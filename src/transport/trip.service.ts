@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TripStatus, StopType } from '@prisma/client';
 import { CreateTripDto } from './dto/create-trip.dto';
@@ -227,6 +231,149 @@ export class TripService {
       photoUrl: pod.photoUrl,
       createdAt: pod.createdAt,
       updatedAt: pod.updatedAt,
+    };
+  }
+
+  async transitionStatus(
+    tenantId: string,
+    tripId: string,
+    newStatus: string,
+  ): Promise<TripDto> {
+    // Map string status to enum
+    const statusMap: Record<string, TripStatus> = {
+      Planned: TripStatus.Planned,
+      Dispatched: TripStatus.Dispatched,
+      InTransit: TripStatus.InTransit,
+      Delivered: TripStatus.Delivered,
+      Closed: TripStatus.Closed,
+      Cancelled: TripStatus.Cancelled,
+    };
+
+    const targetStatus = statusMap[newStatus];
+    if (!targetStatus) {
+      throw new BadRequestException(`Invalid status transition: ${newStatus}`);
+    }
+
+    // Get current trip
+    const trip = await this.prisma.trip.findFirst({
+      where: {
+        id: tripId,
+        tenantId,
+      },
+      include: {
+        stops: {
+          orderBy: {
+            sequence: 'asc',
+          },
+          include: {
+            pods: {
+              take: 1,
+              orderBy: {
+                createdAt: 'desc',
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!trip) {
+      throw new NotFoundException('Trip not found');
+    }
+
+    // Validate status transition
+    const validTransitions: Record<TripStatus, TripStatus[]> = {
+      [TripStatus.Draft]: [TripStatus.Planned, TripStatus.Cancelled],
+      [TripStatus.Planned]: [TripStatus.Dispatched, TripStatus.Cancelled],
+      [TripStatus.Dispatched]: [TripStatus.InTransit, TripStatus.Cancelled],
+      [TripStatus.InTransit]: [TripStatus.Delivered, TripStatus.Cancelled],
+      [TripStatus.Delivered]: [TripStatus.Closed],
+      [TripStatus.Closed]: [],
+      [TripStatus.Cancelled]: [],
+    };
+
+    const allowedStatuses = validTransitions[trip.status];
+    if (!allowedStatuses.includes(targetStatus)) {
+      throw new BadRequestException(
+        `Cannot transition from ${trip.status} to ${targetStatus}`,
+      );
+    }
+
+    // Update trip status
+    const updatedTrip = await this.prisma.trip.update({
+      where: { id: tripId },
+      data: { status: targetStatus },
+      include: {
+        stops: {
+          orderBy: {
+            sequence: 'asc',
+          },
+          include: {
+            pods: {
+              take: 1,
+              orderBy: {
+                createdAt: 'desc',
+              },
+            },
+          },
+        },
+      },
+    });
+
+    // Log event
+    await this.eventLogService.logEvent(
+      tenantId,
+      'Trip',
+      tripId,
+      `TRIP_${newStatus.toUpperCase()}`,
+      {
+        previousStatus: trip.status,
+        newStatus: targetStatus,
+      },
+    );
+
+    return this.toDto(
+      updatedTrip,
+      updatedTrip.stops.map((stop) => ({
+        ...stop,
+        pod: stop.pods[0] || null,
+      })),
+    );
+  }
+
+  async getTripEvents(tenantId: string, tripId: string) {
+    // Verify trip exists
+    const trip = await this.prisma.trip.findFirst({
+      where: {
+        id: tripId,
+        tenantId,
+      },
+    });
+
+    if (!trip) {
+      throw new NotFoundException('Trip not found');
+    }
+
+    // Get events for this trip
+    const events = await this.prisma.eventLog.findMany({
+      where: {
+        tenantId,
+        entityType: 'Trip',
+        entityId: tripId,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    return {
+      tripId,
+      events: events.map((event) => ({
+        id: event.id,
+        eventType: event.eventType,
+        payload: event.payload,
+        createdAt: event.createdAt,
+      })),
     };
   }
 }

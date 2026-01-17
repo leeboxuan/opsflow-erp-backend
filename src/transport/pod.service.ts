@@ -36,30 +36,43 @@ export class PodService {
       },
     });
 
+    // Determine status: use provided status, or Completed if signatureUrl provided, or default
+    let podStatus = dto.status;
+    if (!podStatus) {
+      if (dto.signatureUrl || dto.signedBy) {
+        podStatus = 'Completed' as any;
+      } else {
+        podStatus = 'Pending' as any;
+      }
+    }
+
+    // Use signatureUrl as photoUrl if photoUrl not provided and signatureUrl is provided
+    const photoUrlValue = dto.photoUrl || dto.signatureUrl || null;
+
     const pod = existingPod
       ? await this.prisma.pod.update({
           where: {
             id: existingPod.id,
           },
           data: {
-            status: dto.status,
+            status: podStatus,
             signedBy: dto.signedBy || null,
-            signedAt: dto.signedAt ? new Date(dto.signedAt) : null,
-            photoUrl: dto.photoUrl || null,
+            signedAt: dto.signedAt ? new Date(dto.signedAt) : new Date(),
+            photoUrl: photoUrlValue,
           },
         })
       : await this.prisma.pod.create({
           data: {
             tenantId,
             stopId,
-            status: dto.status,
+            status: podStatus,
             signedBy: dto.signedBy || null,
-            signedAt: dto.signedAt ? new Date(dto.signedAt) : null,
-            photoUrl: dto.photoUrl || null,
+            signedAt: dto.signedAt ? new Date(dto.signedAt) : new Date(),
+            photoUrl: photoUrlValue,
           },
         });
 
-    // Log event
+    // Log event with note and signatureUrl in payload
     await this.eventLogService.logEvent(
       tenantId,
       'Stop',
@@ -69,6 +82,8 @@ export class PodService {
         podId: pod.id,
         status: pod.status,
         signedBy: pod.signedBy,
+        signatureUrl: dto.signatureUrl,
+        note: dto.note,
       },
     );
 

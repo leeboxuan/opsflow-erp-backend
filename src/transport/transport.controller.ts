@@ -9,6 +9,7 @@ import {
   Request,
   NotFoundException,
 } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { TenantGuard } from '../auth/guards/tenant.guard';
 import { TransportService } from './transport.service';
@@ -16,8 +17,10 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { OrderDto } from './dto/order.dto';
 import { TripDto } from './dto/trip.dto';
 
+@ApiTags('transport')
 @Controller('transport/orders')
 @UseGuards(AuthGuard, TenantGuard)
+@ApiBearerAuth('JWT-auth')
 export class TransportController {
   constructor(private readonly transportService: TransportService) {}
 
