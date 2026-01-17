@@ -93,9 +93,54 @@ export class AuthController {
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Get current user and tenant information' })
   async getMe(@Request() req: any) {
+    const userId = req.user.userId;
+    const currentTenantId = req.tenant.tenantId;
+    const currentRole = req.tenant.role;
+
+    // Get user details
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    // Get all memberships for the user
+    const memberships = await this.prisma.tenantMembership.findMany({
+      where: {
+        userId,
+      },
+      include: {
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    // Format memberships
+    const membershipsSummary = memberships.map((membership) => ({
+      tenantId: membership.tenantId,
+      role: membership.role,
+      status: membership.status,
+      tenant: {
+        id: membership.tenant.id,
+        name: membership.tenant.name,
+      },
+    }));
+
     return {
-      user: req.user,
-      tenant: req.tenant,
+      id: user.id,
+      email: user.email,
+      role: currentRole, // Role for current active tenant
+      tenantId: currentTenantId, // Current active tenant
+      memberships: membershipsSummary,
     };
   }
 }
