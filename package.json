@@ -17,6 +17,9 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage"
   },
+  "engines": {
+    "node": "20.x"
+  },
   "dependencies": {
     "@nestjs/common": "^10.3.0",
     "@nestjs/config": "^3.1.1",
