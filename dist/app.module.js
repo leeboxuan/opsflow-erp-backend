@@ -15,6 +15,9 @@ const prisma_module_1 = require("./prisma/prisma.module");
 const tenants_module_1 = require("./tenants/tenants.module");
 const health_module_1 = require("./health/health.module");
 const transport_module_1 = require("./transport/transport.module");
+const drivers_module_1 = require("./drivers/drivers.module");
+const admin_module_1 = require("./admin/admin.module");
+const driver_module_1 = require("./driver/driver.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -29,6 +32,9 @@ exports.AppModule = AppModule = __decorate([
             tenants_module_1.TenantsModule,
             health_module_1.HealthModule,
             transport_module_1.TransportModule,
+            drivers_module_1.DriversModule,
+            admin_module_1.AdminModule,
+            driver_module_1.DriverModule,
         ],
         controllers: [app_controller_1.AppController],
     })

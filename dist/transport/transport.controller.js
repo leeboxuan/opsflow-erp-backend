@@ -14,6 +14,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TransportController = void 0;
 const common_1 = require("@nestjs/common");
+const swagger_1 = require("@nestjs/swagger");
 const auth_guard_1 = require("../auth/guards/auth.guard");
 const tenant_guard_1 = require("../auth/guards/tenant.guard");
 const transport_service_1 = require("./transport.service");
@@ -79,8 +80,10 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], TransportController.prototype, "planTrip", null);
 exports.TransportController = TransportController = __decorate([
+    (0, swagger_1.ApiTags)('transport'),
     (0, common_1.Controller)('transport/orders'),
     (0, common_1.UseGuards)(auth_guard_1.AuthGuard, tenant_guard_1.TenantGuard),
+    (0, swagger_1.ApiBearerAuth)('JWT-auth'),
     __metadata("design:paramtypes", [transport_service_1.TransportService])
 ], TransportController);
 //# sourceMappingURL=transport.controller.js.map

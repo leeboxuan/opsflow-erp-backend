@@ -14,6 +14,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PodController = void 0;
 const common_1 = require("@nestjs/common");
+const swagger_1 = require("@nestjs/swagger");
 const auth_guard_1 = require("../auth/guards/auth.guard");
 const tenant_guard_1 = require("../auth/guards/tenant.guard");
 const pod_service_1 = require("./pod.service");
@@ -37,6 +38,7 @@ let PodController = class PodController {
 exports.PodController = PodController;
 __decorate([
     (0, common_1.Patch)(':stopId'),
+    (0, swagger_1.ApiOperation)({ summary: 'Update stop details' }),
     __param(0, (0, common_1.Request)()),
     __param(1, (0, common_1.Param)('stopId')),
     __param(2, (0, common_1.Body)()),
@@ -46,6 +48,7 @@ __decorate([
 ], PodController.prototype, "updateStop", null);
 __decorate([
     (0, common_1.Post)(':stopId/pod'),
+    (0, swagger_1.ApiOperation)({ summary: 'Create or update POD for a stop' }),
     __param(0, (0, common_1.Request)()),
     __param(1, (0, common_1.Param)('stopId')),
     __param(2, (0, common_1.Body)()),
@@ -54,8 +57,10 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], PodController.prototype, "createOrUpdatePod", null);
 exports.PodController = PodController = __decorate([
+    (0, swagger_1.ApiTags)('transport'),
     (0, common_1.Controller)('transport/stops'),
     (0, common_1.UseGuards)(auth_guard_1.AuthGuard, tenant_guard_1.TenantGuard),
+    (0, swagger_1.ApiBearerAuth)('JWT-auth'),
     __metadata("design:paramtypes", [pod_service_1.PodService,
         stop_service_1.StopService])
 ], PodController);

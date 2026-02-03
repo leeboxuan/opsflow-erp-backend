@@ -32,6 +32,7 @@ exports.TransportModule = TransportModule = __decorate([
             stop_service_1.StopService,
             event_log_service_1.EventLogService,
         ],
+        exports: [trip_service_1.TripService, event_log_service_1.EventLogService],
     })
 ], TransportModule);
 //# sourceMappingURL=transport.module.js.map

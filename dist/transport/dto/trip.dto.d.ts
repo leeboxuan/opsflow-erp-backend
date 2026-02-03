@@ -23,11 +23,26 @@ export interface PodDto {
     createdAt: Date;
     updatedAt: Date;
 }
+export interface VehicleInfoDto {
+    id: string;
+    vehicleNumber: string;
+    type: string | null;
+}
+export interface DriverInfoDto {
+    id: string;
+    email: string;
+    name: string | null;
+    phone: string | null;
+}
 export interface TripDto {
     id: string;
     status: TripStatus;
     plannedStartAt: Date | null;
     plannedEndAt: Date | null;
+    assignedDriverId: string | null;
+    assignedVehicleId: string | null;
+    assignedDriver?: DriverInfoDto | null;
+    assignedVehicle?: VehicleInfoDto | null;
     createdAt: Date;
     updatedAt: Date;
     stops: StopDto[];

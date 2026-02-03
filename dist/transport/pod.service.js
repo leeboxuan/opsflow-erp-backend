@@ -34,32 +34,44 @@ let PodService = class PodService {
                 tenantId,
             },
         });
+        let podStatus = dto.status;
+        if (!podStatus) {
+            if (dto.signatureUrl || dto.signedBy) {
+                podStatus = 'Completed';
+            }
+            else {
+                podStatus = 'Pending';
+            }
+        }
+        const photoUrlValue = dto.photoUrl || dto.signatureUrl || null;
         const pod = existingPod
             ? await this.prisma.pod.update({
                 where: {
                     id: existingPod.id,
                 },
                 data: {
-                    status: dto.status,
+                    status: podStatus,
                     signedBy: dto.signedBy || null,
-                    signedAt: dto.signedAt ? new Date(dto.signedAt) : null,
-                    photoUrl: dto.photoUrl || null,
+                    signedAt: dto.signedAt ? new Date(dto.signedAt) : new Date(),
+                    photoUrl: photoUrlValue,
                 },
             })
             : await this.prisma.pod.create({
                 data: {
                     tenantId,
                     stopId,
-                    status: dto.status,
+                    status: podStatus,
                     signedBy: dto.signedBy || null,
-                    signedAt: dto.signedAt ? new Date(dto.signedAt) : null,
-                    photoUrl: dto.photoUrl || null,
+                    signedAt: dto.signedAt ? new Date(dto.signedAt) : new Date(),
+                    photoUrl: photoUrlValue,
                 },
             });
         await this.eventLogService.logEvent(tenantId, 'Stop', stopId, 'POD_UPDATED', {
             podId: pod.id,
             status: pod.status,
             signedBy: pod.signedBy,
+            signatureUrl: dto.signatureUrl,
+            note: dto.note,
         });
         return this.toDto(pod);
     }

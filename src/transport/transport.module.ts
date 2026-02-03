@@ -20,6 +20,6 @@ import { AuthModule } from '../auth/auth.module';
     StopService,
     EventLogService,
   ],
-  exports: [TripService],
+  exports: [TripService, EventLogService],
 })
 export class TransportModule {}

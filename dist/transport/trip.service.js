@@ -14,6 +14,7 @@ const common_1 = require("@nestjs/common");
 const prisma_service_1 = require("../prisma/prisma.service");
 const client_1 = require("@prisma/client");
 const event_log_service_1 = require("./event-log.service");
+const client_2 = require("@prisma/client");
 let TripService = class TripService {
     constructor(prisma, eventLogService) {
         this.prisma = prisma;
@@ -72,7 +73,10 @@ let TripService = class TripService {
                 tripId: result.trip.id,
             });
         }
-        return this.toDto(result.trip, result.stops);
+        return this.toDto(result.trip, result.stops.map((stop) => ({
+            ...stop,
+            pod: stop.pods?.[0] || null,
+        })));
     }
     async listTrips(tenantId, cursor, limit = 20) {
         const take = Math.min(limit, 100);
@@ -104,16 +108,18 @@ let TripService = class TripService {
                         },
                     },
                 },
+                assignedVehicle: true,
             },
         });
         const hasMore = trips.length > take;
         const result = hasMore ? trips.slice(0, take) : trips;
         const nextCursor = hasMore ? result[result.length - 1].id : undefined;
+        const tripsWithDetails = await Promise.all(result.map((trip) => this.toDto(trip, trip.stops.map((stop) => ({
+            ...stop,
+            pod: stop.pods[0] || null,
+        })))));
         return {
-            trips: result.map((trip) => this.toDto(trip, trip.stops.map((stop) => ({
-                ...stop,
-                pod: stop.pods[0] || null,
-            })))),
+            trips: tripsWithDetails,
             nextCursor,
         };
     }
@@ -137,6 +143,7 @@ let TripService = class TripService {
                         },
                     },
                 },
+                assignedVehicle: true,
             },
         });
         if (!trip) {
@@ -147,12 +154,45 @@ let TripService = class TripService {
             pod: stop.pods[0] || null,
         })));
     }
-    toDto(trip, stops) {
+    async toDto(trip, stops) {
+        let assignedDriver = null;
+        if (trip.assignedDriverId) {
+            const membership = await this.prisma.tenantMembership.findFirst({
+                where: {
+                    tenantId: trip.tenantId,
+                    userId: trip.assignedDriverId,
+                    status: client_2.MembershipStatus.Active,
+                },
+                include: {
+                    user: true,
+                },
+            });
+            if (membership) {
+                assignedDriver = {
+                    id: membership.user.id,
+                    email: membership.user.email,
+                    name: membership.user.name,
+                    phone: membership.user.phone,
+                };
+            }
+        }
+        let assignedVehicle = null;
+        if (trip.assignedVehicle) {
+            assignedVehicle = {
+                id: trip.assignedVehicle.id,
+                vehicleNumber: trip.assignedVehicle.vehicleNumber,
+                type: trip.assignedVehicle.type,
+            };
+        }
         return {
             id: trip.id,
             status: trip.status,
             plannedStartAt: trip.plannedStartAt,
             plannedEndAt: trip.plannedEndAt,
+            assignedDriverId: trip.assignedDriverId,
+            assignedVehicleId: trip.assignedVehicleId,
+            assignedDriver,
+            assignedVehicle,
             createdAt: trip.createdAt,
             updatedAt: trip.updatedAt,
             stops: stops.map((stop) => this.stopToDto(stop)),
@@ -185,6 +225,270 @@ let TripService = class TripService {
             createdAt: pod.createdAt,
             updatedAt: pod.updatedAt,
         };
+    }
+    async transitionStatus(tenantId, tripId, newStatus) {
+        const statusMap = {
+            Planned: client_1.TripStatus.Planned,
+            Dispatched: client_1.TripStatus.Dispatched,
+            InTransit: client_1.TripStatus.InTransit,
+            Delivered: client_1.TripStatus.Delivered,
+            Closed: client_1.TripStatus.Closed,
+            Cancelled: client_1.TripStatus.Cancelled,
+        };
+        const targetStatus = statusMap[newStatus];
+        if (!targetStatus) {
+            throw new common_1.BadRequestException(`Invalid status transition: ${newStatus}`);
+        }
+        const trip = await this.prisma.trip.findFirst({
+            where: {
+                id: tripId,
+                tenantId,
+            },
+            include: {
+                stops: {
+                    orderBy: {
+                        sequence: 'asc',
+                    },
+                    include: {
+                        pods: {
+                            take: 1,
+                            orderBy: {
+                                createdAt: 'desc',
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        if (!trip) {
+            throw new common_1.NotFoundException('Trip not found');
+        }
+        const validTransitions = {
+            [client_1.TripStatus.Draft]: [client_1.TripStatus.Planned, client_1.TripStatus.Cancelled],
+            [client_1.TripStatus.Planned]: [client_1.TripStatus.Dispatched, client_1.TripStatus.Cancelled],
+            [client_1.TripStatus.Dispatched]: [client_1.TripStatus.InTransit, client_1.TripStatus.Cancelled],
+            [client_1.TripStatus.InTransit]: [client_1.TripStatus.Delivered, client_1.TripStatus.Cancelled],
+            [client_1.TripStatus.Delivered]: [client_1.TripStatus.Closed],
+            [client_1.TripStatus.Closed]: [],
+            [client_1.TripStatus.Cancelled]: [],
+        };
+        const allowedStatuses = validTransitions[trip.status];
+        if (!allowedStatuses.includes(targetStatus)) {
+            throw new common_1.BadRequestException(`Cannot transition from ${trip.status} to ${targetStatus}`);
+        }
+        const updatedTrip = await this.prisma.trip.update({
+            where: { id: tripId },
+            data: { status: targetStatus },
+            include: {
+                stops: {
+                    orderBy: {
+                        sequence: 'asc',
+                    },
+                    include: {
+                        pods: {
+                            take: 1,
+                            orderBy: {
+                                createdAt: 'desc',
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        await this.eventLogService.logEvent(tenantId, 'Trip', tripId, `TRIP_${newStatus.toUpperCase()}`, {
+            previousStatus: trip.status,
+            newStatus: targetStatus,
+        });
+        return this.toDto(updatedTrip, updatedTrip.stops.map((stop) => ({
+            ...stop,
+            pod: stop.pods[0] || null,
+        })));
+    }
+    async getTripEvents(tenantId, tripId) {
+        const trip = await this.prisma.trip.findFirst({
+            where: {
+                id: tripId,
+                tenantId,
+            },
+        });
+        if (!trip) {
+            throw new common_1.NotFoundException('Trip not found');
+        }
+        const events = await this.prisma.eventLog.findMany({
+            where: {
+                tenantId,
+                entityType: 'Trip',
+                entityId: tripId,
+            },
+            orderBy: {
+                createdAt: 'desc',
+            },
+        });
+        return {
+            tripId,
+            events: events.map((event) => ({
+                id: event.id,
+                eventType: event.eventType,
+                payload: event.payload,
+                createdAt: event.createdAt,
+            })),
+        };
+    }
+    async listTripsForDriver(tenantId, driverUserId, cursor, limit = 20) {
+        const take = Math.min(limit, 100);
+        const where = {
+            tenantId,
+            assignedDriverId: driverUserId,
+            ...(cursor && {
+                id: {
+                    gt: cursor,
+                },
+            }),
+        };
+        const trips = await this.prisma.trip.findMany({
+            where,
+            take: take + 1,
+            orderBy: {
+                createdAt: 'desc',
+            },
+            include: {
+                stops: {
+                    orderBy: {
+                        sequence: 'asc',
+                    },
+                    include: {
+                        pods: {
+                            take: 1,
+                            orderBy: {
+                                createdAt: 'desc',
+                            },
+                        },
+                    },
+                },
+                assignedVehicle: true,
+            },
+        });
+        const hasMore = trips.length > take;
+        const result = hasMore ? trips.slice(0, take) : trips;
+        const nextCursor = hasMore ? result[result.length - 1].id : undefined;
+        const tripsWithDetails = await Promise.all(result.map((trip) => this.toDto(trip, trip.stops.map((stop) => ({
+            ...stop,
+            pod: stop.pods[0] || null,
+        })))));
+        return {
+            trips: tripsWithDetails,
+            nextCursor,
+        };
+    }
+    async assignDriver(tenantId, tripId, driverUserId) {
+        const trip = await this.prisma.trip.findFirst({
+            where: {
+                id: tripId,
+                tenantId,
+            },
+        });
+        if (!trip) {
+            throw new common_1.NotFoundException('Trip not found');
+        }
+        const membership = await this.prisma.tenantMembership.findFirst({
+            where: {
+                tenantId,
+                userId: driverUserId,
+                role: client_2.Role.Driver,
+                status: client_2.MembershipStatus.Active,
+            },
+        });
+        if (!membership) {
+            throw new common_1.NotFoundException('Driver not found or not active in this tenant');
+        }
+        const updatedTrip = await this.prisma.trip.update({
+            where: { id: tripId },
+            data: { assignedDriverId: driverUserId },
+            include: {
+                stops: {
+                    orderBy: {
+                        sequence: 'asc',
+                    },
+                    include: {
+                        pods: {
+                            take: 1,
+                            orderBy: {
+                                createdAt: 'desc',
+                            },
+                        },
+                    },
+                },
+                assignedVehicle: true,
+            },
+        });
+        await this.eventLogService.logEvent(tenantId, 'Trip', tripId, 'DRIVER_ASSIGNED', {
+            driverUserId,
+        });
+        return this.toDto(updatedTrip, updatedTrip.stops.map((stop) => ({
+            ...stop,
+            pod: stop.pods[0] || null,
+        })));
+    }
+    async assignVehicle(tenantId, tripId, dto) {
+        const trip = await this.prisma.trip.findFirst({
+            where: {
+                id: tripId,
+                tenantId,
+            },
+        });
+        if (!trip) {
+            throw new common_1.NotFoundException('Trip not found');
+        }
+        let vehicle;
+        if (dto.vehicleId) {
+            vehicle = await this.prisma.vehicle.findFirst({
+                where: {
+                    id: dto.vehicleId,
+                    tenantId,
+                },
+            });
+        }
+        else if (dto.vehicleNumber) {
+            vehicle = await this.prisma.vehicle.findUnique({
+                where: {
+                    tenantId_vehicleNumber: {
+                        tenantId,
+                        vehicleNumber: dto.vehicleNumber,
+                    },
+                },
+            });
+        }
+        if (!vehicle) {
+            throw new common_1.NotFoundException('Vehicle not found in this tenant');
+        }
+        const updatedTrip = await this.prisma.trip.update({
+            where: { id: tripId },
+            data: { assignedVehicleId: vehicle.id },
+            include: {
+                stops: {
+                    orderBy: {
+                        sequence: 'asc',
+                    },
+                    include: {
+                        pods: {
+                            take: 1,
+                            orderBy: {
+                                createdAt: 'desc',
+                            },
+                        },
+                    },
+                },
+                assignedVehicle: true,
+            },
+        });
+        await this.eventLogService.logEvent(tenantId, 'Trip', tripId, 'VEHICLE_ASSIGNED', {
+            vehicleId: vehicle.id,
+            vehicleNumber: vehicle.vehicleNumber,
+        });
+        return this.toDto(updatedTrip, updatedTrip.stops.map((stop) => ({
+            ...stop,
+            pod: stop.pods[0] || null,
+        })));
     }
 };
 exports.TripService = TripService;

@@ -202,6 +202,7 @@ let TransportService = class TransportService {
                         },
                     },
                 },
+                assignedVehicle: true,
             },
         });
         if (!tripWithStops) {
@@ -273,6 +274,16 @@ let TransportService = class TransportService {
             status: trip.status,
             plannedStartAt: trip.plannedStartAt,
             plannedEndAt: trip.plannedEndAt,
+            assignedDriverId: trip.assignedDriverId || null,
+            assignedVehicleId: trip.assignedVehicleId || null,
+            assignedDriver: null,
+            assignedVehicle: trip.assignedVehicle
+                ? {
+                    id: trip.assignedVehicle.id,
+                    vehicleNumber: trip.assignedVehicle.vehicleNumber,
+                    type: trip.assignedVehicle.type,
+                }
+                : null,
             createdAt: trip.createdAt,
             updatedAt: trip.updatedAt,
             stops: stops.map((stop) => ({

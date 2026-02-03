@@ -16,7 +16,7 @@ const config_1 = require("@nestjs/config");
 let SupabaseService = class SupabaseService {
     constructor(configService) {
         this.configService = configService;
-        const supabaseUrl = this.configService.get('SUPABASE_URL');
+        const supabaseUrl = this.configService.get('SUPABASE_PROJECT_URL');
         const supabaseKey = this.configService.get('SUPABASE_SERVICE_ROLE_KEY');
         if (!supabaseUrl || !supabaseKey) {
             throw new Error('Supabase configuration is missing');

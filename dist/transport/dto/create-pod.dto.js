@@ -11,27 +11,45 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CreatePodDto = void 0;
 const class_validator_1 = require("class-validator");
+const swagger_1 = require("@nestjs/swagger");
 const client_1 = require("@prisma/client");
 class CreatePodDto {
 }
 exports.CreatePodDto = CreatePodDto;
 __decorate([
+    (0, swagger_1.ApiProperty)({ example: client_1.PodStatus.Completed, enum: client_1.PodStatus, required: false }),
+    (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsEnum)(client_1.PodStatus),
     __metadata("design:type", String)
 ], CreatePodDto.prototype, "status", void 0);
 __decorate([
+    (0, swagger_1.ApiProperty)({ example: 'John Doe', required: false }),
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], CreatePodDto.prototype, "signedBy", void 0);
 __decorate([
+    (0, swagger_1.ApiProperty)({ example: '2024-01-15T10:00:00Z', required: false }),
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsDateString)(),
     __metadata("design:type", String)
 ], CreatePodDto.prototype, "signedAt", void 0);
 __decorate([
+    (0, swagger_1.ApiProperty)({ example: 'https://example.com/photo.jpg', required: false }),
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], CreatePodDto.prototype, "photoUrl", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ example: 'https://example.com/signature.jpg', required: false }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreatePodDto.prototype, "signatureUrl", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ example: 'Delivery completed successfully', required: false }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreatePodDto.prototype, "note", void 0);
 //# sourceMappingURL=create-pod.dto.js.map
