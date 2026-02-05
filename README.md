@@ -26,7 +26,8 @@ Use `.env.local` for local development (the app loads `.env.local` then `.env`).
 
 | Variable | Required | Where to get it |
 |----------|----------|-----------------|
-| `DATABASE_URL` | Yes | Supabase → Project Settings → Database → Connection string (URI, pooler) |
+| `DATABASE_URL` | Yes | Supabase → Project Settings → Database → **Connection pooling** (Session mode, port 5432) — used by the app at runtime |
+| `DIRECT_URL` | Yes (Render) | Supabase → Project Settings → Database → **Direct connection** URI (host `db.XXX.supabase.co:5432`). Required for `prisma migrate deploy` on Render to avoid P1002 advisory lock timeout when using the pooler. |
 | `SUPABASE_PROJECT_URL` | Yes | Supabase → Project Settings → API → Project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase → Project Settings → API → `service_role` secret |
 | `SUPABASE_JWT_SECRET` | Optional | Supabase → Project Settings → API → JWT Secret (for legacy HS256 tokens) |
@@ -51,7 +52,8 @@ Set all env vars in Render dashboard (Environment) so they match your `.env.loca
 
 2. **Render**  
    - Env vars must match what the code expects (see table above).  
-   - `DATABASE_URL` = Supabase Postgres connection string (pooler recommended).  
+   - `DATABASE_URL` = Supabase **pooler** (Session mode).  
+   - `DIRECT_URL` = Supabase **direct** connection (same password; host `db.<project-ref>.supabase.co`). Migrations use this to avoid P1002 timeout.  
    - `SUPABASE_PROJECT_URL` + `SUPABASE_SERVICE_ROLE_KEY` = same Supabase project as DB.  
    - After changing Prisma migrations, push code; Render runs `prisma migrate deploy` on release.
 
@@ -68,5 +70,7 @@ Set all env vars in Render dashboard (Environment) so they match your `.env.loca
 
 - **Development:** `pnpm prisma:migrate`
 - **Production (Render):** runs automatically via `releaseCommand: pnpm prisma:migrate:deploy`
+
+Prisma uses `DIRECT_URL` for migrations (see `schema.prisma`). If you see **P1002** (timeout acquiring advisory lock) on Render, set `DIRECT_URL` in Render’s Environment to Supabase’s **direct** connection string (not the pooler).
 
 > If you manage schema in Supabase instead, you can skip Prisma migrate and use Prisma only for type-safe access.

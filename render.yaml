@@ -10,8 +10,12 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20
-      # Database (Supabase Postgres connection string)
+      # Database: use pooler for app runtime (better connection handling)
       - key: DATABASE_URL
+        sync: false
+      # Direct DB URL for migrations only (avoids P1002 advisory lock timeout with pooler)
+      # In Supabase: Project Settings → Database → "Direct connection" URI (host db.XXX.supabase.co:5432)
+      - key: DIRECT_URL
         sync: false
       # Supabase Auth (required for JWT verification and admin APIs)
       - key: SUPABASE_PROJECT_URL
