@@ -19,12 +19,7 @@ export declare class TripService {
     transitionStatus(tenantId: string, tripId: string, newStatus: string): Promise<TripDto>;
     getTripEvents(tenantId: string, tripId: string): Promise<{
         tripId: string;
-        events: {
-            id: string;
-            eventType: string;
-            payload: import("@prisma/client/runtime/library").JsonValue;
-            createdAt: Date;
-        }[];
+        events: any;
     }>;
     listTripsForDriver(tenantId: string, driverUserId: string, cursor?: string, limit?: number): Promise<{
         trips: TripDto[];

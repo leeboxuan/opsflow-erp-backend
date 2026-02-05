@@ -19,7 +19,6 @@ import { LoginResponseDto } from './dto/login-response.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RefreshResponseDto } from './dto/refresh-response.dto';
 import { PrismaService } from '../prisma/prisma.service';
-import { MembershipStatus } from '@prisma/client';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -74,7 +73,7 @@ export class AuthController {
     const membership = await this.prisma.tenantMembership.findFirst({
       where: {
         userId: authUser.userId,
-        status: MembershipStatus.Active,
+        status: 'Active',
       },
       include: {
         tenant: true,

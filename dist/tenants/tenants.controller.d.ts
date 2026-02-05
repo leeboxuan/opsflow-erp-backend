@@ -24,12 +24,12 @@ export declare class TenantsController {
     constructor(prisma: PrismaService);
     getTenants(req: any): Promise<TenantDto[]>;
     getCurrentTenant(req: any): Promise<{
-        id: string;
-        name: string;
-        slug: string;
+        id: any;
+        name: any;
+        slug: any;
         role: any;
-        createdAt: Date;
-        updatedAt: Date;
+        createdAt: any;
+        updatedAt: any;
     }>;
     getMembers(req: any): Promise<MemberDto[]>;
     inviteMember(req: any, dto: InviteMemberDto): Promise<MemberDto>;

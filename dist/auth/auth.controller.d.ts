@@ -15,18 +15,10 @@ export declare class AuthController {
     login(dto: LoginDto): Promise<LoginResponseDto>;
     refresh(dto: RefreshTokenDto): Promise<RefreshResponseDto>;
     getMe(req: any): Promise<{
-        id: string;
-        email: string;
+        id: any;
+        email: any;
         role: any;
         authUserId: any;
-        tenantMemberships: {
-            tenantId: string;
-            role: import("@prisma/client").$Enums.Role;
-            status: import("@prisma/client").$Enums.MembershipStatus;
-            tenant: {
-                id: string;
-                name: string;
-            };
-        }[];
+        tenantMemberships: any;
     }>;
 }

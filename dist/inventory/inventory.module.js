@@ -11,12 +11,13 @@ const common_1 = require("@nestjs/common");
 const inventory_controller_1 = require("./inventory.controller");
 const inventory_service_1 = require("./inventory.service");
 const prisma_module_1 = require("../prisma/prisma.module");
+const auth_module_1 = require("../auth/auth.module");
 let InventoryModule = class InventoryModule {
 };
 exports.InventoryModule = InventoryModule;
 exports.InventoryModule = InventoryModule = __decorate([
     (0, common_1.Module)({
-        imports: [prisma_module_1.PrismaModule],
+        imports: [auth_module_1.AuthModule, prisma_module_1.PrismaModule],
         controllers: [inventory_controller_1.InventoryController],
         providers: [inventory_service_1.InventoryService],
         exports: [inventory_service_1.InventoryService],

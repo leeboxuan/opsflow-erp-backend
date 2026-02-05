@@ -24,7 +24,6 @@ const tenant_guard_1 = require("./guards/tenant.guard");
 const login_dto_1 = require("./dto/login.dto");
 const refresh_token_dto_1 = require("./dto/refresh-token.dto");
 const prisma_service_1 = require("../prisma/prisma.service");
-const client_1 = require("@prisma/client");
 let AuthController = class AuthController {
     constructor(authService, supabaseService, prisma, configService) {
         this.authService = authService;
@@ -58,7 +57,7 @@ let AuthController = class AuthController {
         const membership = await this.prisma.tenantMembership.findFirst({
             where: {
                 userId: authUser.userId,
-                status: client_1.MembershipStatus.Active,
+                status: 'Active',
             },
             include: {
                 tenant: true,

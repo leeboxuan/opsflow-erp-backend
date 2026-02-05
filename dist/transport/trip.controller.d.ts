@@ -17,12 +17,7 @@ export declare class TripController {
     completeTrip(req: any, id: string): Promise<TripDto>;
     getTripEvents(req: any, id: string): Promise<{
         tripId: string;
-        events: {
-            id: string;
-            eventType: string;
-            payload: import("@prisma/client/runtime/library").JsonValue;
-            createdAt: Date;
-        }[];
+        events: any;
     }>;
     assignDriver(req: any, tripId: string, dto: AssignDriverDto): Promise<TripDto>;
     assignVehicle(req: any, tripId: string, dto: AssignVehicleDto): Promise<TripDto>;
