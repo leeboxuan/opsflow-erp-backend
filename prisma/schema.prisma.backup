@@ -1,0 +1,314 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+//
+// IMPORTANT: This repo does NOT own the database schema or migrations.
+// Schema and migrations are defined in cargo-erp. This file is kept in sync
+// for Prisma client only. Do not run prisma migrate dev/deploy or create
+// new migrations from this repo.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  Admin
+  Ops
+  Finance
+  Driver
+}
+
+enum MembershipStatus {
+  Active
+  Invited
+  Suspended
+}
+
+enum OrderStatus {
+  Draft
+  Confirmed
+  Planned
+  Dispatched
+  InTransit
+  Delivered
+  Closed
+  Cancelled
+}
+
+enum TripStatus {
+  Draft
+  Planned
+  Dispatched
+  InTransit
+  Delivered
+  Closed
+  Cancelled
+}
+
+enum StopType {
+  PICKUP
+  DELIVERY
+}
+
+enum PodStatus {
+  Pending
+  Completed
+  Failed
+}
+
+enum StopStatus {
+  Pending
+  InProgress
+  Completed
+}
+
+// Multi-tenant foundation
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships           TenantMembership[]
+  transportOrders        TransportOrder[]
+  trips                 Trip[]
+  stops                 Stop[]
+  pods                  Pod[]
+  podPhotoDocuments     PodPhotoDocument[]
+  eventLogs             EventLog[]
+  vehicles              Vehicle[]
+  driverLocations       DriverLocationLatest[]
+  driverWalletTransactions DriverWalletTransaction[]
+
+  @@map("tenants")
+}
+
+model User {
+  id         String   @id @default(cuid())
+  email      String   @unique
+  name       String?
+  phone      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  /// Supabase auth user id (auth.users.id), UUID, unique
+  authUserId String?  @unique @map("auth_user_id") @db.Uuid
+
+  /// Application-level role for this user (e.g. 'USER', 'SUPERADMIN')
+  role       String   @default("USER")
+
+  memberships TenantMembership[]
+
+  @@index([email])
+  @@map("users")
+}
+
+model TenantMembership {
+  id        String           @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      Role
+  status    MembershipStatus @default(Active)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([tenantId, status])
+  @@index([userId])
+  @@map("tenant_memberships")
+}
+
+// Transport module entities
+model TransportOrder {
+  id                  String      @id @default(cuid())
+  tenantId            String
+  customerRef         String
+  doNumber            String?
+  priceCents          Int         @default(0)
+  currency            String      @default("SGD")
+  customerName        String?
+  contactName         String?
+  contactPhone        String?
+  status              OrderStatus @default(Draft)
+  pickupWindowStart   DateTime?
+  pickupWindowEnd     DateTime?
+  deliveryWindowStart DateTime?
+  deliveryWindowEnd   DateTime?
+  notes               String?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stops  Stop[] @relation("OrderStops")
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@map("transport_orders")
+}
+
+model Trip {
+  id                String     @id @default(cuid())
+  tenantId          String
+  status            TripStatus @default(Draft)
+  plannedStartAt    DateTime?
+  plannedEndAt      DateTime?
+  assignedDriverId  String?
+  assignedVehicleId String?
+  trailerNo         String?
+  startedAt        DateTime?
+  closedAt         DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stops            Stop[]
+  assignedVehicle  Vehicle?  @relation(fields: [assignedVehicleId], references: [id], onDelete: SetNull)
+  walletTransactions DriverWalletTransaction[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, plannedStartAt])
+  @@index([tenantId, assignedDriverId])
+  @@map("trips")
+}
+
+model Vehicle {
+  id             String   @id @default(cuid())
+  tenantId       String
+  vehicleNumber  String
+  type           String?
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trips  Trip[]
+
+  @@unique([tenantId, vehicleNumber])
+  @@index([tenantId])
+  @@map("vehicles")
+}
+
+model Stop {
+  id           String      @id @default(cuid())
+  tenantId     String
+  tripId       String
+  sequence     Int
+  type         StopType
+  status       StopStatus  @default(Pending)
+  addressLine1 String
+  addressLine2 String?
+  city         String
+  postalCode   String
+  country      String
+  plannedAt    DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip              Trip               @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  transportOrder    TransportOrder?    @relation("OrderStops", fields: [transportOrderId], references: [id], onDelete: SetNull)
+  transportOrderId  String?
+  pods              Pod[]
+  podPhotoDocuments PodPhotoDocument[]
+
+  @@index([tenantId, tripId])
+  @@index([tenantId, transportOrderId])
+  @@map("stops")
+}
+
+model Pod {
+  id        String    @id @default(cuid())
+  tenantId  String
+  stopId    String
+  status    PodStatus @default(Pending)
+  signedBy  String?
+  signedAt  DateTime?
+  photoUrl  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stop   Stop   @relation(fields: [stopId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, stopId])
+  @@index([tenantId, status])
+  @@map("pods")
+}
+
+model PodPhotoDocument {
+  id        String   @id @default(cuid())
+  tenantId  String
+  stopId    String
+  photoKey  String
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stop   Stop   @relation(fields: [stopId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, stopId])
+  @@map("pod_photo_documents")
+}
+
+model DriverWalletTransaction {
+  id            String   @id @default(cuid())
+  tenantId      String
+  driverUserId  String
+  tripId        String
+  amountCents   Int
+  currency      String   @default("SGD")
+  type          String   // e.g. TripCompleted
+  description   String?
+  createdAt     DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, driverUserId])
+  @@index([tenantId, driverUserId, createdAt])
+  @@map("driver_wallet_transactions")
+}
+
+model EventLog {
+  id         String   @id @default(cuid())
+  tenantId   String
+  entityType String // Order | Trip | Stop
+  entityId   String
+  eventType  String
+  payload    Json?
+  createdAt  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, createdAt])
+  @@map("event_logs")
+}
+
+model DriverLocationLatest {
+  id           String   @id @default(cuid())
+  tenantId     String
+  driverUserId String
+  lat          Float
+  lng          Float
+  accuracy     Float?
+  heading      Float?
+  speed        Float?
+  capturedAt   DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, driverUserId])
+  @@index([tenantId, updatedAt])
+  @@map("driver_location_latest")
+}

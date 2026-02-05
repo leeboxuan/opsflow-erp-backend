@@ -18,11 +18,18 @@ async function bootstrap() {
     }),
   );
   
-  // Enable CORS for web app
-  app.enableCors({
-    origin: process.env.WEB_APP_URL || 'http://localhost:3000',
-    credentials: true,
-  });
+  // Enable CORS for web app(s)
+// WEB_APP_URLS supports comma-separated origins, e.g. "http://localhost:3000,https://opsflow-erp-web.onrender.com"
+const rawOrigins = process.env.WEB_APP_URLS || process.env.WEB_APP_URL || 'http://localhost:3000';
+const allowedOrigins = rawOrigins
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+app.enableCors({
+  origin: allowedOrigins,
+  credentials: true,
+});
 
   // Swagger documentation setup
   const config = new DocumentBuilder()

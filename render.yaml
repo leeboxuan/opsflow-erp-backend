@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: opsflow-erp-backend
+    env: node
+    plan: starter
+    buildCommand: pnpm install --frozen-lockfile && pnpm prisma:generate && pnpm build
+    # Run migrations against Supabase Postgres before each deploy
+    releaseCommand: pnpm prisma:migrate:deploy
+    startCommand: pnpm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      # Database (Supabase Postgres connection string)
+      - key: DATABASE_URL
+        sync: false
+      # Supabase Auth (required for JWT verification and admin APIs)
+      - key: SUPABASE_PROJECT_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # Optional: for legacy HS256 JWTs (Supabase JWT secret from project settings)
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      # CORS: comma-separated origins (e.g. https://opsflow-erp-web.onrender.com)
+      - key: WEB_APP_URLS
+        sync: false

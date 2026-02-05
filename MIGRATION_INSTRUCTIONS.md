@@ -31,12 +31,7 @@ This will install all NestJS and Prisma dependencies.
 
 ## Step 4: Set Up Environment Variables
 
-1. Copy `.env.example` to `.env`:
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Update `.env` with your actual values:
+1. Create `.env.local` in the repo root with your actual values:
    - `DATABASE_URL`: Your PostgreSQL connection string
    - `SUPABASE_PROJECT_URL` or `SUPABASE_PROJECT_REF`: Your Supabase project reference
    - `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase service role key
@@ -76,7 +71,7 @@ SUPABASE_USER_EMAIL=user@example.com pnpm prisma:seed
 pnpm dev
 ```
 
-The API will be available at `http://localhost:3001` (or the port specified in `.env`).
+The API will be available at `http://localhost:3001` (or the port specified in `.env.local`).
 
 All routes are prefixed with `/api` (e.g., `GET /api/health`, `GET /api/auth/me`).
 

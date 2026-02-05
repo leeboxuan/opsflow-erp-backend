@@ -14,6 +14,7 @@ import { DriverModule } from './driver/driver.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      envFilePath: ['.env.local', '.env'],
     }),
     PrismaModule,
     AuthModule,
