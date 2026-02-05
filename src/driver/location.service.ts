@@ -13,7 +13,7 @@ export class LocationService {
     dto: UpdateLocationDto,
   ): Promise<LocationDto> {
     // Verify driver belongs to tenant
-    const membership = await this.prisma.tenantMembership.findFirst({
+    const membership = await (this.prisma as any).tenantMembership.findFirst({
       where: {
         tenantId,
         userId: driverUserId,
@@ -27,7 +27,7 @@ export class LocationService {
     }
 
     // Upsert latest location
-    const location = await this.prisma.driverLocationLatest.upsert({
+    const location = await (this.prisma as any).driverLocationLatest.upsert({
       where: {
         tenantId_driverUserId: {
           tenantId,
@@ -61,7 +61,7 @@ export class LocationService {
     tenantId: string,
     driverUserId: string,
   ): Promise<LocationDto | null> {
-    const location = await this.prisma.driverLocationLatest.findUnique({
+    const location = await (this.prisma as any).driverLocationLatest.findUnique({
       where: {
         tenantId_driverUserId: {
           tenantId,
@@ -80,11 +80,8 @@ export class LocationService {
   async getAllDriverLocations(
     tenantId: string,
   ): Promise<DriverLocationDto[]> {
-    const locations = await this.prisma.driverLocationLatest.findMany({
+    const locations = await (this.prisma as any).driverLocationLatest.findMany({
       where: { tenantId },
-      include: {
-        // Note: We need to get user info via membership since DriverLocationLatest doesn't have direct user relation
-      },
       orderBy: {
         updatedAt: 'desc',
       },
@@ -93,7 +90,7 @@ export class LocationService {
     // Get user info for each driver
     const locationsWithUsers = await Promise.all(
       locations.map(async (location) => {
-        const membership = await this.prisma.tenantMembership.findFirst({
+        const membership = await (this.prisma as any).tenantMembership.findFirst({
           where: {
             tenantId,
             userId: location.driverUserId,

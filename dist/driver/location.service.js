@@ -71,7 +71,6 @@ let LocationService = class LocationService {
     async getAllDriverLocations(tenantId) {
         const locations = await this.prisma.driverLocationLatest.findMany({
             where: { tenantId },
-            include: {},
             orderBy: {
                 updatedAt: 'desc',
             },
