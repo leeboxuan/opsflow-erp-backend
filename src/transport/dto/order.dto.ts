@@ -28,7 +28,9 @@ export interface PodDto {
 
 export interface OrderDto {
   id: string;
+  orderRef: string;
   customerRef: string;
+  customerName: string | null;
   status: OrderStatus;
   pickupWindowStart: Date | null;
   pickupWindowEnd: Date | null;

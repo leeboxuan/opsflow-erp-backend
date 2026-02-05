@@ -20,26 +20,115 @@ let TransportService = class TransportService {
         this.eventLogService = eventLogService;
     }
     async createOrder(tenantId, dto) {
-        const order = await this.prisma.transportOrder.create({
-            data: {
-                tenantId,
-                customerRef: dto.customerRef,
-                orderRef: dto.orderRef ?? dto.customerRef,
-                status: client_1.OrderStatus.Draft,
-                pickupWindowStart: dto.pickupWindowStart
-                    ? new Date(dto.pickupWindowStart)
-                    : null,
-                pickupWindowEnd: dto.pickupWindowEnd
-                    ? new Date(dto.pickupWindowEnd)
-                    : null,
-                deliveryWindowStart: dto.deliveryWindowStart
-                    ? new Date(dto.deliveryWindowStart)
-                    : null,
-                deliveryWindowEnd: dto.deliveryWindowEnd
-                    ? new Date(dto.deliveryWindowEnd)
-                    : null,
-                notes: dto.notes ?? null,
-            },
+        const existing = await this.prisma.transportOrder.findFirst({
+            where: { tenantId, orderRef: dto.orderRef },
+        });
+        if (existing) {
+            throw new common_1.ConflictException({
+                code: 'DUPLICATE_ORDER_REF',
+                message: 'Order with this orderRef already exists for this tenant',
+            });
+        }
+        const order = await this.prisma.$transaction(async (tx) => {
+            const newOrder = await tx.transportOrder.create({
+                data: {
+                    tenantId,
+                    orderRef: dto.orderRef,
+                    customerName: dto.customerName,
+                    customerRef: dto.customerName,
+                    status: client_1.OrderStatus.Draft,
+                },
+            });
+            for (let i = 0; i < dto.stops.length; i++) {
+                const s = dto.stops[i];
+                await tx.stop.create({
+                    data: {
+                        tenantId,
+                        transportOrderId: newOrder.id,
+                        sequence: i + 1,
+                        type: s.type,
+                        addressLine1: s.addressLine1,
+                        addressLine2: s.addressLine2 ?? null,
+                        city: s.city,
+                        postalCode: s.postalCode,
+                        country: s.country,
+                        plannedAt: s.plannedAt ? new Date(s.plannedAt) : null,
+                    },
+                });
+            }
+            if (dto.items && dto.items.length > 0) {
+                const aggregated = new Map();
+                for (const it of dto.items) {
+                    const existing = aggregated.get(it.inventoryItemId);
+                    if (existing) {
+                        existing.quantity += it.quantity;
+                        if (it.batchId !== undefined && it.batchId !== existing.batchId)
+                            existing.mixedBatches = true;
+                    }
+                    else {
+                        aggregated.set(it.inventoryItemId, {
+                            quantity: it.quantity,
+                            batchId: it.batchId,
+                            mixedBatches: false,
+                        });
+                    }
+                }
+                for (const [inventoryItemId, agg] of aggregated) {
+                    const { quantity, batchId, mixedBatches } = agg;
+                    const item = await tx.inventory_items.findFirst({
+                        where: { id: inventoryItemId, tenantId },
+                    });
+                    if (!item) {
+                        throw new common_1.BadRequestException(`Inventory item not found: ${inventoryItemId}`);
+                    }
+                    const unitWhere = {
+                        tenantId,
+                        inventoryItemId,
+                        status: client_1.InventoryUnitStatus.Available,
+                    };
+                    if (batchId && !mixedBatches)
+                        unitWhere.batchId = batchId;
+                    const availableUnits = await tx.inventory_units.findMany({
+                        where: unitWhere,
+                        orderBy: { createdAt: 'asc' },
+                        take: quantity,
+                    });
+                    if (availableUnits.length < quantity) {
+                        throw new common_1.BadRequestException(`Not enough available units for item ${item.sku} (requested ${quantity}, available ${availableUnits.length})`);
+                    }
+                    const unitIds = availableUnits.map((u) => u.id);
+                    await tx.inventory_units.updateMany({
+                        where: { id: { in: unitIds } },
+                        data: {
+                            status: client_1.InventoryUnitStatus.Reserved,
+                            transportOrderId: newOrder.id,
+                        },
+                    });
+                    const effectiveBatchId = mixedBatches ? null : (batchId ?? null);
+                    await tx.transport_order_items.upsert({
+                        where: {
+                            transportOrderId_inventoryItemId: {
+                                transportOrderId: newOrder.id,
+                                inventoryItemId,
+                            },
+                        },
+                        create: {
+                            tenantId,
+                            transportOrderId: newOrder.id,
+                            inventoryItemId,
+                            batchId: effectiveBatchId,
+                            qty: quantity,
+                        },
+                        update: {
+                            qty: quantity,
+                            batchId: effectiveBatchId,
+                        },
+                    });
+                }
+            }
+            return tx.transportOrder.findUniqueOrThrow({
+                where: { id: newOrder.id },
+            });
         });
         return this.toDto(order);
     }
@@ -189,6 +278,18 @@ let TransportService = class TransportService {
                     },
                 },
             });
+            await tx.inventory_units.updateMany({
+                where: {
+                    tenantId,
+                    transportOrderId: order.id,
+                    status: client_1.InventoryUnitStatus.Reserved,
+                },
+                data: {
+                    status: client_1.InventoryUnitStatus.InTransit,
+                    tripId: trip.id,
+                    stopId: deliveryStop.id,
+                },
+            });
             return { trip, stops: [pickupStop, deliveryStop] };
         });
         const tripWithStops = await this.prisma.trip.findUnique({
@@ -221,7 +322,9 @@ let TransportService = class TransportService {
     toDto(order) {
         return {
             id: order.id,
+            orderRef: order.orderRef,
             customerRef: order.customerRef,
+            customerName: order.customerName,
             status: order.status,
             pickupWindowStart: order.pickupWindowStart,
             pickupWindowEnd: order.pickupWindowEnd,
@@ -235,7 +338,9 @@ let TransportService = class TransportService {
     toDtoWithStops(order) {
         return {
             id: order.id,
+            orderRef: order.orderRef,
             customerRef: order.customerRef,
+            customerName: order.customerName,
             status: order.status,
             pickupWindowStart: order.pickupWindowStart,
             pickupWindowEnd: order.pickupWindowEnd,

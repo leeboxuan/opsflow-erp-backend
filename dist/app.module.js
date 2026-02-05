@@ -18,6 +18,7 @@ const transport_module_1 = require("./transport/transport.module");
 const drivers_module_1 = require("./drivers/drivers.module");
 const admin_module_1 = require("./admin/admin.module");
 const driver_module_1 = require("./driver/driver.module");
+const inventory_module_1 = require("./inventory/inventory.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -36,6 +37,7 @@ exports.AppModule = AppModule = __decorate([
             drivers_module_1.DriversModule,
             admin_module_1.AdminModule,
             driver_module_1.DriverModule,
+            inventory_module_1.InventoryModule,
         ],
         controllers: [app_controller_1.AppController],
     })

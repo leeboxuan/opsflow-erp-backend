@@ -9,6 +9,7 @@ import { TransportModule } from './transport/transport.module';
 import { DriversModule } from './drivers/drivers.module';
 import { AdminModule } from './admin/admin.module';
 import { DriverModule } from './driver/driver.module';
+import { InventoryModule } from './inventory/inventory.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { DriverModule } from './driver/driver.module';
     DriversModule,
     AdminModule,
     DriverModule,
+    InventoryModule,
   ],
   controllers: [AppController],
 })

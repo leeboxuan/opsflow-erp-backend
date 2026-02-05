@@ -311,6 +311,16 @@ let DriverMvpService = class DriverMvpService {
                     where: { id: updatedStop.transportOrderId },
                     data: { status: client_1.OrderStatus.Delivered },
                 });
+                if (updatedStop.type === client_1.StopType.DELIVERY) {
+                    await tx.inventory_units.updateMany({
+                        where: {
+                            tenantId,
+                            transportOrderId: updatedStop.transportOrderId,
+                            status: { in: [client_1.InventoryUnitStatus.InTransit, client_1.InventoryUnitStatus.Reserved] },
+                        },
+                        data: { status: client_1.InventoryUnitStatus.Delivered },
+                    });
+                }
             }
             if (isFinalStop) {
                 await tx.trip.update({

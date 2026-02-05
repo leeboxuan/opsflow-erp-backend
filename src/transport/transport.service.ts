@@ -1,6 +1,17 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ConflictException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { OrderStatus, TransportOrder, TripStatus, StopType } from '@prisma/client';
+import {
+  OrderStatus,
+  TransportOrder,
+  TripStatus,
+  StopType,
+  InventoryUnitStatus,
+} from '@prisma/client';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { OrderDto } from './dto/order.dto';
 import { TripDto } from './dto/trip.dto';
@@ -14,26 +25,131 @@ export class TransportService {
   ) {}
 
   async createOrder(tenantId: string, dto: CreateOrderDto): Promise<OrderDto> {
-    const order = await this.prisma.transportOrder.create({
-      data: {
-        tenantId,
-        customerRef: dto.customerRef,
-        orderRef: dto.orderRef ?? dto.customerRef,
-        status: OrderStatus.Draft,
-        pickupWindowStart: dto.pickupWindowStart
-          ? new Date(dto.pickupWindowStart)
-          : null,
-        pickupWindowEnd: dto.pickupWindowEnd
-          ? new Date(dto.pickupWindowEnd)
-          : null,
-        deliveryWindowStart: dto.deliveryWindowStart
-          ? new Date(dto.deliveryWindowStart)
-          : null,
-        deliveryWindowEnd: dto.deliveryWindowEnd
-          ? new Date(dto.deliveryWindowEnd)
-          : null,
-        notes: dto.notes ?? null,
-      },
+    const existing = await this.prisma.transportOrder.findFirst({
+      where: { tenantId, orderRef: dto.orderRef },
+    });
+    if (existing) {
+      throw new ConflictException({
+        code: 'DUPLICATE_ORDER_REF',
+        message: 'Order with this orderRef already exists for this tenant',
+      });
+    }
+
+    const order = await this.prisma.$transaction(async (tx) => {
+      const newOrder = await tx.transportOrder.create({
+        data: {
+          tenantId,
+          orderRef: dto.orderRef,
+          customerName: dto.customerName,
+          customerRef: dto.customerName,
+          status: OrderStatus.Draft,
+        },
+      });
+
+      for (let i = 0; i < dto.stops.length; i++) {
+        const s = dto.stops[i];
+        await tx.stop.create({
+          data: {
+            tenantId,
+            transportOrderId: newOrder.id,
+            sequence: i + 1,
+            type: s.type,
+            addressLine1: s.addressLine1,
+            addressLine2: s.addressLine2 ?? null,
+            city: s.city,
+            postalCode: s.postalCode,
+            country: s.country,
+            plannedAt: s.plannedAt ? new Date(s.plannedAt) : null,
+          },
+        });
+      }
+
+      if (dto.items && dto.items.length > 0) {
+        const aggregated = new Map<
+          string,
+          { quantity: number; batchId?: string | null; mixedBatches: boolean }
+        >();
+        for (const it of dto.items) {
+          const existing = aggregated.get(it.inventoryItemId);
+          if (existing) {
+            existing.quantity += it.quantity;
+            if (it.batchId !== undefined && it.batchId !== existing.batchId)
+              existing.mixedBatches = true;
+          } else {
+            aggregated.set(it.inventoryItemId, {
+              quantity: it.quantity,
+              batchId: it.batchId,
+              mixedBatches: false,
+            });
+          }
+        }
+
+        for (const [inventoryItemId, agg] of aggregated) {
+          const { quantity, batchId, mixedBatches } = agg;
+          const item = await tx.inventory_items.findFirst({
+            where: { id: inventoryItemId, tenantId },
+          });
+          if (!item) {
+            throw new BadRequestException(
+              `Inventory item not found: ${inventoryItemId}`,
+            );
+          }
+
+          const unitWhere: any = {
+            tenantId,
+            inventoryItemId,
+            status: InventoryUnitStatus.Available,
+          };
+          if (batchId && !mixedBatches) unitWhere.batchId = batchId;
+
+          const availableUnits = await tx.inventory_units.findMany({
+            where: unitWhere,
+            orderBy: { createdAt: 'asc' },
+            take: quantity,
+          });
+
+          if (availableUnits.length < quantity) {
+            throw new BadRequestException(
+              `Not enough available units for item ${item.sku} (requested ${quantity}, available ${availableUnits.length})`,
+            );
+          }
+
+          const unitIds = availableUnits.map((u) => u.id);
+          await tx.inventory_units.updateMany({
+            where: { id: { in: unitIds } },
+            data: {
+              status: InventoryUnitStatus.Reserved,
+              transportOrderId: newOrder.id,
+            },
+          });
+
+          const effectiveBatchId =
+            mixedBatches ? null : (batchId ?? null);
+          await tx.transport_order_items.upsert({
+            where: {
+              transportOrderId_inventoryItemId: {
+                transportOrderId: newOrder.id,
+                inventoryItemId,
+              },
+            },
+            create: {
+              tenantId,
+              transportOrderId: newOrder.id,
+              inventoryItemId,
+              batchId: effectiveBatchId,
+              qty: quantity,
+            },
+            update: {
+              qty: quantity,
+              batchId: effectiveBatchId,
+            },
+          });
+        }
+      }
+
+      return tx.transportOrder.findUniqueOrThrow({
+        where: { id: newOrder.id },
+      });
     });
 
     return this.toDto(order);
@@ -219,6 +335,20 @@ export class TransportService {
         },
       });
 
+      // Mark order's reserved inventory units as InTransit; link to trip and delivery stop
+      await tx.inventory_units.updateMany({
+        where: {
+          tenantId,
+          transportOrderId: order.id,
+          status: InventoryUnitStatus.Reserved,
+        },
+        data: {
+          status: InventoryUnitStatus.InTransit,
+          tripId: trip.id,
+          stopId: deliveryStop.id,
+        },
+      });
+
       return { trip, stops: [pickupStop, deliveryStop] };
     });
 
@@ -259,7 +389,9 @@ export class TransportService {
   private toDto(order: TransportOrder): OrderDto {
     return {
       id: order.id,
+      orderRef: order.orderRef,
       customerRef: order.customerRef,
+      customerName: order.customerName,
       status: order.status,
       pickupWindowStart: order.pickupWindowStart,
       pickupWindowEnd: order.pickupWindowEnd,
@@ -274,7 +406,9 @@ export class TransportService {
   private toDtoWithStops(order: any): OrderDto {
     return {
       id: order.id,
+      orderRef: order.orderRef,
       customerRef: order.customerRef,
+      customerName: order.customerName,
       status: order.status,
       pickupWindowStart: order.pickupWindowStart,
       pickupWindowEnd: order.pickupWindowEnd,

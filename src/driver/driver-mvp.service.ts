@@ -6,7 +6,13 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EventLogService } from '../transport/event-log.service';
-import { TripStatus, StopStatus, OrderStatus } from '@prisma/client';
+import {
+  TripStatus,
+  StopStatus,
+  OrderStatus,
+  InventoryUnitStatus,
+  StopType,
+} from '@prisma/client';
 import {
   DriverTripDto,
   DriverStopDto,
@@ -408,6 +414,16 @@ export class DriverMvpService {
           where: { id: updatedStop.transportOrderId },
           data: { status: OrderStatus.Delivered },
         });
+        if (updatedStop.type === StopType.DELIVERY) {
+          await tx.inventory_units.updateMany({
+            where: {
+              tenantId,
+              transportOrderId: updatedStop.transportOrderId,
+              status: { in: [InventoryUnitStatus.InTransit, InventoryUnitStatus.Reserved] },
+            },
+            data: { status: InventoryUnitStatus.Delivered },
+          });
+        }
       }
 
       if (isFinalStop) {
