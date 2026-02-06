@@ -22,7 +22,7 @@ export class TransportService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventLogService: EventLogService,
-  ) {}
+  ) { }
 
   async createOrder(tenantId: string, dto: CreateOrderDto): Promise<OrderDto> {
     const existing = await this.prisma.transportOrder.findFirst({
@@ -42,6 +42,11 @@ export class TransportService {
           orderRef: dto.orderRef,
           customerName: dto.customerName,
           customerRef: dto.customerName,
+
+          // ✅ NEW
+          customerContactNumber: dto.customerContactNumber ?? null,
+          notes: dto.notes ?? null,
+
           status: OrderStatus.Draft,
         },
       });
@@ -162,7 +167,7 @@ export class TransportService {
   ): Promise<{ orders: OrderDto[]; nextCursor?: string }> {
     // Temporary debug log to verify request flow
     console.log('[Transport] tenantId:', tenantId);
-    
+
     // tenantId is REQUIRED - all roles must operate under a tenant
     if (!tenantId || tenantId === null || tenantId === undefined) {
       throw new BadRequestException('tenantId is required');
@@ -385,13 +390,16 @@ export class TransportService {
       })),
     );
   }
-
   private toDto(order: TransportOrder): OrderDto {
     return {
       id: order.id,
       orderRef: order.orderRef,
       customerRef: order.customerRef,
       customerName: order.customerName,
+
+      // ✅ NEW
+      customerContactNumber: (order as any).customerContactNumber ?? null,
+
       status: order.status,
       pickupWindowStart: order.pickupWindowStart,
       pickupWindowEnd: order.pickupWindowEnd,
@@ -415,34 +423,37 @@ export class TransportService {
       deliveryWindowStart: order.deliveryWindowStart,
       deliveryWindowEnd: order.deliveryWindowEnd,
       notes: order.notes,
+      // ✅ NEW
+
+      customerContactNumber: order.customerContactNumber ?? null,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
       stops: order.stops
         ? order.stops.map((stop: any) => ({
-            id: stop.id,
-            sequence: stop.sequence,
-            type: stop.type,
-            addressLine1: stop.addressLine1,
-            addressLine2: stop.addressLine2,
-            city: stop.city,
-            postalCode: stop.postalCode,
-            country: stop.country,
-            plannedAt: stop.plannedAt,
-            transportOrderId: stop.transportOrderId,
-            createdAt: stop.createdAt,
-            updatedAt: stop.updatedAt,
-            pod: stop.pods && stop.pods[0]
-              ? {
-                  id: stop.pods[0].id,
-                  status: stop.pods[0].status,
-                  signedBy: stop.pods[0].signedBy,
-                  signedAt: stop.pods[0].signedAt,
-                  photoUrl: stop.pods[0].photoUrl,
-                  createdAt: stop.pods[0].createdAt,
-                  updatedAt: stop.pods[0].updatedAt,
-                }
-              : null,
-          }))
+          id: stop.id,
+          sequence: stop.sequence,
+          type: stop.type,
+          addressLine1: stop.addressLine1,
+          addressLine2: stop.addressLine2,
+          city: stop.city,
+          postalCode: stop.postalCode,
+          country: stop.country,
+          plannedAt: stop.plannedAt,
+          transportOrderId: stop.transportOrderId,
+          createdAt: stop.createdAt,
+          updatedAt: stop.updatedAt,
+          pod: stop.pods && stop.pods[0]
+            ? {
+              id: stop.pods[0].id,
+              status: stop.pods[0].status,
+              signedBy: stop.pods[0].signedBy,
+              signedAt: stop.pods[0].signedAt,
+              photoUrl: stop.pods[0].photoUrl,
+              createdAt: stop.pods[0].createdAt,
+              updatedAt: stop.pods[0].updatedAt,
+            }
+            : null,
+        }))
         : undefined,
     };
   }
@@ -458,10 +469,10 @@ export class TransportService {
       assignedDriver: null, // TransportService doesn't load driver/vehicle details
       assignedVehicle: trip.vehicles
         ? {
-            id: trip.vehicles.id,
-            vehicleNumber: trip.vehicles.vehicleNumber,
-            type: trip.vehicles.type ?? null,
-          }
+          id: trip.vehicles.id,
+          vehicleNumber: trip.vehicles.vehicleNumber,
+          type: trip.vehicles.type ?? null,
+        }
         : null,
       createdAt: trip.createdAt,
       updatedAt: trip.updatedAt,
@@ -480,14 +491,14 @@ export class TransportService {
         updatedAt: stop.updatedAt,
         pod: stop.pod
           ? {
-              id: stop.pod.id,
-              status: stop.pod.status,
-              signedBy: stop.pod.signedBy,
-              signedAt: stop.pod.signedAt,
-              photoUrl: stop.pod.photoUrl,
-              createdAt: stop.pod.createdAt,
-              updatedAt: stop.pod.updatedAt,
-            }
+            id: stop.pod.id,
+            status: stop.pod.status,
+            signedBy: stop.pod.signedBy,
+            signedAt: stop.pod.signedAt,
+            photoUrl: stop.pod.photoUrl,
+            createdAt: stop.pod.createdAt,
+            updatedAt: stop.pod.updatedAt,
+          }
           : null,
       })),
     };

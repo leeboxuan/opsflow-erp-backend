@@ -31,6 +31,10 @@ export interface OrderDto {
   orderRef: string;
   customerRef: string;
   customerName: string | null;
+
+  // ✅ NEW
+  customerContactNumber: string | null;
+
   status: OrderStatus;
   pickupWindowStart: Date | null;
   pickupWindowEnd: Date | null;

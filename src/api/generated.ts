@@ -631,6 +631,177 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/inventory/items/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get inventory items with unit counts by status */
+        get: operations["InventoryController_getItemsSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inventory/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search inventory items */
+        get: operations["InventoryController_getItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inventory/batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List inventory batches */
+        get: operations["InventoryController_listBatches"];
+        put?: never;
+        /** Create a new inventory batch */
+        post: operations["InventoryController_createBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inventory/batches/{batchId}/receive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stock In: receive items into a batch, create batch_items + inventory_units */
+        post: operations["InventoryController_receiveStock"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inventory/batches/{batchId}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get batch summary with per-item counts by status */
+        get: operations["InventoryController_getBatchSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inventory/batches/{batchId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get batch by ID */
+        get: operations["InventoryController_getBatch"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inventory/orders/{orderId}/reserve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reserve inventory units for an order */
+        post: operations["InventoryController_reserveItems"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inventory/orders/{orderId}/dispatch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dispatch reserved units (mark as InTransit) */
+        post: operations["InventoryController_dispatchItems"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inventory/orders/{orderId}/deliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark units as delivered */
+        post: operations["InventoryController_deliverItems"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inventory/orders/{orderId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel reservation and release units */
+        post: operations["InventoryController_cancelReservation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -668,7 +839,29 @@ export interface components {
              */
             status?: "Active" | "Invited" | "Suspended";
         };
-        CreateOrderDto: Record<string, never>;
+        CreateOrderStopDto: {
+            /** @enum {string} */
+            type: "PICKUP" | "DELIVERY";
+            addressLine1: string;
+            addressLine2?: string;
+            city: string;
+            postalCode: string;
+            country: string;
+            plannedAt?: string;
+        };
+        CreateOrderItemDto: {
+            /** @description Inventory item ID (from GET /inventory/items) */
+            inventoryItemId: string;
+            quantity: number;
+            /** @description Optional batch ID to reserve from */
+            batchId?: string;
+        };
+        CreateOrderDto: {
+            orderRef: string;
+            customerName: string;
+            stops: components["schemas"]["CreateOrderStopDto"][];
+            items?: components["schemas"]["CreateOrderItemDto"][];
+        };
         CreateTripDto: Record<string, never>;
         AssignDriverDto: {
             /** @example clx1234567890abcdef */
@@ -745,6 +938,40 @@ export interface components {
             heading?: number;
             /** @example 25.5 */
             speed?: number;
+        };
+        CreateBatchDto: {
+            /** @description If omitted, auto-generated as B260205-001 style */
+            batchCode?: string;
+            notes?: string;
+        };
+        ReceiveStockItemDto: {
+            /** @description Inventory item ID (from GET /inventory/items) */
+            inventoryItemId: string;
+            quantity: number;
+        };
+        ReceiveStockDto: {
+            items: components["schemas"]["ReceiveStockItemDto"][];
+            /**
+             * @description unitSku format: ITEM-BATCH-SEQ = <sku>-<batchCode>-<seq>, ITEM-SEQ = <sku>-<seq>
+             * @enum {string}
+             */
+            unitSkuFormat?: "ITEM-BATCH-SEQ" | "ITEM-SEQ";
+        };
+        ReserveItemDto: {
+            inventorySku: string;
+            batchId?: string;
+            qty: number;
+        };
+        ReserveItemsDto: {
+            items: components["schemas"]["ReserveItemDto"][];
+        };
+        DispatchItemsDto: {
+            unitSkus?: string[];
+            tripId?: string;
+            stopId?: string;
+        };
+        DeliverItemsDto: {
+            unitSkus?: string[];
         };
     };
     responses: never;
@@ -1574,6 +1801,236 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    InventoryController_getItemsSummary: {
+        parameters: {
+            query?: {
+                /** @description Search term for SKU, name, or reference */
+                search?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    InventoryController_getItems: {
+        parameters: {
+            query?: {
+                /** @description Search term for SKU, name, or reference */
+                search?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    InventoryController_listBatches: {
+        parameters: {
+            query?: {
+                customerName?: string;
+                status?: "Draft" | "Open" | "Completed" | "Cancelled";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    InventoryController_createBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateBatchDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    InventoryController_receiveStock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batchId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReceiveStockDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    InventoryController_getBatchSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batchId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    InventoryController_getBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batchId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    InventoryController_reserveItems: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReserveItemsDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    InventoryController_dispatchItems: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DispatchItemsDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    InventoryController_deliverItems: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeliverItemsDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    InventoryController_cancelReservation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
