@@ -6,7 +6,8 @@ import { DispatchItemsDto } from './dto/dispatch-items.dto';
 import { DeliverItemsDto } from './dto/deliver-items.dto';
 import { BatchDto } from './dto/batch.dto';
 import { InventoryItemDto } from './dto/inventory-item.dto';
-import { InventoryBatchStatus } from '@prisma/client';
+declare const BATCH_STATUS_VALUES: readonly ["Draft", "Open", "Completed", "Cancelled"];
+type BatchStatusQuery = (typeof BATCH_STATUS_VALUES)[number];
 export declare class InventoryController {
     private readonly inventoryService;
     constructor(inventoryService: InventoryService);
@@ -52,7 +53,7 @@ export declare class InventoryController {
             };
         }>;
     }>;
-    listBatches(req: any, customerName?: string, status?: InventoryBatchStatus): Promise<BatchDto[]>;
+    listBatches(req: any, customerName?: string, status?: BatchStatusQuery): Promise<BatchDto[]>;
     getBatch(req: any, batchId: string): Promise<BatchDto>;
     reserveItems(req: any, orderId: string, dto: ReserveItemsDto): Promise<{
         reserved: number;
@@ -72,3 +73,4 @@ export declare class InventoryController {
         released: number;
     }>;
 }
+export {};

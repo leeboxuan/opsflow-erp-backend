@@ -1,5 +1,4 @@
 import { PrismaService } from '../prisma/prisma.service';
-import { InventoryBatchStatus } from '@prisma/client';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { ReceiveUnitsDto } from './dto/receive-units.dto';
 import { ReceiveStockDto } from './dto/receive-stock.dto';
@@ -8,6 +7,13 @@ import { DispatchItemsDto } from './dto/dispatch-items.dto';
 import { DeliverItemsDto } from './dto/deliver-items.dto';
 import { BatchDto } from './dto/batch.dto';
 import { InventoryItemDto } from './dto/inventory-item.dto';
+declare const InventoryBatchStatus: {
+    readonly Draft: "Draft";
+    readonly Open: "Open";
+    readonly Completed: "Completed";
+    readonly Cancelled: "Cancelled";
+};
+type InventoryBatchStatus = (typeof InventoryBatchStatus)[keyof typeof InventoryBatchStatus];
 export declare class InventoryService {
     private readonly prisma;
     constructor(prisma: PrismaService);
@@ -83,3 +89,4 @@ export declare class InventoryService {
     private toBatchDto;
     private generateId;
 }
+export {};

@@ -12,4 +12,10 @@ export class InventoryItemDto {
 
   @ApiProperty({ required: false, nullable: true })
   reference?: string | null;
+
+  @ApiProperty({ required: false, nullable: true, description: 'Display unit label (e.g. pcs, box)' })
+  unit?: string | null;
+
+  @ApiProperty({ description: 'Count of units in Available status (InventoryUnitStatus.Available)', example: 10 })
+  availableQty: number;
 }

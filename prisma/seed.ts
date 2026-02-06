@@ -1,4 +1,5 @@
 import { PrismaClient, Role, MembershipStatus } from '@prisma/client';
+import { inventorySeed } from "./inventorySeed";
 
 const prisma = new PrismaClient();
 
@@ -14,6 +15,7 @@ async function main() {
       slug: 'demo-logistics',
     },
   });
+  await inventorySeed(prisma, tenant.slug);
 
   console.log(`✅ Tenant: ${tenant.name} (${tenant.slug})`);
 

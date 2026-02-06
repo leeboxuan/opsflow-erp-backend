@@ -23,7 +23,7 @@ const receive_stock_dto_1 = require("./dto/receive-stock.dto");
 const reserve_items_dto_1 = require("./dto/reserve-items.dto");
 const dispatch_items_dto_1 = require("./dto/dispatch-items.dto");
 const deliver_items_dto_1 = require("./dto/deliver-items.dto");
-const client_1 = require("@prisma/client");
+const BATCH_STATUS_VALUES = ['Draft', 'Open', 'Completed', 'Cancelled'];
 let InventoryController = class InventoryController {
     constructor(inventoryService) {
         this.inventoryService = inventoryService;
@@ -126,7 +126,7 @@ __decorate([
     (0, common_1.Get)('batches'),
     (0, swagger_1.ApiOperation)({ summary: 'List inventory batches' }),
     (0, swagger_1.ApiQuery)({ name: 'customerName', required: false }),
-    (0, swagger_1.ApiQuery)({ name: 'status', required: false, enum: client_1.InventoryBatchStatus }),
+    (0, swagger_1.ApiQuery)({ name: 'status', required: false, enum: BATCH_STATUS_VALUES }),
     __param(0, (0, common_1.Request)()),
     __param(1, (0, common_1.Query)('customerName')),
     __param(2, (0, common_1.Query)('status')),

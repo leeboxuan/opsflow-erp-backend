@@ -12,7 +12,21 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.InventoryService = void 0;
 const common_1 = require("@nestjs/common");
 const prisma_service_1 = require("../prisma/prisma.service");
-const client_1 = require("@prisma/client");
+const InventoryBatchStatus = {
+    Draft: 'Draft',
+    Open: 'Open',
+    Completed: 'Completed',
+    Cancelled: 'Cancelled',
+};
+const InventoryUnitStatus = {
+    Available: 'Available',
+    Reserved: 'Reserved',
+    InTransit: 'InTransit',
+    Delivered: 'Delivered',
+    Returned: 'Returned',
+    Damaged: 'Damaged',
+    Cancelled: 'Cancelled',
+};
 let InventoryService = class InventoryService {
     constructor(prisma) {
         this.prisma = prisma;
@@ -23,7 +37,7 @@ let InventoryService = class InventoryService {
             where: {
                 tenantId,
                 inventoryItemId,
-                status: client_1.InventoryUnitStatus.Available,
+                status: InventoryUnitStatus.Available,
             },
         });
         await prisma.inventory_items.update({
@@ -57,16 +71,16 @@ let InventoryService = class InventoryService {
                 byItem.set(u.inventoryItemId, c);
             }
             switch (u.status) {
-                case client_1.InventoryUnitStatus.Available:
+                case InventoryUnitStatus.Available:
                     c.available++;
                     break;
-                case client_1.InventoryUnitStatus.Reserved:
+                case InventoryUnitStatus.Reserved:
                     c.reserved++;
                     break;
-                case client_1.InventoryUnitStatus.InTransit:
+                case InventoryUnitStatus.InTransit:
                     c.inTransit++;
                     break;
-                case client_1.InventoryUnitStatus.Delivered:
+                case InventoryUnitStatus.Delivered:
                     c.delivered++;
                     break;
             }
@@ -110,6 +124,8 @@ let InventoryService = class InventoryService {
                 sku: true,
                 name: true,
                 reference: true,
+                unit: true,
+                availableQty: true,
             },
             orderBy: { sku: 'asc' },
         });
@@ -118,6 +134,8 @@ let InventoryService = class InventoryService {
             sku: item.sku,
             name: item.name,
             reference: item.reference,
+            unit: item.unit,
+            availableQty: item.availableQty ?? 0,
         }));
     }
     async createBatch(tenantId, dto) {
@@ -153,7 +171,7 @@ let InventoryService = class InventoryService {
                 tenantId,
                 batchCode,
                 notes: dto.notes ?? null,
-                status: client_1.InventoryBatchStatus.Draft,
+                status: InventoryBatchStatus.Draft,
             },
         });
         return this.toBatchDto(batch, {
@@ -171,7 +189,7 @@ let InventoryService = class InventoryService {
         if (!batch) {
             throw new common_1.NotFoundException('Batch not found');
         }
-        if (batch.status === client_1.InventoryBatchStatus.Cancelled) {
+        if (batch.status === InventoryBatchStatus.Cancelled) {
             throw new common_1.BadRequestException('Cannot receive into a cancelled batch');
         }
         const format = dto.unitSkuFormat === 'ITEM-SEQ' ? 'ITEM-SEQ' : 'ITEM-BATCH-SEQ';
@@ -249,7 +267,7 @@ let InventoryService = class InventoryService {
                         inventoryItemId: line.inventoryItemId,
                         batchId,
                         unitSku,
-                        status: client_1.InventoryUnitStatus.Available,
+                        status: InventoryUnitStatus.Available,
                     });
                 }
                 await tx.inventory_units.createMany({
@@ -264,11 +282,11 @@ let InventoryService = class InventoryService {
                     totalInBatch,
                 });
             }
-            if (batch.status === client_1.InventoryBatchStatus.Draft) {
+            if (batch.status === InventoryBatchStatus.Draft) {
                 await tx.inventory_batches.update({
                     where: { id: batchId },
                     data: {
-                        status: client_1.InventoryBatchStatus.Open,
+                        status: InventoryBatchStatus.Open,
                         receivedAt: new Date(),
                     },
                 });
@@ -324,16 +342,16 @@ let InventoryService = class InventoryService {
             }
             const count = row._count?.id ?? 0;
             switch (row.status) {
-                case client_1.InventoryUnitStatus.Available:
+                case InventoryUnitStatus.Available:
                     c.available = count;
                     break;
-                case client_1.InventoryUnitStatus.Reserved:
+                case InventoryUnitStatus.Reserved:
                     c.reserved = count;
                     break;
-                case client_1.InventoryUnitStatus.InTransit:
+                case InventoryUnitStatus.InTransit:
                     c.inTransit = count;
                     break;
-                case client_1.InventoryUnitStatus.Delivered:
+                case InventoryUnitStatus.Delivered:
                     c.delivered = count;
                     break;
             }
@@ -373,7 +391,7 @@ let InventoryService = class InventoryService {
         if (!batch) {
             throw new common_1.NotFoundException('Batch not found');
         }
-        if (batch.status === client_1.InventoryBatchStatus.Cancelled) {
+        if (batch.status === InventoryBatchStatus.Cancelled) {
             throw new common_1.BadRequestException('Cannot receive units into a cancelled batch');
         }
         return await this.prisma.$transaction(async (tx) => {
@@ -438,7 +456,7 @@ let InventoryService = class InventoryService {
                     inventoryItemId: inventoryItem.id,
                     batchId,
                     unitSku,
-                    status: client_1.InventoryUnitStatus.Available,
+                    status: InventoryUnitStatus.Available,
                 });
             }
             await tx.inventory_units.createMany({
@@ -505,7 +523,7 @@ let InventoryService = class InventoryService {
                 const unitWhere = {
                     tenantId,
                     inventoryItemId: inventoryItem.id,
-                    status: client_1.InventoryUnitStatus.Available,
+                    status: InventoryUnitStatus.Available,
                 };
                 if (item.batchId) {
                     unitWhere.batchId = item.batchId;
@@ -524,7 +542,7 @@ let InventoryService = class InventoryService {
                         id: { in: unitIds },
                     },
                     data: {
-                        status: client_1.InventoryUnitStatus.Reserved,
+                        status: InventoryUnitStatus.Reserved,
                         transportOrderId: orderId,
                     },
                 });
@@ -581,7 +599,7 @@ let InventoryService = class InventoryService {
             const where = {
                 tenantId,
                 transportOrderId: orderId,
-                status: client_1.InventoryUnitStatus.Reserved,
+                status: InventoryUnitStatus.Reserved,
             };
             if (dto.unitSkus && dto.unitSkus.length > 0) {
                 where.unitSku = { in: dto.unitSkus };
@@ -591,7 +609,7 @@ let InventoryService = class InventoryService {
                 throw new common_1.BadRequestException('No reserved units found for this order');
             }
             const updateData = {
-                status: client_1.InventoryUnitStatus.InTransit,
+                status: InventoryUnitStatus.InTransit,
             };
             if (dto.tripId) {
                 updateData.tripId = dto.tripId;
@@ -621,7 +639,7 @@ let InventoryService = class InventoryService {
             const where = {
                 tenantId,
                 transportOrderId: orderId,
-                status: client_1.InventoryUnitStatus.InTransit,
+                status: InventoryUnitStatus.InTransit,
             };
             if (dto.unitSkus && dto.unitSkus.length > 0) {
                 where.unitSku = { in: dto.unitSkus };
@@ -633,7 +651,7 @@ let InventoryService = class InventoryService {
             await tx.inventory_units.updateMany({
                 where: { id: { in: units.map((u) => u.id) } },
                 data: {
-                    status: client_1.InventoryUnitStatus.Delivered,
+                    status: InventoryUnitStatus.Delivered,
                 },
             });
             const itemIds = [...new Set(units.map((u) => u.inventoryItemId))];
@@ -655,7 +673,7 @@ let InventoryService = class InventoryService {
                 where: {
                     tenantId,
                     transportOrderId: orderId,
-                    status: client_1.InventoryUnitStatus.Reserved,
+                    status: InventoryUnitStatus.Reserved,
                 },
             });
             if (units.length === 0) {
@@ -666,7 +684,7 @@ let InventoryService = class InventoryService {
                     id: { in: units.map((u) => u.id) },
                 },
                 data: {
-                    status: client_1.InventoryUnitStatus.Available,
+                    status: InventoryUnitStatus.Available,
                     transportOrderId: null,
                 },
             });
@@ -686,28 +704,28 @@ let InventoryService = class InventoryService {
                 where: {
                     tenantId,
                     batchId,
-                    status: client_1.InventoryUnitStatus.Available,
+                    status: InventoryUnitStatus.Available,
                 },
             }),
             this.prisma.inventory_units.count({
                 where: {
                     tenantId,
                     batchId,
-                    status: client_1.InventoryUnitStatus.Reserved,
+                    status: InventoryUnitStatus.Reserved,
                 },
             }),
             this.prisma.inventory_units.count({
                 where: {
                     tenantId,
                     batchId,
-                    status: client_1.InventoryUnitStatus.InTransit,
+                    status: InventoryUnitStatus.InTransit,
                 },
             }),
             this.prisma.inventory_units.count({
                 where: {
                     tenantId,
                     batchId,
-                    status: client_1.InventoryUnitStatus.Delivered,
+                    status: InventoryUnitStatus.Delivered,
                 },
             }),
         ]);

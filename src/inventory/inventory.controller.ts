@@ -20,7 +20,10 @@ import { DispatchItemsDto } from './dto/dispatch-items.dto';
 import { DeliverItemsDto } from './dto/deliver-items.dto';
 import { BatchDto } from './dto/batch.dto';
 import { InventoryItemDto } from './dto/inventory-item.dto';
-import { InventoryBatchStatus } from '@prisma/client';
+
+/** Allowed batch status filter (matches Prisma InventoryBatchStatus) */
+const BATCH_STATUS_VALUES = ['Draft', 'Open', 'Completed', 'Cancelled'] as const;
+type BatchStatusQuery = (typeof BATCH_STATUS_VALUES)[number];
 
 @ApiTags('inventory')
 @Controller('inventory')
@@ -124,11 +127,11 @@ export class InventoryController {
   @Get('batches')
   @ApiOperation({ summary: 'List inventory batches' })
   @ApiQuery({ name: 'customerName', required: false })
-  @ApiQuery({ name: 'status', required: false, enum: InventoryBatchStatus })
+  @ApiQuery({ name: 'status', required: false, enum: BATCH_STATUS_VALUES })
   async listBatches(
     @Request() req: any,
     @Query('customerName') customerName?: string,
-    @Query('status') status?: InventoryBatchStatus,
+    @Query('status') status?: BatchStatusQuery,
   ): Promise<BatchDto[]> {
     const tenantId = req.tenant.tenantId;
     return this.inventoryService.listBatches(tenantId, customerName, status);

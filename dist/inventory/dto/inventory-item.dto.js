@@ -30,4 +30,12 @@ __decorate([
     (0, swagger_1.ApiProperty)({ required: false, nullable: true }),
     __metadata("design:type", String)
 ], InventoryItemDto.prototype, "reference", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ required: false, nullable: true, description: 'Display unit label (e.g. pcs, box)' }),
+    __metadata("design:type", String)
+], InventoryItemDto.prototype, "unit", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ description: 'Count of units in Available status (InventoryUnitStatus.Available)', example: 10 }),
+    __metadata("design:type", Number)
+], InventoryItemDto.prototype, "availableQty", void 0);
 //# sourceMappingURL=inventory-item.dto.js.map

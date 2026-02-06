@@ -5,10 +5,6 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  InventoryBatchStatus,
-  InventoryUnitStatus,
-} from '@prisma/client';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { ReceiveUnitsDto } from './dto/receive-units.dto';
 import { ReceiveStockDto } from './dto/receive-stock.dto';
@@ -17,6 +13,26 @@ import { DispatchItemsDto } from './dto/dispatch-items.dto';
 import { DeliverItemsDto } from './dto/deliver-items.dto';
 import { BatchDto } from './dto/batch.dto';
 import { InventoryItemDto } from './dto/inventory-item.dto';
+
+// Local enums matching Prisma schema (avoids @prisma/client enum resolution issues)
+const InventoryBatchStatus = {
+  Draft: 'Draft',
+  Open: 'Open',
+  Completed: 'Completed',
+  Cancelled: 'Cancelled',
+} as const;
+type InventoryBatchStatus = (typeof InventoryBatchStatus)[keyof typeof InventoryBatchStatus];
+
+const InventoryUnitStatus = {
+  Available: 'Available',
+  Reserved: 'Reserved',
+  InTransit: 'InTransit',
+  Delivered: 'Delivered',
+  Returned: 'Returned',
+  Damaged: 'Damaged',
+  Cancelled: 'Cancelled',
+} as const;
+type InventoryUnitStatus = (typeof InventoryUnitStatus)[keyof typeof InventoryUnitStatus];
 
 @Injectable()
 export class InventoryService {
@@ -157,15 +173,20 @@ export class InventoryService {
         sku: true,
         name: true,
         reference: true,
+        unit: true,
+        availableQty: true,
       },
       orderBy: { sku: 'asc' },
     });
+
 
     return items.map((item) => ({
       id: item.id,
       sku: item.sku,
       name: item.name,
       reference: item.reference,
+      unit: item.unit,
+      availableQty: item.availableQty ?? 0,
     }));
   }
 

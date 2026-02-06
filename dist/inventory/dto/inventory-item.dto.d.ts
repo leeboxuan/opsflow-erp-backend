@@ -3,4 +3,6 @@ export declare class InventoryItemDto {
     sku?: string;
     name?: string;
     reference?: string | null;
+    unit?: string | null;
+    availableQty: number;
 }

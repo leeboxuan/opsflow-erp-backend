@@ -314,6 +314,7 @@ model inventory_items {
   sku          String
   name         String
   reference    String?
+  unit         String?  // Display unit label (e.g. "pcs", "box") for mobile
   availableQty Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime
