@@ -223,6 +223,7 @@ export class TransportService {
         transport_order_items: {
           include: {
             inventory_item: true,
+            units: { include: { inventory_unit: true } },
           },
         },
       },

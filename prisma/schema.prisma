@@ -8,30 +8,30 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-
 model Tenant {
-  id                       String                    @id @default(cuid())
-  name                     String
-  slug                     String                    @unique
-  createdAt                DateTime                  @default(now())
-  updatedAt                DateTime                  @updatedAt
-  driver_wallet_entries    driver_wallet_entries[]
-  driverWalletTransactions DriverWalletTransaction[]
-  drivers                  drivers[]
-  driverLocationLatest     DriverLocationLatest[]
-  eventLogs                EventLog[]
-  inventory_items          inventory_items[]
-  inventory_batches        inventory_batches[]
-  inventory_batch_items    inventory_batch_items[]
-  inventory_units          inventory_units[]
-  podPhotoDocuments        PodPhotoDocument[]
-  pods                     Pod[]
-  stops                    Stop[]
-  memberships              TenantMembership[]
-  transportOrders          TransportOrder[]
-  transport_order_items    transport_order_items[]
-  trips                    Trip[]
-  vehicles                 Vehicle[]
+  id                         String                       @id @default(cuid())
+  name                       String
+  slug                       String                       @unique
+  createdAt                  DateTime                     @default(now())
+  updatedAt                  DateTime                     @updatedAt
+  driver_wallet_entries      driver_wallet_entries[]
+  driverWalletTransactions   DriverWalletTransaction[]
+  drivers                    drivers[]
+  driverLocationLatest       DriverLocationLatest[]
+  eventLogs                  EventLog[]
+  inventory_items            inventory_items[]
+  inventory_batches          inventory_batches[]
+  inventory_batch_items      inventory_batch_items[]
+  inventory_units            inventory_units[]
+  podPhotoDocuments          PodPhotoDocument[]
+  pods                       Pod[]
+  stops                      Stop[]
+  memberships                TenantMembership[]
+  transportOrders            TransportOrder[]
+  transport_order_items      transport_order_items[]
+  trips                      Trip[]
+  vehicles                   Vehicle[]
+  transport_order_item_units transport_order_item_units[]
 
   @@map("tenants")
 }
@@ -73,20 +73,20 @@ model TenantMembership {
 }
 
 model TransportOrder {
-  id                         String                    @id @default(cuid())
-  tenantId                   String
-  customerRef                String
-  status                     OrderStatus               @default(Draft)
-  pickupWindowStart          DateTime?
-  pickupWindowEnd            DateTime?
-  deliveryWindowStart        DateTime?
-  deliveryWindowEnd          DateTime?
+  id                  String      @id @default(cuid())
+  tenantId            String
+  customerRef         String
+  status              OrderStatus @default(Draft)
+  pickupWindowStart   DateTime?
+  pickupWindowEnd     DateTime?
+  deliveryWindowStart DateTime?
+  deliveryWindowEnd   DateTime?
 
   // ✅ already exists
-  notes                      String?
+  notes String?
 
   // ✅ NEW
-  customerContactNumber      String?
+  customerContactNumber String?
 
   createdAt                  DateTime                  @default(now())
   updatedAt                  DateTime                  @updatedAt
@@ -316,16 +316,16 @@ model drivers {
 }
 
 model inventory_items {
-  id           String   @id
-  tenantId     String
-  sku          String
-  name         String
-  reference    String?
-  availableQty Int      @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime
-  tenants      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  inventory_units inventory_units[]
+  id                    String                  @id
+  tenantId              String
+  sku                   String
+  name                  String
+  reference             String?
+  availableQty          Int                     @default(0)
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime
+  tenants               Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inventory_units       inventory_units[]
   inventory_batch_items inventory_batch_items[]
   transport_order_items transport_order_items[]
 
@@ -423,19 +423,19 @@ enum InventoryUnitStatus {
 }
 
 model inventory_batches {
-  id           String                 @id @default(cuid())
-  tenantId     String
-  batchCode    String
-  customerName String?
-  customerRef  String?
-  receivedAt   DateTime?
-  notes        String?
-  status       InventoryBatchStatus   @default(Draft)
-  createdAt    DateTime               @default(now())
-  updatedAt    DateTime               @updatedAt
-  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                    String                  @id @default(cuid())
+  tenantId              String
+  batchCode             String
+  customerName          String?
+  customerRef           String?
+  receivedAt            DateTime?
+  notes                 String?
+  status                InventoryBatchStatus    @default(Draft)
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  tenant                Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   inventory_batch_items inventory_batch_items[]
-  inventory_units inventory_units[]
+  inventory_units       inventory_units[]
   transport_order_items transport_order_items[]
 
   @@unique([tenantId, batchCode])
@@ -445,16 +445,16 @@ model inventory_batches {
 }
 
 model inventory_batch_items {
-  id               String   @id @default(cuid())
-  tenantId         String
-  batchId          String
-  inventoryItemId  String
-  qty              Int
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  batch            inventory_batches @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  inventory_item   inventory_items   @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  id              String            @id @default(cuid())
+  tenantId        String
+  batchId         String
+  inventoryItemId String
+  qty             Int
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  batch           inventory_batches @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  inventory_item  inventory_items   @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
 
   @@unique([batchId, inventoryItemId])
   @@index([tenantId, batchId])
@@ -462,23 +462,24 @@ model inventory_batch_items {
 }
 
 model inventory_units {
-  id               String              @id @default(cuid())
+  id               String                       @id @default(cuid())
   tenantId         String
-  inventoryItemId String
+  inventoryItemId  String
   batchId          String
   unitSku          String
-  status           InventoryUnitStatus @default(Available)
+  status           InventoryUnitStatus          @default(Available)
   transportOrderId String?
   tripId           String?
   stopId           String?
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @updatedAt
-  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  inventory_item   inventory_items    @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
-  batch            inventory_batches   @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  transport_order  TransportOrder?    @relation(fields: [transportOrderId], references: [id], onDelete: SetNull)
-  trip             Trip?              @relation(fields: [tripId], references: [id], onDelete: SetNull)
-  stop             Stop?               @relation(fields: [stopId], references: [id], onDelete: SetNull)
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
+  tenant           Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inventory_item   inventory_items              @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  batch            inventory_batches            @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  transport_order  TransportOrder?              @relation(fields: [transportOrderId], references: [id], onDelete: SetNull)
+  trip             Trip?                        @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  stop             Stop?                        @relation(fields: [stopId], references: [id], onDelete: SetNull)
+  order_item_links transport_order_item_units[]
 
   @@unique([tenantId, unitSku])
   @@index([tenantId, inventoryItemId, status])
@@ -489,22 +490,40 @@ model inventory_units {
 }
 
 model transport_order_items {
-  id               String            @id @default(cuid())
+  id               String                       @id @default(cuid())
   tenantId         String
   transportOrderId String
-  inventoryItemId String
+  inventoryItemId  String
   batchId          String?
   qty              Int
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  transport_order  TransportOrder   @relation(fields: [transportOrderId], references: [id], onDelete: Cascade)
-  inventory_item   inventory_items  @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
-  batch            inventory_batches? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
+  tenant           Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  transport_order  TransportOrder               @relation(fields: [transportOrderId], references: [id], onDelete: Cascade)
+  inventory_item   inventory_items              @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  batch            inventory_batches?           @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  units            transport_order_item_units[]
 
   @@unique([transportOrderId, inventoryItemId])
   @@index([tenantId, transportOrderId])
   @@index([tenantId, inventoryItemId])
   @@index([tenantId, batchId])
   @@map("transport_order_items")
+}
+
+model transport_order_item_units {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  transportOrderItemId String
+  inventoryUnitId      String
+  createdAt            DateTime @default(now())
+
+  tenant         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order_item     transport_order_items @relation(fields: [transportOrderItemId], references: [id], onDelete: Cascade)
+  inventory_unit inventory_units       @relation(fields: [inventoryUnitId], references: [id], onDelete: Cascade)
+
+  @@unique([transportOrderItemId, inventoryUnitId])
+  @@index([tenantId, transportOrderItemId])
+  @@index([tenantId, inventoryUnitId])
+  @@map("transport_order_item_units")
 }
