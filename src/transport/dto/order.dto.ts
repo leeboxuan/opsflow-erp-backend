@@ -44,4 +44,16 @@ export interface OrderDto {
   createdAt: Date;
   updatedAt: Date;
   stops?: StopDto[];
+  items?: Array<{
+    id: string;
+    tenantId: string;
+    transportOrderId: string;
+    inventoryItemId: string;
+    batchId: string | null;
+    qty: number;
+    sku: string | null;
+    name: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }>;
 }

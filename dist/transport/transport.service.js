@@ -36,6 +36,8 @@ let TransportService = class TransportService {
                     orderRef: dto.orderRef,
                     customerName: dto.customerName,
                     customerRef: dto.customerName,
+                    customerContactNumber: dto.customerContactNumber ?? null,
+                    notes: dto.notes ?? null,
                     status: client_1.OrderStatus.Draft,
                 },
             });
@@ -169,16 +171,17 @@ let TransportService = class TransportService {
             },
             include: {
                 stops: {
-                    orderBy: {
-                        sequence: 'asc',
-                    },
+                    orderBy: { sequence: "asc" },
                     include: {
                         pods: {
                             take: 1,
-                            orderBy: {
-                                createdAt: 'desc',
-                            },
+                            orderBy: { createdAt: "desc" },
                         },
+                    },
+                },
+                transport_order_items: {
+                    include: {
+                        inventory_item: true,
                     },
                 },
             },
@@ -325,6 +328,7 @@ let TransportService = class TransportService {
             orderRef: order.orderRef,
             customerRef: order.customerRef,
             customerName: order.customerName,
+            customerContactNumber: order.customerContactNumber ?? null,
             status: order.status,
             pickupWindowStart: order.pickupWindowStart,
             pickupWindowEnd: order.pickupWindowEnd,
@@ -347,6 +351,15 @@ let TransportService = class TransportService {
             deliveryWindowStart: order.deliveryWindowStart,
             deliveryWindowEnd: order.deliveryWindowEnd,
             notes: order.notes,
+            items: order.transport_order_items?.map((it) => ({
+                id: it.id,
+                inventoryItemId: it.inventoryItemId,
+                batchId: it.batchId ?? null,
+                qty: it.qty,
+                sku: it.inventory_item?.sku ?? null,
+                name: it.inventory_item?.name ?? null,
+            })) ?? [],
+            customerContactNumber: order.customerContactNumber ?? null,
             createdAt: order.createdAt,
             updatedAt: order.updatedAt,
             stops: order.stops

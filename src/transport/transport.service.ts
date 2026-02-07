@@ -210,16 +210,19 @@ export class TransportService {
       },
       include: {
         stops: {
-          orderBy: {
-            sequence: 'asc',
-          },
+          orderBy: { sequence: "asc" },
           include: {
             pods: {
               take: 1,
-              orderBy: {
-                createdAt: 'desc',
-              },
+              orderBy: { createdAt: "desc" },
             },
+          },
+        },
+    
+        // ✅ ADD THIS
+        transport_order_items: {
+          include: {
+            inventory_item: true,
           },
         },
       },
@@ -408,6 +411,7 @@ export class TransportService {
       notes: order.notes,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
+
     };
   }
 
@@ -424,7 +428,14 @@ export class TransportService {
       deliveryWindowEnd: order.deliveryWindowEnd,
       notes: order.notes,
       // ✅ NEW
-
+      items: order.transport_order_items?.map((it: any) => ({
+        id: it.id,
+        inventoryItemId: it.inventoryItemId,
+        batchId: it.batchId ?? null,
+        qty: it.qty,
+        sku: it.inventory_item?.sku ?? null,
+        name: it.inventory_item?.name ?? null,
+      })) ?? [],
       customerContactNumber: order.customerContactNumber ?? null,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,

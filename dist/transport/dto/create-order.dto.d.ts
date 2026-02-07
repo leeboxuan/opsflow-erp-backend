@@ -16,6 +16,8 @@ export declare class CreateOrderItemDto {
 export declare class CreateOrderDto {
     orderRef: string;
     customerName: string;
+    customerContactNumber?: string;
+    notes?: string;
     stops: CreateOrderStopDto[];
     items?: CreateOrderItemDto[];
 }

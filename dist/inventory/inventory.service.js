@@ -124,16 +124,31 @@ let InventoryService = class InventoryService {
                 sku: true,
                 name: true,
                 reference: true,
-                availableQty: true,
             },
             orderBy: { sku: 'asc' },
         });
+        const ids = items.map((i) => i.id);
+        if (ids.length === 0)
+            return [];
+        const counts = await this.prisma.inventory_units.groupBy({
+            by: ['inventoryItemId'],
+            where: {
+                tenantId,
+                inventoryItemId: { in: ids },
+                status: InventoryUnitStatus.Available,
+            },
+            _count: { _all: true },
+        });
+        const availableByItemId = new Map();
+        for (const c of counts) {
+            availableByItemId.set(c.inventoryItemId, c._count._all);
+        }
         return items.map((item) => ({
             id: item.id,
             sku: item.sku,
             name: item.name,
             reference: item.reference,
-            availableQty: item.availableQty ?? 0,
+            availableQty: availableByItemId.get(item.id) ?? 0,
         }));
     }
     async createBatch(tenantId, dto) {

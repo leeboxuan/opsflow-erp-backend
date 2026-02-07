@@ -88,6 +88,28 @@ __decorate([
     __metadata("design:type", String)
 ], CreateOrderDto.prototype, "customerName", void 0);
 __decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        description: 'Customer contact number in E.164 (SG only). Example: +6591893401',
+        example: '+6591893401',
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Matches)(/^\+65\d{8}$/, {
+        message: 'customerContactNumber must be +65 followed by 8 digits',
+    }),
+    __metadata("design:type", String)
+], CreateOrderDto.prototype, "customerContactNumber", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        description: 'Notes / special instructions (max 500 chars)',
+        example: 'Call before arrival. Leave with guard if no answer.',
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(500, { message: 'notes cannot exceed 500 characters' }),
+    __metadata("design:type", String)
+], CreateOrderDto.prototype, "notes", void 0);
+__decorate([
     (0, swagger_1.ApiProperty)({ type: [CreateOrderStopDto], minItems: 1 }),
     (0, class_validator_1.IsArray)(),
     (0, class_validator_1.ArrayMinSize)(1),
