@@ -218,7 +218,7 @@ export class TransportService {
             },
           },
         },
-    
+
         // ✅ ADD THIS
         transport_order_items: {
           include: {
@@ -429,14 +429,17 @@ export class TransportService {
       deliveryWindowEnd: order.deliveryWindowEnd,
       notes: order.notes,
       // ✅ NEW
-      items: order.transport_order_items?.map((it: any) => ({
-        id: it.id,
-        inventoryItemId: it.inventoryItemId,
-        batchId: it.batchId ?? null,
-        qty: it.qty,
-        sku: it.inventory_item?.sku ?? null,
-        name: it.inventory_item?.name ?? null,
-      })) ?? [],
+      items:
+        order.transport_order_items?.map((it: any) => ({
+          id: it.id,
+          inventoryItemId: it.inventoryItemId,
+          batchId: it.batchId ?? null,
+          qty: it.qty,
+          sku: it.inventory_item?.sku ?? null,
+          name: it.inventory_item?.name ?? null,
+          unitSkus:
+            it.units?.map((u: any) => u.inventory_unit?.unitSku).filter(Boolean) ?? [],
+        })) ?? [],
       customerContactNumber: order.customerContactNumber ?? null,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,

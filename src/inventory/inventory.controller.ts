@@ -20,6 +20,9 @@ import { DispatchItemsDto } from './dto/dispatch-items.dto';
 import { DeliverItemsDto } from './dto/deliver-items.dto';
 import { BatchDto } from './dto/batch.dto';
 import { InventoryItemDto } from './dto/inventory-item.dto';
+import { ReleaseUnitsDto } from './dto/release-units.dto';
+import { StockInDto } from './dto/stock-in.dto';
+import { SearchUnitsQueryDto } from './dto/search-units-query.dto';
 
 /** Allowed batch status filter (matches Prisma InventoryBatchStatus) */
 const BATCH_STATUS_VALUES = ['Draft', 'Open', 'Completed', 'Cancelled'] as const;
@@ -189,4 +192,65 @@ export class InventoryController {
     const tenantId = req.tenant.tenantId;
     return this.inventoryService.cancelReservation(tenantId, orderId);
   }
+
+  @Post('orders/:orderId/release-units')
+async releaseUnits(
+  @Request() req: any,
+  @Param('orderId') orderId: string,
+  @Body() dto: ReleaseUnitsDto,
+): Promise<{ released: number }> {
+  const tenantId = req.tenant.tenantId;
+  return this.inventoryService.releaseUnits(tenantId, orderId, dto);
 }
+
+@Get('units')
+async listUnits(
+  @Request() req: any,
+  @Query('inventoryItemId') inventoryItemId: string,
+  @Query('status') status: string = 'Available',
+  @Query('limit') limit: string = '50',
+) {
+  const tenantId = req.tenant.tenantId;
+  return this.inventoryService.listUnits(tenantId, inventoryItemId, status, Number(limit));
+}
+
+@Get('units/search')
+@ApiOperation({ summary: 'Search inventory units by unitSku prefix/search and filters' })
+@ApiQuery({ name: 'prefix', required: false })
+@ApiQuery({ name: 'search', required: false })
+@ApiQuery({ name: 'itemSku', required: false })
+@ApiQuery({ name: 'status', required: false })
+@ApiQuery({ name: 'batchId', required: false })
+@ApiQuery({ name: 'transportOrderId', required: false })
+@ApiQuery({ name: 'limit', required: false })
+async searchUnits(
+  @Request() req: any,
+  @Query() query: SearchUnitsQueryDto,
+): Promise<
+  Array<{
+    id: string;
+    unitSku: string;
+    status: string;
+    inventoryItemId: string;
+    itemSku: string;
+    batchId: string;
+    transportOrderId: string | null;
+  }>
+> {
+  const tenantId = req.tenant.tenantId;
+  return this.inventoryService.searchUnits(tenantId, query);
+}
+
+
+@Post('stock-in')
+@ApiOperation({ summary: 'Create a batch + receive units from a client item sheet' })
+async stockIn(
+  @Request() req: any,
+  @Body() dto: StockInDto,
+) {
+  const tenantId = req.tenant.tenantId;
+  return this.inventoryService.stockInFromClientSheet(tenantId, dto);
+}
+
+}
+

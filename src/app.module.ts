@@ -10,6 +10,7 @@ import { DriversModule } from './drivers/drivers.module';
 import { AdminModule } from './admin/admin.module';
 import { DriverModule } from './driver/driver.module';
 import { InventoryModule } from './inventory/inventory.module';
+import { CustomersModule } from './customers/customers.module';
 
 @Module({
   imports: [
@@ -26,7 +27,8 @@ import { InventoryModule } from './inventory/inventory.module';
     AdminModule,
     DriverModule,
     InventoryModule,
+    CustomersModule
   ],
   controllers: [AppController],
 })
-export class AppModule {}
+export class AppModule { }

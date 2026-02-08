@@ -32,6 +32,7 @@ model Tenant {
   trips                      Trip[]
   vehicles                   Vehicle[]
   transport_order_item_units transport_order_item_units[]
+  customer_companies         customer_companies[]
 
   @@map("tenants")
 }
@@ -53,6 +54,40 @@ model User {
   @@index([email])
   @@index([authUserId])
   @@map("users")
+}
+
+model customer_companies {
+  id             String              @id @default(cuid())
+  tenantId       String
+  name           String
+  normalizedName String
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contacts       customer_contacts[]
+  batches        inventory_batches[]
+
+  @@unique([tenantId, normalizedName])
+  @@index([tenantId])
+  @@map("customer_companies")
+}
+
+model customer_contacts {
+  id              String             @id @default(cuid())
+  companyId        String
+  name             String
+  email            String
+  normalizedEmail  String
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  company          customer_companies @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  batches          inventory_batches[]
+
+  @@unique([companyId, normalizedEmail])
+  @@index([companyId])
+  @@map("customer_contacts")
 }
 
 model TenantMembership {
@@ -426,14 +461,26 @@ model inventory_batches {
   id                    String                  @id @default(cuid())
   tenantId              String
   batchCode             String
+
+  // ✅ Stock-In v2 fields
+  batchDescription      String?
+  customerCompanyId     String?
+  customerContactId     String?
+
+  // Legacy fields (kept for backward compatibility)
   customerName          String?
   customerRef           String?
+
   receivedAt            DateTime?
   notes                 String?
   status                InventoryBatchStatus    @default(Draft)
   createdAt             DateTime                @default(now())
   updatedAt             DateTime                @updatedAt
+
   tenant                Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerCompany       customer_companies?     @relation(fields: [customerCompanyId], references: [id], onDelete: SetNull)
+  customerContact       customer_contacts?      @relation(fields: [customerContactId], references: [id], onDelete: SetNull)
+
   inventory_batch_items inventory_batch_items[]
   inventory_units       inventory_units[]
   transport_order_items transport_order_items[]
@@ -441,6 +488,8 @@ model inventory_batches {
   @@unique([tenantId, batchCode])
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
+  @@index([tenantId, customerCompanyId])
+  @@index([tenantId, customerContactId])
   @@map("inventory_batches")
 }
 

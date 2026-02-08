@@ -111,20 +111,18 @@ async function seedInventory(tenantId: string) {
   for (const item of inventory) {
     // Create / update inventory item
     const inventoryItem = await prisma.inventory_items.upsert({
-      where: {
-        tenantId_sku: {
-          tenantId,
-          sku: item.sku,
-        },
-      },
+      where: { tenantId_sku: { tenantId, sku: item.sku } },
       update: {
         name: item.name,
+        availableQty: item.units, // ✅ keep in sync
+        updatedAt: new Date(),
       },
       create: {
         id: `${tenantId}_${item.sku}`,
         tenantId,
         sku: item.sku,
         name: item.name,
+        availableQty: item.units, // ✅ keep in sync
         updatedAt: new Date(),
       },
     });
@@ -148,10 +146,13 @@ async function seedInventory(tenantId: string) {
       let suffix = 0;
       const newUnits = Array.from({ length: unitsToCreate }).map(() => {
         let unitSku: string;
+      
         do {
-          unitSku = `${item.sku}-${suffix++}`;
+          unitSku = `${item.sku}-${String(suffix++).padStart(4, '0')}`; // ✅ MAT-001-0001
         } while (usedSkus.has(unitSku));
+      
         usedSkus.add(unitSku);
+      
         return {
           tenantId,
           inventoryItemId: inventoryItem.id,
