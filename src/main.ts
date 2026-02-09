@@ -18,6 +18,7 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule);
   
+
   // Set global prefix for all routes
   app.setGlobalPrefix('api');
   
@@ -33,14 +34,24 @@ async function bootstrap() {
   // Enable CORS for web app(s)
 // WEB_APP_URLS supports comma-separated origins, e.g. "http://localhost:3000,https://opsflow-erp-web.onrender.com"
 const rawOrigins = process.env.WEB_APP_URLS || process.env.WEB_APP_URL || 'http://localhost:3000';
-const allowedOrigins = rawOrigins
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+const allowedOrigins = process.env.WEB_APP_URLS
+  ? process.env.WEB_APP_URLS.split(',').map(o => o.trim())
+  : ['http://localhost:3000'];
 
 app.enableCors({
-  origin: allowedOrigins,
+  origin: (origin, callback) => {
+    // allow server-to-server or curl (no origin)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS blocked for origin: ${origin}`), false);
+  },
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 });
 
   // Swagger documentation setup
