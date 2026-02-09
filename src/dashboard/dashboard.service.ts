@@ -1,8 +1,11 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
-import { PrismaService } from "../prisma/prisma.service";
-import { InventoryUnitStatus, OrderStatus, TripStatus } from "@prisma/client";
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { InventoryUnitStatus, OrderStatus, TripStatus } from '@prisma/client';
 
-function toCountMap<T extends string>(rows: Array<{ key: T; count: number }>, allKeys: T[]) {
+function toCountMap<T extends string>(
+  rows: Array<{ key: T; count: number }>,
+  allKeys: T[],
+) {
   const map: Record<string, number> = {};
   for (const k of allKeys) map[k] = 0;
   for (const r of rows) map[r.key] = r.count;
@@ -15,19 +18,19 @@ export class DashboardService {
 
   async getSummary(tenantId: string | null) {
     if (!tenantId) {
-      // Your system supports superadmin without tenant context,
-      // but dashboard numbers without tenant make no sense.
-      throw new BadRequestException("Tenant context is required for dashboard");
+      throw new BadRequestException('Tenant context is required for dashboard');
     }
 
     const now = new Date();
     const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
     // ---- Orders ----
-    const orderTotal = await this.prisma.transportOrder.count({ where: { tenantId } });
+    const orderTotal = await this.prisma.transportOrder.count({
+      where: { tenantId },
+    });
 
     const orderByStatusRaw = await this.prisma.transportOrder.groupBy({
-      by: ["status"],
+      by: ['status'],
       where: { tenantId },
       _count: { _all: true },
     });
@@ -47,7 +50,7 @@ export class DashboardService {
     const tripTotal = await this.prisma.trip.count({ where: { tenantId } });
 
     const tripByStatusRaw = await this.prisma.trip.groupBy({
-      by: ["status"],
+      by: ['status'],
       where: { tenantId },
       _count: { _all: true },
     });
@@ -57,7 +60,6 @@ export class DashboardService {
       Object.values(TripStatus),
     );
 
-    // “Active today”: either updated recently OR started recently.
     const tripsActiveToday = await this.prisma.trip.count({
       where: {
         tenantId,
@@ -67,10 +69,12 @@ export class DashboardService {
     });
 
     // ---- Inventory Units ----
-    const unitsTotal = await this.prisma.inventory_units.count({ where: { tenantId } });
+    const unitsTotal = await this.prisma.inventory_units.count({
+      where: { tenantId },
+    });
 
     const unitsByStatusRaw = await this.prisma.inventory_units.groupBy({
-      by: ["status"],
+      by: ['status'],
       where: { tenantId },
       _count: { _all: true },
     });
@@ -85,7 +89,6 @@ export class DashboardService {
     // ---- Drivers ----
     const driversTotal = await this.prisma.drivers.count({ where: { tenantId } });
 
-    // “Active now”: drivers attached to active trips (distinct)
     const activeTrips = await this.prisma.trip.findMany({
       where: {
         tenantId,
@@ -95,13 +98,14 @@ export class DashboardService {
       take: 500,
     });
 
-    const activeDriverIds = new Set(activeTrips.map((t) => t.driverId).filter(Boolean) as string[]);
-    const driversActiveNow = activeDriverIds.size;
+    const activeDriverIds = new Set(
+      activeTrips.map((t) => t.driverId).filter(Boolean) as string[],
+    );
 
     // ---- Recent Activity ----
     const activity = await this.prisma.eventLog.findMany({
       where: { tenantId },
-      orderBy: { createdAt: "desc" },
+      orderBy: { createdAt: 'desc' },
       take: 10,
       select: {
         id: true,
@@ -114,25 +118,10 @@ export class DashboardService {
     });
 
     return {
-      orders: {
-        total: orderTotal,
-        inProgress: ordersInProgress,
-        byStatus: orderByStatus,
-      },
-      trips: {
-        total: tripTotal,
-        activeToday: tripsActiveToday,
-        byStatus: tripByStatus,
-      },
-      inventory: {
-        unitsTotal,
-        unitsAvailable,
-        unitsByStatus,
-      },
-      drivers: {
-        total: driversTotal,
-        activeNow: driversActiveNow,
-      },
+      orders: { total: orderTotal, inProgress: ordersInProgress, byStatus: orderByStatus },
+      trips: { total: tripTotal, activeToday: tripsActiveToday, byStatus: tripByStatus },
+      inventory: { unitsTotal, unitsAvailable, unitsByStatus },
+      drivers: { total: driversTotal, activeNow: activeDriverIds.size },
       activity,
       generatedAt: now.toISOString(),
     };
