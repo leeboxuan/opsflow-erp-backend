@@ -17,20 +17,6 @@ async function bootstrap() {
   validateAuthEnv();
 
   const app = await NestFactory.create(AppModule);
-
-
-  // Set global prefix for all routes
-  app.setGlobalPrefix('api');
-
-  // Enable validation
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
-
   // Enable CORS for web app(s)
   // WEB_APP_URLS supports comma-separated origins, e.g. "http://localhost:3000,https://opsflow-erp-web.onrender.com"
   const rawOrigins =
@@ -55,6 +41,27 @@ async function bootstrap() {
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   });
+
+  // ✅ Handle CORS preflight globally (fixes OPTIONS 404)
+  app.use((req: any, res: any, next: any) => {
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(204);
+    }
+    next();
+  });
+  // Set global prefix for all routes
+  app.setGlobalPrefix('api');
+
+  // Enable validation
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
+
+
 
   // Swagger documentation setup
   const config = new DocumentBuilder()
