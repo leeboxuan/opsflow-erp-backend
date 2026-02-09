@@ -14,7 +14,6 @@ import { AuthGuard } from '../auth/guards/auth.guard';
 import { TenantGuard } from '../auth/guards/tenant.guard';
 import { InventoryService } from './inventory.service';
 import { CreateBatchDto } from './dto/create-batch.dto';
-import { ReceiveUnitsDto } from './dto/receive-units.dto';
 import { ReceiveStockDto } from './dto/receive-stock.dto';
 import { ReserveItemsDto } from './dto/reserve-items.dto';
 import { DispatchItemsDto } from './dto/dispatch-items.dto';
@@ -195,73 +194,78 @@ export class InventoryController {
   }
 
   @Post('orders/:orderId/release-units')
-async releaseUnits(
-  @Request() req: any,
-  @Param('orderId') orderId: string,
-  @Body() dto: ReleaseUnitsDto,
-): Promise<{ released: number }> {
-  const tenantId = req.tenant.tenantId;
-  return this.inventoryService.releaseUnits(tenantId, orderId, dto);
-}
-
-@Get('units')
-async listUnits(
-  @Request() req: any,
-  @Query('inventoryItemId') inventoryItemId: string,
-  @Query('status') status: string = 'Available',
-  @Query('limit') limit: string = '50',
-) {
-  if (!inventoryItemId) {
-    throw new BadRequestException('inventoryItemId is required. Use /inventory/units/search for ops register.');
+  async releaseUnits(
+    @Request() req: any,
+    @Param('orderId') orderId: string,
+    @Body() dto: ReleaseUnitsDto,
+  ): Promise<{ released: number }> {
+    const tenantId = req.tenant.tenantId;
+    return this.inventoryService.releaseUnits(tenantId, orderId, dto);
   }
-  const tenantId = req.tenant.tenantId;
-  return this.inventoryService.listUnits(tenantId, inventoryItemId, status, Number(limit));
+
+  @Get('units')
+  async listUnits(
+    @Request() req: any,
+    @Query('inventoryItemId') inventoryItemId: string,
+    @Query('status') status: string = 'Available',
+    @Query('limit') limit: string = '50',
+  ) {
+    if (!inventoryItemId) {
+      throw new BadRequestException('inventoryItemId is required. Use /inventory/units/search for ops register.');
+    }
+    const tenantId = req.tenant.tenantId;
+    return this.inventoryService.listUnits(tenantId, inventoryItemId, status, Number(limit));
+  }
+
+  @Get('units/search')
+  @ApiOperation({ summary: 'Search inventory units (ops unit register) - cursor paginated' })
+  @ApiQuery({ name: 'prefix', required: false, description: 'unitSku startsWith' })
+  @ApiQuery({ name: 'search', required: false, description: 'contains match on unitSku / item sku / item name / batch code' })
+  @ApiQuery({ name: 'itemSku', required: false, description: 'filter by item SKU (inventory_items.sku)' })
+  @ApiQuery({ name: 'status', required: false, description: 'filter by unit status' })
+  @ApiQuery({ name: 'batchId', required: false })
+  @ApiQuery({ name: 'transportOrderId', required: false })
+  @ApiQuery({ name: 'cursor', required: false, description: 'cursor (inventory_units.id) from previous page' })
+  @ApiQuery({ name: 'limit', required: false })
+  async searchUnits(
+    @Request() req: any,
+    @Query() query: SearchUnitsQueryDto,
+  ): Promise<{
+    rows: Array<{
+      id: string;
+      unitSku: string;
+      status: string;
+      inventoryItemId: string;
+      itemSku: string;
+      itemName: string | null;
+      batchId: string;
+      batchCode: string | null;
+      transportOrderId: string | null;
+      tripId: string | null;
+      stopId: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+    }>;
+    nextCursor: string | null;
+    hasMore: boolean;
+  }> {
+    const tenantId = req.tenant.tenantId;
+    const result = await this.inventoryService.searchUnits(tenantId, query);
+    // Ensure the structure matches the expected return type
+    if (Array.isArray(result)) {
+      return {
+        rows: result,
+        nextCursor: null,
+        hasMore: false,
+      };
+    }
+    return result;
+  }
+
+  @Post('stock-in')
+  @ApiOperation({ summary: 'Create a batch + receive units from a client item sheet' })
+  async stockIn(@Request() req: any, @Body() dto: StockInDto) {
+    const tenantId = req.tenant.tenantId;
+    return this.inventoryService.stockInFromClientSheet(tenantId, dto);
+  }
 }
-
-
-@Get('units/search')
-@ApiOperation({ summary: 'Search inventory units (ops unit register)' })
-@ApiQuery({ name: 'prefix', required: false, description: 'unitSku startsWith' })
-@ApiQuery({ name: 'search', required: false, description: 'contains match on unitSku / item sku / item name / batch code' })
-@ApiQuery({ name: 'itemSku', required: false, description: 'filter by item SKU (inventory_items.sku)' })
-@ApiQuery({ name: 'status', required: false, description: 'filter by unit status' })
-@ApiQuery({ name: 'batchId', required: false })
-@ApiQuery({ name: 'transportOrderId', required: false })
-@ApiQuery({ name: 'limit', required: false })
-async searchUnits(
-  @Request() req: any,
-  @Query() query: SearchUnitsQueryDto,
-): Promise<
-  Array<{
-    id: string;
-    unitSku: string;
-    status: string;
-    inventoryItemId: string;
-    itemSku: string;
-    itemName: string | null;
-    batchId: string;
-    batchCode: string | null;
-    transportOrderId: string | null;
-    tripId: string | null;
-    stopId: string | null;
-    createdAt: Date;
-    updatedAt: Date;
-  }>
-> {
-  const tenantId = req.tenant.tenantId;
-  return this.inventoryService.searchUnits(tenantId, query);
-}
-
-
-@Post('stock-in')
-@ApiOperation({ summary: 'Create a batch + receive units from a client item sheet' })
-async stockIn(
-  @Request() req: any,
-  @Body() dto: StockInDto,
-) {
-  const tenantId = req.tenant.tenantId;
-  return this.inventoryService.stockInFromClientSheet(tenantId, dto);
-}
-
-}
-

@@ -25,6 +25,14 @@ const InventoryBatchStatus = {
 } as const;
 type InventoryBatchStatus = (typeof InventoryBatchStatus)[keyof typeof InventoryBatchStatus];
 
+
+type ListInventoryItemsArgs = {
+  tenantId: string;
+  limit: number;
+  cursor: string | null;
+  q: string | null;
+  status: string | null; // optional
+};
 const InventoryUnitStatus = {
   Available: 'Available',
   Reserved: 'Reserved',
@@ -79,7 +87,50 @@ export class InventoryService {
    * Recompute and update cached availableQty for an inventory item
    */
 
+  async listInventoryItems(args: ListInventoryItemsArgs) {
+    const { tenantId, limit, cursor, q, status } = args;
 
+    const where: any = { tenantId };
+
+    if (q) {
+      where.OR = [
+        { sku: { contains: q, mode: 'insensitive' } },
+        { name: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+
+    // If you have a status field on inventory_items (some designs do), filter it here.
+    // If status is on inventory_units instead, do NOT filter here (that becomes a join-ish problem).
+    if (status && status !== 'all') {
+      where.status = status;
+    }
+
+    const rowsPlusOne = await this.prisma.inventory_items.findMany({
+      where,
+      take: limit + 1,
+      ...(cursor
+        ? {
+            cursor: { id: cursor },
+            skip: 1,
+          }
+        : {}),
+      orderBy: { id: 'asc' }, // stable cursor order
+      select: {
+        id: true,
+        sku: true,
+        name: true,
+        availableQty: true,
+        updatedAt: true,
+      },
+    });
+
+    const hasMore = rowsPlusOne.length > limit;
+    const rows = hasMore ? rowsPlusOne.slice(0, limit) : rowsPlusOne;
+
+    const nextCursor = hasMore ? rows[rows.length - 1]?.id ?? null : null;
+
+    return { rows, nextCursor, hasMore };
+  }
   private async updateAvailableQty(
     tenantId: string,
     inventoryItemId: string,
@@ -472,16 +523,17 @@ export class InventoryService {
       };
     });
   }
-   /**
-   * POST /inventory/stock-in
-   * One-shot Stock-In flow (transactional):
-   * 1) Resolve/create customer company (tenant-scoped, case-insensitive, trimmed)
-   * 2) Resolve/create contact by (companyId + email) (case-insensitive, trimmed)
-   * 3) Create inventory batch linked to company + contact with metadata
-   * 4) For each row: find-or-create inventory_item by SKU, then create inventory_units for quantity (unitSku generated)
-   * 5) All in ONE transaction (no partial inserts)
-   */
-   async stockInFromClientSheet(
+  /**
+  * POST /inventory/stock-in
+  * One-shot Stock-In flow (transactional):
+  * 1) Resolve/create customer company (tenant-scoped, case-insensitive, trimmed)
+  * 2) Resolve/create contact by (companyId + email) (case-insensitive, trimmed)
+  * 3) Create inventory batch linked to company + contact with metadata
+  * 4) For each row: find-or-create inventory_item by SKU, then create inventory_units for quantity (unitSku generated)
+  * 5) All in ONE transaction (no partial inserts)
+  */
+
+  async stockInFromClientSheet(
     tenantId: string,
     dto: StockInDto,
   ): Promise<{
@@ -491,7 +543,6 @@ export class InventoryService {
     totalUnitsCreated: number;
   }> {
     if (!tenantId) {
-      // TenantGuard should enforce this for non-superadmin, but keep a safe guardrail.
       throw new BadRequestException('Tenant context is required');
     }
 
@@ -524,231 +575,188 @@ export class InventoryService {
       throw new BadRequestException('items must be a non-empty array');
     }
 
-    return await this.prisma.$transaction(async (tx) => {
-      // 1) Resolve company (dedupe by tenantId + normalizedName)
-      const customerCompany = await tx.customer_companies.upsert({
-        where: {
-          tenantId_normalizedName: {
-            tenantId,
-            normalizedName: normalizedCompanyName,
-          },
-        },
-        update: {
-          name: rawCompanyName, // keep display name fresh
-        },
-        create: {
-          tenantId,
-          name: rawCompanyName,
-          normalizedName: normalizedCompanyName,
-        },
-      });
-
-      // 2) Resolve contact (dedupe by companyId + normalizedEmail)
-      const contactName =
-        String(dto.contact?.name ?? '').trim() ||
-        this.customerContactFallbackName(normalizedEmail);
-
-      const customerContact = await tx.customer_contacts.upsert({
-        where: {
-          companyId_normalizedEmail: {
-            companyId: customerCompany.id,
-            normalizedEmail,
-          },
-        },
-        update: {
-          name: contactName,
-          email: rawEmail,
-        },
-        create: {
-          companyId: customerCompany.id,
-          name: contactName,
-          email: rawEmail,
-          normalizedEmail,
-        },
-      });
-
-      // 3) Create batch (batchCode unique per tenant)
-      const existingBatch = await tx.inventory_batches.findUnique({
-        where: {
-          tenantId_batchCode: {
-            tenantId,
-            batchCode,
-          },
-        },
-        select: { id: true },
-      });
-      if (existingBatch) {
-        throw new ConflictException(
-          `Batch with code ${batchCode} already exists`,
-        );
-      }
-
-      const batch = await tx.inventory_batches.create({
-        data: {
-          tenantId,
-          batchCode,
-          batchDescription,
-          receivedAt,
-          notes,
-          status: InventoryBatchStatus.Open,
-          customerCompanyId: customerCompany.id,
-          customerContactId: customerContact.id,
-
-          // keep legacy field in sync for existing screens
-          customerName: customerCompany.name,
-        },
-      });
-
-      // 4) Items -> inventory_items + batch_items + units
-      let totalUnitsCreated = 0;
-      const touchedInventoryItemIds = new Set<string>();
-
-      for (const row of dto.items) {
-        const skuInput = this.normalizeSku(row.itemSku);
-        if (!skuInput) {
-          throw new BadRequestException('Each item must have itemSku');
-        }
-
-        const quantity = (row.quantity ?? 1) as number;
-        if (!Number.isInteger(quantity) || quantity < 1) {
-          throw new BadRequestException(
-            `Quantity must be >= 1 for itemSku ${skuInput}`,
-          );
-        }
-
-        // Find existing item by SKU (case-insensitive), else create
-        let inventoryItem = await tx.inventory_items.findFirst({
+    return await this.prisma.$transaction(
+      async (tx) => {
+        // 1) Resolve company (dedupe by tenantId + normalizedName)
+        const customerCompany = await tx.customer_companies.upsert({
           where: {
-            tenantId,
-            sku: { equals: skuInput, mode: 'insensitive' },
+            tenantId_normalizedName: { tenantId, normalizedName: normalizedCompanyName },
+          },
+          update: { name: rawCompanyName },
+          create: { tenantId, name: rawCompanyName, normalizedName: normalizedCompanyName },
+        });
+
+        // 2) Resolve contact (dedupe by companyId + normalizedEmail)
+        const contactName =
+          String(dto.contact?.name ?? '').trim() ||
+          this.customerContactFallbackName(normalizedEmail);
+
+        const customerContact = await tx.customer_contacts.upsert({
+          where: {
+            companyId_normalizedEmail: {
+              companyId: customerCompany.id,
+              normalizedEmail,
+            },
+          },
+          update: { name: contactName, email: rawEmail },
+          create: {
+            companyId: customerCompany.id,
+            name: contactName,
+            email: rawEmail,
+            normalizedEmail,
           },
         });
 
-        if (!inventoryItem) {
-          // Your schema has inventory_items.id without default, and your seed uses `${tenantId}_${sku}`
-          const normalizedSku = skuInput;
+        // 3) Create batch (batchCode unique per tenant)
+        const existingBatch = await tx.inventory_batches.findUnique({
+          where: { tenantId_batchCode: { tenantId, batchCode } },
+          select: { id: true },
+        });
+        if (existingBatch) {
+          throw new ConflictException(`Batch with code ${batchCode} already exists`);
+        }
 
-          inventoryItem = await tx.inventory_items.create({
-            data: {
-              id: `${tenantId}_${normalizedSku}`,
-              tenantId,
-              sku: normalizedSku,
-              name: (row.itemName?.trim() || normalizedSku) as string,
-              reference: row.itemDescription?.trim() || null,
-              availableQty: 0,
-              updatedAt: new Date(),
-            },
+        const batch = await tx.inventory_batches.create({
+          data: {
+            tenantId,
+            batchCode,
+            batchDescription,
+            receivedAt,
+            notes,
+            status: InventoryBatchStatus.Open,
+            customerCompanyId: customerCompany.id,
+            customerContactId: customerContact.id,
+            customerName: customerCompany.name, // legacy field
+          },
+        });
+
+        // 4) Items -> inventory_items + batch_items + units
+        let totalUnitsCreated = 0;
+
+        for (const row of dto.items) {
+          const skuInput = this.normalizeSku(row.itemSku);
+          if (!skuInput) throw new BadRequestException('Each item must have itemSku');
+
+          const quantity = (row.quantity ?? 1) as number;
+          if (!Number.isInteger(quantity) || quantity < 1) {
+            throw new BadRequestException(`Quantity must be >= 1 for itemSku ${skuInput}`);
+          }
+
+          // Find existing item by SKU (case-insensitive), else create
+          let inventoryItem = await tx.inventory_items.findFirst({
+            where: { tenantId, sku: { equals: skuInput, mode: 'insensitive' } },
           });
-        } else {
-          // Optional enrichment if client provided name/desc
-          const maybeName = row.itemName?.trim();
-          const maybeRef = row.itemDescription?.trim();
-          if (maybeName || maybeRef) {
-            await tx.inventory_items.update({
-              where: { id: inventoryItem.id },
+
+          if (!inventoryItem) {
+            const normalizedSku = skuInput;
+            inventoryItem = await tx.inventory_items.create({
               data: {
-                name: maybeName || inventoryItem.name,
-                reference: maybeRef ?? inventoryItem.reference,
+                id: `${tenantId}_${normalizedSku}`,
+                tenantId,
+                sku: normalizedSku,
+                name: (row.itemName?.trim() || normalizedSku) as string,
+                reference: row.itemDescription?.trim() || null,
+                availableQty: 0,
                 updatedAt: new Date(),
               },
             });
+          } else {
+            // Optional enrichment if client provided name/desc
+            const maybeName = row.itemName?.trim();
+            const maybeRef = row.itemDescription?.trim();
+            if (maybeName || maybeRef) {
+              await tx.inventory_items.update({
+                where: { id: inventoryItem.id },
+                data: {
+                  name: maybeName || inventoryItem.name,
+                  reference: maybeRef ?? inventoryItem.reference,
+                  updatedAt: new Date(),
+                },
+              });
+            }
           }
-        }
 
-        touchedInventoryItemIds.add(inventoryItem.id);
-
-        // Upsert batch_items (unique: batchId + inventoryItemId)
-        await tx.inventory_batch_items.upsert({
-          where: {
-            batchId_inventoryItemId: {
+          // Upsert batch_items (unique: batchId + inventoryItemId)
+          await tx.inventory_batch_items.upsert({
+            where: {
+              batchId_inventoryItemId: { batchId: batch.id, inventoryItemId: inventoryItem.id },
+            },
+            update: { qty: { increment: quantity } },
+            create: {
+              tenantId,
               batchId: batch.id,
               inventoryItemId: inventoryItem.id,
+              qty: quantity,
             },
-          },
-          update: {
-            qty: { increment: quantity },
-          },
-          create: {
-            tenantId,
-            batchId: batch.id,
-            inventoryItemId: inventoryItem.id,
-            qty: quantity,
-          },
-        });
-
-        // Generate unitSkus: <itemSku>-<batchCode>-<0001>
-        const prefix = `${inventoryItem.sku}-${batch.batchCode}-`;
-
-        // determine next seq by scanning existing max suffix for this batch+item
-        const existingUnitSkus = await tx.inventory_units.findMany({
-          where: {
-            tenantId,
-            batchId: batch.id,
-            inventoryItemId: inventoryItem.id,
-            unitSku: { startsWith: prefix },
-          },
-          select: { unitSku: true },
-        });
-
-        let maxSeq = 0;
-        for (const u of existingUnitSkus) {
-          const m = u.unitSku.match(/-(\d{4})$/);
-          if (m) {
-            const n = parseInt(m[1], 10);
-            if (n > maxSeq) maxSeq = n;
-          }
-        }
-
-        const unitsToCreate: Array<{
-          tenantId: string;
-          inventoryItemId: string;
-          batchId: string;
-          unitSku: string;
-          status: InventoryUnitStatus;
-        }> = [];
-
-        for (let i = 0; i < quantity; i++) {
-          const seq = maxSeq + 1 + i;
-          const padded = seq.toString().padStart(4, '0');
-          const unitSku = `${prefix}${padded}`;
-
-          // defensive uniqueness check (tenantId + unitSku is unique)
-          const exists = await tx.inventory_units.findUnique({
-            where: { tenantId_unitSku: { tenantId, unitSku } },
-            select: { id: true },
           });
-          if (exists) {
-            throw new ConflictException(`Unit SKU already exists: ${unitSku}`);
+
+          // Generate unitSkus: <itemSku>-<batchCode>-<0001>
+          const prefix = `${inventoryItem.sku}-${batch.batchCode}-`;
+
+          // FAST: get the last unitSku once (instead of findMany-all)
+          const lastUnit = await tx.inventory_units.findFirst({
+            where: {
+              tenantId,
+              batchId: batch.id,
+              inventoryItemId: inventoryItem.id,
+              unitSku: { startsWith: prefix },
+            },
+            select: { unitSku: true },
+            orderBy: { unitSku: 'desc' }, // works because we pad to 4 digits
+          });
+
+          let maxSeq = 0;
+          if (lastUnit?.unitSku) {
+            const m = lastUnit.unitSku.match(/-(\d{4})$/);
+            if (m) maxSeq = parseInt(m[1], 10);
           }
 
-          unitsToCreate.push({
-            tenantId,
-            inventoryItemId: inventoryItem.id,
-            batchId: batch.id,
-            unitSku,
-            status: InventoryUnitStatus.Available,
+          const unitsToCreate: Array<{
+            tenantId: string;
+            inventoryItemId: string;
+            batchId: string;
+            unitSku: string;
+            status: InventoryUnitStatus;
+          }> = [];
+
+          for (let i = 0; i < quantity; i++) {
+            const seq = maxSeq + 1 + i;
+            const padded = seq.toString().padStart(4, '0');
+            unitsToCreate.push({
+              tenantId,
+              inventoryItemId: inventoryItem.id,
+              batchId: batch.id,
+              unitSku: `${prefix}${padded}`,
+              status: InventoryUnitStatus.Available,
+            });
+          }
+
+          // No per-unit existence checks: let unique constraint do its job
+          await tx.inventory_units.createMany({ data: unitsToCreate });
+
+          // Cheap + correct (since we're creating Available units)
+          await tx.inventory_items.update({
+            where: { id: inventoryItem.id },
+            data: { availableQty: { increment: quantity }, updatedAt: new Date() },
           });
+
+          totalUnitsCreated += quantity;
         }
 
-        await tx.inventory_units.createMany({ data: unitsToCreate });
-        totalUnitsCreated += quantity;
-      }
-
-      // 5) refresh cached availableQty for impacted items
-      for (const inventoryItemId of touchedInventoryItemIds) {
-        await this.updateAvailableQty(tenantId, inventoryItemId, tx);
-      }
-
-      return {
-        batchId: batch.id,
-        customerCompanyId: customerCompany.id,
-        customerContactId: customerContact.id,
-        totalUnitsCreated,
-      };
-    });
+        return {
+          batchId: batch.id,
+          customerCompanyId: customerCompany.id,
+          customerContactId: customerContact.id,
+          totalUnitsCreated,
+        };
+      },
+      // IMPORTANT: prevent “Transaction not found” from timeout spikes
+      { maxWait: 10_000, timeout: 60_000 },
+    );
   }
 
-  
+
+
   private async getNextItemSeqForTenant(
     tx: any,
     tenantId: string,
@@ -1227,7 +1235,11 @@ export class InventoryService {
       }
 
       return { dispatched: units.length };
-    });
+    },
+      {
+        maxWait: 10_000,
+        timeout: 60_000,
+      },);
   }
   async releaseUnits(
     tenantId: string,
@@ -1311,7 +1323,11 @@ export class InventoryService {
       }
 
       return { released: units.length };
-    });
+    },
+      {
+        maxWait: 10_000,
+        timeout: 60_000,
+      },);
   }
 
 
@@ -1342,11 +1358,11 @@ export class InventoryService {
       },
     });
   }
-  
-    /**
-   * GET /inventory/units/search
-   * Supports prefix search (fast) + contains search + filters.
-   */
+
+  /**
+ * GET /inventory/units/search
+ * Supports prefix search (fast) + contains search + filters.
+ */
   /**
  * GET /inventory/units/search
  * Ops unit-register response:
@@ -1359,8 +1375,8 @@ export class InventoryService {
   async searchUnits(
     tenantId: string,
     query: SearchUnitsQueryDto,
-  ): Promise<
-    Array<{
+  ): Promise<{
+    rows: Array<{
       id: string;
       unitSku: string;
       status: string;
@@ -1374,9 +1390,13 @@ export class InventoryService {
       stopId: string | null;
       createdAt: Date;
       updatedAt: Date;
-    }>
-  > {
+    }>;
+    nextCursor: string | null;
+    hasMore: boolean;
+  }> {
     const limit = Math.min(Number(query.limit ?? 50), 200);
+    const cursor = query.cursor?.trim() || null;
+  
     const where: any = { tenantId };
   
     if (query.status) where.status = query.status as any;
@@ -1403,10 +1423,17 @@ export class InventoryService {
       ];
     }
   
-    const units = await this.prisma.inventory_units.findMany({
+    const unitsPlusOne = await this.prisma.inventory_units.findMany({
       where,
-      take: limit,
-      orderBy: { updatedAt: 'desc' },
+      take: limit + 1,
+      ...(cursor
+        ? {
+            cursor: { id: cursor },
+            skip: 1,
+          }
+        : {}),
+      // stable order: updatedAt desc + id desc
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
       select: {
         id: true,
         unitSku: true,
@@ -1414,7 +1441,6 @@ export class InventoryService {
         inventoryItemId: true,
         batchId: true,
         transportOrderId: true,
-        // these should exist because you set them in dispatchItems(); if TS complains, we’ll remove them.
         tripId: true as any,
         stopId: true as any,
         createdAt: true,
@@ -1424,7 +1450,10 @@ export class InventoryService {
       },
     });
   
-    return units.map((u: any) => ({
+    const hasMore = unitsPlusOne.length > limit;
+    const page = hasMore ? unitsPlusOne.slice(0, limit) : unitsPlusOne;
+  
+    const rows = page.map((u: any) => ({
       id: u.id,
       unitSku: u.unitSku,
       status: u.status,
@@ -1439,10 +1468,14 @@ export class InventoryService {
       createdAt: u.createdAt,
       updatedAt: u.updatedAt,
     }));
+  
+    const nextCursor = hasMore ? rows[rows.length - 1]?.id ?? null : null;
+  
+    return { rows, nextCursor, hasMore };
   }
   
 
-  
+
   /**
    * POST /inventory/orders/:orderId/deliver
    */
@@ -1490,7 +1523,10 @@ export class InventoryService {
       }
 
       return { delivered: units.length };
-    });
+    }, {
+      maxWait: 10_000,
+      timeout: 60_000,
+    },);
   }
 
   /**
@@ -1538,7 +1574,11 @@ export class InventoryService {
       }
 
       return { released: units.length };
-    });
+    },
+      {
+        maxWait: 10_000,
+        timeout: 60_000,
+      },);
   }
 
   /**
