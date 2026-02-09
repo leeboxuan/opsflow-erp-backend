@@ -17,11 +17,11 @@ async function bootstrap() {
   validateAuthEnv();
 
   const app = await NestFactory.create(AppModule);
-  
+
 
   // Set global prefix for all routes
   app.setGlobalPrefix('api');
-  
+
   // Enable validation
   app.useGlobalPipes(
     new ValidationPipe({
@@ -30,29 +30,31 @@ async function bootstrap() {
       transform: true,
     }),
   );
-  
+
   // Enable CORS for web app(s)
-// WEB_APP_URLS supports comma-separated origins, e.g. "http://localhost:3000,https://opsflow-erp-web.onrender.com"
-const rawOrigins = process.env.WEB_APP_URLS || process.env.WEB_APP_URL || 'http://localhost:3000';
-const allowedOrigins = process.env.WEB_APP_URLS
-  ? process.env.WEB_APP_URLS.split(',').map(o => o.trim())
-  : ['http://localhost:3000'];
+  // WEB_APP_URLS supports comma-separated origins, e.g. "http://localhost:3000,https://opsflow-erp-web.onrender.com"
+  const rawOrigins =
+    process.env.WEB_APP_URLS || process.env.WEB_APP_URL || "http://localhost:3000";
 
-app.enableCors({
-  origin: (origin, callback) => {
-    // allow server-to-server or curl (no origin)
-    if (!origin) return callback(null, true);
+  const allowedOrigins = rawOrigins
+    .split(",")
+    .map((s) => s.trim().replace(/\/$/, ""))
+    .filter(Boolean);
 
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
+  app.enableCors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
 
-    return callback(new Error(`CORS blocked for origin: ${origin}`), false);
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-});
+      const normalized = origin.replace(/\/$/, "");
+      if (allowedOrigins.includes(normalized)) return cb(null, true);
+
+      // IMPORTANT: don't throw Error, it makes preflight OPTIONS return 500
+      return cb(null, false);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  });
 
   // Swagger documentation setup
   const config = new DocumentBuilder()
