@@ -88,91 +88,103 @@ async function seedUsersAndMemberships(tenantId: string) {
  * INVENTORY
  * =========================
  */
-// async function seedInventory(tenantId: string) {
-//   console.log('🌱 Seeding inventory...\n');
+async function seedInventory(tenantId: string) {
+  console.log('🌱 Seeding inventory...\n');
 
-//   const inventory = [
-//     { sku: 'MAT-001', name: 'Mattress', units: 30 },
-//     { sku: 'SOFA-001', name: 'Sofa', units: 10 },
-//     { sku: 'TB-001', name: 'Table', units: 8 },
-//   ];
+  // small-small quantities so UI looks realistic
+  const inventory = [
+    { sku: 'MAT-001', name: 'Mattress', units: 5 },
+    { sku: 'SOFA-001', name: 'Sofa', units: 3 },
+    { sku: 'TB-001', name: 'Table', units: 2 },
+  ];
 
-//   const seedBatch = await prisma.inventory_batches.upsert({
-//     where: {
-//       tenantId_batchCode: { tenantId, batchCode: 'SEED' },
-//     },
-//     update: {},
-//     create: {
-//       tenantId,
-//       batchCode: 'SEED',
-//     },
-//   });
+  const seedBatch = await prisma.inventory_batches.upsert({
+    where: {
+      tenantId_batchCode: { tenantId, batchCode: 'SEED' },
+    },
+    update: {},
+    create: {
+      tenantId,
+      batchCode: 'SEED',
+    },
+  });
 
-//   for (const item of inventory) {
-//     // Create / update inventory item
-//     const inventoryItem = await prisma.inventory_items.upsert({
-//       where: { tenantId_sku: { tenantId, sku: item.sku } },
-//       update: {
-//         name: item.name,
-//         availableQty: item.units, // ✅ keep in sync
-//         updatedAt: new Date(),
-//       },
-//       create: {
-//         id: `${tenantId}_${item.sku}`,
-//         tenantId,
-//         sku: item.sku,
-//         name: item.name,
-//         availableQty: item.units, // ✅ keep in sync
-//         updatedAt: new Date(),
-//       },
-//     });
+  for (const item of inventory) {
+    // Create / update inventory item
+    const inventoryItem = await prisma.inventory_items.upsert({
+      where: { tenantId_sku: { tenantId, sku: item.sku } },
+      update: {
+        name: item.name,
+        availableQty: item.units, // keep in sync with units
+        updatedAt: new Date(),
+      },
+      create: {
+        id: `${tenantId}_${item.sku}`,
+        tenantId,
+        sku: item.sku,
+        name: item.name,
+        availableQty: item.units,
+        updatedAt: new Date(),
+      },
+    });
 
-//     // Count existing units
-//     const existingUnits = await prisma.inventory_units.count({
-//       where: {
-//         tenantId,
-//         inventoryItemId: inventoryItem.id,
-//       },
-//     });
+    // Count existing units
+    const existingUnits = await prisma.inventory_units.count({
+      where: {
+        tenantId,
+        inventoryItemId: inventoryItem.id,
+      },
+    });
 
-//     const unitsToCreate = item.units - existingUnits;
+    const unitsToCreate = item.units - existingUnits;
 
-//     if (unitsToCreate > 0) {
-//       const existingUnitSkus = await prisma.inventory_units.findMany({
-//         where: { tenantId, inventoryItemId: inventoryItem.id },
-//         select: { unitSku: true },
-//       });
-//       const usedSkus = new Set(existingUnitSkus.map((u) => u.unitSku));
-//       let suffix = 0;
-//       const newUnits = Array.from({ length: unitsToCreate }).map(() => {
-//         let unitSku: string;
-      
-//         do {
-//           unitSku = `${item.sku}-${String(suffix++).padStart(4, '0')}`; // ✅ MAT-001-0001
-//         } while (usedSkus.has(unitSku));
-      
-//         usedSkus.add(unitSku);
-      
-//         return {
-//           tenantId,
-//           inventoryItemId: inventoryItem.id,
-//           batchId: seedBatch.id,
-//           unitSku,
-//           status: InventoryUnitStatus.Available,
-//         };
-//       });
-//       await prisma.inventory_units.createMany({ data: newUnits });
+    if (unitsToCreate > 0) {
+      // ensure unitSku uniqueness even if seed is rerun
+      const existingUnitSkus = await prisma.inventory_units.findMany({
+        where: { tenantId, inventoryItemId: inventoryItem.id },
+        select: { unitSku: true },
+      });
 
-//       console.log(
-//         `✅ ${item.sku}: added ${unitsToCreate} units (total ${item.units})`,
-//       );
-//     } else {
-//       console.log(`✅ ${item.sku}: already has ${existingUnits} units`);
-//     }
-//   }
+      const usedSkus = new Set(existingUnitSkus.map((u) => u.unitSku));
+      let suffix = 0;
 
-//   console.log('\n✅ Inventory seeded\n');
-// }
+      const newUnits = Array.from({ length: unitsToCreate }).map(() => {
+        let unitSku: string;
+
+        do {
+          unitSku = `${item.sku}-${String(++suffix).padStart(4, '0')}`;
+        } while (usedSkus.has(unitSku));
+
+        usedSkus.add(unitSku);
+
+        return {
+          tenantId,
+          inventoryItemId: inventoryItem.id,
+          batchId: seedBatch.id,
+          unitSku,
+          status: InventoryUnitStatus.Available,
+        };
+      });
+
+      await prisma.inventory_units.createMany({ data: newUnits });
+
+      console.log(
+        `✅ ${item.sku}: added ${unitsToCreate} units (total ${item.units})`,
+      );
+    } else {
+      console.log(`✅ ${item.sku}: already has ${existingUnits} units`);
+    }
+
+    // extra safety: ensure availableQty reflects your target units
+    // (in case something was manually edited previously)
+    await prisma.inventory_items.update({
+      where: { id: inventoryItem.id },
+      data: { availableQty: item.units },
+    });
+  }
+
+  console.log('\n✅ Inventory seeded\n');
+}
 
 /**
  * =========================
@@ -194,10 +206,9 @@ async function main() {
 
   console.log(`✅ Tenant: ${tenant.name} (${tenant.slug})\n`);
 
-  const { adminUser, driverUser } =
-    await seedUsersAndMemberships(tenant.id);
+  const { adminUser, driverUser } = await seedUsersAndMemberships(tenant.id);
 
-  // await seedInventory(tenant.id);
+  await seedInventory(tenant.id);
 
   console.log('🎉 Seed completed successfully!\n');
   console.log('══════════════════════════════════════════════');
