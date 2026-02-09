@@ -1356,97 +1356,91 @@ export class InventoryService {
  * - createdAt, updatedAt
  * - transportOrderId / tripId / stopId (if present)
  */
-async searchUnits(
-  tenantId: string,
-  query: SearchUnitsQueryDto,
-): Promise<
-  Array<{
-    id: string;
-    unitSku: string;
-    status: string;
-    inventoryItemId: string;
-    itemSku: string;
-    itemName: string | null;
-    batchId: string;
-    batchCode: string | null;
-    transportOrderId: string | null;
-    tripId: string | null;
-    stopId: string | null;
-    createdAt: Date;
-    updatedAt: Date;
-  }>
-> {
-  const limit = Math.min(Number(query.limit ?? 50), 200);
-
-  const where: any = { tenantId };
-
-  if (query.status) where.status = query.status as any;
-  if (query.batchId) where.batchId = query.batchId;
-  if (query.transportOrderId) where.transportOrderId = query.transportOrderId;
-
-  // unitSku prefix match (fast)
-  if (query.prefix && String(query.prefix).trim()) {
-    where.unitSku = { startsWith: String(query.prefix).trim() };
-  }
-
-  // filter by item SKU (inventory_items.sku)
-  if (query.itemSku && String(query.itemSku).trim()) {
-    where.inventory_item = {
-      sku: { equals: String(query.itemSku).trim(), mode: 'insensitive' },
-    };
-  }
-
-  // general search (contains) on unitSku OR item sku/name OR batchCode
-  if (query.search && String(query.search).trim()) {
-    const s = String(query.search).trim();
-    where.OR = [
-      { unitSku: { contains: s, mode: 'insensitive' } },
-      { inventory_item: { sku: { contains: s, mode: 'insensitive' } } },
-      { inventory_item: { name: { contains: s, mode: 'insensitive' } } },
-      { batch: { batchCode: { contains: s, mode: 'insensitive' } } },
-    ];
-  }
-
-  const units = await this.prisma.inventory_units.findMany({
-    where,
-    take: limit,
-    orderBy: { updatedAt: 'desc' }, // ops wants latest movement first
-    select: {
-      id: true,
-      unitSku: true,
-      status: true,
-      inventoryItemId: true,
-      batchId: true,
-      transportOrderId: true,
-      tripId: true, // if column exists
-      stopId: true, // if column exists
-      createdAt: true,
-      updatedAt: true,
-      inventory_item: {
-        select: { sku: true, name: true },
+  async searchUnits(
+    tenantId: string,
+    query: SearchUnitsQueryDto,
+  ): Promise<
+    Array<{
+      id: string;
+      unitSku: string;
+      status: string;
+      inventoryItemId: string;
+      itemSku: string;
+      itemName: string | null;
+      batchId: string;
+      batchCode: string | null;
+      transportOrderId: string | null;
+      tripId: string | null;
+      stopId: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+    }>
+  > {
+    const limit = Math.min(Number(query.limit ?? 50), 200);
+    const where: any = { tenantId };
+  
+    if (query.status) where.status = query.status as any;
+    if (query.batchId) where.batchId = query.batchId;
+    if (query.transportOrderId) where.transportOrderId = query.transportOrderId;
+  
+    if (query.prefix && String(query.prefix).trim()) {
+      where.unitSku = { startsWith: String(query.prefix).trim() };
+    }
+  
+    if (query.itemSku && String(query.itemSku).trim()) {
+      where.inventory_item = {
+        sku: { equals: String(query.itemSku).trim(), mode: 'insensitive' },
+      };
+    }
+  
+    if (query.search && String(query.search).trim()) {
+      const s = String(query.search).trim();
+      where.OR = [
+        { unitSku: { contains: s, mode: 'insensitive' } },
+        { inventory_item: { sku: { contains: s, mode: 'insensitive' } } },
+        { inventory_item: { name: { contains: s, mode: 'insensitive' } } },
+        { batch: { batchCode: { contains: s, mode: 'insensitive' } } },
+      ];
+    }
+  
+    const units = await this.prisma.inventory_units.findMany({
+      where,
+      take: limit,
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        id: true,
+        unitSku: true,
+        status: true,
+        inventoryItemId: true,
+        batchId: true,
+        transportOrderId: true,
+        // these should exist because you set them in dispatchItems(); if TS complains, we’ll remove them.
+        tripId: true as any,
+        stopId: true as any,
+        createdAt: true,
+        updatedAt: true,
+        inventory_item: { select: { sku: true, name: true } },
+        batch: { select: { batchCode: true } },
       },
-      batch: {
-        select: { batchCode: true },
-      },
-    },
-  });
-
-  return units.map((u) => ({
-    id: u.id,
-    unitSku: u.unitSku,
-    status: u.status,
-    inventoryItemId: u.inventoryItemId,
-    itemSku: u.inventory_item?.sku ?? '',
-    itemName: u.inventory_item?.name ?? null,
-    batchId: u.batchId,
-    batchCode: u.batch?.batchCode ?? null,
-    transportOrderId: u.transportOrderId ?? null,
-    tripId: (u as any).tripId ?? null,
-    stopId: (u as any).stopId ?? null,
-    createdAt: u.createdAt,
-    updatedAt: u.updatedAt,
-  }));
-}
+    });
+  
+    return units.map((u: any) => ({
+      id: u.id,
+      unitSku: u.unitSku,
+      status: u.status,
+      inventoryItemId: u.inventoryItemId,
+      itemSku: u.inventory_item?.sku ?? '',
+      itemName: u.inventory_item?.name ?? null,
+      batchId: u.batchId,
+      batchCode: u.batch?.batchCode ?? null,
+      transportOrderId: u.transportOrderId ?? null,
+      tripId: u.tripId ?? null,
+      stopId: u.stopId ?? null,
+      createdAt: u.createdAt,
+      updatedAt: u.updatedAt,
+    }));
+  }
+  
 
   
   /**

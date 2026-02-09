@@ -7,6 +7,7 @@ import {
   Query,
   UseGuards,
   Request,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -210,16 +211,20 @@ async listUnits(
   @Query('status') status: string = 'Available',
   @Query('limit') limit: string = '50',
 ) {
+  if (!inventoryItemId) {
+    throw new BadRequestException('inventoryItemId is required. Use /inventory/units/search for ops register.');
+  }
   const tenantId = req.tenant.tenantId;
   return this.inventoryService.listUnits(tenantId, inventoryItemId, status, Number(limit));
 }
 
+
 @Get('units/search')
-@ApiOperation({ summary: 'Search inventory units by unitSku prefix/search and filters' })
-@ApiQuery({ name: 'prefix', required: false })
-@ApiQuery({ name: 'search', required: false })
-@ApiQuery({ name: 'itemSku', required: false })
-@ApiQuery({ name: 'status', required: false })
+@ApiOperation({ summary: 'Search inventory units (ops unit register)' })
+@ApiQuery({ name: 'prefix', required: false, description: 'unitSku startsWith' })
+@ApiQuery({ name: 'search', required: false, description: 'contains match on unitSku / item sku / item name / batch code' })
+@ApiQuery({ name: 'itemSku', required: false, description: 'filter by item SKU (inventory_items.sku)' })
+@ApiQuery({ name: 'status', required: false, description: 'filter by unit status' })
 @ApiQuery({ name: 'batchId', required: false })
 @ApiQuery({ name: 'transportOrderId', required: false })
 @ApiQuery({ name: 'limit', required: false })
@@ -233,8 +238,14 @@ async searchUnits(
     status: string;
     inventoryItemId: string;
     itemSku: string;
+    itemName: string | null;
     batchId: string;
+    batchCode: string | null;
     transportOrderId: string | null;
+    tripId: string | null;
+    stopId: string | null;
+    createdAt: Date;
+    updatedAt: Date;
   }>
 > {
   const tenantId = req.tenant.tenantId;
