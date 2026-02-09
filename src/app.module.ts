@@ -11,6 +11,7 @@ import { AdminModule } from './admin/admin.module';
 import { DriverModule } from './driver/driver.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { CustomersModule } from './customers/customers.module';
+import { DashboardModule } from "./dashboard/dashboard.module";
 
 @Module({
   imports: [
@@ -27,7 +28,8 @@ import { CustomersModule } from './customers/customers.module';
     AdminModule,
     DriverModule,
     InventoryModule,
-    CustomersModule
+    CustomersModule,
+    DashboardModule
   ],
   controllers: [AppController],
 })
