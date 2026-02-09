@@ -110,9 +110,9 @@ export class InventoryService {
       take: limit + 1,
       ...(cursor
         ? {
-            cursor: { id: cursor },
-            skip: 1,
-          }
+          cursor: { id: cursor },
+          skip: 1,
+        }
         : {}),
       orderBy: { id: 'asc' }, // stable cursor order
       select: {
@@ -690,10 +690,12 @@ export class InventoryService {
             },
           });
 
-          // Generate unitSkus: <itemSku>-<batchCode>-<0001>
-          const prefix = `${inventoryItem.sku}-${batch.batchCode}-`;
+          // Generate unitSkus: <itemSku>-<batchSeq4>-<unitSeq2>
+          // Example: LLSG-CB-Q-MSM-0001-01
+          const batchSeq4 = String(batch.batchCode.split("-").pop() ?? "").padStart(4, "0");
+          const prefix = `${inventoryItem.sku}-${batchSeq4}-`;
 
-          // FAST: get the last unitSku once (instead of findMany-all)
+          // FAST: get last unitSku once (so we continue the sequence)
           const lastUnit = await tx.inventory_units.findFirst({
             where: {
               tenantId,
@@ -702,12 +704,12 @@ export class InventoryService {
               unitSku: { startsWith: prefix },
             },
             select: { unitSku: true },
-            orderBy: { unitSku: 'desc' }, // works because we pad to 4 digits
+            orderBy: { unitSku: "desc" }, // OK because unit seq is fixed-width (2 digits)
           });
 
           let maxSeq = 0;
           if (lastUnit?.unitSku) {
-            const m = lastUnit.unitSku.match(/-(\d{4})$/);
+            const m = lastUnit.unitSku.match(/-(\d{2})$/);
             if (m) maxSeq = parseInt(m[1], 10);
           }
 
@@ -721,7 +723,15 @@ export class InventoryService {
 
           for (let i = 0; i < quantity; i++) {
             const seq = maxSeq + 1 + i;
-            const padded = seq.toString().padStart(4, '0');
+
+            if (seq > 99) {
+              throw new BadRequestException(
+                `Unit sequence exceeded 99 for ${inventoryItem.sku} in batch ${batch.batchCode}. Use 3-digit unit seq if needed.`
+              );
+            }
+
+            const padded = seq.toString().padStart(2, "0");
+
             unitsToCreate.push({
               tenantId,
               inventoryItemId: inventoryItem.id,
@@ -1396,23 +1406,23 @@ export class InventoryService {
   }> {
     const limit = Math.min(Number(query.limit ?? 50), 200);
     const cursor = query.cursor?.trim() || null;
-  
+
     const where: any = { tenantId };
-  
+
     if (query.status) where.status = query.status as any;
     if (query.batchId) where.batchId = query.batchId;
     if (query.transportOrderId) where.transportOrderId = query.transportOrderId;
-  
+
     if (query.prefix && String(query.prefix).trim()) {
       where.unitSku = { startsWith: String(query.prefix).trim() };
     }
-  
+
     if (query.itemSku && String(query.itemSku).trim()) {
       where.inventory_item = {
         sku: { equals: String(query.itemSku).trim(), mode: 'insensitive' },
       };
     }
-  
+
     if (query.search && String(query.search).trim()) {
       const s = String(query.search).trim();
       where.OR = [
@@ -1422,15 +1432,15 @@ export class InventoryService {
         { batch: { batchCode: { contains: s, mode: 'insensitive' } } },
       ];
     }
-  
+
     const unitsPlusOne = await this.prisma.inventory_units.findMany({
       where,
       take: limit + 1,
       ...(cursor
         ? {
-            cursor: { id: cursor },
-            skip: 1,
-          }
+          cursor: { id: cursor },
+          skip: 1,
+        }
         : {}),
       // stable order: updatedAt desc + id desc
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
@@ -1449,10 +1459,10 @@ export class InventoryService {
         batch: { select: { batchCode: true } },
       },
     });
-  
+
     const hasMore = unitsPlusOne.length > limit;
     const page = hasMore ? unitsPlusOne.slice(0, limit) : unitsPlusOne;
-  
+
     const rows = page.map((u: any) => ({
       id: u.id,
       unitSku: u.unitSku,
@@ -1468,12 +1478,12 @@ export class InventoryService {
       createdAt: u.createdAt,
       updatedAt: u.updatedAt,
     }));
-  
+
     const nextCursor = hasMore ? rows[rows.length - 1]?.id ?? null : null;
-  
+
     return { rows, nextCursor, hasMore };
   }
-  
+
 
 
   /**
