@@ -27,20 +27,24 @@ async function bootstrap() {
     .map((s) => s.trim().replace(/\/$/, ""))
     .filter(Boolean);
 
-  app.enableCors({
-    origin: (origin, cb) => {
-      if (!origin) return cb(null, true);
-
-      const normalized = origin.replace(/\/$/, "");
-      if (allowedOrigins.includes(normalized)) return cb(null, true);
-
-      // IMPORTANT: don't throw Error, it makes preflight OPTIONS return 500
-      return cb(null, false);
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  });
+    app.enableCors({
+      origin: (origin, cb) => {
+        console.log("[CORS] origin:", origin);
+        console.log("[CORS] allowed:", allowedOrigins);
+    
+        if (!origin) return cb(null, true);
+    
+        const normalized = origin.replace(/\/$/, "");
+        const ok = allowedOrigins.includes(normalized);
+    
+        console.log("[CORS] normalized:", normalized, "ok:", ok);
+    
+        return cb(null, ok);
+      },
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization"],
+    });
 
   // ✅ Handle CORS preflight globally (fixes OPTIONS 404)
   app.use((req: any, res: any, next: any) => {
