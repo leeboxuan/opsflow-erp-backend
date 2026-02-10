@@ -15,7 +15,7 @@ import { BatchDto } from './dto/batch.dto';
 import { InventoryItemDto } from './dto/inventory-item.dto';
 import { StockInDto } from './dto/stock-in.dto';
 import { SearchUnitsQueryDto } from './dto/search-units-query.dto';
-
+import { InventoryUnitStatus } from '@prisma/client';
 // Local enums matching Prisma schema (avoids @prisma/client enum resolution issues)
 const InventoryBatchStatus = {
   Draft: 'Draft',
@@ -33,16 +33,16 @@ type ListInventoryItemsArgs = {
   q: string | null;
   status: string | null; // optional
 };
-const InventoryUnitStatus = {
-  Available: 'Available',
-  Reserved: 'Reserved',
-  InTransit: 'InTransit',
-  Delivered: 'Delivered',
-  Returned: 'Returned',
-  Damaged: 'Damaged',
-  Cancelled: 'Cancelled',
-} as const;
-type InventoryUnitStatus = (typeof InventoryUnitStatus)[keyof typeof InventoryUnitStatus];
+// const InventoryUnitStatus = {
+//   Available: 'Available',
+//   Reserved: 'Reserved',
+//   InTransit: 'InTransit',
+//   Delivered: 'Delivered',
+//   Returned: 'Returned',
+//   Damaged: 'Damaged',
+//   Cancelled: 'Cancelled',
+// } as const;
+// type InventoryUnitStatus = (typeof InventoryUnitStatus)[keyof typeof InventoryUnitStatus];
 
 @Injectable()
 export class InventoryService {
@@ -240,6 +240,41 @@ export class InventoryService {
     });
   }
 
+  async updateUnitStatus(
+    tenantId: string,
+    unitId: string,
+    status: InventoryUnitStatus,
+  ): Promise<{ id: string; unitSku: string; status: InventoryUnitStatus; updatedAt: Date }> {
+    const unit = await this.prisma.inventory_units.findFirst({
+      where: { id: unitId, tenantId },
+      select: {
+        id: true,
+        unitSku: true,
+        status: true,
+        transportOrderId: true,
+        tripId: true,
+        stopId: true,
+      },
+    });
+  
+    if (!unit) throw new NotFoundException('Inventory unit not found');
+  
+    // Safety: don’t let admins “make it Available” while it’s still assigned to an order/trip
+    const isAssigned = Boolean(unit.transportOrderId || unit.tripId || unit.stopId);
+    if (status === InventoryUnitStatus.Available && isAssigned) {
+      throw new BadRequestException(
+        'Cannot set to Available while unit is assigned to an order/trip. Unassign it first.',
+      );
+    }
+  
+    const updated = await this.prisma.inventory_units.update({
+      where: { id: unitId },
+      data: { status },
+      select: { id: true, unitSku: true, status: true, updatedAt: true },
+    });
+  
+    return updated;
+  }
   /**
    * GET /inventory/items?search=
    */

@@ -23,6 +23,9 @@ import { InventoryItemDto } from './dto/inventory-item.dto';
 import { ReleaseUnitsDto } from './dto/release-units.dto';
 import { StockInDto } from './dto/stock-in.dto';
 import { SearchUnitsQueryDto } from './dto/search-units-query.dto';
+import { Patch } from '@nestjs/common';
+import { RoleGuard, Roles } from '../auth/guards/role.guard';
+import { UpdateUnitStatusDto } from './dto/update-unit-status.dto';
 
 /** Allowed batch status filter (matches Prisma InventoryBatchStatus) */
 const BATCH_STATUS_VALUES = ['Draft', 'Open', 'Completed', 'Cancelled'] as const;
@@ -33,7 +36,7 @@ type BatchStatusQuery = (typeof BATCH_STATUS_VALUES)[number];
 @UseGuards(AuthGuard, TenantGuard)
 @ApiBearerAuth('JWT-auth')
 export class InventoryController {
-  constructor(private readonly inventoryService: InventoryService) {}
+  constructor(private readonly inventoryService: InventoryService) { }
 
   @Get('items/summary')
   @ApiOperation({ summary: 'Get inventory items with unit counts by status' })
@@ -268,4 +271,19 @@ export class InventoryController {
     const tenantId = req.tenant.tenantId;
     return this.inventoryService.stockInFromClientSheet(tenantId, dto);
   }
+
+  @Patch('units/:unitId/status')
+  @UseGuards(RoleGuard)
+  @Roles('Admin')
+  @ApiOperation({ summary: 'Admin: update inventory unit status' })
+  async updateUnitStatus(
+    @Request() req: any,
+    @Param('unitId') unitId: string,
+    @Body() dto: UpdateUnitStatusDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    return this.inventoryService.updateUnitStatus(tenantId, unitId, dto.status);
+  }
+
 }
+
