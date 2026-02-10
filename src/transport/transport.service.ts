@@ -559,19 +559,51 @@ export class TransportService {
       where: { id: orderId, tenantId },
     });
     if (!order) throw new NotFoundException("Order not found");
-
-    const updated = await this.prisma.transportOrder.update({
-      where: { id: orderId },
-      data: {
-        status: dto.status ?? undefined,
-        customerName: dto.customerName ?? undefined,
-        customerContactNumber: dto.customerContactNumber ?? undefined,
-        notes: dto.notes ?? undefined,
-      },
+  
+    const nextStatus = (dto.status ?? order.status) as any;
+    const prevStatus = order.status as any;
+  
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const o = await tx.transportOrder.update({
+        where: { id: orderId },
+        data: {
+          status: dto.status ?? undefined,
+          customerName: dto.customerName ?? undefined,
+          customerContactNumber: dto.customerContactNumber ?? undefined,
+          notes: dto.notes ?? undefined,
+        },
+      });
+  
+      // ✅ Sync unit statuses based on order status
+      if (dto.status && dto.status !== prevStatus) {
+        if (dto.status === "InTransit") {
+          await tx.inventory_units.updateMany({
+            where: { tenantId, transportOrderId: orderId },
+            data: { status: "InTransit" as any },
+          });
+        }
+  
+        if (dto.status === "Delivered" || dto.status === "Closed") {
+          await tx.inventory_units.updateMany({
+            where: { tenantId, transportOrderId: orderId },
+            data: { status: "Delivered" as any },
+          });
+        }
+  
+        if (dto.status === "Cancelled") {
+          await tx.inventory_units.updateMany({
+            where: { tenantId, transportOrderId: orderId },
+            data: { status: "Available" as any, transportOrderId: null },
+          });
+        }
+      }
+  
+      return o;
     });
-
+  
     return this.toDto(updated);
   }
+  
 
   async replaceOrderItems(tenantId: string, orderId: string, dto: ReplaceOrderItemsDto): Promise<OrderDto> {
     return this.prisma.$transaction(async (tx) => {
@@ -718,7 +750,7 @@ export class TransportService {
       return this.toDtoWithStops(full);
     });
   }
-  
+
   async deleteOrder(tenantId: string, orderId: string) {
     const order = await this.prisma.order.findFirst({
       where: { id: orderId, tenantId },
