@@ -255,18 +255,39 @@ export class InventoryController {
     nextCursor: string | null;
     hasMore: boolean;
     totalCount: number;
-
+    stats: {
+      total: number;
+      available: number;
+      reserved: number;
+      inTransit: number;
+      delivered: number;
+      other: number;
+    };
   }> {
     const tenantId = req.tenant.tenantId;
     const result = await this.inventoryService.searchUnits(tenantId, query);
     // Ensure the structure matches the expected return type
     if (Array.isArray(result)) {
+      const rows = result;
+      const stats = rows.reduce(
+        (acc, row) => {
+          acc.total += 1;
+          const s = row.status;
+          if (s === 'Available') acc.available += 1;
+          else if (s === 'Reserved') acc.reserved += 1;
+          else if (s === 'InTransit') acc.inTransit += 1;
+          else if (s === 'Delivered') acc.delivered += 1;
+          else acc.other += 1;
+          return acc;
+        },
+        { total: 0, available: 0, reserved: 0, inTransit: 0, delivered: 0, other: 0 },
+      );
       return {
-        rows: result,
+        rows,
         nextCursor: null,
         hasMore: false,
-        totalCount: result.length,
-
+        totalCount: rows.length,
+        stats,
       };
     }
     return result;

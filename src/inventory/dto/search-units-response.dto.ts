@@ -12,4 +12,23 @@ export class SearchUnitsResponseDto<T = any> {
 
   @ApiProperty({ example: 187 })
   totalCount!: number;
+
+  @ApiProperty({
+    example: {
+      total: 187,
+      available: 120,
+      reserved: 40,
+      inTransit: 20,
+      delivered: 5,
+      other: 2,
+    },
+  })
+  stats!: {
+    total: number;
+    available: number;
+    reserved: number;
+    inTransit: number;
+    delivered: number;
+    other: number;
+  };
 }

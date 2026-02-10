@@ -89,33 +89,33 @@ export class InventoryService {
 
   async listInventoryItems(args: ListInventoryItemsArgs) {
     const { tenantId, limit, cursor, q, status } = args;
-  
+
     const where: any = { tenantId };
-  
+
     if (q) {
       where.OR = [
         { sku: { contains: q, mode: "insensitive" } },
         { name: { contains: q, mode: "insensitive" } },
       ];
     }
-  
+
     // If you have a status field on inventory_items (some designs do), filter it here.
     // If status is on inventory_units instead, do NOT filter here (that becomes a join-ish problem).
     if (status && status !== "all") {
       where.status = status;
     }
-  
+
     // ✅ NEW: totalCount for "Page X of Y"
     const totalCount = await this.prisma.inventory_items.count({ where });
-  
+
     const rowsPlusOne = await this.prisma.inventory_items.findMany({
       where,
       take: limit + 1,
       ...(cursor
         ? {
-            cursor: { id: cursor },
-            skip: 1,
-          }
+          cursor: { id: cursor },
+          skip: 1,
+        }
         : {}),
       orderBy: { id: "asc" }, // stable cursor order
       select: {
@@ -126,12 +126,12 @@ export class InventoryService {
         updatedAt: true,
       },
     });
-  
+
     const hasMore = rowsPlusOne.length > limit;
     const rows = hasMore ? rowsPlusOne.slice(0, limit) : rowsPlusOne;
-  
+
     const nextCursor = hasMore ? rows[rows.length - 1]?.id ?? null : null;
-  
+
     // ✅ include totalCount in response
     return { rows, nextCursor, hasMore, totalCount };
   }
@@ -260,9 +260,9 @@ export class InventoryService {
         stopId: true,
       },
     });
-  
+
     if (!unit) throw new NotFoundException('Inventory unit not found');
-  
+
     // Safety: don’t let admins “make it Available” while it’s still assigned to an order/trip
     const isAssigned = Boolean(unit.transportOrderId || unit.tripId || unit.stopId);
     if (status === InventoryUnitStatus.Available && isAssigned) {
@@ -270,13 +270,13 @@ export class InventoryService {
         'Cannot set to Available while unit is assigned to an order/trip. Unassign it first.',
       );
     }
-  
+
     const updated = await this.prisma.inventory_units.update({
       where: { id: unitId },
       data: { status },
       select: { id: true, unitSku: true, status: true, updatedAt: true },
     });
-  
+
     return updated;
   }
   /**
@@ -1443,6 +1443,14 @@ export class InventoryService {
     nextCursor: string | null;
     hasMore: boolean;
     totalCount: number;
+    stats: {
+      total: number;
+      available: number;
+      reserved: number;
+      inTransit: number;
+      delivered: number;
+      other: number;
+    };
   }> {
     const limit = Math.min(Number(query.limit ?? 25), 200);
     const cursor = query.cursor?.trim() || null;
@@ -1523,8 +1531,26 @@ export class InventoryService {
     }));
 
     const nextCursor = hasMore ? rows[rows.length - 1]?.id ?? null : null;
+    const grouped = await this.prisma.inventory_units.groupBy({
+      by: ["status"],
+      where,
+      _count: { _all: true },
+    });
 
-    return { rows, nextCursor, hasMore, totalCount };
+    const stats = grouped.reduce(
+      (acc, g) => {
+        acc.total += g._count._all;
+        const s = g.status;
+        if (s === "Available") acc.available += g._count._all;
+        else if (s === "Reserved") acc.reserved += g._count._all;
+        else if (s === "InTransit") acc.inTransit += g._count._all;
+        else if (s === "Delivered") acc.delivered += g._count._all;
+        else acc.other += g._count._all;
+        return acc;
+      },
+      { total: 0, available: 0, reserved: 0, inTransit: 0, delivered: 0, other: 0 }
+    );
+    return { rows, nextCursor, hasMore, totalCount, stats };
   }
 
 
