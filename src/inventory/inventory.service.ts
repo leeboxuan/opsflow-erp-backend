@@ -1750,4 +1750,22 @@ export class InventoryService {
   private generateId(): string {
     return `cl${Date.now().toString(36)}${Math.random().toString(36).substr(2, 9)}`;
   }
+  async deleteItem(tenantId: string, itemId: string) {
+    const badUnit = await this.prisma.inventoryUnit.findFirst({
+      where: {
+        tenantId,
+        itemId,
+        status: { in: ["Reserved", "InTransit", "Delivered"] },
+      },
+    });
+    if (badUnit) throw new BadRequestException("Item has non-available units");
+
+    await this.prisma.$transaction([
+      this.prisma.inventoryUnit.deleteMany({ where: { tenantId, itemId } }),
+      this.prisma.inventoryItem.delete({ where: { id: itemId, tenantId } }),
+    ]);
+
+    return { ok: true };
+  }
+
 }

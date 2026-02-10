@@ -8,6 +8,8 @@ import {
   UseGuards,
   Request,
   BadRequestException,
+  Delete,
+  Req,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiOkResponse } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -311,6 +313,12 @@ export class InventoryController {
   ) {
     const tenantId = req.tenant.tenantId;
     return this.inventoryService.updateUnitStatus(tenantId, unitId, dto.status);
+  }
+
+  @Delete("items/:itemId")
+  deleteInventoryItem(@Req() req, @Param("itemId") itemId: string) {
+    const tenantId = req.tenant.tenantId;
+    return this.inventoryService.deleteItem(tenantId, itemId);
   }
 
 }

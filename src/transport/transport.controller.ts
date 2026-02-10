@@ -10,6 +10,9 @@ import {
   NotFoundException,
   Patch,
   Put,
+  BadRequestException,
+  Delete,
+  Req,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -100,4 +103,14 @@ export class TransportController {
     const tenantId = req.tenant.tenantId;
     return this.transportService.replaceOrderItems(tenantId, id, dto);
   }
+  // (keep your existing imports)
+  
+  @Delete("orders/:orderId")
+  deleteOrder(@Req() req: any, @Param("orderId") orderId: string) {
+    const tenantId = req.tenant.tenantId;
+    return this.transportService.deleteOrder(tenantId, orderId);
+  }
+  
+
+
 }

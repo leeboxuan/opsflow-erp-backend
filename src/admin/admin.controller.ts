@@ -9,6 +9,8 @@ import {
   NotFoundException,
   BadRequestException,
   Patch,
+  Delete,
+  Req,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -259,4 +261,42 @@ export class AdminController {
       updatedAt: user.updatedAt,
     };
   }
+
+  @Delete("drivers/:driverId")
+  async deleteDriver(
+    @Req() req,
+    @Param("driverId") driverId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+
+    // ensure driver belongs to this tenant
+    const membership = await this.prisma.tenantMembership.findUnique({
+      where: { tenantId_userId: { tenantId, userId: driverId } },
+    });
+    if (!membership) throw new NotFoundException("Driver not found");
+
+    // block delete if active trip
+    const activeTrip = await this.prisma.trip.findFirst({
+      where: {
+        tenantId,
+        assignedDriverId: driverId,
+        status: { in: ["Planned", "Dispatched", "InTransit"] },
+      },
+    });
+    if (activeTrip) {
+      throw new BadRequestException("Driver has active trip");
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.driverLocation.deleteMany({
+        where: { tenantId, driverUserId: driverId },
+      }),
+      this.prisma.tenantMembership.delete({
+        where: { tenantId_userId: { tenantId, userId: driverId } },
+      }),
+    ]);
+
+    return { ok: true };
+  }
+
 }

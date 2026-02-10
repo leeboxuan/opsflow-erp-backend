@@ -718,5 +718,36 @@ export class TransportService {
       return this.toDtoWithStops(full);
     });
   }
+  
+  async deleteOrder(tenantId: string, orderId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, tenantId },
+      select: { id: true },
+    });
+
+    if (!order) throw new NotFoundException("Order not found");
+
+    // Block delete if order is already in an active trip
+    const locked = await this.prisma.tripStop.findFirst({
+      where: {
+        tenantId,
+        orderId,
+        trip: { status: { in: ["Dispatched", "InTransit"] } },
+      },
+      select: { id: true },
+    });
+
+    if (locked) throw new BadRequestException("Order is in an active trip");
+
+    await this.prisma.$transaction([
+      // If your schema names differ, adjust these two lines accordingly:
+      this.prisma.orderItem.deleteMany({ where: { tenantId, orderId } }),
+      this.prisma.tripStop.deleteMany({ where: { tenantId, orderId } }),
+      this.prisma.order.delete({ where: { id: orderId } }),
+    ]);
+
+    return { ok: true };
+  }
+
 
 }
