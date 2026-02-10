@@ -89,32 +89,35 @@ export class InventoryService {
 
   async listInventoryItems(args: ListInventoryItemsArgs) {
     const { tenantId, limit, cursor, q, status } = args;
-
+  
     const where: any = { tenantId };
-
+  
     if (q) {
       where.OR = [
-        { sku: { contains: q, mode: 'insensitive' } },
-        { name: { contains: q, mode: 'insensitive' } },
+        { sku: { contains: q, mode: "insensitive" } },
+        { name: { contains: q, mode: "insensitive" } },
       ];
     }
-
+  
     // If you have a status field on inventory_items (some designs do), filter it here.
     // If status is on inventory_units instead, do NOT filter here (that becomes a join-ish problem).
-    if (status && status !== 'all') {
+    if (status && status !== "all") {
       where.status = status;
     }
-
+  
+    // ✅ NEW: totalCount for "Page X of Y"
+    const totalCount = await this.prisma.inventory_items.count({ where });
+  
     const rowsPlusOne = await this.prisma.inventory_items.findMany({
       where,
       take: limit + 1,
       ...(cursor
         ? {
-          cursor: { id: cursor },
-          skip: 1,
-        }
+            cursor: { id: cursor },
+            skip: 1,
+          }
         : {}),
-      orderBy: { id: 'asc' }, // stable cursor order
+      orderBy: { id: "asc" }, // stable cursor order
       select: {
         id: true,
         sku: true,
@@ -123,13 +126,14 @@ export class InventoryService {
         updatedAt: true,
       },
     });
-
+  
     const hasMore = rowsPlusOne.length > limit;
     const rows = hasMore ? rowsPlusOne.slice(0, limit) : rowsPlusOne;
-
+  
     const nextCursor = hasMore ? rows[rows.length - 1]?.id ?? null : null;
-
-    return { rows, nextCursor, hasMore };
+  
+    // ✅ include totalCount in response
+    return { rows, nextCursor, hasMore, totalCount };
   }
   private async updateAvailableQty(
     tenantId: string,
