@@ -8,6 +8,7 @@ import {
   Request,
   NotFoundException,
   BadRequestException,
+  Patch,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -22,6 +23,7 @@ import { CreateVehicleDto } from './dto/create-vehicle.dto';
 import { DriverDto } from './dto/driver.dto';
 import { VehicleDto } from './dto/vehicle.dto';
 import { DriverLocationDto } from '../driver/dto/location.dto';
+import { UpdateDriverDto } from "../drivers/dto/update-driver.dto"; // reuse
 
 @ApiTags('admin')
 @Controller('admin')
@@ -32,7 +34,7 @@ export class AdminController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly locationService: LocationService,
-  ) {}
+  ) { }
 
   @Get('drivers')
   @ApiOperation({ summary: 'List all drivers (Admin/Ops only)' })
@@ -105,9 +107,9 @@ export class AdminController {
         existingMembership.role === Role.Driver
           ? existingMembership
           : await this.prisma.tenantMembership.update({
-              where: { id: existingMembership.id },
-              data: { role: Role.Driver },
-            });
+            where: { id: existingMembership.id },
+            data: { role: Role.Driver },
+          });
 
       return {
         id: user.id,
@@ -214,5 +216,43 @@ export class AdminController {
   async getLocations(@Request() req: any): Promise<DriverLocationDto[]> {
     const tenantId = req.tenant.tenantId;
     return this.locationService.getAllDriverLocations(tenantId);
+  }
+
+  @Patch("drivers/:driverId")
+  @ApiOperation({ summary: "Update driver (Admin/Ops only)" })
+  async updateDriver(
+    @Request() req: any,
+    @Param("driverId") driverId: string,
+    @Body() dto: UpdateDriverDto & { phone?: string },
+  ): Promise<DriverDto> {
+    const tenantId = req.tenant.tenantId;
+
+    // ensure user is a driver in this tenant
+    const membership = await this.prisma.tenantMembership.findUnique({
+      where: { tenantId_userId: { tenantId, userId: driverId } },
+      include: { user: true },
+    });
+
+    if (!membership) throw new NotFoundException("Driver not found");
+
+    const user = await this.prisma.user.update({
+      where: { id: driverId },
+      data: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.phone !== undefined && { phone: dto.phone }),
+        // normally don't allow email change
+      },
+    });
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      phone: (user as any).phone ?? null,
+      role: membership.role,
+      membershipId: membership.id,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
   }
 }

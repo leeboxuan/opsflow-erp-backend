@@ -6,4 +6,6 @@ export class UpdateDriverDto {
   @IsOptional()
   @IsString()
   name?: string;
+  phone?: string;
+
 }
