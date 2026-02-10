@@ -1442,8 +1442,9 @@ export class InventoryService {
     }>;
     nextCursor: string | null;
     hasMore: boolean;
+    totalCount: number;
   }> {
-    const limit = Math.min(Number(query.limit ?? 50), 200);
+    const limit = Math.min(Number(query.limit ?? 25), 200);
     const cursor = query.cursor?.trim() || null;
 
     const where: any = { tenantId };
@@ -1499,6 +1500,9 @@ export class InventoryService {
       },
     });
 
+    const totalCount = await this.prisma.inventory_units.count({ where });
+
+
     const hasMore = unitsPlusOne.length > limit;
     const page = hasMore ? unitsPlusOne.slice(0, limit) : unitsPlusOne;
 
@@ -1520,7 +1524,7 @@ export class InventoryService {
 
     const nextCursor = hasMore ? rows[rows.length - 1]?.id ?? null : null;
 
-    return { rows, nextCursor, hasMore };
+    return { rows, nextCursor, hasMore, totalCount };
   }
 
 

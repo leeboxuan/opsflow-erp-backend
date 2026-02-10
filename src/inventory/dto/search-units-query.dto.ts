@@ -49,7 +49,7 @@ export class SearchUnitsQueryDto {
   @IsString()
   cursor?: string;
 
-  @ApiPropertyOptional({ description: 'Max results (default 50, max 200)', default: 50 })
+  @ApiPropertyOptional({ description: 'Max results (default 25, max 200)', default: 25 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

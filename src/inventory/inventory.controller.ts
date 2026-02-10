@@ -9,7 +9,7 @@ import {
   Request,
   BadRequestException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiOkResponse } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { TenantGuard } from '../auth/guards/tenant.guard';
 import { InventoryService } from './inventory.service';
@@ -26,6 +26,7 @@ import { SearchUnitsQueryDto } from './dto/search-units-query.dto';
 import { Patch } from '@nestjs/common';
 import { RoleGuard, Roles } from '../auth/guards/role.guard';
 import { UpdateUnitStatusDto } from './dto/update-unit-status.dto';
+import { SearchUnitsResponseDto } from './dto/search-units-response.dto';
 
 /** Allowed batch status filter (matches Prisma InventoryBatchStatus) */
 const BATCH_STATUS_VALUES = ['Draft', 'Open', 'Completed', 'Cancelled'] as const;
@@ -230,6 +231,8 @@ export class InventoryController {
   @ApiQuery({ name: 'transportOrderId', required: false })
   @ApiQuery({ name: 'cursor', required: false, description: 'cursor (inventory_units.id) from previous page' })
   @ApiQuery({ name: 'limit', required: false })
+  @ApiOkResponse({ type: SearchUnitsResponseDto })
+
   async searchUnits(
     @Request() req: any,
     @Query() query: SearchUnitsQueryDto,
@@ -251,6 +254,8 @@ export class InventoryController {
     }>;
     nextCursor: string | null;
     hasMore: boolean;
+    totalCount: number;
+
   }> {
     const tenantId = req.tenant.tenantId;
     const result = await this.inventoryService.searchUnits(tenantId, query);
@@ -260,6 +265,8 @@ export class InventoryController {
         rows: result,
         nextCursor: null,
         hasMore: false,
+        totalCount: result.length,
+
       };
     }
     return result;
