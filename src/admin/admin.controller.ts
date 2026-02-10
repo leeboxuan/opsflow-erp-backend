@@ -84,10 +84,14 @@ export class AdminController {
       where: { email: dto.email },
       update: {
         name: dto.name || undefined,
+        phone: dto.phone || undefined, // ✅ ADD
+
       },
       create: {
         email: dto.email,
         name: dto.name || null,
+        phone: dto.phone || null, // ✅ ADD
+
       },
     });
 
