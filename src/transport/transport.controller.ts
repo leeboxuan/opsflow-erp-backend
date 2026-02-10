@@ -8,6 +8,8 @@ import {
   UseGuards,
   Request,
   NotFoundException,
+  Patch,
+  Put,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -16,6 +18,11 @@ import { TransportService } from './transport.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { OrderDto } from './dto/order.dto';
 import { TripDto } from './dto/trip.dto';
+import { RoleGuard, Roles } from '@/auth/guards/role.guard';
+import { Role } from '@prisma/client';
+import { UpdateOrderDto } from './dto/update-order.dto';
+
+import { ReplaceOrderItemsDto } from "./dto/replace-order-items.dto";
 
 @ApiTags('transport')
 @Controller('transport/orders')
@@ -68,5 +75,29 @@ export class TransportController {
   ): Promise<TripDto> {
     const tenantId = req.tenant.tenantId;
     return this.transportService.planTripFromOrder(tenantId, orderId);
+  }
+
+  @Patch(":id")
+  @UseGuards(RoleGuard)
+  @Roles(Role.Admin, Role.Ops)
+  async updateOrder(
+    @Request() req: any,
+    @Param("id") id: string,
+    @Body() dto: UpdateOrderDto
+  ): Promise<OrderDto> {
+    const tenantId = req.tenant.tenantId;
+    return this.transportService.updateOrderHeader(tenantId, id, dto);
+  }
+
+  @Put(":id/items")
+  @UseGuards(RoleGuard)
+  @Roles(Role.Admin, Role.Ops)
+  async replaceOrderItems(
+    @Request() req: any,
+    @Param("id") id: string,
+    @Body() dto: ReplaceOrderItemsDto
+  ): Promise<OrderDto> {
+    const tenantId = req.tenant.tenantId;
+    return this.transportService.replaceOrderItems(tenantId, id, dto);
   }
 }

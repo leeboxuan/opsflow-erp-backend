@@ -16,6 +16,8 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { OrderDto } from './dto/order.dto';
 import { TripDto } from './dto/trip.dto';
 import { EventLogService } from './event-log.service';
+import { UpdateOrderDto } from './dto/update-order.dto';
+import { ReplaceOrderItemsDto } from "./dto/replace-order-items.dto";
 
 @Injectable()
 export class TransportService {
@@ -120,6 +122,7 @@ export class TransportService {
           }
 
           const unitIds = availableUnits.map((u) => u.id);
+
           await tx.inventory_units.updateMany({
             where: { id: { in: unitIds } },
             data: {
@@ -130,7 +133,9 @@ export class TransportService {
 
           const effectiveBatchId =
             mixedBatches ? null : (batchId ?? null);
-          await tx.transport_order_items.upsert({
+
+          // Upsert the order item line
+          const orderItem = await tx.transport_order_items.upsert({
             where: {
               transportOrderId_inventoryItemId: {
                 transportOrderId: newOrder.id,
@@ -148,6 +153,16 @@ export class TransportService {
               qty: quantity,
               batchId: effectiveBatchId,
             },
+          });
+
+          // ✅ Create unit links (so unitSkus can be returned)
+          await tx.transport_order_item_units.createMany({
+            data: unitIds.map((inventoryUnitId) => ({
+              tenantId,
+              transportOrderItemId: orderItem.id,
+              inventoryUnitId,
+            })),
+            skipDuplicates: true,
           });
         }
       }
@@ -518,4 +533,190 @@ export class TransportService {
       })),
     };
   }
+
+  async updateOrder(tenantId: string, orderId: string, dto: UpdateOrderDto): Promise<OrderDto> {
+    const order = await this.prisma.transportOrder.findFirst({
+      where: { id: orderId, tenantId },
+    });
+
+    if (!order) throw new NotFoundException('Order not found');
+
+    const updated = await this.prisma.transportOrder.update({
+      where: { id: orderId },
+      data: {
+        status: dto.status ?? undefined,
+        customerName: dto.customerName ?? undefined,
+        customerContactNumber: dto.customerContactNumber ?? undefined,
+        notes: dto.notes ?? undefined,
+      },
+    });
+
+    return this.toDto(updated);
+  }
+
+  async updateOrderHeader(tenantId: string, orderId: string, dto: UpdateOrderDto): Promise<OrderDto> {
+    const order = await this.prisma.transportOrder.findFirst({
+      where: { id: orderId, tenantId },
+    });
+    if (!order) throw new NotFoundException("Order not found");
+
+    const updated = await this.prisma.transportOrder.update({
+      where: { id: orderId },
+      data: {
+        status: dto.status ?? undefined,
+        customerName: dto.customerName ?? undefined,
+        customerContactNumber: dto.customerContactNumber ?? undefined,
+        notes: dto.notes ?? undefined,
+      },
+    });
+
+    return this.toDto(updated);
+  }
+
+  async replaceOrderItems(tenantId: string, orderId: string, dto: ReplaceOrderItemsDto): Promise<OrderDto> {
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.transportOrder.findFirst({
+        where: { id: orderId, tenantId },
+      });
+      if (!order) throw new NotFoundException("Order not found");
+
+      // Normalize: drop lines with qty=0
+      const lines = (dto.items ?? []).filter((x) => (x.qty ?? 0) > 0);
+
+      // Existing order items + their linked units
+      const existing = await tx.transport_order_items.findMany({
+        where: { tenantId, transportOrderId: orderId },
+        include: { units: true },
+      });
+
+      const existingItemIds = new Set(existing.map((x) => x.id));
+
+      // 1) Detach ALL existing unit links + unreserve units from this order
+      // (we'll re-assign based on new payload)
+      const existingLinked = await tx.transport_order_item_units.findMany({
+        where: { tenantId, transportOrderItemId: { in: Array.from(existingItemIds) } },
+        select: { inventoryUnitId: true },
+      });
+
+      const oldUnitIds = existingLinked.map((x) => x.inventoryUnitId);
+
+      if (oldUnitIds.length > 0) {
+        await tx.inventory_units.updateMany({
+          where: { tenantId, id: { in: oldUnitIds }, transportOrderId: orderId },
+          data: { status: InventoryUnitStatus.Available, transportOrderId: null },
+        });
+      }
+
+      await tx.transport_order_item_units.deleteMany({
+        where: { tenantId, transportOrderItemId: { in: Array.from(existingItemIds) } },
+      });
+
+      // 2) Delete existing item lines (we'll recreate clean)
+      await tx.transport_order_items.deleteMany({
+        where: { tenantId, transportOrderId: orderId },
+      });
+
+      // 3) Recreate item lines + allocate units
+      for (const line of lines) {
+        const item = await tx.inventory_items.findFirst({
+          where: { tenantId, id: line.inventoryItemId },
+        });
+        if (!item) {
+          throw new BadRequestException(`Inventory item not found: ${line.inventoryItemId}`);
+        }
+
+        // Create the order item line
+        const orderItem = await tx.transport_order_items.create({
+          data: {
+            tenantId,
+            transportOrderId: orderId,
+            inventoryItemId: line.inventoryItemId,
+            qty: line.qty,
+            batchId: null,
+          },
+        });
+
+        // Allocate units:
+        // If unitSkus provided -> lock those exact units
+        // Else -> auto allocate FIFO from Available
+        let unitsToReserve: { id: string }[] = [];
+
+        if (line.unitSkus && line.unitSkus.length > 0) {
+          if (line.unitSkus.length !== line.qty) {
+            throw new BadRequestException(
+              `unitSkus length must equal qty for item ${item.sku} (qty ${line.qty}, unitSkus ${line.unitSkus.length})`
+            );
+          }
+
+          const found = await tx.inventory_units.findMany({
+            where: {
+              tenantId,
+              unitSku: { in: line.unitSkus },
+              inventoryItemId: line.inventoryItemId,
+              status: InventoryUnitStatus.Available,
+              transportOrderId: null,
+            },
+          });
+
+          if (found.length !== line.unitSkus.length) {
+            throw new BadRequestException(`Some unitSkus are unavailable or invalid for item ${item.sku}`);
+          }
+
+          unitsToReserve = found.map((u) => ({ id: u.id }));
+        } else {
+          const found = await tx.inventory_units.findMany({
+            where: {
+              tenantId,
+              inventoryItemId: line.inventoryItemId,
+              status: InventoryUnitStatus.Available,
+              transportOrderId: null,
+            },
+            orderBy: { createdAt: "asc" },
+            take: line.qty,
+          });
+
+          if (found.length < line.qty) {
+            throw new BadRequestException(
+              `Not enough available units for item ${item.sku} (requested ${line.qty}, available ${found.length})`
+            );
+          }
+
+          unitsToReserve = found.map((u) => ({ id: u.id }));
+        }
+
+        const unitIds = unitsToReserve.map((u) => u.id);
+
+        await tx.inventory_units.updateMany({
+          where: { tenantId, id: { in: unitIds } },
+          data: { status: InventoryUnitStatus.Reserved, transportOrderId: orderId },
+        });
+
+        await tx.transport_order_item_units.createMany({
+          data: unitIds.map((inventoryUnitId) => ({
+            tenantId,
+            transportOrderItemId: orderItem.id,
+            inventoryUnitId,
+          })),
+        });
+      }
+
+      // Return updated order with stops + item unitSkus
+      const full = await tx.transportOrder.findFirst({
+        where: { id: orderId, tenantId },
+        include: {
+          stops: {
+            orderBy: { sequence: "asc" },
+            include: { pods: { take: 1, orderBy: { createdAt: "desc" } } },
+          },
+          transport_order_items: {
+            include: { inventory_item: true, units: { include: { inventory_unit: true } } },
+          },
+        },
+      });
+
+      if (!full) throw new NotFoundException("Order not found after update");
+      return this.toDtoWithStops(full);
+    });
+  }
+
 }

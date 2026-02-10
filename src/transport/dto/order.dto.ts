@@ -53,7 +53,10 @@ export interface OrderDto {
     qty: number;
     sku: string | null;
     name: string | null;
+    unitSkus?: string[];
+
     createdAt: Date;
     updatedAt: Date;
+
   }>;
 }
