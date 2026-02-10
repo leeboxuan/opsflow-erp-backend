@@ -781,5 +781,38 @@ export class TransportService {
     return { ok: true };
   }
 
-
+  async getOrderLive(tenantId: string, orderId: string) {
+    const stop = await this.prisma.stop.findFirst({
+      where: { tenantId, transportOrderId: orderId, tripId: { not: null } },
+      select: { tripId: true },
+    });
+  
+    if (!stop?.tripId) {
+      return { orderId, tripId: null, driverUserId: null, lat: null, lng: null, capturedAt: null };
+    }
+  
+    const trip = await this.prisma.trip.findFirst({
+      where: { tenantId, id: stop.tripId },
+      select: { id: true, assignedDriverUserId: true },
+    });
+  
+    const driverUserId = trip?.assignedDriverUserId ?? null;
+  
+    const loc = driverUserId
+      ? await this.prisma.driver_location_latest.findFirst({
+          where: { tenantId, driverUserId },
+          select: { lat: true, lng: true, capturedAt: true },
+        })
+      : null;
+  
+    return {
+      orderId,
+      tripId: trip?.id ?? null,
+      driverUserId,
+      lat: loc?.lat ?? null,
+      lng: loc?.lng ?? null,
+      capturedAt: loc?.capturedAt ?? null,
+    };
+  }
+  
 }

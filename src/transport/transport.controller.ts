@@ -111,6 +111,11 @@ export class TransportController {
     return this.transportService.deleteOrder(tenantId, orderId);
   }
   
-
+  @Get(':id/live')
+  async getOrderLive(@Request() req: any, @Param('id') id: string) {
+    const tenantId = req.tenant.tenantId;
+    return this.transportService.getOrderLive(tenantId, id);
+  }
+  
 
 }
