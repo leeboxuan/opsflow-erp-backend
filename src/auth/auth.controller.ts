@@ -28,7 +28,7 @@ export class AuthController {
     private readonly supabaseService: SupabaseService,
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
-  ) {}
+  ) { }
 
   @Post('login')
   @ApiOperation({ summary: 'Login with email and password' })
@@ -204,6 +204,23 @@ export class AuthController {
         createdAt: 'desc',
       },
     });
+    // Auto-activate membership on successful login
+    if (req.tenant?.tenantId) {
+      const activeMembership = await this.prisma.tenantMembership.findFirst({
+        where: {
+          tenantId: req.tenant.tenantId,
+          userId: user.id,
+        },
+      });
+
+      if (activeMembership && activeMembership.status === 'Invited') {
+        await this.prisma.tenantMembership.update({
+          where: { id: activeMembership.id },
+          data: { status: { in: ['Active', 'Invited'] },
+        },
+        });
+      }
+    }
 
     const tenantMemberships = memberships.map((membership) => ({
       tenantId: membership.tenantId,

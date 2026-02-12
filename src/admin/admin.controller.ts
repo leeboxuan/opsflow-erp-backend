@@ -25,7 +25,11 @@ import { CreateVehicleDto } from './dto/create-vehicle.dto';
 import { DriverDto } from './dto/driver.dto';
 import { VehicleDto } from './dto/vehicle.dto';
 import { DriverLocationDto } from '../driver/dto/location.dto';
-import { UpdateDriverDto } from "../drivers/dto/update-driver.dto"; // reuse
+import { UpdateDriverDto } from "../drivers/dto/update-driver.dto";
+import { SupabaseService } from '../auth/supabase.service';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { UserDto } from './dto/user.dto';
 
 @ApiTags('admin')
 @Controller('admin')
@@ -36,6 +40,8 @@ export class AdminController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly locationService: LocationService,
+    private readonly supabaseService: SupabaseService,
+
   ) { }
 
   @Get('drivers')
@@ -71,6 +77,148 @@ export class AdminController {
         updatedAt: membership.user.updatedAt,
       }),
     );
+  }
+
+  @Get('users')
+  @ApiOperation({ summary: 'List all web users (Admin/Ops only)' })
+  async getUsers(@Request() req: any): Promise<UserDto[]> {
+    const tenantId = req.tenant.tenantId;
+
+    const memberships = await this.prisma.tenantMembership.findMany({
+      where: {
+        tenantId,
+        // treat "Users page" as web users (exclude drivers)
+        NOT: { role: Role.Driver },
+      },
+      include: { user: true },
+      orderBy: { user: { createdAt: 'desc' } },
+    });
+
+    return memberships.map((m) => ({
+      id: m.user.id,
+      email: m.user.email,
+      name: m.user.name,
+      role: m.role,
+      status: m.status,
+      membershipId: m.id,
+      createdAt: m.user.createdAt,
+      updatedAt: m.user.updatedAt,
+    }));
+  }
+
+  @Post('users')
+  @ApiOperation({ summary: 'Create/invite a web user (Admin/Ops only)' })
+  async createUser(@Request() req: any, @Body() dto: CreateUserDto): Promise<UserDto> {
+    const tenantId = req.tenant.tenantId;
+
+    if (dto.role === Role.Driver) {
+      throw new BadRequestException('Use /admin/drivers to create drivers');
+    }
+
+    // 1) Upsert internal user (public.users)
+    const user = await this.prisma.user.upsert({
+      where: { email: dto.email },
+      update: { name: dto.name ?? undefined },
+      create: { email: dto.email, name: dto.name ?? null },
+    });
+
+    // 2) Upsert membership for this tenant
+    const membership = await this.prisma.tenantMembership.upsert({
+      where: { tenantId_userId: { tenantId, userId: user.id } },
+      update: {
+        role: dto.role,
+        status: dto.sendInvite === false ? 'Active' : 'Invited',
+      },
+      create: {
+        tenantId,
+        userId: user.id,
+        role: dto.role,
+        status: dto.sendInvite === false ? 'Active' : 'Invited',
+      },
+    });
+
+    // 3) Invite/create Supabase Auth user
+    if (dto.sendInvite !== false) {
+      const supabase = this.supabaseService.getClient();
+      const { error } = await supabase.auth.admin.inviteUserByEmail(dto.email);
+      if (error) {
+        // don’t rollback DB, but do surface the issue
+        throw new BadRequestException(`Supabase invite failed: ${error.message}`);
+      }
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: membership.role,
+      status: membership.status,
+      membershipId: membership.id,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
+  }
+
+  @Patch('users/:userId')
+  @ApiOperation({ summary: 'Update web user (Admin/Ops only)' })
+  async updateUser(
+    @Request() req: any,
+    @Param('userId') userId: string,
+    @Body() dto: UpdateUserDto,
+  ): Promise<UserDto> {
+    const tenantId = req.tenant.tenantId;
+
+    const membership = await this.prisma.tenantMembership.findUnique({
+      where: { tenantId_userId: { tenantId, userId } },
+      include: { user: true },
+    });
+    if (!membership) throw new NotFoundException('User not found in this tenant');
+
+    if (dto.role === Role.Driver) {
+      throw new BadRequestException('Drivers are managed under Drivers');
+    }
+
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(dto.name !== undefined && { name: dto.name }),
+      },
+    });
+
+    const updatedMembership = await this.prisma.tenantMembership.update({
+      where: { id: membership.id },
+      data: {
+        ...(dto.role !== undefined && { role: dto.role }),
+        ...(dto.status !== undefined && { status: dto.status }),
+      },
+    });
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: updatedMembership.role,
+      status: updatedMembership.status,
+      membershipId: updatedMembership.id,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
+  }
+
+  @Delete('users/:userId')
+  @ApiOperation({ summary: 'Remove user from tenant (Admin/Ops only)' })
+  async deleteUser(@Request() req: any, @Param('userId') userId: string) {
+    const tenantId = req.tenant.tenantId;
+
+    const membership = await this.prisma.tenantMembership.findUnique({
+      where: { tenantId_userId: { tenantId, userId } },
+    });
+    if (!membership) throw new NotFoundException('User not found');
+
+    // safer than deleting user globally
+    await this.prisma.tenantMembership.delete({ where: { id: membership.id } });
+
+    return { ok: true };
   }
 
   @Post('drivers')
@@ -138,6 +286,9 @@ export class AdminController {
         status: MembershipStatus.Active,
       },
     });
+
+    const supabase = this.supabaseService.getClient();
+    await supabase.auth.admin.inviteUserByEmail(dto.email);
 
     return {
       id: user.id,
@@ -298,5 +449,87 @@ export class AdminController {
 
     return { ok: true };
   }
+
+// 1) resend invite
+@Post("users/:userId/resend-invite")
+async resendInvite(@Request() req: any, @Param("userId") userId: string) {
+  const tenantId = req.tenant.tenantId;
+
+  const membership = await this.prisma.tenantMembership.findUnique({
+    where: { tenantId_userId: { tenantId, userId } },
+    include: { user: true },
+  });
+  if (!membership) throw new NotFoundException("User not found in this tenant");
+
+  if (membership.role === Role.Driver) {
+    throw new BadRequestException("Drivers are managed under Drivers");
+  }
+
+  const supabase = this.supabaseService.getClient();
+  const { error } = await supabase.auth.admin.inviteUserByEmail(membership.user.email);
+  if (error) throw new BadRequestException(`Supabase invite failed: ${error.message}`);
+
+  await this.prisma.tenantMembership.update({
+    where: { id: membership.id },
+    data: { status: "Invited" },
+  });
+
+  return { ok: true };
+}
+
+// 2) sync status (confirmed => Active)
+@Post("users/:userId/sync-status")
+async syncUserStatus(@Request() req: any, @Param("userId") userId: string) {
+  const tenantId = req.tenant.tenantId;
+
+  const membership = await this.prisma.tenantMembership.findUnique({
+    where: { tenantId_userId: { tenantId, userId } },
+    include: { user: true },
+  });
+  if (!membership) throw new NotFoundException("User not found in this tenant");
+
+  const email = membership.user.email;
+  const supabase = this.supabaseService.getClient();
+
+  // Supabase Admin API doesn't give us a direct "getByEmail" in the simple way.
+  // For small teams, we can page through users until we find a matching email.
+  // Keep it capped so it can't run forever.
+  let confirmed = false;
+
+  const PER_PAGE = 100;
+  const MAX_PAGES = 10; // up to 1000 users
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const { data, error } = await supabase.auth.admin.listUsers({
+      page,
+      perPage: PER_PAGE,
+    });
+
+    if (error) throw new BadRequestException(`Supabase list users failed: ${error.message}`);
+
+    const found = data.users.find((u) => (u.email ?? "").toLowerCase() === email.toLowerCase());
+    if (found) {
+      // Supabase fields vary by version; these are the typical ones:
+      const emailConfirmedAt: any =
+        (found as any).email_confirmed_at ??
+        (found as any).confirmed_at ??
+        (found as any).user_metadata?.email_confirmed_at;
+
+      confirmed = !!emailConfirmedAt;
+      break;
+    }
+
+    // no more results
+    if (data.users.length < PER_PAGE) break;
+  }
+
+  const nextStatus: MembershipStatus = confirmed ? "Active" : "Invited";
+
+  const updated = await this.prisma.tenantMembership.update({
+    where: { id: membership.id },
+    data: { status: nextStatus },
+  });
+
+  return { ok: true, status: updated.status };
+}
 
 }
