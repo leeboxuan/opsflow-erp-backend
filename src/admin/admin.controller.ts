@@ -30,6 +30,7 @@ import { SupabaseService } from '../auth/supabase.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserDto } from './dto/user.dto';
+import type { User as SupabaseAuthUser } from '@supabase/supabase-js';
 
 @ApiTags('admin')
 @Controller('admin')
@@ -450,86 +451,90 @@ export class AdminController {
     return { ok: true };
   }
 
-// 1) resend invite
-@Post("users/:userId/resend-invite")
-async resendInvite(@Request() req: any, @Param("userId") userId: string) {
-  const tenantId = req.tenant.tenantId;
+  // 1) resend invite
+  @Post("users/:userId/resend-invite")
+  async resendInvite(@Request() req: any, @Param("userId") userId: string) {
+    const tenantId = req.tenant.tenantId;
 
-  const membership = await this.prisma.tenantMembership.findUnique({
-    where: { tenantId_userId: { tenantId, userId } },
-    include: { user: true },
-  });
-  if (!membership) throw new NotFoundException("User not found in this tenant");
-
-  if (membership.role === Role.Driver) {
-    throw new BadRequestException("Drivers are managed under Drivers");
-  }
-
-  const supabase = this.supabaseService.getClient();
-  const { error } = await supabase.auth.admin.inviteUserByEmail(membership.user.email);
-  if (error) throw new BadRequestException(`Supabase invite failed: ${error.message}`);
-
-  await this.prisma.tenantMembership.update({
-    where: { id: membership.id },
-    data: { status: "Invited" },
-  });
-
-  return { ok: true };
-}
-
-// 2) sync status (confirmed => Active)
-@Post("users/:userId/sync-status")
-async syncUserStatus(@Request() req: any, @Param("userId") userId: string) {
-  const tenantId = req.tenant.tenantId;
-
-  const membership = await this.prisma.tenantMembership.findUnique({
-    where: { tenantId_userId: { tenantId, userId } },
-    include: { user: true },
-  });
-  if (!membership) throw new NotFoundException("User not found in this tenant");
-
-  const email = membership.user.email;
-  const supabase = this.supabaseService.getClient();
-
-  // Supabase Admin API doesn't give us a direct "getByEmail" in the simple way.
-  // For small teams, we can page through users until we find a matching email.
-  // Keep it capped so it can't run forever.
-  let confirmed = false;
-
-  const PER_PAGE = 100;
-  const MAX_PAGES = 10; // up to 1000 users
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const { data, error } = await supabase.auth.admin.listUsers({
-      page,
-      perPage: PER_PAGE,
+    const membership = await this.prisma.tenantMembership.findUnique({
+      where: { tenantId_userId: { tenantId, userId } },
+      include: { user: true },
     });
+    if (!membership) throw new NotFoundException("User not found in this tenant");
 
-    if (error) throw new BadRequestException(`Supabase list users failed: ${error.message}`);
-
-    const found = data.users.find((u) => (u.email ?? "").toLowerCase() === email.toLowerCase());
-    if (found) {
-      // Supabase fields vary by version; these are the typical ones:
-      const emailConfirmedAt: any =
-        (found as any).email_confirmed_at ??
-        (found as any).confirmed_at ??
-        (found as any).user_metadata?.email_confirmed_at;
-
-      confirmed = !!emailConfirmedAt;
-      break;
+    if (membership.role === Role.Driver) {
+      throw new BadRequestException("Drivers are managed under Drivers");
     }
 
-    // no more results
-    if (data.users.length < PER_PAGE) break;
+    const supabase = this.supabaseService.getClient();
+    const { error } = await supabase.auth.admin.inviteUserByEmail(membership.user.email);
+    if (error) throw new BadRequestException(`Supabase invite failed: ${error.message}`);
+
+    await this.prisma.tenantMembership.update({
+      where: { id: membership.id },
+      data: { status: "Invited" },
+    });
+
+    return { ok: true };
   }
 
-  const nextStatus: MembershipStatus = confirmed ? "Active" : "Invited";
+  // 2) sync status (confirmed => Active)
+  @Post("users/:userId/sync-status")
+  async syncUserStatus(@Request() req: any, @Param("userId") userId: string) {
+    const tenantId = req.tenant.tenantId;
 
-  const updated = await this.prisma.tenantMembership.update({
-    where: { id: membership.id },
-    data: { status: nextStatus },
-  });
+    const membership = await this.prisma.tenantMembership.findUnique({
+      where: { tenantId_userId: { tenantId, userId } },
+      include: { user: true },
+    });
+    if (!membership) throw new NotFoundException("User not found in this tenant");
 
-  return { ok: true, status: updated.status };
-}
+    const email = membership.user.email;
+    const supabase = this.supabaseService.getClient();
+
+    // Supabase Admin API doesn't give us a direct "getByEmail" in the simple way.
+    // For small teams, we can page through users until we find a matching email.
+    // Keep it capped so it can't run forever.
+    let confirmed = false;
+
+    const PER_PAGE = 100;
+    const MAX_PAGES = 10; // up to 1000 users
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const { data, error } = await supabase.auth.admin.listUsers({
+        page,
+        perPage: PER_PAGE,
+      });
+
+      if (error) throw new BadRequestException(`Supabase list users failed: ${error.message}`);
+      const users = (data?.users ?? []) as SupabaseAuthUser[];
+
+      const found = users.find(
+        (u) => (u.email ?? "").toLowerCase() === email.toLowerCase(),
+      );
+
+      if (found) {
+        // Supabase fields vary by version; these are the typical ones:
+        const emailConfirmedAt: any =
+          (found as any).email_confirmed_at ??
+          (found as any).confirmed_at ??
+          (found as any).user_metadata?.email_confirmed_at;
+
+        confirmed = !!emailConfirmedAt;
+        break;
+      }
+
+      // no more results
+      if (data.users.length < PER_PAGE) break;
+    }
+
+    const nextStatus: MembershipStatus = confirmed ? "Active" : "Invited";
+
+    const updated = await this.prisma.tenantMembership.update({
+      where: { id: membership.id },
+      data: { status: nextStatus },
+    });
+
+    return { ok: true, status: updated.status };
+  }
 
 }
