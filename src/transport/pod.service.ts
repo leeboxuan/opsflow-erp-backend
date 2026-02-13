@@ -6,7 +6,7 @@ import { EventLogService } from './event-log.service';
 import { SupabaseService } from '../auth/supabase.service';
 
 const POD_BUCKET = 'pods-photos';
-const SIGNED_URL_TTL_SECONDS = 60 * 5; // 5 minutes
+const SIGNED_URL_TTL_SECONDS = 60 * 60; // 5 minutes
 
 function safeKind(kind?: string): string {
   const k = String(kind ?? 'pod').toLowerCase().trim();
