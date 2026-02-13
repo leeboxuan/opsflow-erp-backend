@@ -114,7 +114,7 @@ export class InventoryController {
     @Param('batchId') batchId: string,
   ): Promise<{
     id: string;
-    batchCode: string;
+    containerNumber: string;
     status: string;
     items: Array<{
       inventoryItemId: string;
@@ -247,7 +247,7 @@ export class InventoryController {
       itemSku: string;
       itemName: string | null;
       batchId: string;
-      batchCode: string | null;
+      containerNumber: string | null;
       transportOrderId: string | null;
       tripId: string | null;
       stopId: string | null;

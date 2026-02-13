@@ -6,7 +6,7 @@ export class BatchDto {
   id: string;
 
   @ApiProperty()
-  batchCode: string;
+  containerNumber: string;
 
   @ApiProperty({ required: false, nullable: true })
   customerName?: string | null;

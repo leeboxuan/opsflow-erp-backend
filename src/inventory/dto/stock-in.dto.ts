@@ -35,7 +35,7 @@ export class StockInContactDto {
 export class StockInBatchDto {
   @ApiProperty({ description: 'Batch code (unique per tenant)' })
   @IsString()
-  batchCode: string;
+  containerNumber: string;
 
   @ApiProperty({ description: 'Batch description' })
   @IsString()

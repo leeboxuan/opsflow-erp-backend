@@ -100,12 +100,12 @@ async function seedInventory(tenantId: string) {
 
   const seedBatch = await prisma.inventory_batches.upsert({
     where: {
-      tenantId_batchCode: { tenantId, batchCode: 'SEED' },
+      tenantId_batchCode: { tenantId, containerNumber: 'SEED' },
     },
     update: {},
     create: {
       tenantId,
-      batchCode: 'SEED',
+      containerNumber: 'SEED',
     },
   });
 

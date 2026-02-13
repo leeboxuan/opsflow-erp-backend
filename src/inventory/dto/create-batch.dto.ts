@@ -5,7 +5,7 @@ export class CreateBatchDto {
   @ApiPropertyOptional({ description: 'If omitted, auto-generated as B260205-001 style' })
   @IsOptional()
   @IsString()
-  batchCode?: string;
+  containerNumber?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

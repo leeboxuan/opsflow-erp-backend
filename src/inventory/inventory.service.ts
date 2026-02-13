@@ -336,14 +336,14 @@ export class InventoryService {
 
   /**
    * POST /inventory/batches
-   * If batchCode not provided, auto-generate: B + YYMMDD + "-" + 3-digit sequence per day (e.g. B260205-001).
+   * If containerNumber not provided, auto-generate: B + YYMMDD + "-" + 3-digit sequence per day (e.g. B260205-001).
    */
   async createBatch(
     tenantId: string,
     dto: CreateBatchDto,
   ): Promise<BatchDto> {
-    let batchCode = dto.batchCode?.trim();
-    if (!batchCode) {
+    let containerNumber = dto.containerNumber?.trim();
+    if (!containerNumber) {
       const now = new Date();
       const yy = String(now.getFullYear()).slice(-2);
       const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -352,32 +352,32 @@ export class InventoryService {
       const todayCount = await this.prisma.inventory_batches.count({
         where: {
           tenantId,
-          batchCode: { startsWith: prefix },
+          containerNumber: { startsWith: prefix },
         },
       });
       const seq = (todayCount + 1).toString().padStart(3, '0');
-      batchCode = `${prefix}${seq}`;
+      containerNumber = `${prefix}${seq}`;
     }
 
     const existing = await this.prisma.inventory_batches.findUnique({
       where: {
         tenantId_batchCode: {
           tenantId,
-          batchCode,
+          containerNumber,
         },
       },
     });
 
     if (existing) {
       throw new ConflictException(
-        `Batch with code ${batchCode} already exists`,
+        `Batch with code ${containerNumber} already exists`,
       );
     }
 
     const batch = await this.prisma.inventory_batches.create({
       data: {
         tenantId,
-        batchCode,
+        containerNumber,
         notes: dto.notes ?? null,
         status: InventoryBatchStatus.Draft,
       },
@@ -506,7 +506,7 @@ export class InventoryService {
           const padded = seq.toString().padStart(4, '0');
           const unitSku =
             format === 'ITEM-BATCH-SEQ'
-              ? `${item.sku}-${batch.batchCode}-${padded}`
+              ? `${item.sku}-${batch.containerNumber}-${padded}`
               : `${item.sku}-${padded}`;
 
           const exists = await tx.inventory_units.findUnique({
@@ -597,9 +597,9 @@ export class InventoryService {
       throw new BadRequestException('contact.email is required');
     }
 
-    const batchCode = String(dto.batch?.batchCode ?? '').trim();
-    if (!batchCode) {
-      throw new BadRequestException('batch.batchCode is required');
+    const containerNumber = String(dto.batch?.containerNumber ?? '').trim();
+    if (!containerNumber) {
+      throw new BadRequestException('batch.containerNumber is required');
     }
 
     const batchDescription = String(dto.batch?.batchDescription ?? '').trim();
@@ -646,19 +646,19 @@ export class InventoryService {
           },
         });
 
-        // 3) Create batch (batchCode unique per tenant)
+        // 3) Create batch (containerNumber unique per tenant)
         const existingBatch = await tx.inventory_batches.findUnique({
-          where: { tenantId_batchCode: { tenantId, batchCode } },
+          where: { tenantId_batchCode: { tenantId, containerNumber } },
           select: { id: true },
         });
         if (existingBatch) {
-          throw new ConflictException(`Batch with code ${batchCode} already exists`);
+          throw new ConflictException(`Batch with code ${containerNumber} already exists`);
         }
 
         const batch = await tx.inventory_batches.create({
           data: {
             tenantId,
-            batchCode,
+            containerNumber,
             batchDescription,
             receivedAt,
             notes,
@@ -731,7 +731,7 @@ export class InventoryService {
 
           // Generate unitSkus: <itemSku>-<batchSeq4>-<unitSeq2>
           // Example: LLSG-CB-Q-MSM-0001-01
-          const batchSeq4 = String(batch.batchCode.split("-").pop() ?? "").padStart(4, "0");
+          const batchSeq4 = String(batch.containerNumber.split("-").pop() ?? "").padStart(4, "0");
           const prefix = `${inventoryItem.sku}-${batchSeq4}-`;
 
           // FAST: get last unitSku once (so we continue the sequence)
@@ -765,7 +765,7 @@ export class InventoryService {
 
             if (seq > 99) {
               throw new BadRequestException(
-                `Unit sequence exceeded 99 for ${inventoryItem.sku} in batch ${batch.batchCode}. Use 3-digit unit seq if needed.`
+                `Unit sequence exceeded 99 for ${inventoryItem.sku} in batch ${batch.containerNumber}. Use 3-digit unit seq if needed.`
               );
             }
 
@@ -834,7 +834,7 @@ export class InventoryService {
     batchId: string,
   ): Promise<{
     id: string;
-    batchCode: string;
+    containerNumber: string;
     status: InventoryBatchStatus;
     items: Array<{
       inventoryItemId: string;
@@ -919,7 +919,7 @@ export class InventoryService {
 
     return {
       id: batch.id,
-      batchCode: batch.batchCode,
+      containerNumber: batch.containerNumber,
       status: batch.status,
       items,
     };
@@ -971,7 +971,7 @@ export class InventoryService {
 
       // Generate unit SKUs
       const unitSkus: string[] = [];
-      const prefix = dto.unitSkuPrefix || `${batch.batchCode}-${dto.inventorySku}`;
+      const prefix = dto.unitSkuPrefix || `${batch.containerNumber}-${dto.inventorySku}`;
 
       // Get existing units for this batch+item to determine next sequence
       const existingUnits = await tx.inventory_units.findMany({
@@ -1403,7 +1403,7 @@ export class InventoryService {
         batchId: true,
         transportOrderId: true,
         inventory_item: { select: { sku: true, name: true } },
-        batch: { select: { batchCode: true } },
+        batch: { select: { containerNumber: true } },
       },
     });
   }
@@ -1417,7 +1417,7 @@ export class InventoryService {
  * Ops unit-register response:
  * - unitSku, status
  * - itemSku, itemName
- * - batchCode
+ * - containerNumber
  * - createdAt, updatedAt
  * - transportOrderId / tripId / stopId (if present)
  */
@@ -1433,7 +1433,7 @@ export class InventoryService {
       itemSku: string;
       itemName: string | null;
       batchId: string;
-      batchCode: string | null;
+      containerNumber: string | null;
       transportOrderId: string | null;
       tripId: string | null;
       stopId: string | null;
@@ -1477,7 +1477,7 @@ export class InventoryService {
         { unitSku: { contains: s, mode: 'insensitive' } },
         { inventory_item: { sku: { contains: s, mode: 'insensitive' } } },
         { inventory_item: { name: { contains: s, mode: 'insensitive' } } },
-        { batch: { batchCode: { contains: s, mode: 'insensitive' } } },
+        { batch: { containerNumber: { contains: s, mode: 'insensitive' } } },
       ];
     }
 
@@ -1504,7 +1504,7 @@ export class InventoryService {
         createdAt: true,
         updatedAt: true,
         inventory_item: { select: { sku: true, name: true } },
-        batch: { select: { batchCode: true } },
+        batch: { select: { containerNumber: true } },
       },
     });
 
@@ -1522,7 +1522,7 @@ export class InventoryService {
       itemSku: u.inventory_item?.sku ?? '',
       itemName: u.inventory_item?.name ?? null,
       batchId: u.batchId,
-      batchCode: u.batch?.batchCode ?? null,
+      containerNumber: u.batch?.containerNumber ?? null,
       transportOrderId: u.transportOrderId ?? null,
       tripId: u.tripId ?? null,
       stopId: u.stopId ?? null,
@@ -1732,7 +1732,7 @@ export class InventoryService {
   ): BatchDto {
     return {
       id: batch.id,
-      batchCode: batch.batchCode,
+      containerNumber: batch.containerNumber,
       customerName: batch.customerName,
       customerRef: batch.customerRef,
       receivedAt: batch.receivedAt,

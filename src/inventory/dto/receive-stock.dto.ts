@@ -29,7 +29,7 @@ export class ReceiveStockDto {
 
   @ApiPropertyOptional({
     enum: ['ITEM-BATCH-SEQ', 'ITEM-SEQ'],
-    description: 'unitSku format: ITEM-BATCH-SEQ = <sku>-<batchCode>-<seq>, ITEM-SEQ = <sku>-<seq>',
+    description: 'unitSku format: ITEM-BATCH-SEQ = <sku>-<containerNumber>-<seq>, ITEM-SEQ = <sku>-<seq>',
   })
   @IsOptional()
   @IsString()

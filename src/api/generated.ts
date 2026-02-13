@@ -941,7 +941,7 @@ export interface components {
         };
         CreateBatchDto: {
             /** @description If omitted, auto-generated as B260205-001 style */
-            batchCode?: string;
+            containerNumber?: string;
             notes?: string;
         };
         ReceiveStockItemDto: {
@@ -952,7 +952,7 @@ export interface components {
         ReceiveStockDto: {
             items: components["schemas"]["ReceiveStockItemDto"][];
             /**
-             * @description unitSku format: ITEM-BATCH-SEQ = <sku>-<batchCode>-<seq>, ITEM-SEQ = <sku>-<seq>
+             * @description unitSku format: ITEM-BATCH-SEQ = <sku>-<containerNumber>-<seq>, ITEM-SEQ = <sku>-<seq>
              * @enum {string}
              */
             unitSkuFormat?: "ITEM-BATCH-SEQ" | "ITEM-SEQ";

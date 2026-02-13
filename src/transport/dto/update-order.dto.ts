@@ -22,4 +22,9 @@ export class UpdateOrderDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  priceCents?: string;
 }

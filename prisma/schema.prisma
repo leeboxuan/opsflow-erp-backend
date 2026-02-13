@@ -391,6 +391,7 @@ enum Role {
   Ops
   Finance
   Driver
+  Customer
 }
 
 enum MembershipStatus {
@@ -467,7 +468,7 @@ enum InventoryUnitStatus {
 model inventory_batches {
   id                    String                  @id @default(cuid())
   tenantId              String
-  batchCode             String
+  containerNumber             String
 
   // ✅ Stock-In v2 fields
   batchDescription      String?
@@ -492,7 +493,7 @@ model inventory_batches {
   inventory_units       inventory_units[]
   transport_order_items transport_order_items[]
 
-  @@unique([tenantId, batchCode])
+  @@unique([tenantId, containerNumber])
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
   @@index([tenantId, customerCompanyId])
