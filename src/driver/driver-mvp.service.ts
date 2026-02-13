@@ -29,7 +29,7 @@ export class DriverMvpService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventLogService: EventLogService,
-  ) {}
+  ) { }
 
   /**
    * GET /driver/trips?date=YYYY-MM-DD
@@ -410,10 +410,35 @@ export class DriverMvpService {
       });
 
       if (updatedStop.transportOrderId) {
-        await tx.transportOrder.update({
+        const deliveredOrder = await tx.transportOrder.update({
           where: { id: updatedStop.transportOrderId },
           data: { status: OrderStatus.Delivered },
         });
+
+        if (deliveredOrder.priceCents && deliveredOrder.priceCents > 0) {
+          const driver = await tx.drivers.findFirst({
+            where: { tenantId, userId: driverUserId },
+          });
+
+          if (driver) {
+            // create once per (tripId, orderId) because schema has @@unique([tripId, transportOrderId])
+            await tx.driverWalletTransaction.create({
+              data: {
+                tenantId,
+                driverId: driver.id,
+                tripId: stop.tripId!,
+                transportOrderId: deliveredOrder.id,
+                amountCents: deliveredOrder.priceCents,
+                currency: deliveredOrder.currency ?? "SGD",
+                type: "OrderDelivered",
+                description: `Order ${deliveredOrder.internalRef ?? deliveredOrder.orderRef} delivered`,
+              },
+            }).catch(() => {
+              // ignore duplicates if stop re-completed etc
+            });
+          }
+        }
+
         if (updatedStop.type === StopType.DELIVERY) {
           await tx.inventory_units.updateMany({
             where: {

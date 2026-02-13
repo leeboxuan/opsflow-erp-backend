@@ -26,13 +26,14 @@ import { Role } from '@prisma/client';
 import { UpdateOrderDto } from './dto/update-order.dto';
 
 import { ReplaceOrderItemsDto } from "./dto/replace-order-items.dto";
+import { UpdateDoDto } from "./dto/update-do.dto";
 
 @ApiTags('transport')
 @Controller('transport/orders')
 @UseGuards(AuthGuard, TenantGuard)
 @ApiBearerAuth('JWT-auth')
 export class TransportController {
-  constructor(private readonly transportService: TransportService) {}
+  constructor(private readonly transportService: TransportService) { }
 
   @Post()
   async createOrder(
@@ -92,6 +93,18 @@ export class TransportController {
     return this.transportService.updateOrderHeader(tenantId, id, dto);
   }
 
+  @Patch(":id/do")
+  @UseGuards(RoleGuard)
+  @Roles(Role.Admin, Role.Ops, Role.Driver)
+  async updateDo(
+    @Request() req: any,
+    @Param("id") id: string,
+    @Body() dto: UpdateDoDto
+  ): Promise<OrderDto> {
+    const tenantId = req.tenant.tenantId;
+    return this.transportService.updateOrderDo(tenantId, id, dto);
+  }
+
   @Put(":id/items")
   @UseGuards(RoleGuard)
   @Roles(Role.Admin, Role.Ops)
@@ -104,18 +117,18 @@ export class TransportController {
     return this.transportService.replaceOrderItems(tenantId, id, dto);
   }
   // (keep your existing imports)
-  
+
   @Delete("orders/:orderId")
   deleteOrder(@Req() req: any, @Param("orderId") orderId: string) {
     const tenantId = req.tenant.tenantId;
     return this.transportService.deleteOrder(tenantId, orderId);
   }
-  
+
   @Get(':id/live')
   async getOrderLive(@Request() req: any, @Param('id') id: string) {
     const tenantId = req.tenant.tenantId;
     return this.transportService.getOrderLive(tenantId, id);
   }
-  
+
 
 }

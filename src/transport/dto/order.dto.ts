@@ -59,4 +59,16 @@ export interface OrderDto {
     updatedAt: Date;
 
   }>;
+  // Internal OpsFlow ref
+  internalRef?: string | null;
+
+  // Signed Delivery Order fields
+  doDocumentUrl?: string | null;
+  doSignatureUrl?: string | null;
+  doSignerName?: string | null;
+  doSignedAt?: Date | null;
+  doStatus?: string | null;
+
+  // Versioning for DO changes
+  doVersion?: number | null;
 }

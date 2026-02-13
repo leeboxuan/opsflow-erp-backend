@@ -44,6 +44,7 @@ export class CreateOrderStopDto {
   @IsOptional()
   @IsDateString()
   plannedAt?: string;
+
 }
 
 export class CreateOrderItemDto {
@@ -106,4 +107,14 @@ export class CreateOrderDto {
   @ValidateNested({ each: true })
   @Type(() => CreateOrderItemDto)
   items?: CreateOrderItemDto[];
+
+  // ✅ NEW: Internal OpsFlow reference (DB-YYYY-MM-DD-XXX)
+  @ApiPropertyOptional({
+    description:
+      "Internal reference. If not provided, backend generates DB-YYYY-MM-DD-XXX",
+    example: "DB-2026-02-01-IMP",
+  })
+  @IsOptional()
+  @IsString()
+  internalRef?: string;
 }

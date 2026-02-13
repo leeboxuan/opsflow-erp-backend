@@ -51,4 +51,16 @@ export interface TripDto {
   createdAt: Date;
   updatedAt: Date;
   stops: StopDto[];
+  driverLocation: DriverLocationDto | null;
+
+}
+
+export interface DriverLocationDto {
+  lat: number;
+  lng: number;
+  accuracy: number | null;
+  heading: number | null;
+  speed: number | null;
+  capturedAt: Date;
+  updatedAt: Date;
 }

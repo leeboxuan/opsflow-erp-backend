@@ -25,6 +25,32 @@ export class TransportService {
     private readonly prisma: PrismaService,
     private readonly eventLogService: EventLogService,
   ) { }
+  private async generateInternalRef(tenantId: string, hint?: string) {
+    const yyyyMmDd = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const base = `DB-${yyyyMmDd}-`;
+
+    const cleanHint = String(hint ?? "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 3);
+
+    // If hint too short, fall back to sequence
+    if (cleanHint.length >= 3) {
+      const candidate = `${base}${cleanHint}`;
+      const exists = await this.prisma.transportOrder.findFirst({
+        where: { tenantId, internalRef: candidate },
+        select: { id: true },
+      });
+      if (!exists) return candidate;
+    }
+
+    const countToday = await this.prisma.transportOrder.count({
+      where: { tenantId, internalRef: { startsWith: base } },
+    });
+
+    const seq = String(countToday + 1).padStart(3, "0");
+    return `${base}${seq}`;
+  }
 
   async createOrder(tenantId: string, dto: CreateOrderDto): Promise<OrderDto> {
     const existing = await this.prisma.transportOrder.findFirst({
@@ -38,21 +64,27 @@ export class TransportService {
     }
 
     const order = await this.prisma.$transaction(async (tx) => {
+      const internalRef =
+        dto.internalRef?.trim() ||
+        (await this.generateInternalRef(tenantId, dto.orderRef));
+
       const newOrder = await tx.transportOrder.create({
         data: {
           tenantId,
-          orderRef: dto.orderRef,
+          // client ref
+          orderRef: dto.orderRef.trim(),
+          // internal
+          internalRef,
+
           customerName: dto.customerName,
+          // keep legacy customerRef if you still use it anywhere
           customerRef: dto.customerName,
 
-          // ✅ NEW
           customerContactNumber: dto.customerContactNumber ?? null,
           notes: dto.notes ?? null,
-
           status: OrderStatus.Draft,
         },
       });
-
       for (let i = 0; i < dto.stops.length; i++) {
         const s = dto.stops[i];
         await tx.stop.create({
@@ -413,10 +445,10 @@ export class TransportService {
     return {
       id: order.id,
       orderRef: order.orderRef,
+      internalRef: (order as any).internalRef ?? null,
+
       customerRef: order.customerRef,
       customerName: order.customerName,
-
-      // ✅ NEW
       customerContactNumber: (order as any).customerContactNumber ?? null,
 
       status: order.status,
@@ -425,6 +457,14 @@ export class TransportService {
       deliveryWindowStart: order.deliveryWindowStart,
       deliveryWindowEnd: order.deliveryWindowEnd,
       notes: order.notes,
+
+      doDocumentUrl: (order as any).doDocumentUrl ?? null,
+      doSignatureUrl: (order as any).doSignatureUrl ?? null,
+      doSignerName: (order as any).doSignerName ?? null,
+      doSignedAt: (order as any).doSignedAt ?? null,
+      doStatus: (order as any).doStatus ?? null,
+      doVersion: (order as any).doVersion ?? null,
+
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
 
@@ -435,6 +475,14 @@ export class TransportService {
     return {
       id: order.id,
       orderRef: order.orderRef,
+      internalRef: order.internalRef ?? null,
+
+      doDocumentUrl: order.doDocumentUrl ?? null,
+      doSignatureUrl: order.doSignatureUrl ?? null,
+      doSignerName: order.doSignerName ?? null,
+      doSignedAt: order.doSignedAt ?? null,
+      doStatus: order.doStatus ?? null,
+      doVersion: order.doVersion ?? null,
       customerRef: order.customerRef,
       customerName: order.customerName,
       status: order.status,
@@ -499,11 +547,15 @@ export class TransportService {
       assignedDriver: null, // TransportService doesn't load driver/vehicle details
       assignedVehicle: trip.vehicles
         ? {
-          id: trip.vehicles.id,
-          vehicleNumber: trip.vehicles.vehicleNumber,
-          type: trip.vehicles.type ?? null,
-        }
+            id: trip.vehicles.id,
+            vehicleNumber: trip.vehicles.vehicleNumber,
+            type: trip.vehicles.type ?? null,
+          }
         : null,
+  
+      // ✅ Trip-level location (not per stop)
+      driverLocation: null,
+  
       createdAt: trip.createdAt,
       updatedAt: trip.updatedAt,
       stops: stops.map((stop) => ({
@@ -521,14 +573,14 @@ export class TransportService {
         updatedAt: stop.updatedAt,
         pod: stop.pod
           ? {
-            id: stop.pod.id,
-            status: stop.pod.status,
-            signedBy: stop.pod.signedBy,
-            signedAt: stop.pod.signedAt,
-            photoUrl: stop.pod.photoUrl,
-            createdAt: stop.pod.createdAt,
-            updatedAt: stop.pod.updatedAt,
-          }
+              id: stop.pod.id,
+              status: stop.pod.status,
+              signedBy: stop.pod.signedBy,
+              signedAt: stop.pod.signedAt,
+              photoUrl: stop.pod.photoUrl,
+              createdAt: stop.pod.createdAt,
+              updatedAt: stop.pod.updatedAt,
+            }
           : null,
       })),
     };
@@ -559,10 +611,10 @@ export class TransportService {
       where: { id: orderId, tenantId },
     });
     if (!order) throw new NotFoundException("Order not found");
-  
+
     const nextStatus = (dto.status ?? order.status) as any;
     const prevStatus = order.status as any;
-  
+
     const updated = await this.prisma.$transaction(async (tx) => {
       const o = await tx.transportOrder.update({
         where: { id: orderId },
@@ -573,7 +625,7 @@ export class TransportService {
           notes: dto.notes ?? undefined,
         },
       });
-  
+
       // ✅ Sync unit statuses based on order status
       if (dto.status && dto.status !== prevStatus) {
         if (dto.status === "InTransit") {
@@ -582,14 +634,14 @@ export class TransportService {
             data: { status: "InTransit" as any },
           });
         }
-  
+
         if (dto.status === "Delivered" || dto.status === "Closed") {
           await tx.inventory_units.updateMany({
             where: { tenantId, transportOrderId: orderId },
             data: { status: "Delivered" as any },
           });
         }
-  
+
         if (dto.status === "Cancelled") {
           await tx.inventory_units.updateMany({
             where: { tenantId, transportOrderId: orderId },
@@ -597,13 +649,13 @@ export class TransportService {
           });
         }
       }
-  
+
       return o;
     });
-  
+
     return this.toDto(updated);
   }
-  
+
 
   async replaceOrderItems(tenantId: string, orderId: string, dto: ReplaceOrderItemsDto): Promise<OrderDto> {
     return this.prisma.$transaction(async (tx) => {
@@ -786,25 +838,25 @@ export class TransportService {
       where: { tenantId, transportOrderId: orderId, tripId: { not: null } },
       select: { tripId: true },
     });
-  
+
     if (!stop?.tripId) {
       return { orderId, tripId: null, driverUserId: null, lat: null, lng: null, capturedAt: null };
     }
-  
+
     const trip = await this.prisma.trip.findFirst({
       where: { tenantId, id: stop.tripId },
       select: { id: true, assignedDriverUserId: true },
     });
-  
+
     const driverUserId = trip?.assignedDriverUserId ?? null;
-  
+
     const loc = driverUserId
       ? await this.prisma.driver_location_latest.findFirst({
-          where: { tenantId, driverUserId },
-          select: { lat: true, lng: true, capturedAt: true },
-        })
+        where: { tenantId, driverUserId },
+        select: { lat: true, lng: true, capturedAt: true },
+      })
       : null;
-  
+
     return {
       orderId,
       tripId: trip?.id ?? null,
@@ -814,5 +866,41 @@ export class TransportService {
       capturedAt: loc?.capturedAt ?? null,
     };
   }
+
+  async updateOrderDo(tenantId: string, orderId: string, dto: any): Promise<OrderDto> {
+    const order = await this.prisma.transportOrder.findFirst({
+      where: { id: orderId, tenantId },
+    });
+    if (!order) throw new NotFoundException("Order not found");
+  
+    const updated = await this.prisma.transportOrder.update({
+      where: { id: orderId },
+      data: {
+        doDocumentUrl: dto.doDocumentUrl ?? order.doDocumentUrl,
+        doSignatureUrl: dto.doSignatureUrl ?? order.doSignatureUrl,
+        doSignerName: dto.doSignerName ?? order.doSignerName,
+        doSignedAt: dto.doSignedAt ? new Date(dto.doSignedAt) : order.doSignedAt,
+        doStatus: dto.doStatus ?? order.doStatus,
+        doVersion: { increment: 1 },
+      },
+      include: {
+        stops: {
+          orderBy: { sequence: "asc" },
+          include: {
+            pods: { take: 1, orderBy: { createdAt: "desc" } },
+          },
+        },
+        transport_order_items: {
+          include: {
+            inventory_item: true,
+            units: { include: { inventory_unit: true } },
+          },
+        },
+      },
+    });
+  
+    return this.toDtoWithStops(updated);
+  }
+  
   
 }

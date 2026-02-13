@@ -137,7 +137,11 @@ model TransportOrder {
   doStatus                   DoStatus                  @default(PENDING)
   doVersion                  Int                       @default(1)
   itemsJson                  Json?
+  // Client's reference (what they give you)
   orderRef                   String
+
+  // Internal OpsFlow reference (DB-YYYY-MM-DD-XXX)
+  internalRef                String?
   driver_wallet_transactions DriverWalletTransaction[]
   stops                      Stop[]                    @relation("OrderStops")
   transport_order_items      transport_order_items[]
@@ -147,6 +151,7 @@ model TransportOrder {
   @@unique([tenantId, orderRef])
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
+  @@unique([tenantId, internalRef])
   @@map("transport_orders")
 }
 

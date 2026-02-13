@@ -12,6 +12,7 @@ import {
   PodDto,
   VehicleInfoDto,
   DriverInfoDto,
+  DriverLocationDto
 } from './dto/trip.dto';
 import { EventLogService } from './event-log.service';
 import { AssignVehicleDto } from '../driver/dto/assign-vehicle.dto';
@@ -22,7 +23,7 @@ export class TripService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventLogService: EventLogService,
-  ) {}
+  ) { }
 
   async createTrip(tenantId: string, dto: CreateTripDto): Promise<TripDto> {
     // Normalize and validate stop sequences
@@ -246,6 +247,30 @@ export class TripService {
         type: trip.vehicles.type ?? null,
       };
     }
+    // Get driver's latest location if assigned
+    let driverLocation: DriverLocationDto | null = null;
+    if (trip.assignedDriverUserId) {
+      const loc = await this.prisma.driverLocationLatest.findUnique({
+        where: {
+          tenantId_driverUserId: {
+            tenantId: trip.tenantId,
+            driverUserId: trip.assignedDriverUserId,
+          },
+        },
+      });
+
+      if (loc) {
+        driverLocation = {
+          lat: loc.lat,
+          lng: loc.lng,
+          accuracy: loc.accuracy,
+          heading: loc.heading,
+          speed: loc.speed,
+          capturedAt: loc.capturedAt,
+          updatedAt: loc.updatedAt,
+        };
+      }
+    }
 
     return {
       id: trip.id,
@@ -259,6 +284,7 @@ export class TripService {
       createdAt: trip.createdAt,
       updatedAt: trip.updatedAt,
       stops: stops.map((stop) => this.stopToDto(stop)),
+      driverLocation,
     };
   }
 
