@@ -29,6 +29,7 @@ import { Patch } from '@nestjs/common';
 import { RoleGuard, Roles } from '../auth/guards/role.guard';
 import { UpdateUnitStatusDto } from './dto/update-unit-status.dto';
 import { SearchUnitsResponseDto } from './dto/search-units-response.dto';
+import { Role } from '@prisma/client';
 
 /** Allowed batch status filter (matches Prisma InventoryBatchStatus) */
 const BATCH_STATUS_VALUES = ['Draft', 'Open', 'Completed', 'Cancelled'] as const;
@@ -63,7 +64,9 @@ export class InventoryController {
     }>
   > {
     const tenantId = req.tenant.tenantId;
-    return this.inventoryService.getItemsSummary(tenantId, search);
+    const customerCompanyId =
+  req.tenant.role === "CUSTOMER" ? req.tenant.customerCompanyId : undefined;
+    return this.inventoryService.getItemsSummary(tenantId, search, customerCompanyId);
   }
 
   @Get('items')
@@ -78,6 +81,8 @@ export class InventoryController {
   }
 
   @Post('batches')
+  @UseGuards(RoleGuard)
+  @Roles(Role.ADMIN, Role.OPS)
   @ApiOperation({ summary: 'Create a new inventory batch' })
   async createBatch(
     @Request() req: any,
@@ -267,7 +272,9 @@ export class InventoryController {
     };
   }> {
     const tenantId = req.tenant.tenantId;
-    const result = await this.inventoryService.searchUnits(tenantId, query);
+    const customerCompanyId =
+      req.tenant.role === "CUSTOMER" ? req.tenant.customerCompanyId : undefined;
+    const result = await this.inventoryService.searchUnits(tenantId, query, customerCompanyId);
     // Ensure the structure matches the expected return type
     if (Array.isArray(result)) {
       const rows = result;
@@ -292,6 +299,7 @@ export class InventoryController {
         stats,
       };
     }
+
     return result;
   }
 

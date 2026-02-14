@@ -36,6 +36,8 @@ export class TransportController {
   constructor(private readonly transportService: TransportService) { }
 
   @Post()
+  @UseGuards(RoleGuard)
+  @Roles(Role.ADMIN, Role.OPS)
   async createOrder(
     @Request() req: any,
     @Body() dto: CreateOrderDto,
@@ -54,7 +56,9 @@ export class TransportController {
     // tenantId is REQUIRED - all roles must operate under a tenant
     const tenantId = req.tenant.tenantId;
     const limitNum = limit ? parseInt(limit, 10) : 20;
-    return this.transportService.listOrders(tenantId, cursor, limitNum);
+    const customerCompanyId =
+    req.tenant.role === Role.CUSTOMER ? req.tenant.customerCompanyId : undefined;
+    return this.transportService.listOrders(tenantId, cursor, limitNum, customerCompanyId);
   }
 
   @Get(':id')
@@ -63,7 +67,9 @@ export class TransportController {
     @Param('id') id: string,
   ): Promise<OrderDto> {
     const tenantId = req.tenant.tenantId;
-    const order = await this.transportService.getOrderById(tenantId, id);
+    const customerCompanyId =
+    req.tenant.role === Role.CUSTOMER ? req.tenant.customerCompanyId : undefined;
+    const order = await this.transportService.getOrderById(tenantId, id, customerCompanyId);
 
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -73,6 +79,8 @@ export class TransportController {
   }
 
   @Post(':orderId/plan-trip')
+  @UseGuards(RoleGuard)
+  @Roles(Role.ADMIN, Role.OPS)
   async planTrip(
     @Request() req: any,
     @Param('orderId') orderId: string,
@@ -129,6 +137,8 @@ export class TransportController {
     const tenantId = req.tenant.tenantId;
     return this.transportService.getOrderLive(tenantId, id);
   }
+
+  
 
 
 }

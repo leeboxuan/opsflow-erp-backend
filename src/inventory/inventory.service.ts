@@ -162,6 +162,7 @@ export class InventoryService {
   async getItemsSummary(
     tenantId: string,
     search?: string,
+    customerCompanyId?: string,
   ): Promise<
     Array<{
       id: string;
@@ -1424,6 +1425,7 @@ export class InventoryService {
   async searchUnits(
     tenantId: string,
     query: SearchUnitsQueryDto,
+    customerCompanyId?: string,
   ): Promise<{
     rows: Array<{
       id: string;

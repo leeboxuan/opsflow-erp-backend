@@ -38,12 +38,12 @@ model Tenant {
 }
 
 model User {
-  id          String             @id @default(cuid())
+  id         String  @id @default(cuid())
   /// Supabase Auth user id (auth.users.id, UUID). Links JWT sub to this row; not the same as id (cuid).
-  authUserId  String?            @unique
-  email       String             @unique
-  name        String?
-  phone       String? 
+  authUserId String? @unique
+  email      String  @unique
+  name       String?
+  phone      String?
 
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
@@ -53,22 +53,32 @@ model User {
   profiles    profiles?
   memberships TenantMembership[]
 
+  customerCompanyId String?
+  customerContactId String?
+
+  customerCompany customer_companies? @relation("UserCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: SetNull)
+  customerContact customer_contacts?  @relation("UserCustomerContact", fields: [customerContactId], references: [id], onDelete: SetNull)
+
+  @@index([customerCompanyId])
+  @@index([customerContactId])
   @@index([email])
   @@index([authUserId])
   @@map("users")
 }
 
 model customer_companies {
-  id             String              @id @default(cuid())
+  id             String   @id @default(cuid())
   tenantId       String
   name           String
   normalizedName String
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contacts       customer_contacts[]
-  batches        inventory_batches[]
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contacts        customer_contacts[]
+  batches         inventory_batches[] @relation("InventoryBatchCustomerCompany")
+  users           User[]              @relation("UserCustomerCompany")
+  transportOrders TransportOrder[]    @relation("TransportOrderCustomerCompany")
 
   @@unique([tenantId, normalizedName])
   @@index([tenantId])
@@ -76,16 +86,17 @@ model customer_companies {
 }
 
 model customer_contacts {
-  id              String             @id @default(cuid())
-  companyId        String
-  name             String
-  email            String
-  normalizedEmail  String
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
+  id              String   @id @default(cuid())
+  companyId       String
+  name            String
+  email           String
+  normalizedEmail String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  company          customer_companies @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  batches          inventory_batches[]
+  company customer_companies  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  batches inventory_batches[] @relation("InventoryBatchCustomerContact")
+  users   User[]              @relation("UserCustomerContact")
 
   @@unique([companyId, normalizedEmail])
   @@index([companyId])
@@ -124,21 +135,23 @@ model TransportOrder {
 
   // ✅ NEW
   customerContactNumber String?
+  customerCompanyId     String?
+  customerCompany       customer_companies? @relation("TransportOrderCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: SetNull)
 
-  createdAt                  DateTime                  @default(now())
-  updatedAt                  DateTime                  @updatedAt
-  priceCents                 Int?
-  currency                   String?                   @default("SGD")
-  customerName               String?
-  doDocumentUrl              String?
-  doSignatureUrl             String?
-  doSignedAt                 DateTime?
-  doSignerName               String?
-  doStatus                   DoStatus                  @default(PENDING)
-  doVersion                  Int                       @default(1)
-  itemsJson                  Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  priceCents     Int?
+  currency       String?   @default("SGD")
+  customerName   String?
+  doDocumentUrl  String?
+  doSignatureUrl String?
+  doSignedAt     DateTime?
+  doSignerName   String?
+  doStatus       DoStatus  @default(PENDING)
+  doVersion      Int       @default(1)
+  itemsJson      Json?
   // Client's reference (what they give you)
-  orderRef                   String
+  orderRef       String
 
   // Internal OpsFlow reference (DB-YYYY-MM-DD-XXX)
   internalRef                String?
@@ -149,9 +162,10 @@ model TransportOrder {
   tenant                     Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, orderRef])
+  @@unique([tenantId, internalRef])
+  @@index([tenantId, customerCompanyId])
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
-  @@unique([tenantId, internalRef])
   @@map("transport_orders")
 }
 
@@ -394,7 +408,6 @@ enum Role {
   CUSTOMER
 }
 
-
 enum MembershipStatus {
   Active
   Invited
@@ -467,28 +480,28 @@ enum InventoryUnitStatus {
 }
 
 model inventory_batches {
-  id                    String                  @id @default(cuid())
-  tenantId              String
-  containerNumber             String
+  id              String @id @default(cuid())
+  tenantId        String
+  containerNumber String
 
   // ✅ Stock-In v2 fields
-  batchDescription      String?
-  customerCompanyId     String?
-  customerContactId     String?
+  batchDescription  String?
+  customerCompanyId String?
+  customerContactId String?
 
   // Legacy fields (kept for backward compatibility)
-  customerName          String?
-  customerRef           String?
+  customerName String?
+  customerRef  String?
 
-  receivedAt            DateTime?
-  notes                 String?
-  status                InventoryBatchStatus    @default(Draft)
-  createdAt             DateTime                @default(now())
-  updatedAt             DateTime                @updatedAt
+  receivedAt DateTime?
+  notes      String?
+  status     InventoryBatchStatus @default(Draft)
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
 
-  tenant                Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customerCompany       customer_companies?     @relation(fields: [customerCompanyId], references: [id], onDelete: SetNull)
-  customerContact       customer_contacts?      @relation(fields: [customerContactId], references: [id], onDelete: SetNull)
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerCompany customer_companies? @relation("InventoryBatchCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: SetNull)
+  customerContact customer_contacts?  @relation("InventoryBatchCustomerContact", fields: [customerContactId], references: [id], onDelete: SetNull)
 
   inventory_batch_items inventory_batch_items[]
   inventory_units       inventory_units[]

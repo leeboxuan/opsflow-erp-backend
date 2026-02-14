@@ -75,11 +75,33 @@ export class TenantGuard implements CanActivate {
       );
     }
 
-    request.tenant = {
+     // After membership is found...
+     const tenantContext: any = {
       tenantId: tenantIdHeader,
       role: membership.role,
       isSuperadmin: false,
     };
+
+    // ✅ If CUSTOMER, attach customerCompanyId (+ enforce it exists)
+    if (membership.role === Role.CUSTOMER) {
+      const u = await this.prisma.user.findUnique({
+        where: { id: user.userId },
+        select: { customerCompanyId: true, customerContactId: true },
+      });
+
+      if (!u?.customerCompanyId) {
+        throw new ForbiddenException(
+          "CUSTOMER user is missing customerCompanyId. Admin must link them to a customer company.",
+        );
+      }
+
+      tenantContext.customerCompanyId = u.customerCompanyId;
+      tenantContext.customerContactId = u.customerContactId ?? null;
+    }
+
+    request.tenant = tenantContext;
+    return true;
+
 
     return true;
   }

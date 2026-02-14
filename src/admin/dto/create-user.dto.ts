@@ -1,5 +1,5 @@
-import { IsEmail, IsEnum, IsOptional, IsString, IsBoolean } from 'class-validator';
-import { Role } from '@prisma/client';
+import { IsEmail, IsEnum, IsOptional, IsString, IsBoolean } from "class-validator";
+import { Role } from "@prisma/client";
 
 export class CreateUserDto {
   @IsEmail()
@@ -10,9 +10,22 @@ export class CreateUserDto {
   name?: string;
 
   @IsEnum(Role)
-  role!: Role; // Admin | Ops | Finance (NOT Driver)
+  role!: Role; // ADMIN | OPS | FINANCE | CUSTOMER (NOT Driver)
 
   @IsOptional()
   @IsBoolean()
-  sendInvite?: boolean = true; // default true
+  sendInvite?: boolean = true;
+
+  // 👇 Only required when role === CUSTOMER
+  @IsOptional()
+  @IsString()
+  customerCompanyName?: string;
+
+  @IsOptional()
+  @IsString()
+  customerContactName?: string;
+
+  @IsOptional()
+  @IsString()
+  customerContactEmail?: string;
 }

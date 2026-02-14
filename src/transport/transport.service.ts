@@ -207,11 +207,8 @@ export class TransportService {
     return this.toDto(order);
   }
 
-  async listOrders(
-    tenantId: string,
-    cursor?: string,
-    limit: number = 20,
-  ): Promise<{ orders: OrderDto[]; nextCursor?: string }> {
+  async listOrders(tenantId: string, cursor?: string, limit: number = 20, customerCompanyId?: string)
+  : Promise<{ orders: OrderDto[]; nextCursor?: string }> {
     // Temporary debug log to verify request flow
     console.log('[Transport] tenantId:', tenantId);
 
@@ -222,14 +219,10 @@ export class TransportService {
 
     const take = Math.min(limit, 100); // Max 100 per page
 
-    const where = {
-      tenantId,
-      ...(cursor && {
-        id: {
-          gt: cursor,
-        },
-      }),
-    };
+    const where: any = { tenantId };
+    if (customerCompanyId) {
+      where.customerCompanyId = customerCompanyId;
+    }
 
     const orders = await this.prisma.transportOrder.findMany({
       where,
@@ -249,12 +242,13 @@ export class TransportService {
     };
   }
 
-  async getOrderById(tenantId: string, id: string): Promise<OrderDto | null> {
+  async getOrderById(tenantId: string, id: string, customerCompanyId?: string): Promise<OrderDto | null> {
+    const where: any = { id, tenantId };
+
+    if (customerCompanyId) where.customerCompanyId = customerCompanyId;
+
     const order = await this.prisma.transportOrder.findFirst({
-      where: {
-        id,
-        tenantId,
-      },
+      where,
       include: {
         stops: {
           orderBy: { sequence: "asc" },
