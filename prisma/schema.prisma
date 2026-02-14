@@ -387,12 +387,13 @@ model profiles {
 }
 
 enum Role {
-  Admin
-  Ops
-  Finance
-  Driver
-  Customer
+  ADMIN
+  OPS
+  FINANCE
+  DRIVER
+  CUSTOMER
 }
+
 
 enum MembershipStatus {
   Active
