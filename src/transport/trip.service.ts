@@ -547,7 +547,7 @@ export class TripService {
       where: {
         tenantId,
         userId: driverUserId,
-        role: Role.Driver,
+        role: Role.DRIVER,
         status: MembershipStatus.Active,
       },
     });

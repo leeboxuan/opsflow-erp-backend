@@ -68,7 +68,7 @@ export class TripController {
 
   @Post(':id/dispatch')
   @UseGuards(RoleGuard)
-  @Roles(Role.Admin, Role.Ops)
+  @Roles(Role.ADMIN, Role.OPS)
   @ApiOperation({ summary: 'Dispatch a trip (Admin/Ops only)' })
   async dispatchTrip(
     @Request() req: any,
@@ -80,7 +80,7 @@ export class TripController {
 
   @Post(':id/start')
   @UseGuards(RoleGuard)
-  @Roles(Role.Driver, Role.Ops, Role.Admin)
+  @Roles(Role.DRIVER, Role.OPS, Role.ADMIN)
   @ApiOperation({ summary: 'Start a trip (Driver/Ops/Admin)' })
   async startTrip(
     @Request() req: any,
@@ -92,7 +92,7 @@ export class TripController {
 
   @Post(':id/complete')
   @UseGuards(RoleGuard)
-  @Roles(Role.Driver, Role.Ops, Role.Admin)
+  @Roles(Role.DRIVER, Role.OPS, Role.ADMIN)
   @ApiOperation({ summary: 'Complete a trip (Driver/Ops/Admin)' })
   async completeTrip(
     @Request() req: any,
@@ -104,7 +104,7 @@ export class TripController {
 
   @Get(':id/events')
   @UseGuards(RoleGuard)
-  @Roles(Role.Driver, Role.Ops, Role.Admin)
+  @Roles(Role.DRIVER, Role.OPS, Role.ADMIN)
   @ApiOperation({ summary: 'Get trip events (Driver/Ops/Admin)' })
   async getTripEvents(
     @Request() req: any,
@@ -116,7 +116,7 @@ export class TripController {
 
   @Post(':tripId/assign-driver')
   @UseGuards(RoleGuard)
-  @Roles(Role.Admin, Role.Ops)
+  @Roles(Role.OPS, Role.ADMIN)
   @ApiOperation({ summary: 'Assign driver to trip (Admin/Ops only)' })
   async assignDriver(
     @Request() req: any,
@@ -129,7 +129,7 @@ export class TripController {
 
   @Post(':tripId/assign-vehicle')
   @UseGuards(RoleGuard)
-  @Roles(Role.Admin, Role.Ops)
+  @Roles(Role.OPS, Role.ADMIN)
   @ApiOperation({ summary: 'Assign vehicle to trip (Admin/Ops only)' })
   async assignVehicle(
     @Request() req: any,
