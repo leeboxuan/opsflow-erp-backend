@@ -30,7 +30,7 @@ import { CompleteStopDto } from './dto/complete-stop.dto';
 @ApiTags('driver')
 @Controller('driver')
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.Driver)
+@Roles(Role.DRIVER)
 @ApiBearerAuth('JWT-auth')
 export class DriverController {
   constructor(

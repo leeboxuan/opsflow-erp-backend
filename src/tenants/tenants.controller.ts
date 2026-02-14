@@ -111,7 +111,7 @@ export class TenantsController {
 
   @Get('members')
   @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-  @Roles(Role.Admin, Role.Ops)
+  @Roles(Role.ADMIN, Role.OPS)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'List all members of current tenant (Admin/Ops only)' })
   async getMembers(@Request() req: any): Promise<MemberDto[]> {
@@ -145,7 +145,7 @@ export class TenantsController {
 
   @Post('invite')
   @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-  @Roles(Role.Admin)
+  @Roles(Role.ADMIN)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Invite a user to join the tenant (Admin only)' })
   async inviteMember(
@@ -207,7 +207,7 @@ export class TenantsController {
 
   @Patch('members/:membershipId')
   @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-  @Roles(Role.Admin)
+  @Roles(Role.ADMIN)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Update membership status or role (Admin only)' })
   async updateMembership(

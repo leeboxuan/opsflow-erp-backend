@@ -26,7 +26,7 @@ export class TenantGuard implements CanActivate {
       if (!tenantIdHeader) {
         request.tenant = {
           tenantId: null,
-          role: Role.Admin,
+          role: Role.ADMIN,
           isSuperadmin: true,
         };
         return true;
@@ -47,7 +47,7 @@ export class TenantGuard implements CanActivate {
       });
       request.tenant = {
         tenantId: tenantIdHeader,
-        role: membership?.role ?? Role.Admin,
+        role: membership?.role ?? Role.ADMIN,
         isSuperadmin: true,
       };
       return true;

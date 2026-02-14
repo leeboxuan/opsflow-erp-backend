@@ -7,7 +7,7 @@ export class InviteMemberDto {
   @IsEmail()
   email: string;
 
-  @ApiProperty({ example: Role.Ops, enum: Role })
+  @ApiProperty({ example: Role.OPS, enum: Role })
   @IsEnum(Role)
   role: Role;
 

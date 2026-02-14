@@ -304,7 +304,7 @@ export class InventoryController {
 
   @Patch('units/:unitId/status')
   @UseGuards(RoleGuard)
-  @Roles('Admin')
+  @Roles('ADMIN')
   @ApiOperation({ summary: 'Admin: update inventory unit status' })
   async updateUnitStatus(
     @Request() req: any,

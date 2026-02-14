@@ -35,7 +35,7 @@ import type { User as SupabaseAuthUser } from '@supabase/supabase-js';
 @ApiTags('admin')
 @Controller('admin')
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.Admin, Role.Ops)
+@Roles(Role.ADMIN, Role.OPS)
 @ApiBearerAuth('JWT-auth')
 export class AdminController {
   constructor(
@@ -53,7 +53,7 @@ export class AdminController {
     const memberships = await this.prisma.tenantMembership.findMany({
       where: {
         tenantId,
-        role: Role.Driver,
+        role: Role.DRIVER,
         status: MembershipStatus.Active,
       },
       include: {
@@ -89,7 +89,7 @@ export class AdminController {
       where: {
         tenantId,
         // treat "Users page" as web users (exclude drivers)
-        NOT: { role: Role.Driver },
+        NOT: { role: Role.DRIVER },
       },
       include: { user: true },
       orderBy: { user: { createdAt: 'desc' } },
@@ -112,7 +112,7 @@ export class AdminController {
   async createUser(@Request() req: any, @Body() dto: CreateUserDto): Promise<UserDto> {
     const tenantId = req.tenant.tenantId;
 
-    if (dto.role === Role.Driver) {
+    if (dto.role === Role.DRIVER) {
       throw new BadRequestException('Use /admin/drivers to create drivers');
     }
 
@@ -175,7 +175,7 @@ export class AdminController {
     });
     if (!membership) throw new NotFoundException('User not found in this tenant');
 
-    if (dto.role === Role.Driver) {
+    if (dto.role === Role.DRIVER) {
       throw new BadRequestException('Drivers are managed under Drivers');
     }
 
@@ -259,11 +259,11 @@ export class AdminController {
     if (existingMembership) {
       // Update existing membership to Driver role if not already
       const membership =
-        existingMembership.role === Role.Driver
+        existingMembership.role === Role.DRIVER
           ? existingMembership
           : await this.prisma.tenantMembership.update({
             where: { id: existingMembership.id },
-            data: { role: Role.Driver },
+            data: { role: Role.DRIVER },
           });
 
       return {
@@ -283,7 +283,7 @@ export class AdminController {
       data: {
         tenantId,
         userId: user.id,
-        role: Role.Driver,
+        role: Role.DRIVER,
         status: MembershipStatus.Active,
       },
     });
@@ -462,7 +462,7 @@ export class AdminController {
     });
     if (!membership) throw new NotFoundException("User not found in this tenant");
 
-    if (membership.role === Role.Driver) {
+    if (membership.role === Role.DRIVER) {
       throw new BadRequestException("Drivers are managed under Drivers");
     }
 

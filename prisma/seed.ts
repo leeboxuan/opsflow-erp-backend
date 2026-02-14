@@ -46,13 +46,13 @@ async function seedUsersAndMemberships(tenantId: string) {
       },
     },
     update: {
-      role: Role.Admin,
+      role: Role.ADMIN,
       status: MembershipStatus.Active,
     },
     create: {
       tenantId,
       userId: adminUser.id,
-      role: Role.Admin,
+      role: Role.ADMIN,
       status: MembershipStatus.Active,
     },
   });
@@ -66,13 +66,13 @@ async function seedUsersAndMemberships(tenantId: string) {
       },
     },
     update: {
-      role: Role.Driver,
+      role: Role.DRIVER,
       status: MembershipStatus.Active,
     },
     create: {
       tenantId,
       userId: driverUser.id,
-      role: Role.Driver,
+      role: Role.DRIVER,
       status: MembershipStatus.Active,
     },
   });

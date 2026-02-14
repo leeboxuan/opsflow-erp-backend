@@ -83,7 +83,7 @@ export class TransportController {
 
   @Patch(":id")
   @UseGuards(RoleGuard)
-  @Roles(Role.Admin, Role.Ops)
+  @Roles(Role.ADMIN, Role.OPS)
   async updateOrder(
     @Request() req: any,
     @Param("id") id: string,
@@ -95,7 +95,7 @@ export class TransportController {
 
   @Patch(":id/do")
   @UseGuards(RoleGuard)
-  @Roles(Role.Admin, Role.Ops, Role.Driver)
+  @Roles(Role.ADMIN, Role.OPS, Role.DRIVER)
   async updateDo(
     @Request() req: any,
     @Param("id") id: string,
@@ -107,7 +107,7 @@ export class TransportController {
 
   @Put(":id/items")
   @UseGuards(RoleGuard)
-  @Roles(Role.Admin, Role.Ops)
+  @Roles(Role.ADMIN, Role.OPS)
   async replaceOrderItems(
     @Request() req: any,
     @Param("id") id: string,

@@ -3,7 +3,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Role, MembershipStatus } from '@prisma/client';
 
 export class UpdateMembershipDto {
-  @ApiProperty({ example: Role.Ops, enum: Role, required: false })
+  @ApiProperty({ example: Role.OPS, enum: Role, required: false })
   @IsOptional()
   @IsEnum(Role)
   role?: Role;
