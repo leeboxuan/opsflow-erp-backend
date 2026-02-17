@@ -68,6 +68,21 @@ export class TransportController {
     );
   }
 
+  @Get("next-internal-ref")
+  async nextInternalRef(
+    @Request() req: any,
+    @Query("year") year?: string,
+    @Query("month") month?: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+
+    return this.transportService.getNextInternalRef(
+      tenantId,
+      year ? Number(year) : undefined,
+      month ? Number(month) : undefined,
+    );
+  }
+  
   @Get(":id")
   async getOrder(
     @Request() req: any,
@@ -151,18 +166,4 @@ export class TransportController {
     return this.transportService.getOrderLive(tenantId, id);
   }
 
-  @Get("next-internal-ref")
-  async nextInternalRef(
-    @Request() req: any,
-    @Query("year") year?: string,
-    @Query("month") month?: string,
-  ) {
-    const tenantId = req.tenant.tenantId;
-
-    return this.transportService.getNextInternalRef(
-      tenantId,
-      year ? Number(year) : undefined,
-      month ? Number(month) : undefined,
-    );
-  }
 }
