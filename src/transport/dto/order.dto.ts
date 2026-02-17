@@ -71,4 +71,6 @@ export interface OrderDto {
 
   // Versioning for DO changes
   doVersion?: number | null;
+  priceCents?: number | null;
+  currency?: string | null;
 }

@@ -9,6 +9,7 @@ import {
   ArrayMinSize,
   Matches,
   MaxLength,
+  IsInt,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -117,4 +118,19 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   internalRef?: string;
+
+  @ApiPropertyOptional({
+    description: 'Driver payout in cents (integer). Example: 35000 = $350.00',
+    example: 35000,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  priceCents?: number;
+
+  @ApiPropertyOptional({ description: 'Currency code, default SGD', example: 'SGD' })
+  @IsOptional()
+  @IsString()
+  currency?: string;
 }

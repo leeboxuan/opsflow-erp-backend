@@ -3,20 +3,20 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
-} from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+} from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
 import {
   OrderStatus,
   TransportOrder,
   TripStatus,
   StopType,
   InventoryUnitStatus,
-} from '@prisma/client';
-import { CreateOrderDto } from './dto/create-order.dto';
-import { OrderDto } from './dto/order.dto';
-import { TripDto } from './dto/trip.dto';
-import { EventLogService } from './event-log.service';
-import { UpdateOrderDto } from './dto/update-order.dto';
+} from "@prisma/client";
+import { CreateOrderDto } from "./dto/create-order.dto";
+import { OrderDto } from "./dto/order.dto";
+import { TripDto } from "./dto/trip.dto";
+import { EventLogService } from "./event-log.service";
+import { UpdateOrderDto } from "./dto/update-order.dto";
 import { ReplaceOrderItemsDto } from "./dto/replace-order-items.dto";
 
 @Injectable()
@@ -24,7 +24,7 @@ export class TransportService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventLogService: EventLogService,
-  ) { }
+  ) {}
   private async generateInternalRef(tenantId: string, hint?: string) {
     const yyyyMmDd = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     const base = `DB-${yyyyMmDd}-`;
@@ -58,8 +58,8 @@ export class TransportService {
     });
     if (existing) {
       throw new ConflictException({
-        code: 'DUPLICATE_ORDER_REF',
-        message: 'Order with this orderRef already exists for this tenant',
+        code: "DUPLICATE_ORDER_REF",
+        message: "Order with this orderRef already exists for this tenant",
       });
     }
 
@@ -83,6 +83,8 @@ export class TransportService {
           customerContactNumber: dto.customerContactNumber ?? null,
           notes: dto.notes ?? null,
           status: OrderStatus.Draft,
+          priceCents: dto.priceCents ?? null,
+          currency: dto.currency ?? "SGD",
         },
       });
       for (let i = 0; i < dto.stops.length; i++) {
@@ -143,7 +145,7 @@ export class TransportService {
 
           const availableUnits = await tx.inventory_units.findMany({
             where: unitWhere,
-            orderBy: { createdAt: 'asc' },
+            orderBy: { createdAt: "asc" },
             take: quantity,
           });
 
@@ -163,8 +165,7 @@ export class TransportService {
             },
           });
 
-          const effectiveBatchId =
-            mixedBatches ? null : (batchId ?? null);
+          const effectiveBatchId = mixedBatches ? null : (batchId ?? null);
 
           // Upsert the order item line
           const orderItem = await tx.transport_order_items.upsert({
@@ -207,14 +208,18 @@ export class TransportService {
     return this.toDto(order);
   }
 
-  async listOrders(tenantId: string, cursor?: string, limit: number = 20, customerCompanyId?: string)
-  : Promise<{ orders: OrderDto[]; nextCursor?: string }> {
+  async listOrders(
+    tenantId: string,
+    cursor?: string,
+    limit: number = 20,
+    customerCompanyId?: string,
+  ): Promise<{ orders: OrderDto[]; nextCursor?: string }> {
     // Temporary debug log to verify request flow
-    console.log('[Transport] tenantId:', tenantId);
+    console.log("[Transport] tenantId:", tenantId);
 
     // tenantId is REQUIRED - all roles must operate under a tenant
     if (!tenantId || tenantId === null || tenantId === undefined) {
-      throw new BadRequestException('tenantId is required');
+      throw new BadRequestException("tenantId is required");
     }
 
     const take = Math.min(limit, 100); // Max 100 per page
@@ -228,7 +233,7 @@ export class TransportService {
       where,
       take: take + 1, // Fetch one extra to check if there's more
       orderBy: {
-        createdAt: 'desc',
+        createdAt: "desc",
       },
     });
 
@@ -242,7 +247,11 @@ export class TransportService {
     };
   }
 
-  async getOrderById(tenantId: string, id: string, customerCompanyId?: string): Promise<OrderDto | null> {
+  async getOrderById(
+    tenantId: string,
+    id: string,
+    customerCompanyId?: string,
+  ): Promise<OrderDto | null> {
     const where: any = { id, tenantId };
 
     if (customerCompanyId) where.customerCompanyId = customerCompanyId;
@@ -277,10 +286,7 @@ export class TransportService {
     return this.toDtoWithStops(order);
   }
 
-  async planTripFromOrder(
-    tenantId: string,
-    orderId: string,
-  ): Promise<TripDto> {
+  async planTripFromOrder(tenantId: string, orderId: string): Promise<TripDto> {
     // Load order and create trip + stops + event logs in a single transaction
     const result = await this.prisma.$transaction(async (tx) => {
       // 1) Find TransportOrder by { id: orderId, tenantId } else 404
@@ -292,7 +298,7 @@ export class TransportService {
       });
 
       if (!order) {
-        throw new NotFoundException('Order not found');
+        throw new NotFoundException("Order not found");
       }
 
       // 2) Create Trip
@@ -313,11 +319,11 @@ export class TransportService {
           tripId: trip.id,
           sequence: 1,
           type: StopType.PICKUP,
-          addressLine1: 'TBD',
+          addressLine1: "TBD",
           addressLine2: null,
-          city: 'Singapore',
-          postalCode: '000000',
-          country: 'SG',
+          city: "Singapore",
+          postalCode: "000000",
+          country: "SG",
           plannedAt: order.pickupWindowStart,
           transportOrderId: order.id,
         },
@@ -330,11 +336,11 @@ export class TransportService {
           tripId: trip.id,
           sequence: 2,
           type: StopType.DELIVERY,
-          addressLine1: 'TBD',
+          addressLine1: "TBD",
           addressLine2: null,
-          city: 'Singapore',
-          postalCode: '000000',
-          country: 'SG',
+          city: "Singapore",
+          postalCode: "000000",
+          country: "SG",
           plannedAt: order.deliveryWindowStart,
           transportOrderId: order.id,
         },
@@ -344,9 +350,9 @@ export class TransportService {
       await tx.eventLog.create({
         data: {
           tenantId,
-          entityType: 'Trip',
+          entityType: "Trip",
           entityId: trip.id,
-          eventType: 'TRIP_CREATED',
+          eventType: "TRIP_CREATED",
           payload: {
             orderId: order.id,
             plannedStartAt: trip.plannedStartAt,
@@ -358,9 +364,9 @@ export class TransportService {
       await tx.eventLog.create({
         data: {
           tenantId,
-          entityType: 'Stop',
+          entityType: "Stop",
           entityId: pickupStop.id,
-          eventType: 'STOP_CREATED',
+          eventType: "STOP_CREATED",
           payload: {
             orderId: order.id,
             tripId: trip.id,
@@ -373,9 +379,9 @@ export class TransportService {
       await tx.eventLog.create({
         data: {
           tenantId,
-          entityType: 'Stop',
+          entityType: "Stop",
           entityId: deliveryStop.id,
-          eventType: 'STOP_CREATED',
+          eventType: "STOP_CREATED",
           payload: {
             orderId: order.id,
             tripId: trip.id,
@@ -408,13 +414,13 @@ export class TransportService {
       include: {
         stops: {
           orderBy: {
-            sequence: 'asc',
+            sequence: "asc",
           },
           include: {
             pods: {
               take: 1,
               orderBy: {
-                createdAt: 'desc',
+                createdAt: "desc",
               },
             },
           },
@@ -424,7 +430,7 @@ export class TransportService {
     });
 
     if (!tripWithStops) {
-      throw new NotFoundException('Trip not found after creation');
+      throw new NotFoundException("Trip not found after creation");
     }
 
     return this.tripToDto(
@@ -461,7 +467,8 @@ export class TransportService {
 
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
-
+      priceCents: order.priceCents ?? null,
+      currency: order.currency ?? "SGD",
     };
   }
 
@@ -495,38 +502,43 @@ export class TransportService {
           sku: it.inventory_item?.sku ?? null,
           name: it.inventory_item?.name ?? null,
           unitSkus:
-            it.units?.map((u: any) => u.inventory_unit?.unitSku).filter(Boolean) ?? [],
+            it.units
+              ?.map((u: any) => u.inventory_unit?.unitSku)
+              .filter(Boolean) ?? [],
         })) ?? [],
       customerContactNumber: order.customerContactNumber ?? null,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
       stops: order.stops
         ? order.stops.map((stop: any) => ({
-          id: stop.id,
-          sequence: stop.sequence,
-          type: stop.type,
-          addressLine1: stop.addressLine1,
-          addressLine2: stop.addressLine2,
-          city: stop.city,
-          postalCode: stop.postalCode,
-          country: stop.country,
-          plannedAt: stop.plannedAt,
-          transportOrderId: stop.transportOrderId,
-          createdAt: stop.createdAt,
-          updatedAt: stop.updatedAt,
-          pod: stop.pods && stop.pods[0]
-            ? {
-              id: stop.pods[0].id,
-              status: stop.pods[0].status,
-              signedBy: stop.pods[0].signedBy,
-              signedAt: stop.pods[0].signedAt,
-              photoUrl: stop.pods[0].photoUrl,
-              createdAt: stop.pods[0].createdAt,
-              updatedAt: stop.pods[0].updatedAt,
-            }
-            : null,
-        }))
+            id: stop.id,
+            sequence: stop.sequence,
+            type: stop.type,
+            addressLine1: stop.addressLine1,
+            addressLine2: stop.addressLine2,
+            city: stop.city,
+            postalCode: stop.postalCode,
+            country: stop.country,
+            plannedAt: stop.plannedAt,
+            transportOrderId: stop.transportOrderId,
+            createdAt: stop.createdAt,
+            updatedAt: stop.updatedAt,
+            pod:
+              stop.pods && stop.pods[0]
+                ? {
+                    id: stop.pods[0].id,
+                    status: stop.pods[0].status,
+                    signedBy: stop.pods[0].signedBy,
+                    signedAt: stop.pods[0].signedAt,
+                    photoUrl: stop.pods[0].photoUrl,
+                    createdAt: stop.pods[0].createdAt,
+                    updatedAt: stop.pods[0].updatedAt,
+                  }
+                : null,
+          }))
         : undefined,
+      priceCents: order.priceCents ?? null,
+      currency: order.currency ?? "SGD",
     };
   }
 
@@ -546,10 +558,10 @@ export class TransportService {
             type: trip.vehicles.type ?? null,
           }
         : null,
-  
+
       // ✅ Trip-level location (not per stop)
       driverLocation: null,
-  
+
       createdAt: trip.createdAt,
       updatedAt: trip.updatedAt,
       stops: stops.map((stop) => ({
@@ -580,12 +592,16 @@ export class TransportService {
     };
   }
 
-  async updateOrder(tenantId: string, orderId: string, dto: UpdateOrderDto): Promise<OrderDto> {
+  async updateOrder(
+    tenantId: string,
+    orderId: string,
+    dto: UpdateOrderDto,
+  ): Promise<OrderDto> {
     const order = await this.prisma.transportOrder.findFirst({
       where: { id: orderId, tenantId },
     });
 
-    if (!order) throw new NotFoundException('Order not found');
+    if (!order) throw new NotFoundException("Order not found");
 
     const updated = await this.prisma.transportOrder.update({
       where: { id: orderId },
@@ -594,13 +610,19 @@ export class TransportService {
         customerName: dto.customerName ?? undefined,
         customerContactNumber: dto.customerContactNumber ?? undefined,
         notes: dto.notes ?? undefined,
+        priceCents: dto.priceCents ?? undefined,
+        currency: dto.currency ?? undefined,
       },
     });
 
     return this.toDto(updated);
   }
 
-  async updateOrderHeader(tenantId: string, orderId: string, dto: UpdateOrderDto): Promise<OrderDto> {
+  async updateOrderHeader(
+    tenantId: string,
+    orderId: string,
+    dto: UpdateOrderDto,
+  ): Promise<OrderDto> {
     const order = await this.prisma.transportOrder.findFirst({
       where: { id: orderId, tenantId },
     });
@@ -617,6 +639,8 @@ export class TransportService {
           customerName: dto.customerName ?? undefined,
           customerContactNumber: dto.customerContactNumber ?? undefined,
           notes: dto.notes ?? undefined,
+          priceCents: dto.priceCents ?? undefined,
+          currency: dto.currency ?? undefined,
         },
       });
 
@@ -650,8 +674,11 @@ export class TransportService {
     return this.toDto(updated);
   }
 
-
-  async replaceOrderItems(tenantId: string, orderId: string, dto: ReplaceOrderItemsDto): Promise<OrderDto> {
+  async replaceOrderItems(
+    tenantId: string,
+    orderId: string,
+    dto: ReplaceOrderItemsDto,
+  ): Promise<OrderDto> {
     return this.prisma.$transaction(async (tx) => {
       const order = await tx.transportOrder.findFirst({
         where: { id: orderId, tenantId },
@@ -672,7 +699,10 @@ export class TransportService {
       // 1) Detach ALL existing unit links + unreserve units from this order
       // (we'll re-assign based on new payload)
       const existingLinked = await tx.transport_order_item_units.findMany({
-        where: { tenantId, transportOrderItemId: { in: Array.from(existingItemIds) } },
+        where: {
+          tenantId,
+          transportOrderItemId: { in: Array.from(existingItemIds) },
+        },
         select: { inventoryUnitId: true },
       });
 
@@ -680,13 +710,23 @@ export class TransportService {
 
       if (oldUnitIds.length > 0) {
         await tx.inventory_units.updateMany({
-          where: { tenantId, id: { in: oldUnitIds }, transportOrderId: orderId },
-          data: { status: InventoryUnitStatus.Available, transportOrderId: null },
+          where: {
+            tenantId,
+            id: { in: oldUnitIds },
+            transportOrderId: orderId,
+          },
+          data: {
+            status: InventoryUnitStatus.Available,
+            transportOrderId: null,
+          },
         });
       }
 
       await tx.transport_order_item_units.deleteMany({
-        where: { tenantId, transportOrderItemId: { in: Array.from(existingItemIds) } },
+        where: {
+          tenantId,
+          transportOrderItemId: { in: Array.from(existingItemIds) },
+        },
       });
 
       // 2) Delete existing item lines (we'll recreate clean)
@@ -700,7 +740,9 @@ export class TransportService {
           where: { tenantId, id: line.inventoryItemId },
         });
         if (!item) {
-          throw new BadRequestException(`Inventory item not found: ${line.inventoryItemId}`);
+          throw new BadRequestException(
+            `Inventory item not found: ${line.inventoryItemId}`,
+          );
         }
 
         // Create the order item line
@@ -722,7 +764,7 @@ export class TransportService {
         if (line.unitSkus && line.unitSkus.length > 0) {
           if (line.unitSkus.length !== line.qty) {
             throw new BadRequestException(
-              `unitSkus length must equal qty for item ${item.sku} (qty ${line.qty}, unitSkus ${line.unitSkus.length})`
+              `unitSkus length must equal qty for item ${item.sku} (qty ${line.qty}, unitSkus ${line.unitSkus.length})`,
             );
           }
 
@@ -737,7 +779,9 @@ export class TransportService {
           });
 
           if (found.length !== line.unitSkus.length) {
-            throw new BadRequestException(`Some unitSkus are unavailable or invalid for item ${item.sku}`);
+            throw new BadRequestException(
+              `Some unitSkus are unavailable or invalid for item ${item.sku}`,
+            );
           }
 
           unitsToReserve = found.map((u) => ({ id: u.id }));
@@ -755,7 +799,7 @@ export class TransportService {
 
           if (found.length < line.qty) {
             throw new BadRequestException(
-              `Not enough available units for item ${item.sku} (requested ${line.qty}, available ${found.length})`
+              `Not enough available units for item ${item.sku} (requested ${line.qty}, available ${found.length})`,
             );
           }
 
@@ -766,7 +810,10 @@ export class TransportService {
 
         await tx.inventory_units.updateMany({
           where: { tenantId, id: { in: unitIds } },
-          data: { status: InventoryUnitStatus.Reserved, transportOrderId: orderId },
+          data: {
+            status: InventoryUnitStatus.Reserved,
+            transportOrderId: orderId,
+          },
         });
 
         await tx.transport_order_item_units.createMany({
@@ -787,7 +834,10 @@ export class TransportService {
             include: { pods: { take: 1, orderBy: { createdAt: "desc" } } },
           },
           transport_order_items: {
-            include: { inventory_item: true, units: { include: { inventory_unit: true } } },
+            include: {
+              inventory_item: true,
+              units: { include: { inventory_unit: true } },
+            },
           },
         },
       });
@@ -834,7 +884,14 @@ export class TransportService {
     });
 
     if (!stop?.tripId) {
-      return { orderId, tripId: null, driverUserId: null, lat: null, lng: null, capturedAt: null };
+      return {
+        orderId,
+        tripId: null,
+        driverUserId: null,
+        lat: null,
+        lng: null,
+        capturedAt: null,
+      };
     }
 
     const trip = await this.prisma.trip.findFirst({
@@ -846,9 +903,9 @@ export class TransportService {
 
     const loc = driverUserId
       ? await this.prisma.driver_location_latest.findFirst({
-        where: { tenantId, driverUserId },
-        select: { lat: true, lng: true, capturedAt: true },
-      })
+          where: { tenantId, driverUserId },
+          select: { lat: true, lng: true, capturedAt: true },
+        })
       : null;
 
     return {
@@ -861,19 +918,25 @@ export class TransportService {
     };
   }
 
-  async updateOrderDo(tenantId: string, orderId: string, dto: any): Promise<OrderDto> {
+  async updateOrderDo(
+    tenantId: string,
+    orderId: string,
+    dto: any,
+  ): Promise<OrderDto> {
     const order = await this.prisma.transportOrder.findFirst({
       where: { id: orderId, tenantId },
     });
     if (!order) throw new NotFoundException("Order not found");
-  
+
     const updated = await this.prisma.transportOrder.update({
       where: { id: orderId },
       data: {
         doDocumentUrl: dto.doDocumentUrl ?? order.doDocumentUrl,
         doSignatureUrl: dto.doSignatureUrl ?? order.doSignatureUrl,
         doSignerName: dto.doSignerName ?? order.doSignerName,
-        doSignedAt: dto.doSignedAt ? new Date(dto.doSignedAt) : order.doSignedAt,
+        doSignedAt: dto.doSignedAt
+          ? new Date(dto.doSignedAt)
+          : order.doSignedAt,
         doStatus: dto.doStatus ?? order.doStatus,
         doVersion: { increment: 1 },
       },
@@ -892,9 +955,7 @@ export class TransportService {
         },
       },
     });
-  
+
     return this.toDtoWithStops(updated);
   }
-  
-  
 }

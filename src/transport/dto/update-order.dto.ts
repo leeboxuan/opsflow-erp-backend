@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { OrderStatus } from '@prisma/client';
 
 export class UpdateOrderDto {
@@ -23,8 +24,15 @@ export class UpdateOrderDto {
   @IsString()
   notes?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Driver payout in cents (integer). Example: 35000 = $350.00' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  priceCents?: number;
+
+  @ApiPropertyOptional({ description: 'Currency code, default SGD' })
   @IsOptional()
   @IsString()
-  priceCents?: string;
+  currency?: string;
 }
