@@ -139,7 +139,7 @@ export class TransportController {
   }
   // (keep your existing imports)
 
-  @Delete("orders/:orderId")
+  @Delete(":orderId")
   deleteOrder(@Req() req: any, @Param("orderId") orderId: string) {
     const tenantId = req.tenant.tenantId;
     return this.transportService.deleteOrder(tenantId, orderId);
@@ -151,7 +151,7 @@ export class TransportController {
     return this.transportService.getOrderLive(tenantId, id);
   }
 
-  @Get("orders/next-internal-ref")
+  @Get("next-internal-ref")
   async nextInternalRef(
     @Request() req: any,
     @Query("year") year?: string,
