@@ -138,7 +138,11 @@ export class TransportController {
     return this.transportService.getOrderLive(tenantId, id);
   }
 
-  
+  @Get("orders/next-internal-ref")
+async nextInternalRef(@Request() req: any) {
+  const tenantId = req.tenant.tenantId;
+  return this.transportService.getNextInternalRef(tenantId);
+}
 
 
 }

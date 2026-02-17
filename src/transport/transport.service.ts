@@ -961,4 +961,27 @@ export class TransportService {
 
     return this.toDtoWithStops(updated);
   }
+
+  async getNextInternalRef(tenantId: string) {
+    const now = new Date();
+    const yyyy = now.getUTCFullYear();
+    const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
+  
+    const monthStart = new Date(Date.UTC(yyyy, now.getUTCMonth(), 1, 0, 0, 0));
+    const monthEnd = new Date(Date.UTC(yyyy, now.getUTCMonth() + 1, 1, 0, 0, 0));
+  
+    const countThisMonth = await this.prisma.transportOrder.count({
+      where: {
+        tenantId,
+        createdAt: { gte: monthStart, lt: monthEnd },
+        internalRef: { not: null },
+      },
+    });
+  
+    const seq = countThisMonth + 1;
+    const ss = String(seq).padStart(2, "0");
+  
+    return { internalRef: `DB-${yyyy}-${mm}-${ss}-IMP` };
+  }
+  
 }
