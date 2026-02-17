@@ -8,10 +8,10 @@ import { InvoicesService } from './invoices.service';
 import { CreateInvoiceDto } from './dto/invoice.dto';
 
 @ApiTags('Finance')
-@ApiBearerAuth('JWT-auth')
 @Controller('finance/invoices')
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
 @Roles(Role.ADMIN, Role.OPS) // add Role.FINANCE later if you have it
+@ApiBearerAuth('JWT-auth')
 export class InvoicesController {
   constructor(private readonly invoices: InvoicesService) {}
 
