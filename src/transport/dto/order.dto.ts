@@ -73,4 +73,5 @@ export interface OrderDto {
   doVersion?: number | null;
   priceCents?: number | null;
   currency?: string | null;
+  invoiceId?: string | null;
 }

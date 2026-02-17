@@ -469,6 +469,7 @@ export class TransportService {
       updatedAt: order.updatedAt,
       priceCents: order.priceCents ?? null,
       currency: order.currency ?? "SGD",
+      invoiceId: order.invoiceId ?? null,
     };
   }
 
@@ -539,6 +540,8 @@ export class TransportService {
         : undefined,
       priceCents: order.priceCents ?? null,
       currency: order.currency ?? "SGD",
+      invoiceId: order.invoiceId ?? null,
+
     };
   }
 
