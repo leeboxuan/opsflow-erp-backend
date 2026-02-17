@@ -621,11 +621,18 @@ model Invoice {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // NEW
+  issuedAt       DateTime?
+  issuedByUserId String?
+  snapshot       Json?
+  pdfKey         String?
+  pdfGeneratedAt DateTime?
+  lockedAt       DateTime?
+
   // relations
   orders    TransportOrder[]
   lineItems InvoiceLineItem[]
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, invoiceNo])
   @@index([tenantId, createdAt])

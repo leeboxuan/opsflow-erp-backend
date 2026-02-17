@@ -186,4 +186,160 @@ export class InvoicesService {
       orderIds: inv.orders?.map((o: any) => o.id) ?? [],
     };
   }
+
+  async createDraftInvoice(tenantId: string, dto: CreateInvoiceDto): Promise<InvoiceDto> {
+    const orders = await this.prisma.transportOrder.findMany({
+      where: { tenantId, id: { in: dto.orderIds } },
+      select: { id: true, status: true, invoiceId: true, customerName: true },
+    });
+  
+    if (orders.length !== dto.orderIds.length) {
+      throw new BadRequestException("Some orders not found under this tenant");
+    }
+  
+    const bad = orders.find((o) => o.invoiceId || o.status !== OrderStatus.Delivered);
+    if (bad) {
+      throw new BadRequestException("Orders must be Delivered and not already invoiced");
+    }
+  
+    const normalized = dto.lineItems.map((l) => {
+      const amountCents = l.qty * l.unitPriceCents;
+      const taxCents = l.taxRate > 0 ? Math.round((amountCents * l.taxRate) / 10000) : 0;
+      return { ...l, amountCents, taxCents, taxRate: toBasisPoints(l.taxRate) };
+    });
+  
+    const subtotalCents = normalized.reduce((s, l) => s + l.amountCents, 0);
+    const taxCents = normalized.reduce((s, l) => s + l.taxCents, 0);
+    const totalCents = subtotalCents + taxCents;
+  
+    const issueDate = dto.issueDateISO ? new Date(dto.issueDateISO + "T00:00:00") : new Date();
+    const dueDate = dto.dueDateISO ? new Date(dto.dueDateISO + "T00:00:00") : null;
+  
+    const invoiceNo = await this.nextInvoiceNo(tenantId, issueDate);
+  
+    const created = await this.prisma.invoice.create({
+      data: {
+        tenantId,
+        invoiceNo,
+        customerName: dto.customerName,
+        currency: dto.currency ?? "SGD",
+        issueDate,
+        dueDate,
+        notes: dto.notes ?? null,
+        status: "Draft",
+        subtotalCents,
+        taxCents,
+        totalCents,
+        lineItems: {
+          create: normalized.map((l) => ({
+            tenantId,
+            description: l.description,
+            qty: l.qty,
+            unitPriceCents: l.unitPriceCents,
+            amountCents: l.amountCents,
+            taxCode: l.taxCode,
+            taxRate: l.taxRate,
+            taxCents: l.taxCents,
+          })),
+        },
+        // optional: store selected orderIds in snapshot draft stage (nice)
+        snapshot: {
+          stage: "Draft",
+          orderIds: dto.orderIds,
+        },
+      },
+      include: {
+        lineItems: true,
+        orders: { select: { id: true } }, // will be empty until issue
+      },
+    });
+  
+    // Return orderIds from dto since orders aren't linked yet
+    return {
+      ...this.toDto(created),
+      orderIds: dto.orderIds,
+    };
+  }
+  
+  async issueInvoice(tenantId: string, invoiceId: string, issuedByUserId?: string) {
+    const issuedAt = new Date();
+  
+    const result = await this.prisma.$transaction(async (tx) => {
+      const inv = await tx.invoice.findFirst({
+        where: { tenantId, id: invoiceId },
+        include: { lineItems: true },
+      });
+  
+      if (!inv) throw new BadRequestException("Invoice not found");
+      if (inv.status !== "Draft") throw new BadRequestException("Invoice is not Draft");
+  
+      const orderIds: string[] = (inv.snapshot as any)?.orderIds ?? [];
+      if (!orderIds.length) throw new BadRequestException("No orders on draft invoice");
+  
+      // re-validate eligibility
+      const orders = await tx.transportOrder.findMany({
+        where: { tenantId, id: { in: orderIds } },
+        select: { id: true, status: true, invoiceId: true, orderRef: true, internalRef: true, priceCents: true },
+      });
+  
+      if (orders.length !== orderIds.length) {
+        throw new BadRequestException("Some orders no longer exist");
+      }
+  
+      const bad = orders.find((o) => o.invoiceId || o.status !== OrderStatus.Delivered);
+      if (bad) throw new BadRequestException("Some orders are no longer eligible to invoice");
+  
+      // concurrency-safe link: only link those that are still invoiceId=null
+      const updated = await tx.transportOrder.updateMany({
+        where: { tenantId, id: { in: orderIds }, invoiceId: null },
+        data: { invoiceId: inv.id, status: OrderStatus.Closed },
+      });
+  
+      if (updated.count !== orderIds.length) {
+        throw new BadRequestException("Some orders were invoiced by someone else");
+      }
+  
+      const finalSnapshot = {
+        stage: "Issued",
+        invoice: {
+          id: inv.id,
+          invoiceNo: inv.invoiceNo,
+          customerName: inv.customerName,
+          currency: inv.currency,
+          issueDate: inv.issueDate,
+          dueDate: inv.dueDate,
+          notes: inv.notes,
+          subtotalCents: inv.subtotalCents,
+          taxCents: inv.taxCents,
+          totalCents: inv.totalCents,
+        },
+        orders: orders.map((o) => ({
+          id: o.id,
+          orderRef: o.orderRef,
+          internalRef: o.internalRef,
+          priceCents: o.priceCents,
+        })),
+        lineItems: inv.lineItems,
+      };
+  
+      const locked = await tx.invoice.update({
+        where: { id: inv.id },
+        data: {
+          status: "Issued",
+          issuedAt,
+          issuedByUserId: issuedByUserId ?? null,
+          lockedAt: issuedAt,
+          snapshot: finalSnapshot,
+        },
+        include: { lineItems: true, orders: { select: { id: true } } },
+      });
+  
+      return locked;
+    });
+  
+    // PDF generation + storage upload happens AFTER commit (safer)
+    // If it fails, invoice is still Issued; you can retry via "regenerate pdf" endpoint.
+    return this.toDto(result);
+  }
+  
 }
