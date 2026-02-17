@@ -962,26 +962,43 @@ export class TransportService {
     return this.toDtoWithStops(updated);
   }
 
-  async getNextInternalRef(tenantId: string) {
+  async getNextInternalRef(
+    tenantId: string,
+    year?: number,
+    month?: number
+  ) {
     const now = new Date();
-    const yyyy = now.getUTCFullYear();
-    const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
   
-    const monthStart = new Date(Date.UTC(yyyy, now.getUTCMonth(), 1, 0, 0, 0));
-    const monthEnd = new Date(Date.UTC(yyyy, now.getUTCMonth() + 1, 1, 0, 0, 0));
+    const yyyy = year ?? now.getUTCFullYear();
+    const mm = month ?? now.getUTCMonth() + 1; // 1–12
+  
+    if (mm < 1 || mm > 12) {
+      throw new Error("Invalid month");
+    }
+  
+    const MM = String(mm).padStart(2, "0");
+  
+    const monthStart = new Date(Date.UTC(yyyy, mm - 1, 1, 0, 0, 0));
+    const monthEnd = new Date(Date.UTC(yyyy, mm, 1, 0, 0, 0));
   
     const countThisMonth = await this.prisma.transportOrder.count({
       where: {
         tenantId,
-        createdAt: { gte: monthStart, lt: monthEnd },
+        createdAt: {
+          gte: monthStart,
+          lt: monthEnd,
+        },
         internalRef: { not: null },
       },
     });
   
-    const seq = countThisMonth + 1;
-    const ss = String(seq).padStart(2, "0");
+    const ss = String(countThisMonth + 1).padStart(2, "0");
   
-    return { internalRef: `DB-${yyyy}-${mm}-${ss}-IMP` };
+    return {
+      internalRef: `DB-${yyyy}-${MM}-${ss}-IMP`,
+    };
   }
+  
+  
   
 }

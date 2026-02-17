@@ -13,27 +13,27 @@ import {
   BadRequestException,
   Delete,
   Req,
-} from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { AuthGuard } from '../auth/guards/auth.guard';
-import { TenantGuard } from '../auth/guards/tenant.guard';
-import { TransportService } from './transport.service';
-import { CreateOrderDto } from './dto/create-order.dto';
-import { OrderDto } from './dto/order.dto';
-import { TripDto } from './dto/trip.dto';
-import { RoleGuard, Roles } from '@/auth/guards/role.guard';
-import { Role } from '@prisma/client';
-import { UpdateOrderDto } from './dto/update-order.dto';
+} from "@nestjs/common";
+import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
+import { AuthGuard } from "../auth/guards/auth.guard";
+import { TenantGuard } from "../auth/guards/tenant.guard";
+import { TransportService } from "./transport.service";
+import { CreateOrderDto } from "./dto/create-order.dto";
+import { OrderDto } from "./dto/order.dto";
+import { TripDto } from "./dto/trip.dto";
+import { RoleGuard, Roles } from "@/auth/guards/role.guard";
+import { Role } from "@prisma/client";
+import { UpdateOrderDto } from "./dto/update-order.dto";
 
 import { ReplaceOrderItemsDto } from "./dto/replace-order-items.dto";
 import { UpdateDoDto } from "./dto/update-do.dto";
 
-@ApiTags('transport')
-@Controller('transport/orders')
+@ApiTags("transport")
+@Controller("transport/orders")
 @UseGuards(AuthGuard, TenantGuard)
-@ApiBearerAuth('JWT-auth')
+@ApiBearerAuth("JWT-auth")
 export class TransportController {
-  constructor(private readonly transportService: TransportService) { }
+  constructor(private readonly transportService: TransportService) {}
 
   @Post()
   @UseGuards(RoleGuard)
@@ -49,41 +49,54 @@ export class TransportController {
   @Get()
   async listOrders(
     @Request() req: any,
-    @Query('cursor') cursor?: string,
-    @Query('limit') limit?: string,
+    @Query("cursor") cursor?: string,
+    @Query("limit") limit?: string,
   ): Promise<{ orders: OrderDto[]; nextCursor?: string }> {
     // Extract tenantId from request context (set by TenantGuard)
     // tenantId is REQUIRED - all roles must operate under a tenant
     const tenantId = req.tenant.tenantId;
     const limitNum = limit ? parseInt(limit, 10) : 20;
     const customerCompanyId =
-    req.tenant.role === Role.CUSTOMER ? req.tenant.customerCompanyId : undefined;
-    return this.transportService.listOrders(tenantId, cursor, limitNum, customerCompanyId);
+      req.tenant.role === Role.CUSTOMER
+        ? req.tenant.customerCompanyId
+        : undefined;
+    return this.transportService.listOrders(
+      tenantId,
+      cursor,
+      limitNum,
+      customerCompanyId,
+    );
   }
 
-  @Get(':id')
+  @Get(":id")
   async getOrder(
     @Request() req: any,
-    @Param('id') id: string,
+    @Param("id") id: string,
   ): Promise<OrderDto> {
     const tenantId = req.tenant.tenantId;
     const customerCompanyId =
-    req.tenant.role === Role.CUSTOMER ? req.tenant.customerCompanyId : undefined;
-    const order = await this.transportService.getOrderById(tenantId, id, customerCompanyId);
+      req.tenant.role === Role.CUSTOMER
+        ? req.tenant.customerCompanyId
+        : undefined;
+    const order = await this.transportService.getOrderById(
+      tenantId,
+      id,
+      customerCompanyId,
+    );
 
     if (!order) {
-      throw new NotFoundException('Order not found');
+      throw new NotFoundException("Order not found");
     }
 
     return order;
   }
 
-  @Post(':orderId/plan-trip')
+  @Post(":orderId/plan-trip")
   @UseGuards(RoleGuard)
   @Roles(Role.ADMIN, Role.OPS)
   async planTrip(
     @Request() req: any,
-    @Param('orderId') orderId: string,
+    @Param("orderId") orderId: string,
   ): Promise<TripDto> {
     const tenantId = req.tenant.tenantId;
     return this.transportService.planTripFromOrder(tenantId, orderId);
@@ -95,7 +108,7 @@ export class TransportController {
   async updateOrder(
     @Request() req: any,
     @Param("id") id: string,
-    @Body() dto: UpdateOrderDto
+    @Body() dto: UpdateOrderDto,
   ): Promise<OrderDto> {
     const tenantId = req.tenant.tenantId;
     return this.transportService.updateOrderHeader(tenantId, id, dto);
@@ -107,7 +120,7 @@ export class TransportController {
   async updateDo(
     @Request() req: any,
     @Param("id") id: string,
-    @Body() dto: UpdateDoDto
+    @Body() dto: UpdateDoDto,
   ): Promise<OrderDto> {
     const tenantId = req.tenant.tenantId;
     return this.transportService.updateOrderDo(tenantId, id, dto);
@@ -119,7 +132,7 @@ export class TransportController {
   async replaceOrderItems(
     @Request() req: any,
     @Param("id") id: string,
-    @Body() dto: ReplaceOrderItemsDto
+    @Body() dto: ReplaceOrderItemsDto,
   ): Promise<OrderDto> {
     const tenantId = req.tenant.tenantId;
     return this.transportService.replaceOrderItems(tenantId, id, dto);
@@ -132,17 +145,24 @@ export class TransportController {
     return this.transportService.deleteOrder(tenantId, orderId);
   }
 
-  @Get(':id/live')
-  async getOrderLive(@Request() req: any, @Param('id') id: string) {
+  @Get(":id/live")
+  async getOrderLive(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
     return this.transportService.getOrderLive(tenantId, id);
   }
 
   @Get("orders/next-internal-ref")
-async nextInternalRef(@Request() req: any) {
-  const tenantId = req.tenant.tenantId;
-  return this.transportService.getNextInternalRef(tenantId);
-}
+  async nextInternalRef(
+    @Request() req: any,
+    @Query("year") year?: string,
+    @Query("month") month?: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
 
-
+    return this.transportService.getNextInternalRef(
+      tenantId,
+      year ? Number(year) : undefined,
+      month ? Number(month) : undefined,
+    );
+  }
 }
