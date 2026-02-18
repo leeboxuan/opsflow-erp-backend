@@ -443,5 +443,121 @@ export class InvoicesService {
     return await this.toDtoWithNames(updated, orderIds);
   }
   
-  
+    // Update an existing Draft invoice: replaces line items and snapshot orderIds.
+  // NOTE: Sent invoices must be reverted first.
+  async updateDraftInvoice(
+    tenantId: string,
+    invoiceId: string,
+    dto: CreateInvoiceDto,
+    updatedByUserId?: string,
+  ): Promise<InvoiceDto> {
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const inv = await tx.invoice.findFirst({
+        where: { tenantId, id: invoiceId },
+        include: { lineItems: true, orders: { select: { id: true } } },
+      });
+
+      if (!inv) throw new BadRequestException("Invoice not found");
+      if (inv.status !== "Draft") {
+        throw new BadRequestException("Only Draft invoices can be updated");
+      }
+
+      // Validate orders (Draft invoices are NOT linked to orders; we keep them in snapshot.orderIds)
+      const orders = await tx.transportOrder.findMany({
+        where: { tenantId, id: { in: dto.orderIds } },
+        select: { id: true, status: true, invoiceId: true },
+      });
+
+      if (orders.length !== dto.orderIds.length) {
+        throw new BadRequestException("Some orders not found under this tenant");
+      }
+
+      const bad = orders.find(
+        (o) =>
+          o.invoiceId ||
+          ![OrderStatus.Delivered, OrderStatus.Closed].includes(o.status as any),
+      );
+      if (bad) {
+        throw new BadRequestException(
+          "Orders must be Delivered/Closed and not already invoiced",
+        );
+      }
+
+      // Compute totals from manual line items
+      const normalized = dto.lineItems.map((l) => {
+        const amountCents = l.qty * l.unitPriceCents;
+        const taxCents =
+          l.taxRate > 0 ? Math.round((amountCents * l.taxRate) / 10000) : 0;
+        return { ...l, amountCents, taxCents, taxRate: toBasisPoints(l.taxRate) };
+      });
+
+      const subtotalCents = normalized.reduce((s, l) => s + l.amountCents, 0);
+      const taxCents = normalized.reduce((s, l) => s + l.taxCents, 0);
+      const totalCents = subtotalCents + taxCents;
+
+      const issueDate = dto.issueDateISO
+        ? new Date(dto.issueDateISO + "T00:00:00")
+        : inv.issueDate;
+
+      const dueDate = dto.dueDateISO
+        ? new Date(dto.dueDateISO + "T00:00:00")
+        : null;
+
+      const prevSnap = inv.snapshot as any;
+      const draftMeta = extractDraftMeta(prevSnap);
+
+      const nextSnapshot = {
+        ...(prevSnap ?? {}),
+        stage: "Draft",
+        orderIds: dto.orderIds,
+        confirmedAt:
+          draftMeta.confirmedAt?.toISOString() ?? prevSnap?.confirmedAt ?? null,
+        confirmedByUserId:
+          draftMeta.confirmedByUserId ?? prevSnap?.confirmedByUserId ?? null,
+        updatedAt: new Date().toISOString(),
+        updatedByUserId: updatedByUserId ?? null,
+      };
+
+      // Replace line items (simple + safe)
+      await tx.invoiceLineItem.deleteMany({
+        where: { tenantId, invoiceId: inv.id },
+      });
+
+      const inv2 = await tx.invoice.update({
+        where: { id: inv.id },
+        data: {
+          customerName: dto.customerName,
+          currency: dto.currency ?? inv.currency,
+          issueDate,
+          dueDate,
+          notes: dto.notes ?? null,
+          subtotalCents,
+          taxCents,
+          totalCents,
+          snapshot: nextSnapshot,
+          lineItems: {
+            create: normalized.map((l) => ({
+              tenantId,
+              description: l.description,
+              qty: l.qty,
+              unitPriceCents: l.unitPriceCents,
+              amountCents: l.amountCents,
+              taxCode: l.taxCode,
+              taxRate: l.taxRate,
+              taxCents: l.taxCents,
+            })),
+          },
+        },
+        include: { lineItems: true, orders: { select: { id: true } } },
+      });
+
+      return inv2;
+    });
+
+    // Draft has no linked orders; return with snapshot orderIds
+    const snap = updated.snapshot as any;
+    const orderIds = Array.isArray(snap?.orderIds) ? snap.orderIds : [];
+    return await this.toDtoWithNames(updated, orderIds);
+  }
+
 }

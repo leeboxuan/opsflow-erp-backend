@@ -34,6 +34,17 @@ export class InvoicesController {
     const tenantId = req.tenant.tenantId;
     return this.invoices.getInvoice(tenantId, id);
   }
+  // Update an existing Draft invoice (used by web: /invoices/[id]/edit)
+  @Post(":id/draft")
+  async updateDraft(
+    @Request() req: any,
+    @Param("id") id: string,
+    @Body() dto: CreateInvoiceDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user?.id;
+    return this.invoices.updateDraftInvoice(tenantId, id, dto, userId);
+  }
 
   @Post()
   async create(@Request() req: any, @Body() dto: CreateInvoiceDto) {
@@ -47,7 +58,7 @@ export class InvoicesController {
     const userId = req.user?.id;
     return this.invoices.createDraftInvoice(tenantId, dto, userId);
   }
-  
+
   @Post(":id/issue")
   async issue(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
