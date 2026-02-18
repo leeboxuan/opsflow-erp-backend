@@ -46,13 +46,13 @@ export class DashboardService {
       (orderByStatus.Dispatched ?? 0) +
       (orderByStatus.InTransit ?? 0);
 
-    const ordersAwaitingInvoice = await this.prisma.transportOrder.count({
-      where: {
-        tenantId,
-        status: { in: [OrderStatus.Delivered, OrderStatus.Closed] },
-        invoiceId: null,
-      },
-    });
+      const ordersAwaitingInvoice = await this.prisma.transportOrder.count({
+        where: {
+          tenantId,
+          status: OrderStatus.Delivered,
+          invoiceId: null,
+        },
+      });
 
     // ---- Trips ----
     const tripTotal = await this.prisma.trip.count({ where: { tenantId } });
