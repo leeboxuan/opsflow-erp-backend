@@ -112,4 +112,17 @@ export class InvoiceDto {
 
   @ApiProperty({ type: [String] })
   orderIds: string[];
+
+  // --- tracking / side panel fields ---
+  @ApiPropertyOptional() confirmedAt?: Date | null;
+  @ApiPropertyOptional() confirmedByUserId?: string | null;
+  @ApiPropertyOptional() confirmedByName?: string | null;
+
+  @ApiPropertyOptional() markedAsSentAt?: Date | null;
+  @ApiPropertyOptional() markedAsSentByUserId?: string | null;
+  @ApiPropertyOptional() markedAsSentByName?: string | null;
+
+  @ApiPropertyOptional() pdfKey?: string | null;
+  @ApiPropertyOptional() pdfGeneratedAt?: Date | null;
 }
+

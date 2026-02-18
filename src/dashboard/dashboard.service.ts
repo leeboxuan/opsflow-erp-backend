@@ -1,6 +1,6 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { InventoryUnitStatus, OrderStatus, TripStatus } from '@prisma/client';
+import { BadRequestException, Injectable } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { InventoryUnitStatus, OrderStatus, TripStatus } from "@prisma/client";
 
 function toCountMap<T extends string>(
   rows: Array<{ key: T; count: number }>,
@@ -18,7 +18,7 @@ export class DashboardService {
 
   async getSummary(tenantId: string | null) {
     if (!tenantId) {
-      throw new BadRequestException('Tenant context is required for dashboard');
+      throw new BadRequestException("Tenant context is required for dashboard");
     }
 
     const now = new Date();
@@ -30,7 +30,7 @@ export class DashboardService {
     });
 
     const orderByStatusRaw = await this.prisma.transportOrder.groupBy({
-      by: ['status'],
+      by: ["status"],
       where: { tenantId },
       _count: { _all: true },
     });
@@ -46,11 +46,19 @@ export class DashboardService {
       (orderByStatus.Dispatched ?? 0) +
       (orderByStatus.InTransit ?? 0);
 
+    const ordersAwaitingInvoice = await this.prisma.transportOrder.count({
+      where: {
+        tenantId,
+        status: { in: [OrderStatus.Delivered, OrderStatus.Closed] },
+        invoiceId: null,
+      },
+    });
+
     // ---- Trips ----
     const tripTotal = await this.prisma.trip.count({ where: { tenantId } });
 
     const tripByStatusRaw = await this.prisma.trip.groupBy({
-      by: ['status'],
+      by: ["status"],
       where: { tenantId },
       _count: { _all: true },
     });
@@ -74,7 +82,7 @@ export class DashboardService {
     });
 
     const unitsByStatusRaw = await this.prisma.inventory_units.groupBy({
-      by: ['status'],
+      by: ["status"],
       where: { tenantId },
       _count: { _all: true },
     });
@@ -87,7 +95,9 @@ export class DashboardService {
     const unitsAvailable = unitsByStatus.Available ?? 0;
 
     // ---- Drivers ----
-    const driversTotal = await this.prisma.drivers.count({ where: { tenantId } });
+    const driversTotal = await this.prisma.drivers.count({
+      where: { tenantId },
+    });
 
     const activeTrips = await this.prisma.trip.findMany({
       where: {
@@ -105,7 +115,7 @@ export class DashboardService {
     // ---- Recent Activity ----
     const activity = await this.prisma.eventLog.findMany({
       where: { tenantId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
       take: 10,
       select: {
         id: true,
@@ -118,8 +128,18 @@ export class DashboardService {
     });
 
     return {
-      orders: { total: orderTotal, inProgress: ordersInProgress, byStatus: orderByStatus },
-      trips: { total: tripTotal, activeToday: tripsActiveToday, byStatus: tripByStatus },
+      orders: {
+        total: orderTotal,
+        inProgress: ordersInProgress,
+        awaitingInvoice: ordersAwaitingInvoice,
+        byStatus: orderByStatus,
+      },
+
+      trips: {
+        total: tripTotal,
+        activeToday: tripsActiveToday,
+        byStatus: tripByStatus,
+      },
       inventory: { unitsTotal, unitsAvailable, unitsByStatus },
       drivers: { total: driversTotal, activeNow: activeDriverIds.size },
       activity,

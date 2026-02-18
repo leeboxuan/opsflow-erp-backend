@@ -7,6 +7,16 @@ function toBasisPoints(rate: number) {
   return Math.round(rate);
 }
 
+function extractDraftMeta(snapshot: any) {
+  const s = snapshot ?? {};
+  return {
+    orderIds: Array.isArray(s.orderIds) ? (s.orderIds as string[]) : [],
+    confirmedAt: s.confirmedAt ? new Date(s.confirmedAt) : null,
+    confirmedByUserId: s.confirmedByUserId ?? null,
+  };
+}
+
+
 @Injectable()
 export class InvoicesService {
   constructor(private prisma: PrismaService) {}
@@ -21,7 +31,7 @@ export class InvoicesService {
       },
     });
 
-    return invoices.map((inv) => this.toDto(inv));
+    return invoices.map((inv) => this.toDtoWithNames(inv));
   }
 
   async getInvoice(tenantId: string, id: string) {
@@ -34,7 +44,7 @@ export class InvoicesService {
     });
 
     if (!inv) throw new BadRequestException("Invoice not found");
-    return this.toDto(inv);
+    return this.toDtoWithNames(inv);
   }
 
   async createInvoice(
@@ -138,7 +148,7 @@ export class InvoicesService {
       return invWithOrders;
     });
 
-    return this.toDto(created);
+    return this.toDtoWithNames(created);
   }
 
   private async nextInvoiceNo(tenantId: string, issueDate: Date) {
@@ -160,7 +170,25 @@ export class InvoicesService {
     return `${prefix}${seqStr}`;
   }
 
-  private toDto(inv: any): InvoiceDto {
+  private async toDtoWithNames(inv: any, fallbackOrderIds?: string[]): Promise<InvoiceDto> {
+    const snap = inv.snapshot as any;
+    const meta = extractDraftMeta(snap);
+  
+    const confirmedByUserId = meta.confirmedByUserId;
+    const markedAsSentByUserId = inv.issuedByUserId ?? null;
+  
+    const userIds = [confirmedByUserId, markedAsSentByUserId].filter(Boolean) as string[];
+    const users = userIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true, name: true, email: true },
+        })
+      : [];
+  
+    const nameById = new Map<string, string>(users.map((u) => [u.id, u.name ?? u.email ?? u.id]));
+  
+    const orderIds = inv.orders?.length ? inv.orders.map((o: any) => o.id) : (fallbackOrderIds ?? meta.orderIds);
+  
     return {
       id: inv.id,
       invoiceNo: inv.invoiceNo,
@@ -183,11 +211,27 @@ export class InvoicesService {
         taxRate: l.taxRate,
         taxCents: l.taxCents,
       })),
-      orderIds: inv.orders?.map((o: any) => o.id) ?? [],
+      orderIds,
+  
+      confirmedAt: meta.confirmedAt,
+      confirmedByUserId: confirmedByUserId,
+      confirmedByName: confirmedByUserId ? (nameById.get(confirmedByUserId) ?? null) : null,
+  
+      markedAsSentAt: inv.issuedAt ?? null,
+      markedAsSentByUserId: markedAsSentByUserId,
+      markedAsSentByName: markedAsSentByUserId ? (nameById.get(markedAsSentByUserId) ?? null) : null,
+  
+      pdfKey: inv.pdfKey ?? null,
+      pdfGeneratedAt: inv.pdfGeneratedAt ?? null,
     };
   }
+  
 
-  async createDraftInvoice(tenantId: string, dto: CreateInvoiceDto): Promise<InvoiceDto> {
+  async createDraftInvoice(
+    tenantId: string,
+    dto: CreateInvoiceDto,
+    confirmedByUserId?: string,
+  ): Promise<InvoiceDto> {
     const orders = await this.prisma.transportOrder.findMany({
       where: { tenantId, id: { in: dto.orderIds } },
       select: { id: true, status: true, invoiceId: true, customerName: true },
@@ -197,9 +241,11 @@ export class InvoicesService {
       throw new BadRequestException("Some orders not found under this tenant");
     }
   
-    const bad = orders.find((o) => o.invoiceId || o.status !== OrderStatus.Delivered);
+    const bad = orders.find(
+      (o) => o.invoiceId || ![OrderStatus.Delivered, OrderStatus.Closed].includes(o.status),
+    );
     if (bad) {
-      throw new BadRequestException("Orders must be Delivered and not already invoiced");
+      throw new BadRequestException("Orders must be Delivered/Closed and not already invoiced");
     }
   
     const normalized = dto.lineItems.map((l) => {
@@ -242,24 +288,23 @@ export class InvoicesService {
             taxCents: l.taxCents,
           })),
         },
-        // optional: store selected orderIds in snapshot draft stage (nice)
         snapshot: {
           stage: "Draft",
           orderIds: dto.orderIds,
+          confirmedAt: new Date().toISOString(),
+          confirmedByUserId: confirmedByUserId ?? null,
         },
       },
       include: {
         lineItems: true,
-        orders: { select: { id: true } }, // will be empty until issue
+        orders: { select: { id: true } }, // empty until "Sent"
       },
     });
   
     // Return orderIds from dto since orders aren't linked yet
-    return {
-      ...this.toDto(created),
-      orderIds: dto.orderIds,
-    };
+    return await this.toDtoWithNames(created, dto.orderIds);
   }
+  
   
   async issueInvoice(tenantId: string, invoiceId: string, issuedByUserId?: string) {
     const issuedAt = new Date();
@@ -300,7 +345,7 @@ export class InvoicesService {
       }
   
       const finalSnapshot = {
-        stage: "Issued",
+        stage: "Sent",
         invoice: {
           id: inv.id,
           invoiceNo: inv.invoiceNo,
@@ -325,7 +370,7 @@ export class InvoicesService {
       const locked = await tx.invoice.update({
         where: { id: inv.id },
         data: {
-          status: "Issued",
+          status: "Sent",
           issuedAt,
           issuedByUserId: issuedByUserId ?? null,
           lockedAt: issuedAt,
@@ -339,7 +384,64 @@ export class InvoicesService {
   
     // PDF generation + storage upload happens AFTER commit (safer)
     // If it fails, invoice is still Issued; you can retry via "regenerate pdf" endpoint.
-    return this.toDto(result);
+    return this.toDtoWithNames(result);
   }
+
+  async revertInvoiceToDraft(tenantId: string, invoiceId: string, userId?: string) {
+    const now = new Date();
+  
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const inv = await tx.invoice.findFirst({
+        where: { tenantId, id: invoiceId },
+        include: { orders: { select: { id: true } }, lineItems: true },
+      });
+  
+      if (!inv) throw new BadRequestException("Invoice not found");
+      if (inv.status !== "Sent") throw new BadRequestException("Only Sent invoices can be reverted");
+  
+      const linkedOrderIds = inv.orders.map((o) => o.id);
+  
+      // unlink orders (make them "awaiting invoice" again)
+      await tx.transportOrder.updateMany({
+        where: { tenantId, id: { in: linkedOrderIds }, invoiceId: inv.id },
+        data: { invoiceId: null },
+      });
+  
+      const prevSnap = inv.snapshot as any;
+      const draftMeta = extractDraftMeta(prevSnap);
+  
+      const nextSnapshot = {
+        ...(prevSnap ?? {}),
+        stage: "Draft",
+        orderIds: linkedOrderIds,
+        // keep original confirm info if it existed
+        confirmedAt: draftMeta.confirmedAt ? draftMeta.confirmedAt.toISOString() : prevSnap?.confirmedAt ?? null,
+        confirmedByUserId: draftMeta.confirmedByUserId ?? prevSnap?.confirmedByUserId ?? null,
+        // optional audit
+        revertedAt: now.toISOString(),
+        revertedByUserId: userId ?? null,
+      };
+  
+      const inv2 = await tx.invoice.update({
+        where: { id: inv.id },
+        data: {
+          status: "Draft",
+          issuedAt: null,
+          issuedByUserId: null,
+          lockedAt: null,
+          snapshot: nextSnapshot,
+        },
+        include: { lineItems: true, orders: { select: { id: true } } }, // now empty
+      });
+  
+      return inv2;
+    });
+  
+    // invoice has no linked orders now; return with snapshot orderIds for UI continuity
+    const snap = updated.snapshot as any;
+    const orderIds = Array.isArray(snap?.orderIds) ? snap.orderIds : [];
+    return await this.toDtoWithNames(updated, orderIds);
+  }
+  
   
 }

@@ -44,13 +44,23 @@ export class InvoicesController {
   @Post("draft")
   async createDraft(@Request() req: any, @Body() dto: CreateInvoiceDto) {
     const tenantId = req.tenant.tenantId;
-    return this.invoices.createDraftInvoice(tenantId, dto);
+    const userId = req.user?.id;
+    return this.invoices.createDraftInvoice(tenantId, dto, userId);
   }
-
+  
   @Post(":id/issue")
   async issue(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
     const issuedByUserId = req.user?.id; // adapt to your auth context
     return this.invoices.issueInvoice(tenantId, id, issuedByUserId);
   }
+
+  @Post(":id/revert")
+  async revertToDraft(@Request() req: any, @Param("id") id: string) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user?.id;
+    return this.invoices.revertInvoiceToDraft(tenantId, id, userId);
+  }
+
+  
 }
