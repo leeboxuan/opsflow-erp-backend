@@ -13,6 +13,7 @@ import { InventoryModule } from './inventory/inventory.module';
 import { CustomersModule } from './customers/customers.module';
 import { DashboardModule } from "./dashboard/dashboard.module";
 import { FinanceModule } from './finance/finance.module';
+import { GoogleMapsService } from "./common/google-maps.service";
 
 @Module({
   imports: [
@@ -31,7 +32,8 @@ import { FinanceModule } from './finance/finance.module';
     InventoryModule,
     CustomersModule,
     DashboardModule,
-    FinanceModule
+    FinanceModule,
+    GoogleMapsService
   ],
   controllers: [AppController],
 })

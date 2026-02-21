@@ -241,6 +241,10 @@ model Stop {
   tenant                     Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   transportOrder             TransportOrder?           @relation("OrderStops", fields: [transportOrderId], references: [id])
   trip                       Trip?                     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  lat                        Float?
+  lng                        Float?
+  placeId                    String?
+  geocodedAt                 DateTime?
 
   @@index([tenantId, transportOrderId])
   @@index([tenantId, tripId])

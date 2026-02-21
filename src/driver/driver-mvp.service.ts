@@ -23,12 +23,15 @@ import {
 } from "./dto/driver-trip.dto";
 import { AcceptTripDto } from "./dto/accept-trip.dto";
 import { CompleteStopDto } from "./dto/complete-stop.dto";
+import { GoogleMapsService } from "../common/google-maps.service";
 
 @Injectable()
 export class DriverMvpService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventLogService: EventLogService,
+    private readonly googleMaps: GoogleMapsService,
+
   ) {}
 
   /**
@@ -796,6 +799,191 @@ export class DriverMvpService {
     ]);
   
     return { ok: true };
+  }
+
+  async getDoPayload(tenantId: string, driverUserId: string, orderId: string) {
+    const stop = await this.prisma.stop.findFirst({
+      where: {
+        tenantId,
+        transportOrderId: orderId,
+        trip: { assignedDriverUserId: driverUserId },
+      },
+      include: {
+        trip: true,
+        transportOrder: true,
+      },
+    });
+  
+    if (!stop?.transportOrder) throw new NotFoundException("Order not found in your trips");
+  
+    const o: any = stop.transportOrder;
+  
+    // you can map these to your real fields later
+    return {
+      company: {
+        name: "DB WISDOM SERVICES PTE LTD",
+        addressLines: ["Office and Warehouse: 7 Gul Circle, Singapore 629563"],
+        logoText: "DB",
+      },
+      order: {
+        id: o.id,
+        orderRef: o.internalRef ?? o.orderRef ?? o.customerRef ?? o.id,
+        customerRef: o.customerRef ?? null,
+        status: o.status,
+      },
+      recipient: {
+        name: o.recipientName ?? o.customerName ?? "—",
+        phone: o.recipientPhone ?? o.customerPhone ?? "—",
+      },
+      deliveryAddress: {
+        line1: o.deliveryAddressLine1 ?? o.addressLine1 ?? stop.addressLine1 ?? "—",
+        line2: o.deliveryAddressLine2 ?? o.addressLine2 ?? stop.addressLine2 ?? null,
+        postalCode: o.deliveryPostalCode ?? o.postalCode ?? stop.postalCode ?? null,
+        country: o.deliveryCountry ?? o.country ?? stop.country ?? "SG",
+      },
+      item: {
+        itemCode: o.itemCode ?? o.skuCode ?? "—",
+        qty: o.itemQty ?? 1,
+        specialRequest: o.specialRequest ?? null,
+      },
+      meta: {
+        stopId: stop.id,
+        tripId: stop.tripId,
+        generatedAtISO: new Date().toISOString(),
+      },
+      doState: {
+        doStatus: o.doStatus ?? "DRAFT",
+        doSignerName: o.doSignerName ?? null,
+        doSignedAt: o.doSignedAt ?? null,
+        doSignatureUrl: o.doSignatureUrl ?? null,
+      },
+    };
+  }
+  
+  async signDeliveryOrder(
+    tenantId: string,
+    driverUserId: string,
+    orderId: string,
+    body: { signerName?: string; signaturePhotoKey: string },
+  ) {
+    const stop = await this.prisma.stop.findFirst({
+      where: {
+        tenantId,
+        transportOrderId: orderId,
+        trip: { assignedDriverUserId: driverUserId },
+      },
+      include: { transportOrder: true },
+    });
+    if (!stop?.transportOrder) throw new NotFoundException("Order not found in your trips");
+  
+    const updated = await this.prisma.transportOrder.update({
+      where: { id: orderId },
+      data: {
+        doStatus: "SIGNED" as any,
+        doSignerName: body.signerName ?? null,
+        doSignedAt: new Date(),
+        doSignatureUrl: body.signaturePhotoKey, // store key; resolve to signed url when needed
+      } as any,
+    });
+  
+    await this.eventLogService.logEvent(tenantId, "Order", orderId, "DO_SIGNED", {
+      signerName: body.signerName ?? null,
+      signaturePhotoKey: body.signaturePhotoKey,
+    });
+  
+    return { ok: true, orderId: updated.id };
+  }
+
+  private stopAddressString(s: any) {
+    return [s.addressLine1, s.addressLine2, s.postalCode, s.city, s.country].filter(Boolean).join(", ");
+  }
+  
+  async geocodeTripStops(tenantId: string, driverUserId: string, tripId: string) {
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, assignedDriverUserId: driverUserId },
+      include: { stops: true },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+  
+    const updates: any[] = [];
+  
+    for (const s of trip.stops) {
+      if (s.lat && s.lng && s.geocodedAt) continue;
+  
+      const addr = this.stopAddressString(s);
+      if (!addr) continue;
+  
+      const geo = await this.googleMaps.geocodeAddress(addr);
+  
+      updates.push(
+        this.prisma.stop.update({
+          where: { id: s.id },
+          data: {
+            lat: geo.location.lat,
+            lng: geo.location.lng,
+            placeId: geo.placeId ?? null,
+            geocodedAt: new Date(),
+          },
+        }),
+      );
+    }
+  
+    await this.prisma.$transaction(updates);
+  
+    return { ok: true, updatedCount: updates.length };
+  }
+  
+  async optimizeTripRoute(tenantId: string, driverUserId: string, tripId: string) {
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, assignedDriverUserId: driverUserId },
+      include: { stops: true },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+  
+    const stops = [...trip.stops].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+    if (stops.length < 3) return { ok: true, message: "Not enough stops to optimize" };
+  
+    // require lat/lng
+    const missing = stops.filter((s) => !(s.lat && s.lng));
+    if (missing.length > 0) {
+      throw new BadRequestException("Some stops missing lat/lng. Call /route/geocode first.");
+    }
+  
+    const origin = { lat: stops[0].lat!, lng: stops[0].lng! };
+    const destination = { lat: stops[stops.length - 1].lat!, lng: stops[stops.length - 1].lng! };
+    const waypoints = stops.slice(1, -1).map((s) => ({ lat: s.lat!, lng: s.lng! }));
+  
+    const { waypointOrder, polyline } = await this.googleMaps.optimizeRoute({
+      origin,
+      destination,
+      waypoints,
+    });
+  
+    // waypointOrder returns indices into waypoints array
+    const optimized = [
+      stops[0],
+      ...waypointOrder.map((idx) => stops[idx + 1]),
+      stops[stops.length - 1],
+    ];
+  
+    await this.prisma.$transaction([
+      ...optimized.map((s, idx) =>
+        this.prisma.stop.update({
+          where: { id: s.id },
+          data: { sequence: idx + 1 },
+        }),
+      ),
+      this.prisma.trip.update({
+        where: { id: trip.id },
+        data: { routeVersion: (trip.routeVersion ?? 1) + 1 },
+      }),
+    ]);
+  
+    await this.eventLogService.logEvent(tenantId, "Trip", tripId, "TRIP_ROUTE_OPTIMIZED", {
+      waypointOrder,
+    });
+  
+    return { ok: true, waypointOrder, polyline };
   }
 
 }
