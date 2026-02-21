@@ -8,6 +8,7 @@ import {
   UseGuards,
   Request,
   NotFoundException,
+  Patch,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -26,6 +27,11 @@ import { TripDto } from '../transport/dto/trip.dto';
 import { DriverTripDto, DriverWalletDto } from './dto/driver-trip.dto';
 import { AcceptTripDto } from './dto/accept-trip.dto';
 import { CompleteStopDto } from './dto/complete-stop.dto';
+import { CreateTripFromOrderDto } from "./dto/create-trip-from-order.dto";
+import { AddOrderToTripDto } from "./dto/add-order-to-trip.dto";
+import { DispatchTripDto } from "./dto/dispatch-trip.dto";
+import { ReorderStopsDto } from "./dto/reorder-stops.dto";
+
 
 @ApiTags('driver')
 @Controller('driver')
@@ -39,7 +45,58 @@ export class DriverController {
     private readonly locationService: LocationService,
     private readonly driverMvpService: DriverMvpService,
   ) {}
-
+  @Get("orders/available")
+  @ApiOperation({ summary: "List orders available for driver to accept" })
+  async listAvailableOrders(@Request() req: any) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverMvpService.listAvailableOrders(tenantId, userId);
+  }
+  
+  @Post("trips/from-order")
+  @ApiOperation({ summary: "Create a new draft trip from first accepted order" })
+  async createTripFromOrder(@Request() req: any, @Body() dto: CreateTripFromOrderDto) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverMvpService.createTripFromOrder(tenantId, userId, dto.orderId);
+  }
+  
+  @Post("trips/:tripId/add-order")
+  @ApiOperation({ summary: "Add an order into an existing draft trip" })
+  async addOrderToTrip(
+    @Request() req: any,
+    @Param("tripId") tripId: string,
+    @Body() dto: AddOrderToTripDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverMvpService.addOrderToTrip(tenantId, userId, tripId, dto.orderId);
+  }
+  
+  @Post("trips/:tripId/dispatch")
+  @ApiOperation({ summary: "Dispatch: scan unitSku(s) and mark inventory as Dispatched; trip -> Dispatched" })
+  async dispatchTrip(
+    @Request() req: any,
+    @Param("tripId") tripId: string,
+    @Body() dto: DispatchTripDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverMvpService.dispatchTrip(tenantId, userId, tripId, dto.unitSkus ?? []);
+  }
+  
+  @Patch("trips/:tripId/reorder-stops")
+  @ApiOperation({ summary: "Reorder delivery stops in a trip (MVP: persist sequence + bump routeVersion)" })
+  async reorderStops(
+    @Request() req: any,
+    @Param("tripId") tripId: string,
+    @Body() dto: ReorderStopsDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverMvpService.reorderStops(tenantId, userId, tripId, dto.stopIds);
+  }
+  
   @Get('trips')
   @ApiOperation({ summary: 'Get trips for current driver by date (MVP: includes stops, delivery order summary, lock state)' })
   async getTripsByDate(

@@ -1249,7 +1249,7 @@ export class InventoryService {
       const where: any = {
         tenantId,
         transportOrderId: orderId,
-        status: InventoryUnitStatus.Reserved,
+        status: InventoryUnitStatus.Dispatched,
       };
 
       if (dto.unitSkus && dto.unitSkus.length > 0) {

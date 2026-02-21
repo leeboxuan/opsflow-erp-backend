@@ -473,6 +473,7 @@ enum InventoryBatchStatus {
 enum InventoryUnitStatus {
   Available
   Reserved
+  Dispatched
   InTransit
   Delivered
   Returned
