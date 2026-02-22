@@ -322,9 +322,9 @@ export class DriverMvpService {
       where: {
         tenantId,
         stops: { some: { tripId: trip.id } },
-        status: InventoryUnitStatus.Dispatched,
+        status: OrderStatus.Dispatched,
       },
-      data: { status: InventoryUnitStatus.InTransit },
+      data: { status: OrderStatus.InTransit },
     });
     await this.eventLogService.logEvent(
       tenantId,
@@ -560,8 +560,18 @@ export class DriverMvpService {
       {
         podPhotoKeys: dto.podPhotoKeys,
         isFinalStop,
+        comment: (dto as any)?.comment ?? null,
       },
     );
+
+    const comment = (dto as any)?.comment;
+    if (comment && String(comment).trim()) {
+      await this.eventLogService.logEvent(tenantId, "Stop", stopId, "STOP_COMMENT", {
+        comment: String(comment).trim(),
+        tripId: stop.tripId,
+        transportOrderId: stop.transportOrderId,
+      });
+    }
 
     if (isFinalStop) {
       await this.eventLogService.logEvent(
@@ -762,7 +772,7 @@ export class DriverMvpService {
     // Trip status -> Dispatched
     await (this.prisma as any).trip.update({
       where: { id: trip.id },
-      data: { status: InventoryUnitStatus.Dispatched },
+      data: { status: TripStatus.Dispatched },
     });
   
     // Optional: order status -> Dispatched for all orders in trip
@@ -772,7 +782,7 @@ export class DriverMvpService {
         stops: { some: { tripId: trip.id } },
         status: { in: ["Planned", "Confirmed"] },
       },
-      data: { status: InventoryUnitStatus.Dispatched },
+      data: { status: OrderStatus.Dispatched },
     });
   
     return { ok: true };
@@ -799,6 +809,65 @@ export class DriverMvpService {
     ]);
   
     return { ok: true };
+  }
+
+  /**
+   * Driver scans returned goods.
+   * - Damaged => InventoryUnitStatus.Damaged
+   * - ReturnToWarehouse => InventoryUnitStatus.Available
+   * - Returned => InventoryUnitStatus.Returned
+   */
+  async scanReturnGoods(
+    tenantId: string,
+    driverUserId: string,
+    tripId: string,
+    body: {
+      unitSkus: string[];
+      disposition: "Damaged" | "ReturnToWarehouse" | "Returned";
+    },
+  ) {
+    const trip = await (this.prisma as any).trip.findFirst({
+      where: { id: tripId, tenantId, assignedDriverUserId: driverUserId },
+      select: { id: true },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    const unitSkus = Array.isArray(body.unitSkus) ? body.unitSkus.filter(Boolean) : [];
+    if (unitSkus.length === 0) throw new BadRequestException("unitSkus required");
+
+    const disposition = body.disposition;
+    const nextStatus =
+      disposition === "Damaged"
+        ? InventoryUnitStatus.Damaged
+        : disposition === "Returned"
+          ? InventoryUnitStatus.Returned
+          : InventoryUnitStatus.Available;
+
+    const result = await (this.prisma as any).inventory_units.updateMany({
+      where: {
+        tenantId,
+        unitSku: { in: unitSkus },
+        tripId: trip.id,
+        status: {
+          in: [
+            InventoryUnitStatus.InTransit,
+            InventoryUnitStatus.Dispatched,
+            InventoryUnitStatus.Delivered,
+            InventoryUnitStatus.Reserved,
+          ],
+        },
+      },
+      data: { status: nextStatus },
+    });
+
+    await this.eventLogService.logEvent(tenantId, "Trip", tripId, "RETURN_GOODS_SCANNED", {
+      disposition,
+      nextStatus,
+      unitSkus,
+      updatedCount: result?.count ?? 0,
+    });
+
+    return { ok: true, updatedCount: result?.count ?? 0, nextStatus };
   }
 
   async getDoPayload(tenantId: string, driverUserId: string, orderId: string) {

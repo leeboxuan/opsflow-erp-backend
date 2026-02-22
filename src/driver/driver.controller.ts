@@ -31,6 +31,7 @@ import { CreateTripFromOrderDto } from "./dto/create-trip-from-order.dto";
 import { AddOrderToTripDto } from "./dto/add-order-to-trip.dto";
 import { DispatchTripDto } from "./dto/dispatch-trip.dto";
 import { ReorderStopsDto } from "./dto/reorder-stops.dto";
+import { ScanReturnGoodsDto } from "./dto/scan-return-goods.dto";
 
 @ApiTags("driver")
 @Controller("driver")
@@ -124,6 +125,39 @@ export class DriverController {
       tripId,
       dto.stopIds,
     );
+  }
+
+  @Post("trips/:tripId/return-goods")
+  @ApiOperation({
+    summary: "Scan return goods (Damaged/Returned/ReturnToWarehouse)",
+  })
+  async scanReturnGoods(
+    @Request() req: any,
+    @Param("tripId") tripId: string,
+    @Body() dto: ScanReturnGoodsDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverMvpService.scanReturnGoods(tenantId, userId, tripId, dto);
+  }
+
+  @Post("trips/:tripId/geocode")
+  @ApiOperation({ summary: "Geocode trip stops (fills lat/lng on stops)" })
+  async geocodeTripStops(@Request() req: any, @Param("tripId") tripId: string) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverMvpService.geocodeTripStops(tenantId, userId, tripId);
+  }
+
+  @Post("trips/:tripId/optimize-route")
+  @ApiOperation({ summary: "Optimize trip stop order (best route)" })
+  async optimizeTripRoute(
+    @Request() req: any,
+    @Param("tripId") tripId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverMvpService.optimizeTripRoute(tenantId, userId, tripId);
   }
 
   @Get("trips")
@@ -266,7 +300,7 @@ export class DriverController {
     const userId = req.user.userId;
     return this.driverMvpService.getDoPayload(tenantId, userId, orderId);
   }
-  
+
   @Post("orders/:orderId/do/sign")
   async signDeliveryOrder(
     @Request() req: any,
@@ -275,20 +309,11 @@ export class DriverController {
   ) {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
-    return this.driverMvpService.signDeliveryOrder(tenantId, userId, orderId, body);
+    return this.driverMvpService.signDeliveryOrder(
+      tenantId,
+      userId,
+      orderId,
+      body,
+    );
   }
-
-  @Post("trips/:tripId/route/geocode")
-async geocodeTripStops(@Request() req: any, @Param("tripId") tripId: string) {
-  const tenantId = req.tenant.tenantId;
-  const userId = req.user.userId;
-  return this.driverMvpService.geocodeTripStops(tenantId, userId, tripId);
-}
-
-@Post("trips/:tripId/route/optimize")
-async optimizeTripRoute(@Request() req: any, @Param("tripId") tripId: string) {
-  const tenantId = req.tenant.tenantId;
-  const userId = req.user.userId;
-  return this.driverMvpService.optimizeTripRoute(tenantId, userId, tripId);
-}
 }
