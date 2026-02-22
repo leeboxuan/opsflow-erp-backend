@@ -943,23 +943,39 @@ export class DriverMvpService {
     const stops = [...trip.stops].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
     if (stops.length < 3) return { ok: true, message: "Not enough stops to optimize" };
   
-    // require lat/lng
+    // Auto-geocode missing lat/lng
+    for (const s of stops) {
+      if (s.lat && s.lng) continue;
+      const addr = [s.addressLine1, s.addressLine2, s.postalCode, s.city, s.country].filter(Boolean).join(", ");
+      if (!addr) continue;
+  
+      const geo = await this.googleMaps.geocodeAddress(addr);
+  
+      await this.prisma.stop.update({
+        where: { id: s.id },
+        data: {
+          lat: geo.location.lat,
+          lng: geo.location.lng,
+          placeId: geo.placeId ?? null,
+          geocodedAt: new Date(),
+        },
+      });
+  
+      s.lat = geo.location.lat as any;
+      s.lng = geo.location.lng as any;
+    }
+  
     const missing = stops.filter((s) => !(s.lat && s.lng));
     if (missing.length > 0) {
-      throw new BadRequestException("Some stops missing lat/lng. Call /route/geocode first.");
+      throw new BadRequestException("Some stops still missing lat/lng (bad address data).");
     }
   
     const origin = { lat: stops[0].lat!, lng: stops[0].lng! };
     const destination = { lat: stops[stops.length - 1].lat!, lng: stops[stops.length - 1].lng! };
     const waypoints = stops.slice(1, -1).map((s) => ({ lat: s.lat!, lng: s.lng! }));
   
-    const { waypointOrder, polyline } = await this.googleMaps.optimizeRoute({
-      origin,
-      destination,
-      waypoints,
-    });
+    const { waypointOrder } = await this.googleMaps.optimizeRoute({ origin, destination, waypoints });
   
-    // waypointOrder returns indices into waypoints array
     const optimized = [
       stops[0],
       ...waypointOrder.map((idx) => stops[idx + 1]),
@@ -983,7 +999,7 @@ export class DriverMvpService {
       waypointOrder,
     });
   
-    return { ok: true, waypointOrder, polyline };
+    return { ok: true, waypointOrder };
   }
 
 }
