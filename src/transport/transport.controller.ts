@@ -40,7 +40,26 @@ import { UpdateDoDto } from "./dto/update-do.dto";
 @ApiBearerAuth("JWT-auth")
 export class TransportController {
   constructor(private readonly transportService: TransportService) {}
-
+  private flattenValidationErrors(errors: any[], parentPath = ""): string[] {
+    const out: string[] = [];
+  
+    for (const err of errors) {
+      const path = parentPath ? `${parentPath}.${err.property}` : err.property;
+  
+      if (err.constraints) {
+        for (const msg of Object.values(err.constraints)) {
+          out.push(`${path}: ${msg}`);
+        }
+      }
+  
+      if (Array.isArray(err.children) && err.children.length) {
+        out.push(...this.flattenValidationErrors(err.children, path));
+      }
+    }
+  
+    return out;
+  }
+  
   private async validateRequestBody<T extends object>(cls: new () => T, body: any): Promise<T> {
     const instance = plainToInstance(cls, body);
     const errors = await validate(instance as any, {
@@ -48,13 +67,17 @@ export class TransportController {
       forbidNonWhitelisted: true,
       forbidUnknownValues: true,
     });
-
+  
     if (errors.length) {
-      throw new BadRequestException(errors);
+      const messages = this.flattenValidationErrors(errors);
+      // This is what you want to see in Render logs:
+      console.error("[VALIDATION]", messages);
+      throw new BadRequestException(messages);
     }
-
+  
     return instance;
   }
+
 
   @Post()
   @UseGuards(RoleGuard)
