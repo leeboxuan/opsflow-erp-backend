@@ -228,8 +228,8 @@ export class TransportService {
         });
       },
       {
-        maxWait: 20_000,
-        timeout: 30_000,
+        maxWait: 30_000,
+        timeout: 60_000,
       },
     );
 
