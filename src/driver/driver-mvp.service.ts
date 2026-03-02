@@ -54,26 +54,21 @@ const orderCardSelect = {
   internalRef: true,
   customerRef: true,
   customerName: true,
-
   currency: true,
   priceCents: true,
 
   transport_order_items: {
     select: {
-      sku: true,
-      name: true,
+      inventoryItemId: true,
       qty: true,
     },
   },
 
-  // only the first DELIVERY stop for card display
   stops: {
     where: { type: StopType.DELIVERY },
     orderBy: { sequence: "asc" },
     take: 1,
     select: {
-      type: true,
-      sequence: true,
       plannedAt: true,
       addressLine1: true,
       addressLine2: true,
@@ -83,6 +78,9 @@ const orderCardSelect = {
     },
   },
 } as const;
+
+type InventoryItemMini = { id: string; sku: string; name: string };
+type OrderItemLinkMini = { inventoryItemId: string; qty: number };
 
 @Injectable()
 export class DriverMvpService {
@@ -98,7 +96,7 @@ export class DriverMvpService {
    * - inMyTrips: orders whose stops belong to trips assigned to driver
    */
   async getInboxOrders(tenantId: string, driverUserId: string) {
-    const [readyToAccept, inMyTrips] = await Promise.all([
+    const [readyToAcceptRaw, inMyTripsRaw] = await Promise.all([
       (this.prisma as any).transportOrder.findMany({
         where: {
           tenantId,
@@ -108,35 +106,27 @@ export class DriverMvpService {
         orderBy: { createdAt: "asc" },
         select: orderCardSelect,
       }),
-  
       (this.prisma as any).transportOrder.findMany({
         where: {
           tenantId,
-          stops: {
-            some: {
-              trip: { assignedDriverUserId: driverUserId },
-            },
-          },
-          status: {
-            in: [
-              OrderStatus.Planned,
-              OrderStatus.Dispatched,
-              OrderStatus.InTransit,
-              OrderStatus.Delivered,
-            ],
-          },
+          stops: { some: { trip: { assignedDriverUserId: driverUserId } } },
+          status: { in: [OrderStatus.Planned, OrderStatus.Dispatched, OrderStatus.InTransit, OrderStatus.Delivered] },
         },
         orderBy: { updatedAt: "desc" },
         select: orderCardSelect,
       }),
     ]);
   
+    const [readyToAccept, inMyTrips] = await Promise.all([
+      this.hydrateOrderCardsWithItems(tenantId, readyToAcceptRaw),
+      this.hydrateOrderCardsWithItems(tenantId, inMyTripsRaw),
+    ]);
+  
     return {
-      readyToAccept: { count: readyToAccept.length, orders: readyToAccept.map(toOrderCard) },
-      inMyTrips: { count: inMyTrips.length, orders: inMyTrips.map(toOrderCard) },
+      readyToAccept: { count: readyToAccept.length, orders: readyToAccept },
+      inMyTrips: { count: inMyTrips.length, orders: inMyTrips },
     };
   }
-
   /**
    * GET /driver/orders/available
    * “Available” = status=Open AND not yet assigned into any trip stop
@@ -586,7 +576,41 @@ export class DriverMvpService {
     await this.eventLogService.logEvent(tenantId, "Stop", stopId, "STOP_STARTED", {});
     return this.toDriverStopDto(updated);
   }
-
+  
+  private async hydrateOrderCardsWithItems(tenantId: string, orders: any[]) {
+    const itemIds = Array.from(
+      new Set(
+        orders
+          .flatMap((o) => (o.transport_order_items ?? []) as Array<{ inventoryItemId: string }>)
+          .map((it) => it.inventoryItemId)
+          .filter(Boolean)
+      )
+    );
+  
+    const inventoryItems = (await (this.prisma as any).inventory_items.findMany({
+      where: { tenantId, id: { in: itemIds } },
+      select: { id: true, sku: true, name: true },
+    })) as InventoryItemMini[];
+  
+    const byId = new Map<string, InventoryItemMini>(
+      inventoryItems.map((x) => [x.id, x])
+    );
+  
+    return orders.map((o) => {
+      const items = (o.transport_order_items ?? []).map((it: any) => {
+        const inv = byId.get(it.inventoryItemId);
+        return {
+          inventoryItemId: it.inventoryItemId,
+          itemSku: inv?.sku ?? null,
+          name: inv?.name ?? null,
+          qty: it.qty ?? 0,
+        };
+      });
+  
+      const { transport_order_items, ...rest } = o;
+      return { ...rest, items };
+    });
+  }
   /**
    * POST /stops/:stopId/complete — complete stop with at least 1 POD photo key.
    * Updates delivery order status; if final stop, closes trip and writes wallet transaction(s).
@@ -1055,3 +1079,4 @@ export class DriverMvpService {
     return { ok: true, waypointOrder };
   }
 }
+
