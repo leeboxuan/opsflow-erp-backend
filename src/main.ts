@@ -2,6 +2,8 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { AllExceptionsFilter } from './common/all-exceptions.filter';
+import { PrismaExceptionFilter } from './common/prisma-exception.filter';
 
 // Fail fast if Supabase JWT secret is missing (required for HS256 token verification after login)
 function validateAuthEnv(): void {
@@ -17,6 +19,7 @@ async function bootstrap() {
   validateAuthEnv();
 
   const app = await NestFactory.create(AppModule);
+  app.useGlobalFilters(new PrismaExceptionFilter(), new AllExceptionsFilter());
   // Enable CORS for web app(s)
   // WEB_APP_URLS supports comma-separated origins, e.g. "http://localhost:3000,https://opsflow-erp-web.onrender.com"
   const rawOrigins =
