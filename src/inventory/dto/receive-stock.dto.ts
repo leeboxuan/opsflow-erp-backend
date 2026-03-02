@@ -34,4 +34,9 @@ export class ReceiveStockDto {
   @IsOptional()
   @IsString()
   unitSkuFormat?: 'ITEM-BATCH-SEQ' | 'ITEM-SEQ';
+
+  @ApiPropertyOptional({ description: "Attach batch ownership if not set yet" })
+  @IsOptional()
+  @IsString()
+  customerCompanyId?: string;
 }

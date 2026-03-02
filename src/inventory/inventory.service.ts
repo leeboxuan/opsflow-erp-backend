@@ -3,28 +3,28 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
-} from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { CreateBatchDto } from './dto/create-batch.dto';
-import { ReceiveUnitsDto } from './dto/receive-units.dto';
-import { ReceiveStockDto } from './dto/receive-stock.dto';
-import { ReserveItemsDto } from './dto/reserve-items.dto';
-import { DispatchItemsDto } from './dto/dispatch-items.dto';
-import { DeliverItemsDto } from './dto/deliver-items.dto';
-import { BatchDto } from './dto/batch.dto';
-import { InventoryItemDto } from './dto/inventory-item.dto';
-import { StockInDto } from './dto/stock-in.dto';
-import { SearchUnitsQueryDto } from './dto/search-units-query.dto';
-import { InventoryUnitStatus } from '@prisma/client';
+} from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { CreateBatchDto } from "./dto/create-batch.dto";
+import { ReceiveUnitsDto } from "./dto/receive-units.dto";
+import { ReceiveStockDto } from "./dto/receive-stock.dto";
+import { ReserveItemsDto } from "./dto/reserve-items.dto";
+import { DispatchItemsDto } from "./dto/dispatch-items.dto";
+import { DeliverItemsDto } from "./dto/deliver-items.dto";
+import { BatchDto } from "./dto/batch.dto";
+import { InventoryItemDto } from "./dto/inventory-item.dto";
+import { StockInDto } from "./dto/stock-in.dto";
+import { SearchUnitsQueryDto } from "./dto/search-units-query.dto";
+import { InventoryUnitStatus } from "@prisma/client";
 // Local enums matching Prisma schema (avoids @prisma/client enum resolution issues)
 const InventoryBatchStatus = {
-  Draft: 'Draft',
-  Open: 'Open',
-  Completed: 'Completed',
-  Cancelled: 'Cancelled',
+  Draft: "Draft",
+  Open: "Open",
+  Completed: "Completed",
+  Cancelled: "Cancelled",
 } as const;
-type InventoryBatchStatus = (typeof InventoryBatchStatus)[keyof typeof InventoryBatchStatus];
-
+type InventoryBatchStatus =
+  (typeof InventoryBatchStatus)[keyof typeof InventoryBatchStatus];
 
 type ListInventoryItemsArgs = {
   tenantId: string;
@@ -46,41 +46,48 @@ type ListInventoryItemsArgs = {
 
 @Injectable()
 export class InventoryService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService) {}
 
   // -----------------------------
   // Stock-In helpers
   // -----------------------------
   private normalizeCompanyName(name: string): string {
-    return String(name ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+    return String(name ?? "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toLowerCase();
   }
 
   private normalizeEmail(email: string): string {
-    return String(email ?? '').trim().toLowerCase();
+    return String(email ?? "")
+      .trim()
+      .toLowerCase();
   }
 
   private normalizeSku(sku: string): string {
-    return String(sku ?? '').trim();
+    return String(sku ?? "").trim();
   }
 
   private parseYyyyMmDdToUtcDate(dateStr: string): Date {
     // Treat YYYY-MM-DD as a date-only value. We store it at UTC midnight.
-    const m = String(dateStr ?? '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const m = String(dateStr ?? "")
+      .trim()
+      .match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!m) {
-      throw new BadRequestException('batch.receivedDate must be YYYY-MM-DD');
+      throw new BadRequestException("batch.receivedDate must be YYYY-MM-DD");
     }
     const y = Number(m[1]);
     const mo = Number(m[2]);
     const d = Number(m[3]);
     const dt = new Date(Date.UTC(y, mo - 1, d, 0, 0, 0));
     if (Number.isNaN(dt.getTime())) {
-      throw new BadRequestException('Invalid batch.receivedDate');
+      throw new BadRequestException("Invalid batch.receivedDate");
     }
     return dt;
   }
 
   private customerContactFallbackName(normalizedEmail: string): string {
-    const localPart = String(normalizedEmail).split('@')[0] || 'In Charge';
+    const localPart = String(normalizedEmail).split("@")[0] || "In Charge";
     return localPart;
   }
   /**
@@ -113,9 +120,9 @@ export class InventoryService {
       take: limit + 1,
       ...(cursor
         ? {
-          cursor: { id: cursor },
-          skip: 1,
-        }
+            cursor: { id: cursor },
+            skip: 1,
+          }
         : {}),
       orderBy: { id: "asc" }, // stable cursor order
       select: {
@@ -130,7 +137,7 @@ export class InventoryService {
     const hasMore = rowsPlusOne.length > limit;
     const rows = hasMore ? rowsPlusOne.slice(0, limit) : rowsPlusOne;
 
-    const nextCursor = hasMore ? rows[rows.length - 1]?.id ?? null : null;
+    const nextCursor = hasMore ? (rows[rows.length - 1]?.id ?? null) : null;
 
     // ✅ include totalCount in response
     return { rows, nextCursor, hasMore, totalCount };
@@ -181,15 +188,15 @@ export class InventoryService {
     const where: any = { tenantId };
     if (search) {
       where.OR = [
-        { sku: { contains: search, mode: 'insensitive' } },
-        { name: { contains: search, mode: 'insensitive' } },
-        { reference: { contains: search, mode: 'insensitive' } },
+        { sku: { contains: search, mode: "insensitive" } },
+        { name: { contains: search, mode: "insensitive" } },
+        { reference: { contains: search, mode: "insensitive" } },
       ];
     }
     const items = await this.prisma.inventory_items.findMany({
       where,
       select: { id: true, sku: true, name: true, reference: true },
-      orderBy: { sku: 'asc' },
+      orderBy: { sku: "asc" },
     });
     const units = await this.prisma.inventory_units.findMany({
       where: { tenantId },
@@ -197,7 +204,12 @@ export class InventoryService {
     });
     const byItem = new Map<
       string,
-      { available: number; reserved: number; inTransit: number; delivered: number }
+      {
+        available: number;
+        reserved: number;
+        inTransit: number;
+        delivered: number;
+      }
     >();
     for (const u of units) {
       let c = byItem.get(u.inventoryItemId);
@@ -227,8 +239,7 @@ export class InventoryService {
         inTransit: 0,
         delivered: 0,
       };
-      const total =
-        c.available + c.reserved + c.inTransit + c.delivered;
+      const total = c.available + c.reserved + c.inTransit + c.delivered;
       return {
         id: item.id,
         sku: item.sku,
@@ -249,7 +260,12 @@ export class InventoryService {
     tenantId: string,
     unitId: string,
     status: InventoryUnitStatus,
-  ): Promise<{ id: string; unitSku: string; status: InventoryUnitStatus; updatedAt: Date }> {
+  ): Promise<{
+    id: string;
+    unitSku: string;
+    status: InventoryUnitStatus;
+    updatedAt: Date;
+  }> {
     const unit = await this.prisma.inventory_units.findFirst({
       where: { id: unitId, tenantId },
       select: {
@@ -262,13 +278,15 @@ export class InventoryService {
       },
     });
 
-    if (!unit) throw new NotFoundException('Inventory unit not found');
+    if (!unit) throw new NotFoundException("Inventory unit not found");
 
     // Safety: don’t let admins “make it Available” while it’s still assigned to an order/trip
-    const isAssigned = Boolean(unit.transportOrderId || unit.tripId || unit.stopId);
+    const isAssigned = Boolean(
+      unit.transportOrderId || unit.tripId || unit.stopId,
+    );
     if (status === InventoryUnitStatus.Available && isAssigned) {
       throw new BadRequestException(
-        'Cannot set to Available while unit is assigned to an order/trip. Unassign it first.',
+        "Cannot set to Available while unit is assigned to an order/trip. Unassign it first.",
       );
     }
 
@@ -290,9 +308,9 @@ export class InventoryService {
     const where: any = { tenantId };
     if (search) {
       where.OR = [
-        { sku: { contains: search, mode: 'insensitive' } },
-        { name: { contains: search, mode: 'insensitive' } },
-        { reference: { contains: search, mode: 'insensitive' } },
+        { sku: { contains: search, mode: "insensitive" } },
+        { name: { contains: search, mode: "insensitive" } },
+        { reference: { contains: search, mode: "insensitive" } },
       ];
     }
 
@@ -305,14 +323,14 @@ export class InventoryService {
         reference: true,
         // we don't trust cached availableQty; we compute below
       },
-      orderBy: { sku: 'asc' },
+      orderBy: { sku: "asc" },
     });
 
     const ids = items.map((i) => i.id);
     if (ids.length === 0) return [];
 
     const counts = await this.prisma.inventory_units.groupBy({
-      by: ['inventoryItemId'],
+      by: ["inventoryItemId"],
       where: {
         tenantId,
         inventoryItemId: { in: ids },
@@ -339,16 +357,13 @@ export class InventoryService {
    * POST /inventory/batches
    * If containerNumber not provided, auto-generate: B + YYMMDD + "-" + 3-digit sequence per day (e.g. B260205-001).
    */
-  async createBatch(
-    tenantId: string,
-    dto: CreateBatchDto,
-  ): Promise<BatchDto> {
+  async createBatch(tenantId: string, dto: CreateBatchDto): Promise<BatchDto> {
     let containerNumber = dto.containerNumber?.trim();
     if (!containerNumber) {
       const now = new Date();
       const yy = String(now.getFullYear()).slice(-2);
-      const mm = String(now.getMonth() + 1).padStart(2, '0');
-      const dd = String(now.getDate()).padStart(2, '0');
+      const mm = String(now.getMonth() + 1).padStart(2, "0");
+      const dd = String(now.getDate()).padStart(2, "0");
       const prefix = `B${yy}${mm}${dd}-`;
       const todayCount = await this.prisma.inventory_batches.count({
         where: {
@@ -356,7 +371,7 @@ export class InventoryService {
           containerNumber: { startsWith: prefix },
         },
       });
-      const seq = (todayCount + 1).toString().padStart(3, '0');
+      const seq = (todayCount + 1).toString().padStart(3, "0");
       containerNumber = `${prefix}${seq}`;
     }
 
@@ -375,15 +390,23 @@ export class InventoryService {
       );
     }
 
+    if (dto.customerCompanyId) {
+      const company = await this.prisma.customer_companies.findFirst({
+        where: { id: dto.customerCompanyId, tenantId },
+        select: { id: true },
+      });
+      if (!company) throw new BadRequestException("Invalid customerCompanyId");
+    }
+
     const batch = await this.prisma.inventory_batches.create({
       data: {
         tenantId,
         containerNumber,
         notes: dto.notes ?? null,
         status: InventoryBatchStatus.Draft,
+        customerCompanyId: dto.customerCompanyId ?? null, // ✅ new
       },
     });
-
     return this.toBatchDto(batch, {
       totalUnits: 0,
       availableUnits: 0,
@@ -412,16 +435,50 @@ export class InventoryService {
   }> {
     const batch = await this.prisma.inventory_batches.findFirst({
       where: { id: batchId, tenantId },
+      select: {
+        id: true,
+        status: true,
+        customerCompanyId: true,
+        containerNumber: true,
+      },
     });
     if (!batch) {
-      throw new NotFoundException('Batch not found');
+      throw new NotFoundException("Batch not found");
     }
     if (batch.status === InventoryBatchStatus.Cancelled) {
-      throw new BadRequestException('Cannot receive into a cancelled batch');
+      throw new BadRequestException("Cannot receive into a cancelled batch");
     }
 
     const format =
-      dto.unitSkuFormat === 'ITEM-SEQ' ? 'ITEM-SEQ' : 'ITEM-BATCH-SEQ';
+      dto.unitSkuFormat === "ITEM-SEQ" ? "ITEM-SEQ" : "ITEM-BATCH-SEQ";
+
+    // ✅ validate + attach customerCompanyId
+    if (dto.customerCompanyId) {
+      const company = await this.prisma.customer_companies.findFirst({
+        where: { id: dto.customerCompanyId, tenantId },
+        select: { id: true },
+      });
+      if (!company) throw new BadRequestException("Invalid customerCompanyId");
+
+      if (
+        batch.customerCompanyId &&
+        batch.customerCompanyId !== dto.customerCompanyId
+      ) {
+        throw new BadRequestException(
+          "Batch already belongs to a different customerCompanyId",
+        );
+      }
+
+      if (!batch.customerCompanyId) {
+        await this.prisma.inventory_batches.update({
+          where: { id: batchId },
+          data: { customerCompanyId: dto.customerCompanyId },
+        });
+      }
+    } else {
+      // optional strict enforcement:
+      // if (!batch.customerCompanyId) throw new BadRequestException("customerCompanyId is required for stock-in");
+    }
 
     return await this.prisma.$transaction(async (tx) => {
       const resultItems: Array<{
@@ -484,7 +541,7 @@ export class InventoryService {
             inventoryItemId: line.inventoryItemId,
           },
           select: { unitSku: true },
-          orderBy: { createdAt: 'desc' },
+          orderBy: { createdAt: "desc" },
         });
 
         const unitsToCreate: Array<{
@@ -495,18 +552,22 @@ export class InventoryService {
           status: InventoryUnitStatus;
         }> = [];
         const baseSeq =
-          format === 'ITEM-BATCH-SEQ'
+          format === "ITEM-BATCH-SEQ"
             ? existingUnits.length + 1
-            : await this.getNextItemSeqForTenant(tx, tenantId, line.inventoryItemId);
+            : await this.getNextItemSeqForTenant(
+                tx,
+                tenantId,
+                line.inventoryItemId,
+              );
 
         for (let i = 0; i < line.quantity; i++) {
           const seq =
-            format === 'ITEM-BATCH-SEQ'
+            format === "ITEM-BATCH-SEQ"
               ? existingUnits.length + 1 + i
               : baseSeq + i;
-          const padded = seq.toString().padStart(4, '0');
+          const padded = seq.toString().padStart(4, "0");
           const unitSku =
-            format === 'ITEM-BATCH-SEQ'
+            format === "ITEM-BATCH-SEQ"
               ? `${item.sku}-${batch.containerNumber}-${padded}`
               : `${item.sku}-${padded}`;
 
@@ -564,14 +625,14 @@ export class InventoryService {
     });
   }
   /**
-  * POST /inventory/stock-in
-  * One-shot Stock-In flow (transactional):
-  * 1) Resolve/create customer company (tenant-scoped, case-insensitive, trimmed)
-  * 2) Resolve/create contact by (companyId + email) (case-insensitive, trimmed)
-  * 3) Create inventory batch linked to company + contact with metadata
-  * 4) For each row: find-or-create inventory_item by SKU, then create inventory_units for quantity (unitSku generated)
-  * 5) All in ONE transaction (no partial inserts)
-  */
+   * POST /inventory/stock-in
+   * One-shot Stock-In flow (transactional):
+   * 1) Resolve/create customer company (tenant-scoped, case-insensitive, trimmed)
+   * 2) Resolve/create contact by (companyId + email) (case-insensitive, trimmed)
+   * 3) Create inventory batch linked to company + contact with metadata
+   * 4) For each row: find-or-create inventory_item by SKU, then create inventory_units for quantity (unitSku generated)
+   * 5) All in ONE transaction (no partial inserts)
+   */
 
   async stockInFromClientSheet(
     tenantId: string,
@@ -583,36 +644,36 @@ export class InventoryService {
     totalUnitsCreated: number;
   }> {
     if (!tenantId) {
-      throw new BadRequestException('Tenant context is required');
+      throw new BadRequestException("Tenant context is required");
     }
 
-    const rawCompanyName = String(dto.customerCompany?.name ?? '').trim();
+    const rawCompanyName = String(dto.customerCompany?.name ?? "").trim();
     const normalizedCompanyName = this.normalizeCompanyName(rawCompanyName);
     if (!rawCompanyName || !normalizedCompanyName) {
-      throw new BadRequestException('customerCompany.name is required');
+      throw new BadRequestException("customerCompany.name is required");
     }
 
-    const rawEmail = String(dto.contact?.email ?? '').trim();
+    const rawEmail = String(dto.contact?.email ?? "").trim();
     const normalizedEmail = this.normalizeEmail(rawEmail);
     if (!normalizedEmail) {
-      throw new BadRequestException('contact.email is required');
+      throw new BadRequestException("contact.email is required");
     }
 
-    const containerNumber = String(dto.batch?.containerNumber ?? '').trim();
+    const containerNumber = String(dto.batch?.containerNumber ?? "").trim();
     if (!containerNumber) {
-      throw new BadRequestException('batch.containerNumber is required');
+      throw new BadRequestException("batch.containerNumber is required");
     }
 
-    const batchDescription = String(dto.batch?.batchDescription ?? '').trim();
+    const batchDescription = String(dto.batch?.batchDescription ?? "").trim();
     if (!batchDescription) {
-      throw new BadRequestException('batch.batchDescription is required');
+      throw new BadRequestException("batch.batchDescription is required");
     }
 
     const receivedAt = this.parseYyyyMmDdToUtcDate(dto.batch.receivedDate);
     const notes = dto.batch.notes?.trim() || null;
 
     if (!Array.isArray(dto.items) || dto.items.length === 0) {
-      throw new BadRequestException('items must be a non-empty array');
+      throw new BadRequestException("items must be a non-empty array");
     }
 
     return await this.prisma.$transaction(
@@ -620,15 +681,22 @@ export class InventoryService {
         // 1) Resolve company (dedupe by tenantId + normalizedName)
         const customerCompany = await tx.customer_companies.upsert({
           where: {
-            tenantId_normalizedName: { tenantId, normalizedName: normalizedCompanyName },
+            tenantId_normalizedName: {
+              tenantId,
+              normalizedName: normalizedCompanyName,
+            },
           },
           update: { name: rawCompanyName },
-          create: { tenantId, name: rawCompanyName, normalizedName: normalizedCompanyName },
+          create: {
+            tenantId,
+            name: rawCompanyName,
+            normalizedName: normalizedCompanyName,
+          },
         });
 
         // 2) Resolve contact (dedupe by companyId + normalizedEmail)
         const contactName =
-          String(dto.contact?.name ?? '').trim() ||
+          String(dto.contact?.name ?? "").trim() ||
           this.customerContactFallbackName(normalizedEmail);
 
         const customerContact = await tx.customer_contacts.upsert({
@@ -652,9 +720,11 @@ export class InventoryService {
           where: { tenantId_containerNumber: { tenantId, containerNumber } },
           select: { id: true },
         });
-        
+
         if (existingBatch) {
-          throw new ConflictException(`Batch with code ${containerNumber} already exists`);
+          throw new ConflictException(
+            `Batch with code ${containerNumber} already exists`,
+          );
         }
 
         const batch = await tx.inventory_batches.create({
@@ -676,16 +746,19 @@ export class InventoryService {
 
         for (const row of dto.items) {
           const skuInput = this.normalizeSku(row.itemSku);
-          if (!skuInput) throw new BadRequestException('Each item must have itemSku');
+          if (!skuInput)
+            throw new BadRequestException("Each item must have itemSku");
 
           const quantity = (row.quantity ?? 1) as number;
           if (!Number.isInteger(quantity) || quantity < 1) {
-            throw new BadRequestException(`Quantity must be >= 1 for itemSku ${skuInput}`);
+            throw new BadRequestException(
+              `Quantity must be >= 1 for itemSku ${skuInput}`,
+            );
           }
 
           // Find existing item by SKU (case-insensitive), else create
           let inventoryItem = await tx.inventory_items.findFirst({
-            where: { tenantId, sku: { equals: skuInput, mode: 'insensitive' } },
+            where: { tenantId, sku: { equals: skuInput, mode: "insensitive" } },
           });
 
           if (!inventoryItem) {
@@ -720,7 +793,10 @@ export class InventoryService {
           // Upsert batch_items (unique: batchId + inventoryItemId)
           await tx.inventory_batch_items.upsert({
             where: {
-              batchId_inventoryItemId: { batchId: batch.id, inventoryItemId: inventoryItem.id },
+              batchId_inventoryItemId: {
+                batchId: batch.id,
+                inventoryItemId: inventoryItem.id,
+              },
             },
             update: { qty: { increment: quantity } },
             create: {
@@ -733,7 +809,9 @@ export class InventoryService {
 
           // Generate unitSkus: <itemSku>-<batchSeq4>-<unitSeq2>
           // Example: LLSG-CB-Q-MSM-0001-01
-          const batchSeq4 = String(batch.containerNumber.split("-").pop() ?? "").padStart(4, "0");
+          const batchSeq4 = String(
+            batch.containerNumber.split("-").pop() ?? "",
+          ).padStart(4, "0");
           const prefix = `${inventoryItem.sku}-${batchSeq4}-`;
 
           // FAST: get last unitSku once (so we continue the sequence)
@@ -767,7 +845,7 @@ export class InventoryService {
 
             if (seq > 99) {
               throw new BadRequestException(
-                `Unit sequence exceeded 99 for ${inventoryItem.sku} in batch ${batch.containerNumber}. Use 3-digit unit seq if needed.`
+                `Unit sequence exceeded 99 for ${inventoryItem.sku} in batch ${batch.containerNumber}. Use 3-digit unit seq if needed.`,
               );
             }
 
@@ -788,7 +866,10 @@ export class InventoryService {
           // Cheap + correct (since we're creating Available units)
           await tx.inventory_items.update({
             where: { id: inventoryItem.id },
-            data: { availableQty: { increment: quantity }, updatedAt: new Date() },
+            data: {
+              availableQty: { increment: quantity },
+              updatedAt: new Date(),
+            },
           });
 
           totalUnitsCreated += quantity;
@@ -805,8 +886,6 @@ export class InventoryService {
       { maxWait: 10_000, timeout: 60_000 },
     );
   }
-
-
 
   private async getNextItemSeqForTenant(
     tx: any,
@@ -860,18 +939,23 @@ export class InventoryService {
       },
     });
     if (!batch) {
-      throw new NotFoundException('Batch not found');
+      throw new NotFoundException("Batch not found");
     }
 
     const unitCounts = await this.prisma.inventory_units.groupBy({
-      by: ['inventoryItemId', 'status'],
+      by: ["inventoryItemId", "status"],
       where: { tenantId, batchId },
       _count: { id: true },
     });
 
     const byItem = new Map<
       string,
-      { available: number; reserved: number; inTransit: number; delivered: number }
+      {
+        available: number;
+        reserved: number;
+        inTransit: number;
+        delivered: number;
+      }
     >();
     for (const row of unitCounts) {
       let c = byItem.get(row.inventoryItemId);
@@ -903,8 +987,7 @@ export class InventoryService {
         inTransit: 0,
         delivered: 0,
       };
-      const total =
-        c.available + c.reserved + c.inTransit + c.delivered;
+      const total = c.available + c.reserved + c.inTransit + c.delivered;
       return {
         inventoryItemId: bi.inventoryItemId,
         sku: bi.inventory_item.sku,
@@ -940,11 +1023,13 @@ export class InventoryService {
     });
 
     if (!batch) {
-      throw new NotFoundException('Batch not found');
+      throw new NotFoundException("Batch not found");
     }
 
     if (batch.status === InventoryBatchStatus.Cancelled) {
-      throw new BadRequestException('Cannot receive units into a cancelled batch');
+      throw new BadRequestException(
+        "Cannot receive units into a cancelled batch",
+      );
     }
 
     return await this.prisma.$transaction(async (tx) => {
@@ -973,7 +1058,8 @@ export class InventoryService {
 
       // Generate unit SKUs
       const unitSkus: string[] = [];
-      const prefix = dto.unitSkuPrefix || `${batch.containerNumber}-${dto.inventorySku}`;
+      const prefix =
+        dto.unitSkuPrefix || `${batch.containerNumber}-${dto.inventorySku}`;
 
       // Get existing units for this batch+item to determine next sequence
       const existingUnits = await tx.inventory_units.findMany({
@@ -983,7 +1069,7 @@ export class InventoryService {
           inventoryItemId: inventoryItem.id,
           unitSku: { startsWith: prefix },
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
         take: 1,
       });
 
@@ -1000,7 +1086,7 @@ export class InventoryService {
       const unitsToCreate = [];
       for (let i = 0; i < dto.quantity; i++) {
         const seq = startSeq + i;
-        const unitSku = `${prefix}-${seq.toString().padStart(4, '0')}`;
+        const unitSku = `${prefix}-${seq.toString().padStart(4, "0")}`;
         unitSkus.push(unitSku);
 
         // Check for conflicts
@@ -1052,7 +1138,7 @@ export class InventoryService {
   ): Promise<BatchDto[]> {
     const where: any = { tenantId };
     if (customerName) {
-      where.customerName = { contains: customerName, mode: 'insensitive' };
+      where.customerName = { contains: customerName, mode: "insensitive" };
     }
     if (status) {
       where.status = status;
@@ -1060,7 +1146,7 @@ export class InventoryService {
 
     const batches = await this.prisma.inventory_batches.findMany({
       where,
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
     });
 
     // Get counts for each batch
@@ -1083,7 +1169,7 @@ export class InventoryService {
     });
 
     if (!batch) {
-      throw new NotFoundException('Batch not found');
+      throw new NotFoundException("Batch not found");
     }
 
     const counts = await this.getBatchCounts(tenantId, batchId);
@@ -1097,14 +1183,17 @@ export class InventoryService {
     tenantId: string,
     orderId: string,
     dto: ReserveItemsDto,
-  ): Promise<{ reserved: number; items: Array<{ inventorySku: string; qty: number; unitSkus: string[] }> }> {
+  ): Promise<{
+    reserved: number;
+    items: Array<{ inventorySku: string; qty: number; unitSkus: string[] }>;
+  }> {
     // Verify order exists and belongs to tenant
     const order = await this.prisma.transportOrder.findFirst({
       where: { id: orderId, tenantId },
     });
 
     if (!order) {
-      throw new NotFoundException('Order not found');
+      throw new NotFoundException("Order not found");
     }
 
     return await this.prisma.$transaction(async (tx) => {
@@ -1145,7 +1234,7 @@ export class InventoryService {
 
         const availableUnits = await tx.inventory_units.findMany({
           where: unitWhere,
-          orderBy: { createdAt: 'asc' },
+          orderBy: { createdAt: "asc" },
           take: item.qty,
         });
 
@@ -1243,54 +1332,60 @@ export class InventoryService {
     });
 
     if (!order) {
-      throw new NotFoundException('Order not found');
+      throw new NotFoundException("Order not found");
     }
 
-    return await this.prisma.$transaction(async (tx) => {
-      const where: any = {
-        tenantId,
-        transportOrderId: orderId,
-        status: InventoryUnitStatus.Dispatched,
-      };
+    return await this.prisma.$transaction(
+      async (tx) => {
+        const where: any = {
+          tenantId,
+          transportOrderId: orderId,
+          status: InventoryUnitStatus.Dispatched,
+        };
 
-      if (dto.unitSkus && dto.unitSkus.length > 0) {
-        where.unitSku = { in: dto.unitSkus };
-      }
+        if (dto.unitSkus && dto.unitSkus.length > 0) {
+          where.unitSku = { in: dto.unitSkus };
+        }
 
-      const units = await tx.inventory_units.findMany({ where });
+        const units = await tx.inventory_units.findMany({ where });
 
-      if (units.length === 0) {
-        throw new BadRequestException('No reserved units found for this order');
-      }
+        if (units.length === 0) {
+          throw new BadRequestException(
+            "No reserved units found for this order",
+          );
+        }
 
-      const updateData: any = {
-        status: InventoryUnitStatus.InTransit,
-      };
+        const updateData: any = {
+          status: InventoryUnitStatus.InTransit,
+        };
 
-      if (dto.tripId) {
-        updateData.tripId = dto.tripId;
-      }
-      if (dto.stopId) {
-        updateData.stopId = dto.stopId;
-      }
+        if (dto.tripId) {
+          updateData.tripId = dto.tripId;
+        }
+        if (dto.stopId) {
+          updateData.stopId = dto.stopId;
+        }
 
-      await tx.inventory_units.updateMany({
-        where: { id: { in: units.map((u) => u.id) } },
-        data: updateData,
-      });
+        await tx.inventory_units.updateMany({
+          where: { id: { in: units.map((u) => u.id) } },
+          data: updateData,
+        });
 
-      // Update cached counts for affected items
-      const itemIds = [...new Set(units.map((u) => u.inventoryItemId))] as string[];
-      for (const itemId of itemIds) {
-        await this.updateAvailableQty(tenantId, itemId, tx);
-      }
+        // Update cached counts for affected items
+        const itemIds = [
+          ...new Set(units.map((u) => u.inventoryItemId)),
+        ] as string[];
+        for (const itemId of itemIds) {
+          await this.updateAvailableQty(tenantId, itemId, tx);
+        }
 
-      return { dispatched: units.length };
-    },
+        return { dispatched: units.length };
+      },
       {
         maxWait: 10_000,
         timeout: 60_000,
-      },);
+      },
+    );
   }
   async releaseUnits(
     tenantId: string,
@@ -1301,86 +1396,87 @@ export class InventoryService {
     const order = await this.prisma.transportOrder.findFirst({
       where: { id: orderId, tenantId },
     });
-    if (!order) throw new NotFoundException('Order not found');
+    if (!order) throw new NotFoundException("Order not found");
 
-    return this.prisma.$transaction(async (tx) => {
-      // load units by unitSku that are reserved for this order
-      const units = await tx.inventory_units.findMany({
-        where: {
-          tenantId,
-          unitSku: { in: dto.unitSkus },
-          status: InventoryUnitStatus.Reserved,
-          transportOrderId: orderId,
-        },
-      });
-
-      if (!units.length) return { released: 0 };
-
-      // find their link rows (which order item each unit belongs to)
-      const links = await tx.transport_order_item_units.findMany({
-        where: {
-          tenantId,
-          inventoryUnitId: { in: units.map((u) => u.id) },
-        },
-      });
-
-      // delete link rows
-      await tx.transport_order_item_units.deleteMany({
-        where: {
-          tenantId,
-          inventoryUnitId: { in: units.map((u) => u.id) },
-        },
-      });
-
-      // release units back to available
-      await tx.inventory_units.updateMany({
-        where: { tenantId, id: { in: units.map((u) => u.id) } },
-        data: {
-          status: InventoryUnitStatus.Available,
-          transportOrderId: null,
-          tripId: null,
-          stopId: null,
-        },
-      });
-
-      // decrement qty on the affected transport_order_items
-      const countByOrderItem = new Map<string, number>();
-      for (const l of links) {
-        countByOrderItem.set(
-          l.transportOrderItemId,
-          (countByOrderItem.get(l.transportOrderItemId) ?? 0) + 1,
-        );
-      }
-
-      for (const [transportOrderItemId, dec] of countByOrderItem.entries()) {
-        const item = await tx.transport_order_items.findFirst({
-          where: { id: transportOrderItemId, tenantId },
+    return this.prisma.$transaction(
+      async (tx) => {
+        // load units by unitSku that are reserved for this order
+        const units = await tx.inventory_units.findMany({
+          where: {
+            tenantId,
+            unitSku: { in: dto.unitSkus },
+            status: InventoryUnitStatus.Reserved,
+            transportOrderId: orderId,
+          },
         });
-        if (!item) continue;
 
-        const nextQty = Math.max(0, item.qty - dec);
+        if (!units.length) return { released: 0 };
 
-        if (nextQty === 0) {
-          await tx.transport_order_items.delete({ where: { id: item.id } });
-        } else {
-          await tx.transport_order_items.update({
-            where: { id: item.id },
-            data: { qty: nextQty },
-          });
+        // find their link rows (which order item each unit belongs to)
+        const links = await tx.transport_order_item_units.findMany({
+          where: {
+            tenantId,
+            inventoryUnitId: { in: units.map((u) => u.id) },
+          },
+        });
+
+        // delete link rows
+        await tx.transport_order_item_units.deleteMany({
+          where: {
+            tenantId,
+            inventoryUnitId: { in: units.map((u) => u.id) },
+          },
+        });
+
+        // release units back to available
+        await tx.inventory_units.updateMany({
+          where: { tenantId, id: { in: units.map((u) => u.id) } },
+          data: {
+            status: InventoryUnitStatus.Available,
+            transportOrderId: null,
+            tripId: null,
+            stopId: null,
+          },
+        });
+
+        // decrement qty on the affected transport_order_items
+        const countByOrderItem = new Map<string, number>();
+        for (const l of links) {
+          countByOrderItem.set(
+            l.transportOrderItemId,
+            (countByOrderItem.get(l.transportOrderItemId) ?? 0) + 1,
+          );
         }
 
-        // refresh cached inventory qty
-        await this.updateAvailableQty(tenantId, item.inventoryItemId, tx);
-      }
+        for (const [transportOrderItemId, dec] of countByOrderItem.entries()) {
+          const item = await tx.transport_order_items.findFirst({
+            where: { id: transportOrderItemId, tenantId },
+          });
+          if (!item) continue;
 
-      return { released: units.length };
-    },
+          const nextQty = Math.max(0, item.qty - dec);
+
+          if (nextQty === 0) {
+            await tx.transport_order_items.delete({ where: { id: item.id } });
+          } else {
+            await tx.transport_order_items.update({
+              where: { id: item.id },
+              data: { qty: nextQty },
+            });
+          }
+
+          // refresh cached inventory qty
+          await this.updateAvailableQty(tenantId, item.inventoryItemId, tx);
+        }
+
+        return { released: units.length };
+      },
       {
         maxWait: 10_000,
         timeout: 60_000,
-      },);
+      },
+    );
   }
-
 
   async listUnits(
     tenantId: string,
@@ -1394,7 +1490,7 @@ export class InventoryService {
         inventoryItemId,
         status: status as any,
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: "asc" },
       take: limit,
       select: {
         id: true,
@@ -1411,18 +1507,18 @@ export class InventoryService {
   }
 
   /**
- * GET /inventory/units/search
- * Supports prefix search (fast) + contains search + filters.
- */
+   * GET /inventory/units/search
+   * Supports prefix search (fast) + contains search + filters.
+   */
   /**
- * GET /inventory/units/search
- * Ops unit-register response:
- * - unitSku, status
- * - itemSku, itemName
- * - containerNumber
- * - createdAt, updatedAt
- * - transportOrderId / tripId / stopId (if present)
- */
+   * GET /inventory/units/search
+   * Ops unit-register response:
+   * - unitSku, status
+   * - itemSku, itemName
+   * - containerNumber
+   * - createdAt, updatedAt
+   * - transportOrderId / tripId / stopId (if present)
+   */
   async searchUnits(
     tenantId: string,
     query: SearchUnitsQueryDto,
@@ -1470,17 +1566,17 @@ export class InventoryService {
 
     if (query.itemSku && String(query.itemSku).trim()) {
       where.inventory_item = {
-        sku: { equals: String(query.itemSku).trim(), mode: 'insensitive' },
+        sku: { equals: String(query.itemSku).trim(), mode: "insensitive" },
       };
     }
 
     if (query.search && String(query.search).trim()) {
       const s = String(query.search).trim();
       where.OR = [
-        { unitSku: { contains: s, mode: 'insensitive' } },
-        { inventory_item: { sku: { contains: s, mode: 'insensitive' } } },
-        { inventory_item: { name: { contains: s, mode: 'insensitive' } } },
-        { batch: { containerNumber: { contains: s, mode: 'insensitive' } } },
+        { unitSku: { contains: s, mode: "insensitive" } },
+        { inventory_item: { sku: { contains: s, mode: "insensitive" } } },
+        { inventory_item: { name: { contains: s, mode: "insensitive" } } },
+        { batch: { containerNumber: { contains: s, mode: "insensitive" } } },
       ];
     }
 
@@ -1489,12 +1585,12 @@ export class InventoryService {
       take: limit + 1,
       ...(cursor
         ? {
-          cursor: { id: cursor },
-          skip: 1,
-        }
+            cursor: { id: cursor },
+            skip: 1,
+          }
         : {}),
       // stable order: updatedAt desc + id desc
-      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
       select: {
         id: true,
         unitSku: true,
@@ -1513,7 +1609,6 @@ export class InventoryService {
 
     const totalCount = await this.prisma.inventory_units.count({ where });
 
-
     const hasMore = unitsPlusOne.length > limit;
     const page = hasMore ? unitsPlusOne.slice(0, limit) : unitsPlusOne;
 
@@ -1522,7 +1617,7 @@ export class InventoryService {
       unitSku: u.unitSku,
       status: u.status,
       inventoryItemId: u.inventoryItemId,
-      itemSku: u.inventory_item?.sku ?? '',
+      itemSku: u.inventory_item?.sku ?? "",
       itemName: u.inventory_item?.name ?? null,
       batchId: u.batchId,
       containerNumber: u.batch?.containerNumber ?? null,
@@ -1533,7 +1628,7 @@ export class InventoryService {
       updatedAt: u.updatedAt,
     }));
 
-    const nextCursor = hasMore ? rows[rows.length - 1]?.id ?? null : null;
+    const nextCursor = hasMore ? (rows[rows.length - 1]?.id ?? null) : null;
     const grouped = await this.prisma.inventory_units.groupBy({
       by: ["status"],
       where,
@@ -1551,12 +1646,17 @@ export class InventoryService {
         else acc.other += g._count._all;
         return acc;
       },
-      { total: 0, available: 0, reserved: 0, inTransit: 0, delivered: 0, other: 0 }
+      {
+        total: 0,
+        available: 0,
+        reserved: 0,
+        inTransit: 0,
+        delivered: 0,
+        other: 0,
+      },
     );
     return { rows, nextCursor, hasMore, totalCount, stats };
   }
-
-
 
   /**
    * POST /inventory/orders/:orderId/deliver
@@ -1571,44 +1671,51 @@ export class InventoryService {
     });
 
     if (!order) {
-      throw new NotFoundException('Order not found');
+      throw new NotFoundException("Order not found");
     }
 
-    return await this.prisma.$transaction(async (tx) => {
-      const where: any = {
-        tenantId,
-        transportOrderId: orderId,
-        status: InventoryUnitStatus.InTransit,
-      };
+    return await this.prisma.$transaction(
+      async (tx) => {
+        const where: any = {
+          tenantId,
+          transportOrderId: orderId,
+          status: InventoryUnitStatus.InTransit,
+        };
 
-      if (dto.unitSkus && dto.unitSkus.length > 0) {
-        where.unitSku = { in: dto.unitSkus };
-      }
+        if (dto.unitSkus && dto.unitSkus.length > 0) {
+          where.unitSku = { in: dto.unitSkus };
+        }
 
-      const units = await tx.inventory_units.findMany({ where });
+        const units = await tx.inventory_units.findMany({ where });
 
-      if (units.length === 0) {
-        throw new BadRequestException('No in-transit units found for this order');
-      }
+        if (units.length === 0) {
+          throw new BadRequestException(
+            "No in-transit units found for this order",
+          );
+        }
 
-      await tx.inventory_units.updateMany({
-        where: { id: { in: units.map((u) => u.id) } },
-        data: {
-          status: InventoryUnitStatus.Delivered,
-        },
-      });
+        await tx.inventory_units.updateMany({
+          where: { id: { in: units.map((u) => u.id) } },
+          data: {
+            status: InventoryUnitStatus.Delivered,
+          },
+        });
 
-      // Update cached counts
-      const itemIds = [...new Set(units.map((u) => u.inventoryItemId))] as string[];
-      for (const itemId of itemIds) {
-        await this.updateAvailableQty(tenantId, itemId, tx);
-      }
+        // Update cached counts
+        const itemIds = [
+          ...new Set(units.map((u) => u.inventoryItemId)),
+        ] as string[];
+        for (const itemId of itemIds) {
+          await this.updateAvailableQty(tenantId, itemId, tx);
+        }
 
-      return { delivered: units.length };
-    }, {
-      maxWait: 10_000,
-      timeout: 60_000,
-    },);
+        return { delivered: units.length };
+      },
+      {
+        maxWait: 10_000,
+        timeout: 60_000,
+      },
+    );
   }
 
   /**
@@ -1623,44 +1730,48 @@ export class InventoryService {
     });
 
     if (!order) {
-      throw new NotFoundException('Order not found');
+      throw new NotFoundException("Order not found");
     }
 
-    return await this.prisma.$transaction(async (tx) => {
-      const units = await tx.inventory_units.findMany({
-        where: {
-          tenantId,
-          transportOrderId: orderId,
-          status: InventoryUnitStatus.Reserved,
-        },
-      });
+    return await this.prisma.$transaction(
+      async (tx) => {
+        const units = await tx.inventory_units.findMany({
+          where: {
+            tenantId,
+            transportOrderId: orderId,
+            status: InventoryUnitStatus.Reserved,
+          },
+        });
 
-      if (units.length === 0) {
-        return { released: 0 };
-      }
+        if (units.length === 0) {
+          return { released: 0 };
+        }
 
-      await tx.inventory_units.updateMany({
-        where: {
-          id: { in: units.map((u) => u.id) },
-        },
-        data: {
-          status: InventoryUnitStatus.Available,
-          transportOrderId: null,
-        },
-      });
+        await tx.inventory_units.updateMany({
+          where: {
+            id: { in: units.map((u) => u.id) },
+          },
+          data: {
+            status: InventoryUnitStatus.Available,
+            transportOrderId: null,
+          },
+        });
 
-      // Update cached counts
-      const itemIds = [...new Set(units.map((u) => u.inventoryItemId))] as string[];
-      for (const itemId of itemIds) {
-        await this.updateAvailableQty(tenantId, itemId, tx);
-      }
+        // Update cached counts
+        const itemIds = [
+          ...new Set(units.map((u) => u.inventoryItemId)),
+        ] as string[];
+        for (const itemId of itemIds) {
+          await this.updateAvailableQty(tenantId, itemId, tx);
+        }
 
-      return { released: units.length };
-    },
+        return { released: units.length };
+      },
       {
         maxWait: 10_000,
         timeout: 60_000,
-      },);
+      },
+    );
   }
 
   /**
@@ -1770,5 +1881,4 @@ export class InventoryService {
 
     return { ok: true };
   }
-
 }

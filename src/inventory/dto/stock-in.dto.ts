@@ -3,6 +3,7 @@ import {
   IsArray,
   IsEmail,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   Matches,
@@ -105,4 +106,9 @@ export class StockInDto {
   @ValidateNested({ each: true })
   @Type(() => StockInItemDto)
   items: StockInItemDto[];
+
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  customerCompanyId: string;
 }

@@ -11,4 +11,9 @@ export class CreateBatchDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiPropertyOptional({ description: "Customer company that owns this batch" })
+  @IsOptional()
+  @IsString()
+  customerCompanyId?: string;
 }
