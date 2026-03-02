@@ -34,6 +34,43 @@ type OrderLite = {
   customerName: string | null;
 };
 
+const orderCardSelect = {
+  id: true,
+  status: true,
+  orderRef: true,
+  internalRef: true,
+  customerRef: true,
+  customerName: true,
+
+  currency: true,
+  priceCents: true,
+
+  items: {
+    select: {
+      sku: true,
+      name: true,
+      qty: true,
+    },
+  },
+
+  // only the first DELIVERY stop for card display
+  stops: {
+    where: { type: StopType.DELIVERY },
+    orderBy: { sequence: "asc" },
+    take: 1,
+    select: {
+      type: true,
+      sequence: true,
+      plannedAt: true,
+      addressLine1: true,
+      addressLine2: true,
+      postalCode: true,
+      city: true,
+      country: true,
+    },
+  },
+} as const;
+
 @Injectable()
 export class DriverMvpService {
   constructor(
@@ -48,15 +85,6 @@ export class DriverMvpService {
    * - inMyTrips: orders whose stops belong to trips assigned to driver
    */
   async getInboxOrders(tenantId: string, driverUserId: string) {
-    const select = {
-      id: true,
-      status: true,
-      orderRef: true,
-      internalRef: true,
-      customerRef: true,
-      customerName: true,
-    } as const;
-
     const [readyToAccept, inMyTrips] = await Promise.all([
       (this.prisma as any).transportOrder.findMany({
         where: {
@@ -65,9 +93,9 @@ export class DriverMvpService {
           stops: { none: { tripId: { not: null } } },
         },
         orderBy: { createdAt: "asc" },
-        select,
-      }) as Promise<OrderLite[]>,
-
+        select: orderCardSelect,
+      }),
+  
       (this.prisma as any).transportOrder.findMany({
         where: {
           tenantId,
@@ -86,10 +114,10 @@ export class DriverMvpService {
           },
         },
         orderBy: { updatedAt: "desc" },
-        select,
-      }) as Promise<OrderLite[]>,
+        select: orderCardSelect,
+      }),
     ]);
-
+  
     return {
       readyToAccept: { count: readyToAccept.length, orders: readyToAccept },
       inMyTrips: { count: inMyTrips.length, orders: inMyTrips },
@@ -100,7 +128,7 @@ export class DriverMvpService {
    * GET /driver/orders/available
    * “Available” = status=Open AND not yet assigned into any trip stop
    */
-  async listAvailableOrders(tenantId: string, _driverUserId: string) {
+  async listAvailableOrders(tenantId: string, driverUserId: string) {
     const orders = await (this.prisma as any).transportOrder.findMany({
       where: {
         tenantId,
@@ -108,16 +136,9 @@ export class DriverMvpService {
         stops: { none: { tripId: { not: null } } },
       },
       orderBy: { createdAt: "asc" },
-      select: {
-        id: true,
-        status: true,
-        orderRef: true,
-        internalRef: true,
-        customerRef: true,
-        customerName: true,
-      },
+      select: orderCardSelect,
     });
-
+  
     return { count: orders.length, orders };
   }
 
