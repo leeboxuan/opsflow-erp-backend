@@ -35,6 +35,7 @@ model Tenant {
   customer_companies         customer_companies[]
   Invoice                    Invoice[]
   InvoiceLineItem            InvoiceLineItem[]
+  transportInternalRefCounters transport_internal_ref_counters[]
 
   @@map("tenants")
 }
