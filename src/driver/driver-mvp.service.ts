@@ -34,6 +34,19 @@ type OrderLite = {
   customerName: string | null;
 };
 
+function toOrderCard(o: any) {
+  const items =
+    Array.isArray(o.transport_order_items)
+      ? o.transport_order_items.map((it: any) => ({
+          sku: it?.inventory_item?.sku ?? null,
+          name: it?.inventory_item?.name ?? null,
+          qty: it?.qty ?? 0,
+        }))
+      : [];
+
+  const { transport_order_items, ...rest } = o;
+  return { ...rest, items };
+}
 const orderCardSelect = {
   id: true,
   status: true,
@@ -45,7 +58,7 @@ const orderCardSelect = {
   currency: true,
   priceCents: true,
 
-  items: {
+  transport_order_items: {
     select: {
       sku: true,
       name: true,
@@ -119,8 +132,8 @@ export class DriverMvpService {
     ]);
   
     return {
-      readyToAccept: { count: readyToAccept.length, orders: readyToAccept },
-      inMyTrips: { count: inMyTrips.length, orders: inMyTrips },
+      readyToAccept: { count: readyToAccept.length, orders: readyToAccept.map(toOrderCard) },
+      inMyTrips: { count: inMyTrips.length, orders: inMyTrips.map(toOrderCard) },
     };
   }
 
@@ -139,8 +152,7 @@ export class DriverMvpService {
       select: orderCardSelect,
     });
   
-    return { count: orders.length, orders };
-  }
+    return { count: orders.length, orders: orders.map(toOrderCard) };  }
 
   /**
    * ACCEPT ORDER
