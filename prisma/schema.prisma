@@ -666,3 +666,18 @@ model InvoiceLineItem {
   @@index([tenantId, invoiceId])
   @@map("invoice_line_items")
 }
+
+model transport_internal_ref_counters {
+  tenantId String
+  yyyymm   String
+  nextSeq  Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, yyyymm])
+  @@index([tenantId])
+  @@map("transport_internal_ref_counters")
+}

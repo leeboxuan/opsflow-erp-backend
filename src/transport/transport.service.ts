@@ -10,6 +10,7 @@ import {
   StopType,
   TransportOrder,
   TripStatus,
+  Prisma,
 } from "@prisma/client";
 
 import { PrismaService } from "../prisma/prisma.service";
@@ -22,6 +23,27 @@ import { ReplaceOrderItemsDto } from "./dto/replace-order-items.dto";
 import { OrderDto } from "./dto/order.dto";
 import { TripDto } from "./dto/trip.dto";
 
+type InternalRefCounterClient = {
+  transport_internal_ref_counters: {
+    upsert: (
+      args: Parameters<
+        PrismaService["transport_internal_ref_counters"]["upsert"]
+      >[0],
+    ) => Promise<{ nextSeq: number }>;
+  };
+};
+
+export interface CreatedOrderSummary {
+  id: string;
+  internalRef: string;
+  externalRef?: string;
+}
+
+export interface CreateOrdersBatchResult {
+  createdCount: number;
+  created: CreatedOrderSummary[];
+}
+
 @Injectable()
 export class TransportService {
   constructor(
@@ -30,34 +52,58 @@ export class TransportService {
   ) {}
 
   /**
-   * Canonical internalRef format (monthly sequence):
-   * DB-YYYY-MM-SS-IMP  (SS is 2 digits)
+   * Allocate a contiguous block of internalRef values for a given tenant + (year, month)
+   * using an atomic counter row (`transport_internal_ref_counters`).
    *
-   * NOTE: This uses a "count + retry on unique constraint" strategy.
-   * It's safe under concurrency because the unique constraint acts as the lock.
+   * This uses a single `upsert` on the counter table and derives the start/end of the
+   * allocated sequence block from the returned `nextSeq` value, ensuring uniqueness
+   * even under high concurrency and without scanning the main orders table.
    */
-  private async generateInternalRefMonthly(
+  private async allocateInternalRefBlock(
+    client: InternalRefCounterClient,
     tenantId: string,
     yyyy: number,
     mm: number,
-  ): Promise<string> {
+    batchSize: number,
+  ): Promise<string[]> {
+    if (batchSize <= 0) {
+      throw new Error("batchSize must be positive");
+    }
     if (mm < 1 || mm > 12) throw new Error("Invalid month");
 
     const MM = String(mm).padStart(2, "0");
+    const yyyymm = `${yyyy}-${MM}`;
 
-    const monthStart = new Date(Date.UTC(yyyy, mm - 1, 1, 0, 0, 0));
-    const monthEnd = new Date(Date.UTC(yyyy, mm, 1, 0, 0, 0));
-
-    const countThisMonth = await this.prisma.transportOrder.count({
+    const row = await client.transport_internal_ref_counters.upsert({
       where: {
+        tenantId_yyyymm: {
+          tenantId,
+          yyyymm,
+        },
+      },
+      create: {
         tenantId,
-        createdAt: { gte: monthStart, lt: monthEnd },
-        internalRef: { startsWith: `DB-${yyyy}-${MM}-` },
+        yyyymm,
+        nextSeq: batchSize,
+      },
+      update: {
+        nextSeq: { increment: batchSize },
+      },
+      select: {
+        nextSeq: true,
       },
     });
 
-    const ss = String(countThisMonth + 1).padStart(2, "0");
-    return `DB-${yyyy}-${MM}-${ss}-IMP`;
+    const endSeq = row.nextSeq;
+    const startSeq = endSeq - batchSize + 1;
+
+    const refs: string[] = [];
+    for (let seq = startSeq; seq <= endSeq; seq++) {
+      const ss = String(seq).padStart(2, "0");
+      refs.push(`DB-${yyyy}-${MM}-${ss}-IMP`);
+    }
+
+    return refs;
   }
 
   async getNextInternalRef(tenantId: string, year?: number, month?: number) {
@@ -65,24 +111,17 @@ export class TransportService {
     const yyyy = year ?? now.getUTCFullYear();
     const mm = month ?? now.getUTCMonth() + 1;
 
-    const internalRef = await this.generateInternalRefMonthly(tenantId, yyyy, mm);
+    const [internalRef] = await this.allocateInternalRefBlock(
+      this.prisma as unknown as InternalRefCounterClient,
+      tenantId,
+      yyyy,
+      mm,
+      1,
+    );
     return { internalRef };
   }
 
-  async createOrder(tenantId: string, dto: CreateOrderDto): Promise<OrderDto> {
-    // ---- Validate uniqueness of orderRef (cheap, outside tx)
-    const existing = await this.prisma.transportOrder.findFirst({
-      where: { tenantId, orderRef: dto.orderRef },
-      select: { id: true },
-    });
-    if (existing) {
-      throw new ConflictException({
-        code: "DUPLICATE_ORDER_REF",
-        message: "Order with this orderRef already exists for this tenant",
-      });
-    }
-
-    // ---- Aggregate items outside tx (cheap)
+  private aggregateOrderItems(dto: CreateOrderDto) {
     const aggregated = new Map<
       string,
       { quantity: number; batchId?: string | null; mixedBatches: boolean }
@@ -107,9 +146,19 @@ export class TransportService {
     const aggregatedEntries = Array.from(aggregated.entries());
     const inventoryItemIds = aggregatedEntries.map(([id]) => id);
 
-    // ---- Validate inventory items exist outside tx (cheap)
+    return { aggregatedEntries, inventoryItemIds };
+  }
+
+  private async createOneOrderInTransaction(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    dto: CreateOrderDto,
+    internalRef: string,
+  ): Promise<TransportOrder> {
+    const { aggregatedEntries, inventoryItemIds } = this.aggregateOrderItems(dto);
+
     if (inventoryItemIds.length > 0) {
-      const found = await this.prisma.inventory_items.findMany({
+      const found = await tx.inventory_items.findMany({
         where: { tenantId, id: { in: inventoryItemIds } },
         select: { id: true },
       });
@@ -120,160 +169,235 @@ export class TransportService {
       }
     }
 
+    const newOrder = await tx.transportOrder.create({
+      data: {
+        tenantId,
+        orderRef: dto.orderRef.trim(),
+        internalRef,
+        customerName: dto.customerName,
+        customerRef: dto.customerName, // legacy
+        customerContactNumber: dto.customerContactNumber ?? null,
+        notes: dto.notes ?? null,
+        status: OrderStatus.Draft,
+        priceCents: dto.priceCents ?? null,
+        currency: dto.currency ?? "SGD",
+      },
+      select: { id: true },
+    });
+
+    if (dto.stops?.length) {
+      await tx.stop.createMany({
+        data: dto.stops.map((s, idx) => ({
+          tenantId,
+          transportOrderId: newOrder.id,
+          sequence: idx + 1,
+          type: s.type,
+          addressLine1: s.addressLine1,
+          addressLine2: s.addressLine2 ?? null,
+          city: s.city,
+          postalCode: s.postalCode,
+          country: s.country,
+          plannedAt: s.plannedAt ? new Date(s.plannedAt) : null,
+        })),
+      });
+    }
+
+    for (const [inventoryItemId, agg] of aggregatedEntries) {
+      const { quantity, batchId, mixedBatches } = agg;
+
+      const unitWhere: any = {
+        tenantId,
+        inventoryItemId,
+        status: InventoryUnitStatus.Available,
+        transportOrderId: null,
+      };
+      if (batchId && !mixedBatches) unitWhere.batchId = batchId;
+
+      const availableUnits = await tx.inventory_units.findMany({
+        where: unitWhere,
+        orderBy: { createdAt: "asc" },
+        take: quantity,
+        select: { id: true },
+      });
+
+      if (availableUnits.length < quantity) {
+        const item = await tx.inventory_items.findUnique({
+          where: { id: inventoryItemId },
+          select: { sku: true },
+        });
+
+        throw new BadRequestException(
+          `Not enough available units for item ${
+            item?.sku ?? inventoryItemId
+          } (requested ${quantity}, available ${availableUnits.length})`,
+        );
+      }
+
+      const unitIds = availableUnits.map((u) => u.id);
+
+      await tx.inventory_units.updateMany({
+        where: { tenantId, id: { in: unitIds } },
+        data: {
+          status: InventoryUnitStatus.Reserved,
+          transportOrderId: newOrder.id,
+        },
+      });
+
+      const effectiveBatchId = mixedBatches ? null : (batchId ?? null);
+
+      const orderItem = await tx.transport_order_items.upsert({
+        where: {
+          transportOrderId_inventoryItemId: {
+            transportOrderId: newOrder.id,
+            inventoryItemId,
+          },
+        },
+        create: {
+          tenantId,
+          transportOrderId: newOrder.id,
+          inventoryItemId,
+          batchId: effectiveBatchId,
+          qty: quantity,
+        },
+        update: {
+          qty: quantity,
+          batchId: effectiveBatchId,
+        },
+        select: { id: true },
+      });
+
+      await tx.transport_order_item_units.createMany({
+        data: unitIds.map((inventoryUnitId) => ({
+          tenantId,
+          transportOrderItemId: orderItem.id,
+          inventoryUnitId,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return tx.transportOrder.findUniqueOrThrow({
+      where: { id: newOrder.id },
+    });
+  }
+
+  async createOrder(
+    tenantId: string,
+    payload: CreateOrderDto | { orders: CreateOrderDto[] },
+  ): Promise<OrderDto | CreateOrdersBatchResult> {
+    const maybeBatch = payload as any;
+    const isBatch =
+      maybeBatch && Array.isArray(maybeBatch.orders) && maybeBatch.orders.length > 0;
+
+    if (!isBatch) {
+      const dto = payload as CreateOrderDto;
+
+      const existing = await this.prisma.transportOrder.findFirst({
+        where: { tenantId, orderRef: dto.orderRef },
+        select: { id: true },
+      });
+      if (existing) {
+        throw new ConflictException({
+          code: "DUPLICATE_ORDER_REF",
+          message: "Order with this orderRef already exists for this tenant",
+        });
+      }
+
+      const now = new Date();
+      const yyyy = now.getUTCFullYear();
+      const mm = now.getUTCMonth() + 1;
+
+      const order = await this.prisma.$transaction(
+        async (tx) => {
+          const [sequenceInternalRef] = await this.allocateInternalRefBlock(
+            tx,
+            tenantId,
+            yyyy,
+            mm,
+            1,
+          );
+
+          const internalRef = dto.internalRef?.trim() || sequenceInternalRef;
+          return this.createOneOrderInTransaction(tx, tenantId, dto, internalRef);
+        },
+        { maxWait: 30_000, timeout: 60_000 },
+      );
+
+      return this.toDto(order);
+    }
+
+    const orders = (payload as any).orders as CreateOrderDto[];
+    if (!orders.length) {
+      throw new BadRequestException("orders array must not be empty");
+    }
+
     const now = new Date();
     const yyyy = now.getUTCFullYear();
     const mm = now.getUTCMonth() + 1;
 
-    const order = await this.prisma.$transaction(
+    const orderRefs = orders.map((o) => o.orderRef?.trim()).filter(Boolean) as string[];
+    const orderRefSet = new Set(orderRefs);
+    if (orderRefSet.size !== orderRefs.length) {
+      throw new BadRequestException("Duplicate orderRef values found in batch payload");
+    }
+
+    const created = await this.prisma.$transaction(
       async (tx) => {
-        // ---- Create order with collision-safe internalRef retry INSIDE tx
-        let internalRef =
-          dto.internalRef?.trim() ||
-          (await this.generateInternalRefMonthly(tenantId, yyyy, mm));
-
-        let newOrder: { id: string } | null = null;
-
-        for (let attempt = 0; attempt < 10; attempt++) {
-          try {
-            newOrder = await tx.transportOrder.create({
-              data: {
-                tenantId,
-                orderRef: dto.orderRef.trim(),
-                internalRef,
-                customerName: dto.customerName,
-                customerRef: dto.customerName, // legacy
-                customerContactNumber: dto.customerContactNumber ?? null,
-                notes: dto.notes ?? null,
-                status: OrderStatus.Draft,
-                priceCents: dto.priceCents ?? null,
-                currency: dto.currency ?? "SGD",
-              },
-              select: { id: true },
-            });
-            break;
-          } catch (e: any) {
-            // Unique constraint failed => regenerate and retry
-            if (e?.code === "P2002") {
-              internalRef = await this.generateInternalRefMonthly(tenantId, yyyy, mm);
-              continue;
-            }
-            throw e;
-          }
-        }
-
-        if (!newOrder) {
-          throw new ConflictException({
-            code: "INTERNAL_REF_CONFLICT",
-            message: "Failed to generate a unique internal reference. Try again.",
-          });
-        }
-
-        // ---- Stops: createMany (1 query)
-        if (dto.stops?.length) {
-          await tx.stop.createMany({
-            data: dto.stops.map((s, idx) => ({
-              tenantId,
-              transportOrderId: newOrder!.id,
-              sequence: idx + 1,
-              type: s.type,
-              addressLine1: s.addressLine1,
-              addressLine2: s.addressLine2 ?? null,
-              city: s.city,
-              postalCode: s.postalCode,
-              country: s.country,
-              plannedAt: s.plannedAt ? new Date(s.plannedAt) : null,
-            })),
-          });
-        }
-
-        // ---- Items / reserving units
-        for (const [inventoryItemId, agg] of aggregatedEntries) {
-          const { quantity, batchId, mixedBatches } = agg;
-
-          const unitWhere: any = {
+        const existing = await tx.transportOrder.findMany({
+          where: {
             tenantId,
-            inventoryItemId,
-            status: InventoryUnitStatus.Available,
-            transportOrderId: null,
-          };
-          if (batchId && !mixedBatches) unitWhere.batchId = batchId;
+            orderRef: { in: orderRefs },
+          },
+          select: { orderRef: true },
+        });
 
-          // FIFO select unit IDs
-          const availableUnits = await tx.inventory_units.findMany({
-            where: unitWhere,
-            orderBy: { createdAt: "asc" },
-            take: quantity,
-            select: { id: true },
-          });
-
-          if (availableUnits.length < quantity) {
-            const item = await tx.inventory_items.findUnique({
-              where: { id: inventoryItemId },
-              select: { sku: true },
-            });
-
-            throw new BadRequestException(
-              `Not enough available units for item ${
-                item?.sku ?? inventoryItemId
-              } (requested ${quantity}, available ${availableUnits.length})`,
-            );
-          }
-
-          const unitIds = availableUnits.map((u) => u.id);
-
-          // Reserve units
-          await tx.inventory_units.updateMany({
-            where: { tenantId, id: { in: unitIds } },
-            data: {
-              status: InventoryUnitStatus.Reserved,
-              transportOrderId: newOrder!.id,
-            },
-          });
-
-          const effectiveBatchId = mixedBatches ? null : (batchId ?? null);
-
-          // Upsert order item line
-          const orderItem = await tx.transport_order_items.upsert({
-            where: {
-              transportOrderId_inventoryItemId: {
-                transportOrderId: newOrder!.id,
-                inventoryItemId,
-              },
-            },
-            create: {
-              tenantId,
-              transportOrderId: newOrder!.id,
-              inventoryItemId,
-              batchId: effectiveBatchId,
-              qty: quantity,
-            },
-            update: {
-              qty: quantity,
-              batchId: effectiveBatchId,
-            },
-            select: { id: true },
-          });
-
-          // Link reserved units
-          await tx.transport_order_item_units.createMany({
-            data: unitIds.map((inventoryUnitId) => ({
-              tenantId,
-              transportOrderItemId: orderItem.id,
-              inventoryUnitId,
-            })),
-            skipDuplicates: true,
+        if (existing.length) {
+          const duplicateRef = existing[0].orderRef;
+          throw new ConflictException({
+            code: "DUPLICATE_ORDER_REF",
+            message:
+              "Order with this orderRef already exists for this tenant in the database",
+            detail: { orderRef: duplicateRef },
           });
         }
 
-        return tx.transportOrder.findUniqueOrThrow({
-          where: { id: newOrder!.id },
-        });
+        const allocatedRefs = await this.allocateInternalRefBlock(
+          tx,
+          tenantId,
+          yyyy,
+          mm,
+          orders.length,
+        );
+
+        const result: CreatedOrderSummary[] = [];
+
+        for (let i = 0; i < orders.length; i++) {
+          const dto = orders[i];
+          const allocatedInternalRef = allocatedRefs[i];
+
+          const order = await this.createOneOrderInTransaction(
+            tx,
+            tenantId,
+            dto,
+            dto.internalRef?.trim() || allocatedInternalRef,
+          );
+
+          result.push({
+            id: order.id,
+            internalRef: (order as any).internalRef ?? allocatedInternalRef,
+            externalRef: dto.orderRef ?? undefined,
+          });
+        }
+
+        return result;
       },
-      // give Render/DB breathing room (you already saw P2028)
       { maxWait: 30_000, timeout: 60_000 },
     );
 
-    return this.toDto(order);
+    return {
+      createdCount: created.length,
+      created,
+    };
   }
 
   async listOrders(

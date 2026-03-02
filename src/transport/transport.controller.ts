@@ -17,7 +17,10 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
-import { TransportService } from "./transport.service";
+import {
+  TransportService,
+  CreateOrdersBatchResult,
+} from "./transport.service";
 import { CreateOrderDto } from "./dto/create-order.dto";
 import { OrderDto } from "./dto/order.dto";
 import { TripDto } from "./dto/trip.dto";
@@ -40,10 +43,17 @@ export class TransportController {
   @Roles(Role.ADMIN, Role.OPS)
   async createOrder(
     @Request() req: any,
-    @Body() dto: CreateOrderDto,
-  ): Promise<OrderDto> {
+    @Body() body: any,
+  ): Promise<OrderDto | CreateOrdersBatchResult> {
     const tenantId = req.tenant.tenantId;
-    return this.transportService.createOrder(tenantId, dto);
+    // Backward compatible: if body.orders is not present, treat as single DTO
+    if (!body || !Array.isArray(body.orders)) {
+      return this.transportService.createOrder(tenantId, body as CreateOrderDto);
+    }
+
+    return this.transportService.createOrder(tenantId, {
+      orders: body.orders as CreateOrderDto[],
+    });
   }
 
   @Get()
