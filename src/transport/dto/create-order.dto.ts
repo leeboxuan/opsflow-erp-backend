@@ -10,6 +10,7 @@ import {
   Matches,
   MaxLength,
   IsInt,
+  IsEnum,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -17,7 +18,7 @@ import { StopType } from '@prisma/client';
 
 export class CreateOrderStopDto {
   @ApiProperty({ enum: StopType })
-  @IsString()
+  @IsEnum(StopType)
   type: StopType;
 
   @ApiProperty()
@@ -39,6 +40,10 @@ export class CreateOrderStopDto {
 
   @ApiProperty()
   @IsString()
+  // Prefer ISO3166-1 alpha-2 codes (e.g. "SG")
+  @Matches(/^[A-Z]{2}$/, {
+    message: 'country must be ISO 3166-1 alpha-2 code (e.g. SG)',
+  })
   country: string;
 
   @ApiPropertyOptional()

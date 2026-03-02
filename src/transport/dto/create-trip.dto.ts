@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsEnum,
   ValidateNested,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { StopType } from '@prisma/client';
@@ -31,6 +32,9 @@ export class CreateStopDto {
   postalCode: string;
 
   @IsString()
+  @Matches(/^[A-Z]{2}$/, {
+    message: 'country must be ISO 3166-1 alpha-2 code (e.g. SG)',
+  })
   country: string;
 
   @IsOptional()

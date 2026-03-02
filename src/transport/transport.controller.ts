@@ -15,6 +15,8 @@ import {
   Req,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
+import { plainToInstance } from "class-transformer";
+import { validate } from "class-validator";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
 import {
@@ -22,6 +24,7 @@ import {
   CreateOrdersBatchResult,
 } from "./transport.service";
 import { CreateOrderDto } from "./dto/create-order.dto";
+import { CreateOrdersBatchDto } from "./dto/create-orders-batch.dto";
 import { OrderDto } from "./dto/order.dto";
 import { TripDto } from "./dto/trip.dto";
 import { RoleGuard, Roles } from "@/auth/guards/role.guard";
@@ -38,6 +41,21 @@ import { UpdateDoDto } from "./dto/update-do.dto";
 export class TransportController {
   constructor(private readonly transportService: TransportService) {}
 
+  private async validateRequestBody<T extends object>(cls: new () => T, body: any): Promise<T> {
+    const instance = plainToInstance(cls, body);
+    const errors = await validate(instance as any, {
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      forbidUnknownValues: true,
+    });
+
+    if (errors.length) {
+      throw new BadRequestException(errors);
+    }
+
+    return instance;
+  }
+
   @Post()
   @UseGuards(RoleGuard)
   @Roles(Role.ADMIN, Role.OPS)
@@ -46,14 +64,16 @@ export class TransportController {
     @Body() body: any,
   ): Promise<OrderDto | CreateOrdersBatchResult> {
     const tenantId = req.tenant.tenantId;
-    // Backward compatible: if body.orders is not present, treat as single DTO
-    if (!body || !Array.isArray(body.orders)) {
-      return this.transportService.createOrder(tenantId, body as CreateOrderDto);
+
+    // If request body contains "orders", treat as batch.
+    if (body && Object.prototype.hasOwnProperty.call(body, "orders")) {
+      const batch = await this.validateRequestBody(CreateOrdersBatchDto, body);
+      return this.transportService.createOrder(tenantId, { orders: batch.orders });
     }
 
-    return this.transportService.createOrder(tenantId, {
-      orders: body.orders as CreateOrderDto[],
-    });
+    // Backward compatible: single DTO payload
+    const dto = await this.validateRequestBody(CreateOrderDto, body);
+    return this.transportService.createOrder(tenantId, dto);
   }
 
   @Get()
