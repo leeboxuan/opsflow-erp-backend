@@ -138,4 +138,8 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   currency?: string;
+
+  @IsOptional()
+  @IsString()
+  customerCompanyId?: string;
 }

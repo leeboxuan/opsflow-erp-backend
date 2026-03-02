@@ -172,7 +172,14 @@ export class TransportService {
         throw new BadRequestException(`Inventory item not found: ${missing[0]}`);
       }
     }
-
+    if (dto.customerCompanyId) {
+      const exists = await this.prisma.customer_companies.findFirst({
+        where: { id: dto.customerCompanyId, tenantId },
+        select: { id: true },
+      });
+      if (!exists) throw new BadRequestException("Invalid customerCompanyId");
+    }
+    
     const newOrder = await tx.transportOrder.create({
       data: {
         tenantId,
@@ -185,6 +192,7 @@ export class TransportService {
         status: ORDER_STATUS_OPEN,
         priceCents: dto.priceCents ?? null,
         currency: dto.currency ?? "SGD",
+        customerCompanyId: dto.customerCompanyId ?? null,
       },
       select: { id: true },
     });

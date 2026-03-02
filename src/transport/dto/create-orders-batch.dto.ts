@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { IsArray, ValidateNested, ArrayMinSize } from "class-validator";
+import { IsArray, ValidateNested, ArrayMinSize, IsOptional, IsString } from "class-validator";
 import { CreateOrderDto } from "./create-order.dto";
 
 export class CreateOrdersBatchDto {
@@ -8,4 +8,8 @@ export class CreateOrdersBatchDto {
   @ValidateNested({ each: true })
   @Type(() => CreateOrderDto)
   orders!: CreateOrderDto[];
+
+  @IsOptional()
+  @IsString()
+  customerCompanyId?: string;
 }
