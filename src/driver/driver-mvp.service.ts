@@ -35,14 +35,13 @@ type OrderLite = {
 };
 
 function toOrderCard(o: any) {
-  const items =
-    Array.isArray(o.transport_order_items)
-      ? o.transport_order_items.map((it: any) => ({
-          sku: it?.inventory_item?.sku ?? null,
-          name: it?.inventory_item?.name ?? null,
-          qty: it?.qty ?? 0,
-        }))
-      : [];
+  const items = Array.isArray(o.transport_order_items)
+    ? o.transport_order_items.map((it: any) => ({
+        sku: it?.inventory_item?.sku ?? null,
+        name: it?.inventory_item?.name ?? null,
+        qty: it?.qty ?? 0,
+      }))
+    : [];
 
   const { transport_order_items, ...rest } = o;
   return { ...rest, items };
@@ -90,6 +89,38 @@ export class DriverMvpService {
     private readonly googleMaps: GoogleMapsService,
   ) {}
 
+  private async ensureTripPlanned(tx: any, tripId: string) {
+    const stops = await tx.stop.findMany({
+      where: { tripId },
+      select: { plannedAt: true, sequence: true },
+      orderBy: { sequence: "asc" },
+    });
+
+    // If no stops, keep it Draft (or you could delete trip later)
+    if (!stops.length) return;
+
+    const plannedTimes = stops
+      .map((s: any) => s.plannedAt)
+      .filter(Boolean) as Date[];
+    const plannedStartAt =
+      plannedTimes.length > 0
+        ? new Date(Math.min(...plannedTimes.map((d) => d.getTime())))
+        : new Date();
+    const plannedEndAt =
+      plannedTimes.length > 0
+        ? new Date(Math.max(...plannedTimes.map((d) => d.getTime())))
+        : plannedStartAt;
+
+    await tx.trip.update({
+      where: { id: tripId },
+      data: {
+        status: TripStatus.Planned,
+        // Only set if missing (so you don’t overwrite admin scheduling later)
+        plannedStartAt: plannedStartAt,
+        plannedEndAt: plannedEndAt,
+      },
+    });
+  }
   /**
    * DRIVER INBOX
    * - readyToAccept: status=Open AND not assigned into any trip stop
@@ -110,18 +141,25 @@ export class DriverMvpService {
         where: {
           tenantId,
           stops: { some: { trip: { assignedDriverUserId: driverUserId } } },
-          status: { in: [OrderStatus.Planned, OrderStatus.Dispatched, OrderStatus.InTransit, OrderStatus.Delivered] },
+          status: {
+            in: [
+              OrderStatus.Planned,
+              OrderStatus.Dispatched,
+              OrderStatus.InTransit,
+              OrderStatus.Delivered,
+            ],
+          },
         },
         orderBy: { updatedAt: "desc" },
         select: orderCardSelect,
       }),
     ]);
-  
+
     const [readyToAccept, inMyTrips] = await Promise.all([
       this.hydrateOrderCardsWithItems(tenantId, readyToAcceptRaw),
       this.hydrateOrderCardsWithItems(tenantId, inMyTripsRaw),
     ]);
-  
+
     return {
       readyToAccept: { count: readyToAccept.length, orders: readyToAccept },
       inMyTrips: { count: inMyTrips.length, orders: inMyTrips },
@@ -141,8 +179,9 @@ export class DriverMvpService {
       orderBy: { createdAt: "asc" },
       select: orderCardSelect,
     });
-  
-    return { count: orders.length, orders: orders.map(toOrderCard) };  }
+
+    return { count: orders.length, orders: orders.map(toOrderCard) };
+  }
 
   /**
    * ACCEPT ORDER
@@ -159,7 +198,11 @@ export class DriverMvpService {
       await this.addOrderToTrip(tenantId, driverUserId, tripId, orderId);
       return { ok: true, mode: "addedToTrip", tripId };
     }
-    const trip = await this.createTripFromOrder(tenantId, driverUserId, orderId);
+    const trip = await this.createTripFromOrder(
+      tenantId,
+      driverUserId,
+      orderId,
+    );
     return { ok: true, mode: "createdTrip", tripId: trip.id };
   }
 
@@ -180,7 +223,11 @@ export class DriverMvpService {
     return { line1, line2, city, postalCode, country };
   }
 
-  async createTripFromOrder(tenantId: string, driverUserId: string, orderId: string) {
+  async createTripFromOrder(
+    tenantId: string,
+    driverUserId: string,
+    orderId: string,
+  ) {
     const order = await (this.prisma as any).transportOrder.findFirst({
       where: {
         id: orderId,
@@ -190,58 +237,71 @@ export class DriverMvpService {
       },
       include: { stops: { orderBy: { createdAt: "asc" } } },
     });
-  
+
     if (!order) throw new BadRequestException("Order not available to accept");
-  
+
     const existingStop = order.stops?.find((s: any) => !s.tripId);
-    if (!existingStop) throw new BadRequestException("Order has no available stop to attach");
-  
-    const trip = await (this.prisma as any).trip.create({
-      data: {
-        tenantId,
-        status: TripStatus.Draft,
-        assignedDriverUserId: driverUserId,
-        routeVersion: 1,
-      },
+    if (!existingStop)
+      throw new BadRequestException("Order has no available stop to attach");
+
+    const trip = await (this.prisma as any).$transaction(async (tx: any) => {
+      const createdTrip = await tx.trip.create({
+        data: {
+          tenantId,
+          status: TripStatus.Draft, // will be flipped to Planned below
+          assignedDriverUserId: driverUserId,
+          routeVersion: 1,
+        },
+      });
+
+      await tx.stop.update({
+        where: { id: existingStop.id },
+        data: {
+          tripId: createdTrip.id,
+          sequence: 1,
+          status: StopStatus.Pending,
+        },
+      });
+
+      await tx.transportOrder.update({
+        where: { id: order.id },
+        data: { status: OrderStatus.Planned },
+      });
+
+      await this.ensureTripPlanned(tx, createdTrip.id);
+
+      return createdTrip;
     });
-  
-    // Attach the EXISTING stop instead of creating a new one
-    await (this.prisma as any).stop.update({
-      where: { id: existingStop.id },
-      data: {
-        tripId: trip.id,
-        sequence: 1,
-        status: StopStatus.Pending,
-      },
-    });
-  
-    await (this.prisma as any).transportOrder.update({
-      where: { id: order.id },
-      data: { status: OrderStatus.Planned },
-    });
-  
+
     await this.eventLogService.logEvent(
       tenantId,
       "Trip",
       trip.id,
       "TRIP_CREATED_FROM_ORDER",
-      { orderId: order.id, stopId: existingStop.id }
+      { orderId: order.id, stopId: existingStop.id },
     );
-  
+
     return trip;
   }
 
-  async addOrderToTrip(tenantId: string, driverUserId: string, tripId: string, orderId: string) {
+  async addOrderToTrip(
+    tenantId: string,
+    driverUserId: string,
+    tripId: string,
+    orderId: string,
+  ) {
     const trip = await (this.prisma as any).trip.findFirst({
       where: { id: tripId, tenantId, assignedDriverUserId: driverUserId },
       include: { stops: true },
     });
     if (!trip) throw new NotFoundException("Trip not found");
-  
+
     if (![TripStatus.Draft, TripStatus.Planned].includes(trip.status)) {
-      throw new BadRequestException("Can only add orders to Draft/Planned trips");
+      throw new BadRequestException(
+        "Can only add orders to Draft/Planned trips",
+      );
     }
-  
+
     const order = await (this.prisma as any).transportOrder.findFirst({
       where: {
         id: orderId,
@@ -252,34 +312,40 @@ export class DriverMvpService {
       include: { stops: { orderBy: { createdAt: "asc" } } },
     });
     if (!order) throw new BadRequestException("Order not available to accept");
-  
+
     const existingStop = order.stops?.find((s: any) => !s.tripId);
-    if (!existingStop) throw new BadRequestException("Order has no available stop to attach");
-  
-    const nextSeq = Math.max(0, ...(trip.stops.map((s: any) => s.sequence ?? 0))) + 1;
-  
-    await (this.prisma as any).stop.update({
-      where: { id: existingStop.id },
-      data: {
-        tripId: trip.id,
-        sequence: nextSeq,
-        status: StopStatus.Pending,
-      },
+    if (!existingStop)
+      throw new BadRequestException("Order has no available stop to attach");
+
+    const nextSeq =
+      Math.max(0, ...trip.stops.map((s: any) => s.sequence ?? 0)) + 1;
+
+    await (this.prisma as any).$transaction(async (tx: any) => {
+      await tx.stop.update({
+        where: { id: existingStop.id },
+        data: {
+          tripId: trip.id,
+          sequence: nextSeq,
+          status: StopStatus.Pending,
+        },
+      });
+
+      await tx.transportOrder.update({
+        where: { id: order.id },
+        data: { status: OrderStatus.Planned },
+      });
+
+      await this.ensureTripPlanned(tx, trip.id);
     });
-  
-    await (this.prisma as any).transportOrder.update({
-      where: { id: order.id },
-      data: { status: OrderStatus.Planned },
-    });
-  
+
     await this.eventLogService.logEvent(
       tenantId,
       "Trip",
       trip.id,
       "ORDER_ADDED_TO_TRIP",
-      { orderId: order.id, stopId: existingStop.id, stopSequence: nextSeq }
+      { orderId: order.id, stopId: existingStop.id, stopSequence: nextSeq },
     );
-  
+
     return { ok: true };
   }
 
@@ -343,11 +409,15 @@ export class DriverMvpService {
     tripStatus: TripStatus,
   ): TripLockStateDto {
     const sorted = [...stops].sort((a, b) => a.sequence - b.sequence);
-    const completedCount = sorted.filter((s) => s.status === StopStatus.Completed).length;
-    const allStopsCompleted = sorted.length > 0 && completedCount === sorted.length;
+    const completedCount = sorted.filter(
+      (s) => s.status === StopStatus.Completed,
+    ).length;
+    const allStopsCompleted =
+      sorted.length > 0 && completedCount === sorted.length;
 
     const nextStop = sorted.find((s) => s.status !== StopStatus.Completed);
-    const canStartStopId = nextStop?.status === StopStatus.Pending ? nextStop.id : null;
+    const canStartStopId =
+      nextStop?.status === StopStatus.Pending ? nextStop.id : null;
 
     const canStartTrip =
       tripStatus === TripStatus.Dispatched &&
@@ -411,10 +481,17 @@ export class DriverMvpService {
         },
       },
     });
-    if (!trip) throw new NotFoundException("Trip not found or not assigned to you");
+    if (!trip)
+      throw new NotFoundException("Trip not found or not assigned to you");
 
-    if (![TripStatus.Dispatched, TripStatus.Planned, TripStatus.Draft].includes(trip.status)) {
-      throw new BadRequestException(`Trip cannot be accepted in status ${trip.status}`);
+    if (
+      ![TripStatus.Dispatched, TripStatus.Planned, TripStatus.Draft].includes(
+        trip.status,
+      )
+    ) {
+      throw new BadRequestException(
+        `Trip cannot be accepted in status ${trip.status}`,
+      );
     }
 
     let vehicleId = trip.vehicleId;
@@ -442,11 +519,17 @@ export class DriverMvpService {
       },
     });
 
-    await this.eventLogService.logEvent(tenantId, "Trip", tripId, "TRIP_ACCEPTED", {
-      vehicleNo: dto.vehicleNo,
-      trailerNo: dto.trailerNo,
-      vehicleId: updated.vehicleId,
-    });
+    await this.eventLogService.logEvent(
+      tenantId,
+      "Trip",
+      tripId,
+      "TRIP_ACCEPTED",
+      {
+        vehicleNo: dto.vehicleNo,
+        trailerNo: dto.trailerNo,
+        vehicleId: updated.vehicleId,
+      },
+    );
 
     const lockState = this.computeLockState(updated.stops, updated.status);
     return {
@@ -469,41 +552,67 @@ export class DriverMvpService {
   /**
    * POST /trips/:tripId/start — start trip (transition to InTransit)
    */
-  async startTrip(tenantId: string, driverUserId: string, tripId: string): Promise<DriverTripDto> {
+  async startTrip(
+    tenantId: string,
+    driverUserId: string,
+    tripId: string,
+  ): Promise<DriverTripDto> {
     const trip = await this.prisma.trip.findFirst({
       where: { id: tripId, tenantId, assignedDriverUserId: driverUserId },
       include: {
-        stops: { orderBy: { sequence: "asc" }, include: { transportOrder: true, podPhotoDocuments: true } },
+        stops: {
+          orderBy: { sequence: "asc" },
+          include: { transportOrder: true, podPhotoDocuments: true },
+        },
       },
     });
-    if (!trip) throw new NotFoundException("Trip not found or not assigned to you");
+    if (!trip)
+      throw new NotFoundException("Trip not found or not assigned to you");
     if (trip.status !== TripStatus.Dispatched) {
       throw new BadRequestException(
         `Trip can only be started when status is Dispatched (current: ${trip.status})`,
       );
     }
     const allPending = trip.stops.every((s) => s.status === StopStatus.Pending);
-    if (!allPending) throw new BadRequestException("All stops must be Pending to start trip");
+    if (!allPending)
+      throw new BadRequestException("All stops must be Pending to start trip");
 
     const updated = await this.prisma.trip.update({
       where: { id: tripId },
       data: { status: TripStatus.InTransit, startedAt: new Date() },
       include: {
-        stops: { orderBy: { sequence: "asc" }, include: { transportOrder: true, podPhotoDocuments: true } },
+        stops: {
+          orderBy: { sequence: "asc" },
+          include: { transportOrder: true, podPhotoDocuments: true },
+        },
       },
     });
 
     await (this.prisma as any).inventory_units.updateMany({
-      where: { tenantId, tripId: trip.id, status: InventoryUnitStatus.Dispatched },
+      where: {
+        tenantId,
+        tripId: trip.id,
+        status: InventoryUnitStatus.Dispatched,
+      },
       data: { status: InventoryUnitStatus.InTransit },
     });
 
     await (this.prisma as any).transportOrder.updateMany({
-      where: { tenantId, stops: { some: { tripId: trip.id } }, status: OrderStatus.Dispatched },
+      where: {
+        tenantId,
+        stops: { some: { tripId: trip.id } },
+        status: OrderStatus.Dispatched,
+      },
       data: { status: OrderStatus.InTransit },
     });
 
-    await this.eventLogService.logEvent(tenantId, "Trip", tripId, "TRIP_STARTED", {});
+    await this.eventLogService.logEvent(
+      tenantId,
+      "Trip",
+      tripId,
+      "TRIP_STARTED",
+      {},
+    );
     const lockState = this.computeLockState(updated.stops, updated.status);
 
     return {
@@ -526,7 +635,11 @@ export class DriverMvpService {
   /**
    * POST /stops/:stopId/start — start stop N (only if stop N-1 is completed)
    */
-  async startStop(tenantId: string, driverUserId: string, stopId: string): Promise<DriverStopDto> {
+  async startStop(
+    tenantId: string,
+    driverUserId: string,
+    stopId: string,
+  ): Promise<DriverStopDto> {
     const stop = await this.prisma.stop.findFirst({
       where: { id: stopId, tenantId },
       include: { trip: true, transportOrder: true, podPhotoDocuments: true },
@@ -536,11 +649,17 @@ export class DriverMvpService {
       throw new ForbiddenException("Stop is not on a trip assigned to you");
     }
     if (stop.status !== StopStatus.Pending) {
-      throw new BadRequestException(`Stop is not Pending (current: ${stop.status})`);
+      throw new BadRequestException(
+        `Stop is not Pending (current: ${stop.status})`,
+      );
     }
 
     const prevStops = await this.prisma.stop.findMany({
-      where: { tripId: stop.tripId!, tenantId, sequence: { lt: stop.sequence! } },
+      where: {
+        tripId: stop.tripId!,
+        tenantId,
+        sequence: { lt: stop.sequence! },
+      },
       orderBy: { sequence: "desc" },
       take: 1,
     });
@@ -556,29 +675,42 @@ export class DriverMvpService {
       include: { transportOrder: true, podPhotoDocuments: true },
     });
 
-    await this.eventLogService.logEvent(tenantId, "Stop", stopId, "STOP_STARTED", {});
+    await this.eventLogService.logEvent(
+      tenantId,
+      "Stop",
+      stopId,
+      "STOP_STARTED",
+      {},
+    );
     return this.toDriverStopDto(updated);
   }
-  
+
   private async hydrateOrderCardsWithItems(tenantId: string, orders: any[]) {
     const itemIds = Array.from(
       new Set(
         orders
-          .flatMap((o) => (o.transport_order_items ?? []) as Array<{ inventoryItemId: string }>)
+          .flatMap(
+            (o) =>
+              (o.transport_order_items ?? []) as Array<{
+                inventoryItemId: string;
+              }>,
+          )
           .map((it) => it.inventoryItemId)
-          .filter(Boolean)
-      )
+          .filter(Boolean),
+      ),
     );
-  
-    const inventoryItems = (await (this.prisma as any).inventory_items.findMany({
-      where: { tenantId, id: { in: itemIds } },
-      select: { id: true, sku: true, name: true },
-    })) as InventoryItemMini[];
-  
+
+    const inventoryItems = (await (this.prisma as any).inventory_items.findMany(
+      {
+        where: { tenantId, id: { in: itemIds } },
+        select: { id: true, sku: true, name: true },
+      },
+    )) as InventoryItemMini[];
+
     const byId = new Map<string, InventoryItemMini>(
-      inventoryItems.map((x) => [x.id, x])
+      inventoryItems.map((x) => [x.id, x]),
     );
-  
+
     return orders.map((o) => {
       const items = (o.transport_order_items ?? []).map((it: any) => {
         const inv = byId.get(it.inventoryItemId);
@@ -589,7 +721,7 @@ export class DriverMvpService {
           qty: it.qty ?? 0,
         };
       });
-  
+
       const { transport_order_items, ...rest } = o;
       return { ...rest, items };
     });
@@ -604,15 +736,18 @@ export class DriverMvpService {
     stopId: string,
     dto: CompleteStopDto,
   ): Promise<DriverStopDto> {
-    if (!dto.podPhotoKeys?.length) throw new BadRequestException("At least one POD photo key is required");
+    if (!dto.podPhotoKeys?.length)
+      throw new BadRequestException("At least one POD photo key is required");
 
     const stop = await this.prisma.stop.findFirst({
       where: { id: stopId, tenantId },
       include: { trip: true, transportOrder: true, podPhotoDocuments: true },
     });
     if (!stop) throw new NotFoundException("Stop not found");
-    if (stop.trip.assignedDriverUserId !== driverUserId) throw new ForbiddenException("Stop is not on a trip assigned to you");
-    if (stop.status === StopStatus.Completed) throw new BadRequestException("Stop is already completed");
+    if (stop.trip.assignedDriverUserId !== driverUserId)
+      throw new ForbiddenException("Stop is not on a trip assigned to you");
+    if (stop.status === StopStatus.Completed)
+      throw new BadRequestException("Stop is already completed");
 
     const maxSequence = await this.prisma.stop.aggregate({
       where: { tripId: stop.tripId! },
@@ -629,7 +764,11 @@ export class DriverMvpService {
 
       await tx.podPhotoDocument.deleteMany({ where: { stopId } });
       await tx.podPhotoDocument.createMany({
-        data: dto.podPhotoKeys.map((photoKey) => ({ tenantId, stopId, photoKey })),
+        data: dto.podPhotoKeys.map((photoKey) => ({
+          tenantId,
+          stopId,
+          photoKey,
+        })),
       });
 
       if (updatedStop.transportOrderId) {
@@ -639,20 +778,24 @@ export class DriverMvpService {
         });
 
         if (deliveredOrder.priceCents && deliveredOrder.priceCents > 0) {
-          const driver = await tx.drivers.findFirst({ where: { tenantId, userId: driverUserId } });
+          const driver = await tx.drivers.findFirst({
+            where: { tenantId, userId: driverUserId },
+          });
           if (driver) {
-            await tx.driverWalletTransaction.create({
-              data: {
-                tenantId,
-                driverId: driver.id,
-                tripId: stop.tripId!,
-                transportOrderId: deliveredOrder.id,
-                amountCents: deliveredOrder.priceCents,
-                currency: deliveredOrder.currency ?? "SGD",
-                type: "OrderDelivered",
-                description: `Order ${deliveredOrder.internalRef ?? deliveredOrder.orderRef} delivered`,
-              },
-            }).catch(() => {});
+            await tx.driverWalletTransaction
+              .create({
+                data: {
+                  tenantId,
+                  driverId: driver.id,
+                  tripId: stop.tripId!,
+                  transportOrderId: deliveredOrder.id,
+                  amountCents: deliveredOrder.priceCents,
+                  currency: deliveredOrder.currency ?? "SGD",
+                  type: "OrderDelivered",
+                  description: `Order ${deliveredOrder.internalRef ?? deliveredOrder.orderRef} delivered`,
+                },
+              })
+              .catch(() => {});
           }
         }
 
@@ -661,7 +804,13 @@ export class DriverMvpService {
             where: {
               tenantId,
               transportOrderId: updatedStop.transportOrderId,
-              status: { in: [InventoryUnitStatus.InTransit, InventoryUnitStatus.Reserved, InventoryUnitStatus.Dispatched] },
+              status: {
+                in: [
+                  InventoryUnitStatus.InTransit,
+                  InventoryUnitStatus.Reserved,
+                  InventoryUnitStatus.Dispatched,
+                ],
+              },
             },
             data: { status: InventoryUnitStatus.Delivered },
           });
@@ -674,7 +823,9 @@ export class DriverMvpService {
           data: { status: TripStatus.Delivered, closedAt: new Date() },
         });
 
-        const driver = await tx.drivers.findFirst({ where: { tenantId, userId: driverUserId } });
+        const driver = await tx.drivers.findFirst({
+          where: { tenantId, userId: driverUserId },
+        });
         if (driver) {
           await tx.driverWalletTransaction.create({
             data: {
@@ -696,23 +847,41 @@ export class DriverMvpService {
       });
     });
 
-    await this.eventLogService.logEvent(tenantId, "Stop", stopId, "STOP_COMPLETED", {
-      podPhotoKeys: dto.podPhotoKeys,
-      isFinalStop,
-      comment: (dto as any)?.comment ?? null,
-    });
+    await this.eventLogService.logEvent(
+      tenantId,
+      "Stop",
+      stopId,
+      "STOP_COMPLETED",
+      {
+        podPhotoKeys: dto.podPhotoKeys,
+        isFinalStop,
+        comment: (dto as any)?.comment ?? null,
+      },
+    );
 
     const comment = (dto as any)?.comment;
     if (comment && String(comment).trim()) {
-      await this.eventLogService.logEvent(tenantId, "Stop", stopId, "STOP_COMMENT", {
-        comment: String(comment).trim(),
-        tripId: stop.tripId,
-        transportOrderId: stop.transportOrderId,
-      });
+      await this.eventLogService.logEvent(
+        tenantId,
+        "Stop",
+        stopId,
+        "STOP_COMMENT",
+        {
+          comment: String(comment).trim(),
+          tripId: stop.tripId,
+          transportOrderId: stop.transportOrderId,
+        },
+      );
     }
 
     if (isFinalStop) {
-      await this.eventLogService.logEvent(tenantId, "Trip", stop.tripId, "TRIP_DELIVERED", {});
+      await this.eventLogService.logEvent(
+        tenantId,
+        "Trip",
+        stop.tripId,
+        "TRIP_DELIVERED",
+        {},
+      );
     }
 
     return this.toDriverStopDto(updated!);
@@ -721,17 +890,28 @@ export class DriverMvpService {
   /**
    * GET /driver/wallet?month=YYYY-MM
    */
-  async getWallet(tenantId: string, driverUserId: string, month: string): Promise<DriverWalletDto> {
+  async getWallet(
+    tenantId: string,
+    driverUserId: string,
+    month: string,
+  ): Promise<DriverWalletDto> {
     const [y, m] = month.split("-").map(Number);
-    if (!y || !m || m < 1 || m > 12) throw new BadRequestException("Invalid month format; use YYYY-MM");
+    if (!y || !m || m < 1 || m > 12)
+      throw new BadRequestException("Invalid month format; use YYYY-MM");
     const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0));
     const end = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0));
 
-    const driver = await this.prisma.drivers.findFirst({ where: { tenantId, userId: driverUserId } });
+    const driver = await this.prisma.drivers.findFirst({
+      where: { tenantId, userId: driverUserId },
+    });
     if (!driver) return { month, transactions: [], totalCents: 0 };
 
     const transactions = await this.prisma.driverWalletTransaction.findMany({
-      where: { tenantId, driverId: driver.id, createdAt: { gte: start, lt: end } },
+      where: {
+        tenantId,
+        driverId: driver.id,
+        createdAt: { gte: start, lt: end },
+      },
       orderBy: { createdAt: "desc" },
     });
 
@@ -799,7 +979,12 @@ export class DriverMvpService {
     return { ok: true };
   }
 
-  async reorderStops(tenantId: string, driverUserId: string, tripId: string, stopIds: string[]) {
+  async reorderStops(
+    tenantId: string,
+    driverUserId: string,
+    tripId: string,
+    stopIds: string[],
+  ) {
     const trip = await (this.prisma as any).trip.findFirst({
       where: { id: tripId, tenantId, assignedDriverUserId: driverUserId },
     });
@@ -836,8 +1021,11 @@ export class DriverMvpService {
     });
     if (!trip) throw new NotFoundException("Trip not found");
 
-    const unitSkus = Array.isArray(body.unitSkus) ? body.unitSkus.filter(Boolean) : [];
-    if (unitSkus.length === 0) throw new BadRequestException("unitSkus required");
+    const unitSkus = Array.isArray(body.unitSkus)
+      ? body.unitSkus.filter(Boolean)
+      : [];
+    if (unitSkus.length === 0)
+      throw new BadRequestException("unitSkus required");
 
     const disposition = body.disposition;
     const nextStatus =
@@ -864,12 +1052,18 @@ export class DriverMvpService {
       data: { status: nextStatus },
     });
 
-    await this.eventLogService.logEvent(tenantId, "Trip", tripId, "RETURN_GOODS_SCANNED", {
-      disposition,
-      nextStatus,
-      unitSkus,
-      updatedCount: result?.count ?? 0,
-    });
+    await this.eventLogService.logEvent(
+      tenantId,
+      "Trip",
+      tripId,
+      "RETURN_GOODS_SCANNED",
+      {
+        disposition,
+        nextStatus,
+        unitSkus,
+        updatedCount: result?.count ?? 0,
+      },
+    );
 
     return { ok: true, updatedCount: result?.count ?? 0, nextStatus };
   }
@@ -884,7 +1078,8 @@ export class DriverMvpService {
       include: { trip: true, transportOrder: true },
     });
 
-    if (!stop?.transportOrder) throw new NotFoundException("Order not found in your trips");
+    if (!stop?.transportOrder)
+      throw new NotFoundException("Order not found in your trips");
     const o: any = stop.transportOrder;
 
     return {
@@ -904,9 +1099,12 @@ export class DriverMvpService {
         phone: o.recipientPhone ?? o.customerPhone ?? "—",
       },
       deliveryAddress: {
-        line1: o.deliveryAddressLine1 ?? o.addressLine1 ?? stop.addressLine1 ?? "—",
-        line2: o.deliveryAddressLine2 ?? o.addressLine2 ?? stop.addressLine2 ?? null,
-        postalCode: o.deliveryPostalCode ?? o.postalCode ?? stop.postalCode ?? null,
+        line1:
+          o.deliveryAddressLine1 ?? o.addressLine1 ?? stop.addressLine1 ?? "—",
+        line2:
+          o.deliveryAddressLine2 ?? o.addressLine2 ?? stop.addressLine2 ?? null,
+        postalCode:
+          o.deliveryPostalCode ?? o.postalCode ?? stop.postalCode ?? null,
         country: o.deliveryCountry ?? o.country ?? stop.country ?? "SG",
       },
       item: {
@@ -942,7 +1140,8 @@ export class DriverMvpService {
       },
       include: { transportOrder: true },
     });
-    if (!stop?.transportOrder) throw new NotFoundException("Order not found in your trips");
+    if (!stop?.transportOrder)
+      throw new NotFoundException("Order not found in your trips");
 
     const updated = await this.prisma.transportOrder.update({
       where: { id: orderId },
@@ -954,19 +1153,31 @@ export class DriverMvpService {
       } as any,
     });
 
-    await this.eventLogService.logEvent(tenantId, "Order", orderId, "DO_SIGNED", {
-      signerName: body.signerName ?? null,
-      signaturePhotoKey: body.signaturePhotoKey,
-    });
+    await this.eventLogService.logEvent(
+      tenantId,
+      "Order",
+      orderId,
+      "DO_SIGNED",
+      {
+        signerName: body.signerName ?? null,
+        signaturePhotoKey: body.signaturePhotoKey,
+      },
+    );
 
     return { ok: true, orderId: updated.id };
   }
 
   private stopAddressString(s: any) {
-    return [s.addressLine1, s.addressLine2, s.postalCode, s.city, s.country].filter(Boolean).join(", ");
+    return [s.addressLine1, s.addressLine2, s.postalCode, s.city, s.country]
+      .filter(Boolean)
+      .join(", ");
   }
 
-  async geocodeTripStops(tenantId: string, driverUserId: string, tripId: string) {
+  async geocodeTripStops(
+    tenantId: string,
+    driverUserId: string,
+    tripId: string,
+  ) {
     const trip = await this.prisma.trip.findFirst({
       where: { id: tripId, tenantId, assignedDriverUserId: driverUserId },
       include: { stops: true },
@@ -1000,15 +1211,22 @@ export class DriverMvpService {
     return { ok: true, updatedCount: updates.length };
   }
 
-  async optimizeTripRoute(tenantId: string, driverUserId: string, tripId: string) {
+  async optimizeTripRoute(
+    tenantId: string,
+    driverUserId: string,
+    tripId: string,
+  ) {
     const trip = await this.prisma.trip.findFirst({
       where: { id: tripId, tenantId, assignedDriverUserId: driverUserId },
       include: { stops: true },
     });
     if (!trip) throw new NotFoundException("Trip not found");
 
-    const stops = [...trip.stops].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
-    if (stops.length < 3) return { ok: true, message: "Not enough stops to optimize" };
+    const stops = [...trip.stops].sort(
+      (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0),
+    );
+    if (stops.length < 3)
+      return { ok: true, message: "Not enough stops to optimize" };
 
     for (const s of stops) {
       if (s.lat && s.lng) continue;
@@ -1032,15 +1250,31 @@ export class DriverMvpService {
     }
 
     const missing = stops.filter((s) => !(s.lat && s.lng));
-    if (missing.length > 0) throw new BadRequestException("Some stops still missing lat/lng (bad address data).");
+    if (missing.length > 0)
+      throw new BadRequestException(
+        "Some stops still missing lat/lng (bad address data).",
+      );
 
     const origin = { lat: stops[0].lat!, lng: stops[0].lng! };
-    const destination = { lat: stops[stops.length - 1].lat!, lng: stops[stops.length - 1].lng! };
-    const waypoints = stops.slice(1, -1).map((s) => ({ lat: s.lat!, lng: s.lng! }));
+    const destination = {
+      lat: stops[stops.length - 1].lat!,
+      lng: stops[stops.length - 1].lng!,
+    };
+    const waypoints = stops
+      .slice(1, -1)
+      .map((s) => ({ lat: s.lat!, lng: s.lng! }));
 
-    const { waypointOrder } = await this.googleMaps.optimizeRoute({ origin, destination, waypoints });
+    const { waypointOrder } = await this.googleMaps.optimizeRoute({
+      origin,
+      destination,
+      waypoints,
+    });
 
-    const optimized = [stops[0], ...waypointOrder.map((idx) => stops[idx + 1]), stops[stops.length - 1]];
+    const optimized = [
+      stops[0],
+      ...waypointOrder.map((idx) => stops[idx + 1]),
+      stops[stops.length - 1],
+    ];
 
     await this.prisma.$transaction([
       ...optimized.map((s, idx) =>
@@ -1055,11 +1289,16 @@ export class DriverMvpService {
       }),
     ]);
 
-    await this.eventLogService.logEvent(tenantId, "Trip", tripId, "TRIP_ROUTE_OPTIMIZED", {
-      waypointOrder,
-    });
+    await this.eventLogService.logEvent(
+      tenantId,
+      "Trip",
+      tripId,
+      "TRIP_ROUTE_OPTIMIZED",
+      {
+        waypointOrder,
+      },
+    );
 
     return { ok: true, waypointOrder };
   }
 }
-
