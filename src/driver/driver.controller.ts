@@ -53,6 +53,14 @@ export class DriverController {
     return this.driverMvpService.listAvailableOrders(tenantId, userId);
   }
 
+  @Get("orders/inbox")
+  @ApiOperation({ summary: "Driver inbox: ready-to-accept + orders in my trips" })
+  async getInbox(@Request() req: any) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverMvpService.getInboxOrders(tenantId, userId);
+  }
+  
   @Post("trips/from-order")
   @ApiOperation({
     summary: "Create a new draft trip from first accepted order",
