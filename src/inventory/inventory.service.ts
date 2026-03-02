@@ -362,7 +362,7 @@ export class InventoryService {
 
     const existing = await this.prisma.inventory_batches.findUnique({
       where: {
-        tenantId_batchCode: {
+        tenantId_containerNumber: {
           tenantId,
           containerNumber,
         },
@@ -649,9 +649,10 @@ export class InventoryService {
 
         // 3) Create batch (containerNumber unique per tenant)
         const existingBatch = await tx.inventory_batches.findUnique({
-          where: { tenantId_batchCode: { tenantId, containerNumber } },
+          where: { tenantId_containerNumber: { tenantId, containerNumber } },
           select: { id: true },
         });
+        
         if (existingBatch) {
           throw new ConflictException(`Batch with code ${containerNumber} already exists`);
         }
