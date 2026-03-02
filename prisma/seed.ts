@@ -15,6 +15,10 @@ import {
 
 const prisma = new PrismaClient();
 
+// Compatibility shim for when Prisma Client hasn't been regenerated after renaming
+// OrderStatus.Draft -> OrderStatus.Open.
+const ORDER_STATUS_OPEN = "Open" as any as OrderStatus;
+
 const TENANT_SLUG = "demo-logistics";
 const TENANT_NAME = "Demo Logistics";
 
@@ -334,9 +338,9 @@ async function createOrderWithStops(params: {
       city: "Singapore",
       postalCode: "408600",
       country: "SG",
-      status: status === OrderStatus.Draft ? StopStatus.Pending : StopStatus.Completed,
+      status: status === ORDER_STATUS_OPEN ? StopStatus.Pending : StopStatus.Completed,
       plannedAt: createdAt,
-      completedAt: status === OrderStatus.Draft ? null : createdAt,
+      completedAt: status === ORDER_STATUS_OPEN ? null : createdAt,
       createdAt,
       updatedAt: createdAt,
     },
@@ -703,7 +707,7 @@ async function main() {
   const base = new Date("2026-02-01T10:00:00.000Z");
 
   const statuses: { ref: string; status: OrderStatus; offsetMin: number; price: number }[] = [
-    { ref: "ORD-DRAFT-001", status: OrderStatus.Draft, offsetMin: 0, price: 1200 },
+    { ref: "ORD-OPEN-001", status: ORDER_STATUS_OPEN, offsetMin: 0, price: 1200 },
     { ref: "ORD-CONF-001", status: OrderStatus.Confirmed, offsetMin: 2, price: 1800 },
     { ref: "ORD-PLAN-001", status: OrderStatus.Planned, offsetMin: 4, price: 2400 },
     { ref: "ORD-DISP-001", status: OrderStatus.Dispatched, offsetMin: 6, price: 2800 },
@@ -795,7 +799,7 @@ async function main() {
 
   console.log("✅ Trips + stop routing seeded");
 
-  // 7) Items + units + wallet (skip Draft/Cancelled)
+    // 7) Items + units + wallet (skip Open/Cancelled)
   for (const o of created) {
     const tripId =
       o.status === OrderStatus.Planned
@@ -806,7 +810,7 @@ async function main() {
         ? tripDelivered.id
         : null;
 
-    const shouldAttach = o.status !== OrderStatus.Draft && o.status !== OrderStatus.Cancelled;
+    const shouldAttach = o.status !== ORDER_STATUS_OPEN && o.status !== OrderStatus.Cancelled;
 
     if (shouldAttach) {
       await attachItemsAndUnits({

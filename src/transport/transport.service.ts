@@ -44,6 +44,10 @@ export interface CreateOrdersBatchResult {
   created: CreatedOrderSummary[];
 }
 
+// NOTE: If Prisma Client types lag behind schema edits, this preserves runtime value "Open"
+// while still keeping the field typed as OrderStatus.
+const ORDER_STATUS_OPEN = "Open" as any as OrderStatus;
+
 @Injectable()
 export class TransportService {
   constructor(
@@ -178,7 +182,7 @@ export class TransportService {
         customerRef: dto.customerName, // legacy
         customerContactNumber: dto.customerContactNumber ?? null,
         notes: dto.notes ?? null,
-        status: OrderStatus.Draft,
+        status: ORDER_STATUS_OPEN,
         priceCents: dto.priceCents ?? null,
         currency: dto.currency ?? "SGD",
       },

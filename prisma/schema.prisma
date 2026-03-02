@@ -127,7 +127,7 @@ model TransportOrder {
   id                    String              @id @default(cuid())
   tenantId              String
   customerRef           String
-  status                OrderStatus         @default(Draft)
+  status                OrderStatus         @default(Open)
   pickupWindowStart     DateTime?
   pickupWindowEnd       DateTime?
   deliveryWindowStart   DateTime?
@@ -421,7 +421,7 @@ enum MembershipStatus {
 }
 
 enum OrderStatus {
-  Draft
+  Open
   Confirmed
   Planned
   Dispatched
