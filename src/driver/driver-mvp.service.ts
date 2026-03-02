@@ -180,12 +180,7 @@ export class DriverMvpService {
     return { line1, line2, city, postalCode, country };
   }
 
-  async createTripFromOrder(
-    tenantId: string,
-    driverUserId: string,
-    orderId: string,
-  ) {
-    // Order must be available: Open AND not in any trip
+  async createTripFromOrder(tenantId: string, driverUserId: string, orderId: string) {
     const order = await (this.prisma as any).transportOrder.findFirst({
       where: {
         id: orderId,
@@ -193,11 +188,14 @@ export class DriverMvpService {
         status: OrderStatus.Open,
         stops: { none: { tripId: { not: null } } },
       },
+      include: { stops: { orderBy: { createdAt: "asc" } } },
     });
-    if (!order) {
-      throw new BadRequestException("Order not available to accept");
-    }
-
+  
+    if (!order) throw new BadRequestException("Order not available to accept");
+  
+    const existingStop = order.stops?.find((s: any) => !s.tripId);
+    if (!existingStop) throw new BadRequestException("Order has no available stop to attach");
+  
     const trip = await (this.prisma as any).trip.create({
       data: {
         tenantId,
@@ -206,54 +204,44 @@ export class DriverMvpService {
         routeVersion: 1,
       },
     });
-
-    const addr = this.pickStopAddressFromOrder(order);
-
-    await (this.prisma as any).stop.create({
+  
+    // Attach the EXISTING stop instead of creating a new one
+    await (this.prisma as any).stop.update({
+      where: { id: existingStop.id },
       data: {
-        tenantId,
         tripId: trip.id,
-        type: StopType.DELIVERY,
         sequence: 1,
-        addressLine1: addr.line1,
-        addressLine2: addr.line2,
-        city: addr.city,
-        postalCode: addr.postalCode,
-        country: addr.country,
-        transportOrderId: order.id,
         status: StopStatus.Pending,
       },
     });
-
+  
     await (this.prisma as any).transportOrder.update({
       where: { id: order.id },
       data: { status: OrderStatus.Planned },
     });
-
-    await this.eventLogService.logEvent(tenantId, "Trip", trip.id, "TRIP_CREATED_FROM_ORDER", {
-      orderId: order.id,
-    });
-
+  
+    await this.eventLogService.logEvent(
+      tenantId,
+      "Trip",
+      trip.id,
+      "TRIP_CREATED_FROM_ORDER",
+      { orderId: order.id, stopId: existingStop.id }
+    );
+  
     return trip;
   }
 
-  async addOrderToTrip(
-    tenantId: string,
-    driverUserId: string,
-    tripId: string,
-    orderId: string,
-  ) {
+  async addOrderToTrip(tenantId: string, driverUserId: string, tripId: string, orderId: string) {
     const trip = await (this.prisma as any).trip.findFirst({
       where: { id: tripId, tenantId, assignedDriverUserId: driverUserId },
       include: { stops: true },
     });
     if (!trip) throw new NotFoundException("Trip not found");
-
+  
     if (![TripStatus.Draft, TripStatus.Planned].includes(trip.status)) {
       throw new BadRequestException("Can only add orders to Draft/Planned trips");
     }
-
-    // Order must be available: Open AND not in any trip
+  
     const order = await (this.prisma as any).transportOrder.findFirst({
       where: {
         id: orderId,
@@ -261,42 +249,37 @@ export class DriverMvpService {
         status: OrderStatus.Open,
         stops: { none: { tripId: { not: null } } },
       },
+      include: { stops: { orderBy: { createdAt: "asc" } } },
     });
-    if (!order) {
-      throw new BadRequestException("Order not available to accept");
-    }
-
-    const nextSeq =
-      Math.max(0, ...(trip.stops.map((s: any) => s.sequence ?? 0))) + 1;
-
-    const addr = this.pickStopAddressFromOrder(order);
-
-    await (this.prisma as any).stop.create({
+    if (!order) throw new BadRequestException("Order not available to accept");
+  
+    const existingStop = order.stops?.find((s: any) => !s.tripId);
+    if (!existingStop) throw new BadRequestException("Order has no available stop to attach");
+  
+    const nextSeq = Math.max(0, ...(trip.stops.map((s: any) => s.sequence ?? 0))) + 1;
+  
+    await (this.prisma as any).stop.update({
+      where: { id: existingStop.id },
       data: {
-        tenantId,
         tripId: trip.id,
-        type: StopType.DELIVERY,
         sequence: nextSeq,
-        addressLine1: addr.line1,
-        addressLine2: addr.line2,
-        city: addr.city,
-        postalCode: addr.postalCode,
-        country: addr.country,
-        transportOrderId: order.id,
         status: StopStatus.Pending,
       },
     });
-
+  
     await (this.prisma as any).transportOrder.update({
       where: { id: order.id },
       data: { status: OrderStatus.Planned },
     });
-
-    await this.eventLogService.logEvent(tenantId, "Trip", trip.id, "ORDER_ADDED_TO_TRIP", {
-      orderId: order.id,
-      stopSequence: nextSeq,
-    });
-
+  
+    await this.eventLogService.logEvent(
+      tenantId,
+      "Trip",
+      trip.id,
+      "ORDER_ADDED_TO_TRIP",
+      { orderId: order.id, stopId: existingStop.id, stopSequence: nextSeq }
+    );
+  
     return { ok: true };
   }
 
