@@ -525,4 +525,44 @@ export class CustomersService {
       userCount: updated._count.users,
     };
   }
+
+
+  async deleteCompany(tenantId: string, companyId: string) {
+    // tenant safety: ensure company belongs to tenant
+    const company = await this.prisma.customer_companies.findFirst({
+      where: { id: companyId, tenantId },
+      select: {
+        id: true,
+        _count: {
+          select: {
+            contacts: true,
+            users: true,
+          },
+        },
+      },
+    });
+  
+    if (!company) throw new NotFoundException("Customer company not found");
+  
+    // ✅ protect against deleting linked records
+    if (company._count.contacts > 0) {
+      throw new BadRequestException(
+        "Cannot delete customer company: contacts exist. Remove contacts first.",
+      );
+    }
+  
+    if (company._count.users > 0) {
+      throw new BadRequestException(
+        "Cannot delete customer company: portal users exist. Remove users first.",
+      );
+    }
+  
+    // If your schema has other links (orders/invoices/etc), add checks here too.
+  
+    await this.prisma.customer_companies.delete({
+      where: { id: companyId },
+    });
+  
+    return { id: companyId, deleted: true };
+  }
 }

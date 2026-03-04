@@ -8,6 +8,7 @@ import {
   Request,
   UseGuards,
   Patch,
+  Delete,
 } from "@nestjs/common";
 import {
   ApiBearerAuth,
@@ -162,5 +163,19 @@ export class CustomersController {
   ) {
     const tenantId = req.tenant.tenantId;
     return this.customersService.updateCompany(tenantId, companyId, dto);
+  }
+
+  @Delete("companies/:companyId")
+  @UseGuards(RoleGuard)
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({
+    summary: "Delete a customer company (Admin/Ops/Finance only)",
+  })
+  async deleteCompany(
+    @Request() req: any,
+    @Param("companyId") companyId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    return this.customersService.deleteCompany(tenantId, companyId);
   }
 }
