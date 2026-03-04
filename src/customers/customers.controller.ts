@@ -10,7 +10,7 @@ import {
   Patch,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
-import { Role } from "@prisma/client";
+import { MembershipStatus, Role } from "@prisma/client";
 
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { RoleGuard, Roles } from "../auth/guards/role.guard";
@@ -150,7 +150,7 @@ export class CustomersController {
     const tenantId = req.tenant.tenantId;
     return this.customersService.setCompanyActive(tenantId, companyId, false);
   }
-  
+
   @Patch("companies/:companyId/unsuspend")
   @UseGuards(RoleGuard)
   @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
@@ -159,4 +159,40 @@ export class CustomersController {
     const tenantId = req.tenant.tenantId;
     return this.customersService.setCompanyActive(tenantId, companyId, true);
   }
+
+  @Patch("companies/:companyId/users/:userId/suspend")
+@UseGuards(RoleGuard)
+@Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+@ApiOperation({ summary: "Suspend a customer portal user under a company" })
+async suspendCompanyUser(
+  @Request() req: any,
+  @Param("companyId") companyId: string,
+  @Param("userId") userId: string,
+) {
+  const tenantId = req.tenant.tenantId;
+  return this.customersService.setCompanyUserStatus(
+    tenantId,
+    companyId,
+    userId,
+    MembershipStatus.Suspended,
+  );
+}
+
+@Patch("companies/:companyId/users/:userId/unsuspend")
+@UseGuards(RoleGuard)
+@Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+@ApiOperation({ summary: "Unsuspend a customer portal user under a company" })
+async unsuspendCompanyUser(
+  @Request() req: any,
+  @Param("companyId") companyId: string,
+  @Param("userId") userId: string,
+) {
+  const tenantId = req.tenant.tenantId;
+  return this.customersService.setCompanyUserStatus(
+    tenantId,
+    companyId,
+    userId,
+    MembershipStatus.Active,
+  );
+}
 }

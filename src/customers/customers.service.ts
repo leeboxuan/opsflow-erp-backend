@@ -541,4 +541,56 @@ export class CustomersService {
       affectedUsers: userIds.length,
     };
   }
+
+  async setCompanyUserStatus(
+    tenantId: string,
+    companyId: string,
+    targetUserId: string,
+    status: MembershipStatus,
+  ) {
+    // tenant-safe company check
+    const company = await this.prisma.customer_companies.findFirst({
+      where: { id: companyId, tenantId },
+      select: { id: true },
+    });
+    if (!company) throw new NotFoundException("Customer company not found");
+  
+    // ensure the user is linked to THIS company
+    const targetUser = await this.prisma.user.findFirst({
+      where: { id: targetUserId, customerCompanyId: companyId },
+      select: { id: true },
+    });
+    if (!targetUser) {
+      throw new NotFoundException("User not found under this company");
+    }
+  
+    // update membership status (must exist in this tenant and be CUSTOMER)
+    const membership = await this.prisma.tenantMembership.findFirst({
+      where: {
+        tenantId,
+        userId: targetUserId,
+        role: Role.CUSTOMER,
+      },
+      select: { id: true },
+    });
+  
+    if (!membership) {
+      throw new NotFoundException("Tenant membership not found for this user");
+    }
+  
+    const updated = await this.prisma.tenantMembership.update({
+      where: { id: membership.id },
+      data: { status },
+      select: {
+        userId: true,
+        status: true,
+        role: true,
+      },
+    });
+  
+    return {
+      userId: updated.userId,
+      status: updated.status,
+    };
+  }
 }
