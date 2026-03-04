@@ -1,18 +1,16 @@
-import { ConfigService } from '@nestjs/config';
+import { ConfigService } from "@nestjs/config";
 import {
   BadRequestException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { Role, MembershipStatus } from "@prisma/client";
+import { MembershipStatus, Role } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
 import {
   CreateCustomerCompanyUserDto,
   ListCompaniesQueryDto,
   ListContactsQueryDto,
-} from "./dto/customers.dto";
-import {
   CreateCustomerCompanyDto,
   UpdateCustomerCompanyDto,
 } from "./dto/customers.dto";
@@ -25,20 +23,23 @@ export class CustomersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
   ) {
-
     const supabaseUrl =
-    this.configService.get<string>("SUPABASE_PROJECT_URL") ||
-    this.configService.get<string>("SUPABASE_URL");
+      this.configService.get<string>("SUPABASE_PROJECT_URL") ||
+      this.configService.get<string>("SUPABASE_URL");
 
-  const serviceRoleKey = this.configService.get<string>("SUPABASE_SERVICE_ROLE_KEY");
+    const serviceRoleKey = this.configService.get<string>(
+      "SUPABASE_SERVICE_ROLE_KEY",
+    );
 
-  if (!supabaseUrl || !serviceRoleKey) {
-    throw new Error("SUPABASE_PROJECT_URL and SUPABASE_SERVICE_ROLE_KEY must be configured");
-  }
+    if (!supabaseUrl || !serviceRoleKey) {
+      throw new Error(
+        "SUPABASE_PROJECT_URL and SUPABASE_SERVICE_ROLE_KEY must be configured",
+      );
+    }
 
-  this.supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
+    this.supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
   }
 
   private normalizeCompanyName(name: string): string {
@@ -49,9 +50,7 @@ export class CustomersService {
   }
 
   private normalizeEmail(email: string): string {
-    return String(email ?? "")
-      .trim()
-      .toLowerCase();
+    return String(email ?? "").trim().toLowerCase();
   }
 
   async searchCompanies(tenantId: string, query: ListCompaniesQueryDto) {
@@ -75,6 +74,7 @@ export class CustomersService {
       select: {
         id: true,
         name: true,
+        isActive: true,
         _count: {
           select: {
             contacts: true,
@@ -87,6 +87,7 @@ export class CustomersService {
     return companies.map((c) => ({
       id: c.id,
       name: c.name,
+      isActive: c.isActive,
       contactCount: c._count.contacts,
       userCount: c._count.users,
     }));
@@ -97,7 +98,6 @@ export class CustomersService {
     companyId: string,
     query: ListContactsQueryDto,
   ) {
-    // tenant safety: ensure company belongs to tenant
     const company = await this.prisma.customer_companies.findFirst({
       where: { id: companyId, tenantId },
       select: { id: true },
@@ -118,7 +118,7 @@ export class CustomersService {
       ];
     }
 
-    const contacts = await this.prisma.customer_contacts.findMany({
+    return this.prisma.customer_contacts.findMany({
       where,
       orderBy: [{ name: "asc" }, { email: "asc" }],
       take: limit,
@@ -128,8 +128,6 @@ export class CustomersService {
         email: true,
       },
     });
-
-    return contacts;
   }
 
   async createCompany(tenantId: string, dto: CreateCustomerCompanyDto) {
@@ -137,13 +135,10 @@ export class CustomersService {
     if (!companyName) throw new BadRequestException("name is required");
 
     const normalizedName = this.normalizeCompanyName(companyName);
-
     const billingSameAs = !!dto.billingSameAsAddress;
 
     const company = await this.prisma.customer_companies.upsert({
-      where: {
-        tenantId_normalizedName: { tenantId, normalizedName },
-      },
+      where: { tenantId_normalizedName: { tenantId, normalizedName } },
       update: {
         name: companyName,
         email: dto.email ?? null,
@@ -247,7 +242,6 @@ export class CustomersService {
     companyId: string,
     input: { name: string; email: string; mobile?: string },
   ) {
-    // tenant safety: ensure company belongs to tenant
     const company = await this.prisma.customer_companies.findFirst({
       where: { id: companyId, tenantId },
       select: { id: true },
@@ -259,36 +253,15 @@ export class CustomersService {
     if (!contactName) throw new BadRequestException("name is required");
     if (!email) throw new BadRequestException("email is required");
 
-    // Upsert keeps it idempotent for "add contact" UX
-    const contact = await this.prisma.customer_contacts.upsert({
-      where: {
-        companyId_normalizedEmail: {
-          companyId,
-          normalizedEmail: email,
-        },
-      },
-      update: {
-        name: contactName,
-        email,
-      },
-      create: {
-        companyId,
-        name: contactName,
-        email,
-        normalizedEmail: email,
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-      },
+    return this.prisma.customer_contacts.upsert({
+      where: { companyId_normalizedEmail: { companyId, normalizedEmail: email } },
+      update: { name: contactName, email },
+      create: { companyId, name: contactName, email, normalizedEmail: email },
+      select: { id: true, name: true, email: true },
     });
-
-    return contact;
   }
 
   async listCompanyUsers(tenantId: string, companyId: string) {
-    // tenant safety: ensure company belongs to tenant
     const company = await this.prisma.customer_companies.findFirst({
       where: { id: companyId, tenantId },
       select: { id: true },
@@ -299,9 +272,7 @@ export class CustomersService {
       where: {
         tenantId,
         role: Role.CUSTOMER,
-        user: {
-          customerCompanyId: companyId,
-        },
+        user: { customerCompanyId: companyId },
       },
       include: { user: true },
       orderBy: { user: { email: "asc" } },
@@ -323,19 +294,20 @@ export class CustomersService {
     const email = dto.email?.trim().toLowerCase();
     const name = dto.name?.trim() || null;
     const password = dto.password;
-  
+
     if (!email) throw new BadRequestException("Email is required");
-    if (!password || password.length < 8) throw new BadRequestException("Password must be at least 8 characters");
-  
-    // tenant-safe company check
-    const company = await this.prisma.customerCompany.findFirst({
+    if (!password || password.length < 8)
+      throw new BadRequestException("Password must be at least 8 characters");
+
+    const company = await this.prisma.customer_companies.findFirst({
       where: { id: companyId, tenantId },
-      select: { id: true },
+      select: { id: true, isActive: true },
     });
-  
+
     if (!company) throw new NotFoundException("Customer company not found");
-  
-    // Create Supabase Auth user directly (no invite email)
+    if (company.isActive === false)
+      throw new BadRequestException("Customer company is suspended");
+
     const { data, error } = await this.supabaseAdmin.auth.admin.createUser({
       email,
       password,
@@ -347,15 +319,12 @@ export class CustomersService {
         role: "CUSTOMER",
       },
     });
-  
-    if (error) {
-      throw new BadRequestException(error.message);
-    }
-  
+
+    if (error) throw new BadRequestException(error.message);
+
     const authUserId = data.user?.id;
     if (!authUserId) throw new BadRequestException("Failed to create auth user");
-  
-    // Create/Upsert internal user + membership
+
     const user = await this.prisma.$transaction(async (tx) => {
       const u = await tx.user.upsert({
         where: { email },
@@ -373,17 +342,21 @@ export class CustomersService {
           customerCompanyId: companyId,
         },
       });
-  
-      // only if you have tenantMembership table:
+
       await tx.tenantMembership.upsert({
         where: { tenantId_userId: { tenantId, userId: u.id } },
-        update: { role: Role.CUSTOMER, status: "Active" },
-        create: { tenantId, userId: u.id, role: Role.CUSTOMER, status: "Active" },
+        update: { role: Role.CUSTOMER, status: MembershipStatus.Active },
+        create: {
+          tenantId,
+          userId: u.id,
+          role: Role.CUSTOMER,
+          status: MembershipStatus.Active,
+        },
       });
-  
+
       return u;
     });
-  
+
     return {
       id: user.id,
       authUserId,
@@ -526,43 +499,46 @@ export class CustomersService {
     };
   }
 
-
-  async deleteCompany(tenantId: string, companyId: string) {
-    // tenant safety: ensure company belongs to tenant
+  async setCompanyActive(tenantId: string, companyId: string, isActive: boolean) {
+    // tenant safety
     const company = await this.prisma.customer_companies.findFirst({
       where: { id: companyId, tenantId },
-      select: {
-        id: true,
-        _count: {
-          select: {
-            contacts: true,
-            users: true,
-          },
-        },
-      },
+      select: { id: true, isActive: true },
     });
   
     if (!company) throw new NotFoundException("Customer company not found");
   
-    // ✅ protect against deleting linked records
-    if (company._count.contacts > 0) {
-      throw new BadRequestException(
-        "Cannot delete customer company: contacts exist. Remove contacts first.",
-      );
-    }
-  
-    if (company._count.users > 0) {
-      throw new BadRequestException(
-        "Cannot delete customer company: portal users exist. Remove users first.",
-      );
-    }
-  
-    // If your schema has other links (orders/invoices/etc), add checks here too.
-  
-    await this.prisma.customer_companies.delete({
+    const updated = await this.prisma.customer_companies.update({
       where: { id: companyId },
+      data: { isActive },
+      select: { id: true, isActive: true },
     });
   
-    return { id: companyId, deleted: true };
+    // Get all users linked to this company
+    const users = await this.prisma.user.findMany({
+      where: { customerCompanyId: companyId },
+      select: { id: true },
+    });
+  
+    const userIds = users.map((u) => u.id);
+  
+    if (userIds.length > 0) {
+      await this.prisma.tenantMembership.updateMany({
+        where: {
+          tenantId,
+          userId: { in: userIds },
+          role: Role.CUSTOMER,
+        },
+        data: {
+          status: isActive ? MembershipStatus.Active : MembershipStatus.Suspended,
+        },
+      });
+    }
+  
+    return {
+      id: updated.id,
+      isActive: updated.isActive,
+      affectedUsers: userIds.length,
+    };
   }
 }

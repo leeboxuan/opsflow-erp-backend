@@ -8,14 +8,8 @@ import {
   Request,
   UseGuards,
   Patch,
-  Delete,
 } from "@nestjs/common";
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiQuery,
-  ApiTags,
-} from "@nestjs/swagger";
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
 import { Role } from "@prisma/client";
 
 import { AuthGuard } from "../auth/guards/auth.guard";
@@ -43,16 +37,8 @@ export class CustomersController {
 
   @Get("companies")
   @ApiOperation({ summary: "Search customer companies (tenant-scoped)" })
-  @ApiQuery({
-    name: "search",
-    required: false,
-    description: "Search by company name",
-  })
-  @ApiQuery({
-    name: "limit",
-    required: false,
-    description: "Max results (default 20, max 100)",
-  })
+  @ApiQuery({ name: "search", required: false, description: "Search by company name" })
+  @ApiQuery({ name: "limit", required: false, description: "Max results (default 20, max 100)" })
   async listCompanies(
     @Request() req: any,
     @Query() query: ListCompaniesQueryDto,
@@ -64,9 +50,7 @@ export class CustomersController {
   @Post("companies")
   @UseGuards(RoleGuard)
   @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
-  @ApiOperation({
-    summary: "Create a customer company (Admin/Ops/Finance only)",
-  })
+  @ApiOperation({ summary: "Create a customer company (Admin/Ops/Finance only)" })
   async createCompany(
     @Request() req: any,
     @Body() dto: CreateCustomerCompanyDto,
@@ -77,16 +61,8 @@ export class CustomersController {
 
   @Get("companies/:companyId/contacts")
   @ApiOperation({ summary: "List/search contacts for a company (tenant-safe)" })
-  @ApiQuery({
-    name: "search",
-    required: false,
-    description: "Search by contact name/email",
-  })
-  @ApiQuery({
-    name: "limit",
-    required: false,
-    description: "Max results (default 20, max 100)",
-  })
+  @ApiQuery({ name: "search", required: false, description: "Search by contact name/email" })
+  @ApiQuery({ name: "limit", required: false, description: "Max results (default 20, max 100)" })
   async listContacts(
     @Request() req: any,
     @Param("companyId") companyId: string,
@@ -165,17 +141,22 @@ export class CustomersController {
     return this.customersService.updateCompany(tenantId, companyId, dto);
   }
 
-  @Delete("companies/:companyId")
+  // ✅ NEW: suspend/unsuspend endpoints
+  @Patch("companies/:companyId/suspend")
   @UseGuards(RoleGuard)
   @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
-  @ApiOperation({
-    summary: "Delete a customer company (Admin/Ops/Finance only)",
-  })
-  async deleteCompany(
-    @Request() req: any,
-    @Param("companyId") companyId: string,
-  ) {
+  @ApiOperation({ summary: "Suspend a customer company and all its users" })
+  async suspendCompany(@Request() req: any, @Param("companyId") companyId: string) {
     const tenantId = req.tenant.tenantId;
-    return this.customersService.deleteCompany(tenantId, companyId);
+    return this.customersService.setCompanyActive(tenantId, companyId, false);
+  }
+  
+  @Patch("companies/:companyId/unsuspend")
+  @UseGuards(RoleGuard)
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Unsuspend a customer company and all its users" })
+  async unsuspendCompany(@Request() req: any, @Param("companyId") companyId: string) {
+    const tenantId = req.tenant.tenantId;
+    return this.customersService.setCompanyActive(tenantId, companyId, true);
   }
 }
