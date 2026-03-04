@@ -6,6 +6,7 @@ import {
   Min,
   IsEmail,
   IsBoolean,
+  MinLength,
 } from "class-validator";
 import { Type } from "class-transformer";
 
@@ -339,21 +340,23 @@ export class CustomerCompanyUserDto {
 }
 
 export class CreateCustomerCompanyUserDto {
-  @ApiProperty({ description: "User email" })
+  @ApiProperty()
   @IsEmail()
-  email: string;
+  email!: string;
 
-  @ApiPropertyOptional({ description: "User display name" })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   name?: string;
 
-  @ApiPropertyOptional({
-    description: "Send Supabase invite email (default true)",
-    default: true,
-  })
+  @ApiProperty({ description: "Initial password set by admin" })
+  @IsString()
+  @MinLength(8)
+  password!: string;
+
+  // keep if you had it, but we won't use it now
+  @ApiPropertyOptional()
   @IsOptional()
-  @Type(() => Boolean)
   @IsBoolean()
   sendInvite?: boolean;
 }

@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import {
   BadRequestException,
   Injectable,
@@ -7,6 +8,7 @@ import { Role, MembershipStatus } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
 import {
+  CreateCustomerCompanyUserDto,
   ListCompaniesQueryDto,
   ListContactsQueryDto,
 } from "./dto/customers.dto";
@@ -14,13 +16,30 @@ import {
   CreateCustomerCompanyDto,
   UpdateCustomerCompanyDto,
 } from "./dto/customers.dto";
+import { createClient } from "@supabase/supabase-js";
 
 @Injectable()
 export class CustomersService {
+  private supabaseAdmin;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
-  ) {}
+    private readonly configService: ConfigService
+  ) {
+
+    const supabaseUrl =
+    this.configService.get<string>("SUPABASE_PROJECT_URL") ||
+    this.configService.get<string>("SUPABASE_URL");
+
+  const serviceRoleKey = this.configService.get<string>("SUPABASE_SERVICE_ROLE_KEY");
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error("SUPABASE_PROJECT_URL and SUPABASE_SERVICE_ROLE_KEY must be configured");
+  }
+
+  this.supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
+  }
 
   private normalizeCompanyName(name: string): string {
     return String(name ?? "")
@@ -299,72 +318,78 @@ export class CustomersService {
   async createCompanyUser(
     tenantId: string,
     companyId: string,
-    input: { email: string; name?: string; sendInvite?: boolean },
+    dto: CreateCustomerCompanyUserDto,
   ) {
-    // tenant safety: ensure company belongs to tenant
-    const company = await this.prisma.customer_companies.findFirst({
+    const email = dto.email?.trim().toLowerCase();
+    const name = dto.name?.trim() || null;
+    const password = dto.password;
+  
+    if (!email) throw new BadRequestException("Email is required");
+    if (!password || password.length < 8) throw new BadRequestException("Password must be at least 8 characters");
+  
+    // tenant-safe company check
+    const company = await this.prisma.customerCompany.findFirst({
       where: { id: companyId, tenantId },
       select: { id: true },
     });
+  
     if (!company) throw new NotFoundException("Customer company not found");
-
-    const email = this.normalizeEmail(input.email);
-    if (!email) throw new BadRequestException("email is required");
-
-    const name =
-      input.name !== undefined ? String(input.name).trim() : undefined;
-    const sendInvite = input.sendInvite !== false;
-
-    const result = await this.prisma.$transaction(async (tx) => {
-      const user = await tx.user.upsert({
+  
+    // Create Supabase Auth user directly (no invite email)
+    const { data, error } = await this.supabaseAdmin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        name: name ?? undefined,
+        tenantId,
+        companyId,
+        role: "CUSTOMER",
+      },
+    });
+  
+    if (error) {
+      throw new BadRequestException(error.message);
+    }
+  
+    const authUserId = data.user?.id;
+    if (!authUserId) throw new BadRequestException("Failed to create auth user");
+  
+    // Create/Upsert internal user + membership
+    const user = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.user.upsert({
         where: { email },
         update: {
-          ...(name !== undefined && { name: name || null }),
+          authUserId,
+          name: name ?? undefined,
+          role: Role.CUSTOMER,
           customerCompanyId: companyId,
         },
         create: {
+          authUserId,
           email,
-          name: name ? name : null,
+          name: name ?? email,
+          role: Role.CUSTOMER,
           customerCompanyId: companyId,
         },
       });
-
-      const membership = await tx.tenantMembership.upsert({
-        where: { tenantId_userId: { tenantId, userId: user.id } },
-        update: {
-          role: Role.CUSTOMER,
-          status: sendInvite
-            ? MembershipStatus.Invited
-            : MembershipStatus.Active,
-        },
-        create: {
-          tenantId,
-          userId: user.id,
-          role: Role.CUSTOMER,
-          status: sendInvite
-            ? MembershipStatus.Invited
-            : MembershipStatus.Active,
-        },
+  
+      // only if you have tenantMembership table:
+      await tx.tenantMembership.upsert({
+        where: { tenantId_userId: { tenantId, userId: u.id } },
+        update: { role: Role.CUSTOMER, status: "Active" },
+        create: { tenantId, userId: u.id, role: Role.CUSTOMER, status: "Active" },
       });
-
-      return { user, membership };
+  
+      return u;
     });
-
-    if (sendInvite) {
-      const supabase = this.supabaseService.getClient();
-      const { error } = await supabase.auth.admin.inviteUserByEmail(email);
-      if (error) {
-        throw new BadRequestException(
-          `Supabase invite failed: ${error.message}`,
-        );
-      }
-    }
-
+  
     return {
-      id: result.user.id,
-      email: result.user.email,
-      name: result.user.name,
-      status: result.membership.status,
+      id: user.id,
+      authUserId,
+      email: user.email,
+      name: user.name,
+      status: "ACTIVE",
     };
   }
 
