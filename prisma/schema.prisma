@@ -72,8 +72,38 @@ model User {
 model customer_companies {
   id             String   @id @default(cuid())
   tenantId       String
+
+  // Core identity
   name           String
   normalizedName String
+
+  // Company contact
+  email          String?
+  phone          String?
+
+  // Address
+  addressLine1   String?
+  addressLine2   String?
+  postalCode     String?
+  country        String?  @default("SG")
+
+  // Billing
+  billingSameAsAddress Boolean @default(false)
+  billingAddressLine1  String?
+  billingAddressLine2  String?
+  billingPostalCode    String?
+  billingCountry       String? @default("SG")
+
+  // PIC
+  picName        String?
+  picMobile      String?
+  picEmail       String?
+
+  // Helpful extras
+  uen            String?
+  notes          String?
+  isActive       Boolean  @default(true)
+
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -85,6 +115,7 @@ model customer_companies {
 
   @@unique([tenantId, normalizedName])
   @@index([tenantId])
+  @@index([tenantId, isActive])
   @@map("customer_companies")
 }
 
@@ -94,6 +125,7 @@ model customer_contacts {
   name            String
   email           String
   normalizedEmail String
+  mobile          String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
