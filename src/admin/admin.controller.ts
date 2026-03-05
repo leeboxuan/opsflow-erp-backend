@@ -349,7 +349,7 @@ export class AdminController {
         id: vehicle.id,
         vehicleNumber: vehicle.vehicleNumber,
         type: (vehicle as { type?: string | null }).type ?? null,
-        notes: vehicle.notes,
+        vehicleDescription: vehicle.vehicleDescription,
         createdAt: vehicle.createdAt,
         updatedAt: vehicle.updatedAt,
       }),
@@ -384,7 +384,7 @@ export class AdminController {
       data: {
         tenantId,
         vehicleNumber: dto.vehicleNumber,
-        notes: dto.notes || null,
+        vehicleDescription: dto.vehicleDescription || null,
       },
     });
 
@@ -392,7 +392,7 @@ export class AdminController {
       id: vehicle.id,
       vehicleNumber: vehicle.vehicleNumber,
       type: dto.type ?? null,
-      notes: vehicle.notes,
+      vehicleDescription: vehicle.vehicleDescription,
       createdAt: vehicle.createdAt,
       updatedAt: vehicle.updatedAt,
     };

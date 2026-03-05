@@ -11,7 +11,7 @@ export class VehicleDto {
   type: string | null;
 
   @ApiProperty({ nullable: true })
-  notes: string | null;
+  vehicleDescription: string | null;
 
   @ApiProperty()
   createdAt: Date;

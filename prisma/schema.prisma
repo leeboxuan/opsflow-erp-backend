@@ -241,15 +241,15 @@ model Trip {
 }
 
 model Vehicle {
-  id            String   @id @default(cuid())
-  tenantId      String
-  vehicleNumber String
-  notes         String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  trips         Trip[]
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  driversDefault drivers[]
+  id                  String   @id @default(cuid())
+  tenantId            String
+  vehicleNumber       String
+  vehicleDescription  String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  trips               Trip[]
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driversDefault      drivers[]
 
   @@unique([tenantId, vehicleNumber])
   @@index([tenantId])

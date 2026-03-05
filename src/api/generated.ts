@@ -908,8 +908,8 @@ export interface components {
             vehicleNumber: string;
             /** @example Van */
             type?: string;
-            /** @example Notes about the vehicle */
-            notes?: string;
+            /** @example Description of the vehicle */
+            vehicleDescription?: string;
         };
         AcceptTripDto: {
             /** @example ABC-1234 */

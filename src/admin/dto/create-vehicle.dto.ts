@@ -11,8 +11,8 @@ export class CreateVehicleDto {
   @IsString()
   type?: string;
 
-  @ApiProperty({ example: 'Notes about the vehicle', required: false })
+  @ApiProperty({ example: 'Description of the vehicle', required: false })
   @IsOptional()
   @IsString()
-  notes?: string;
+  vehicleDescription?: string;
 }
