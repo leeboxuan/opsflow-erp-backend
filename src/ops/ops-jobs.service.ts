@@ -12,6 +12,9 @@ import {
   buildPaginationMeta,
   type PaginatedResponse,
 } from "../common/pagination";
+import { applyMappedFilter } from "../common/listing/listing.filters";
+import { buildOrderBy } from "../common/listing/listing.sort";
+import { applyQSearch } from "../common/listing/listing.search";
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
 import { AssignJobDto } from "./dto/assign-job.dto";
@@ -140,22 +143,39 @@ export class OpsJobsService {
       }
     }
 
-    if (query.search?.trim()) {
-      const s = query.search.trim();
-      where.OR = [
-        { internalRef: { contains: s, mode: "insensitive" } },
-        { pickupAddress1: { contains: s, mode: "insensitive" } },
-        { deliveryAddress1: { contains: s, mode: "insensitive" } },
-        { receiverName: { contains: s, mode: "insensitive" } },
-        { receiverPhone: { contains: s, mode: "insensitive" } },
-      ];
+    const q = (query.q ?? query.search)?.trim();
+    applyQSearch(where, q, [
+      "internalRef",
+      "pickupAddress1",
+      "deliveryAddress1",
+      "receiverName",
+      "receiverPhone",
+    ]);
+
+    applyMappedFilter(where, query.filter, {
+      Draft: { status: JobStatus.Draft },
+      Assigned: { status: JobStatus.Assigned },
+      InProgress: { status: JobStatus.InProgress },
+      PendingDepot: { status: JobStatus.PendingDepot },
+      Completed: { status: JobStatus.Completed },
+      Cancelled: { status: JobStatus.Cancelled },
+    });
+    if (query.status) {
+      where.status = query.status as JobStatus;
     }
+
+    const orderBy = buildOrderBy(
+      query.sortBy,
+      query.sortDir,
+      ["createdAt", "updatedAt", "pickupDate", "internalRef", "status"],
+      { createdAt: "desc" },
+    );
 
     const [total, jobs] = await this.prisma.$transaction([
       this.prisma.job.count({ where }),
       this.prisma.job.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy,
         skip,
         take,
       }),

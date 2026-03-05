@@ -2,6 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from "@nestjs/comm
 import { MembershipStatus, Role } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
+import { applyMappedFilter } from "../common/listing/listing.filters";
+import { buildOrderBy } from "../common/listing/listing.sort";
 import { AdminCreateDriverDto } from "./dto/admin-create-driver.dto";
 import { AdminUpdateDriverDto } from "./dto/admin-update-driver.dto";
 import { AdminDriverDto } from "./dto/admin-driver.dto";
@@ -13,22 +15,48 @@ export class AdminDriversService {
 
   async listDrivers(
     tenantId: string,
-    query?: { page?: unknown; pageSize?: unknown },
+    query?: { q?: string; filter?: string; sortBy?: string; sortDir?: string; page?: unknown; pageSize?: unknown },
   ): Promise<{ data: AdminDriverDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
 
-    const where = {
+    const where: any = {
       tenantId,
       role: Role.DRIVER,
       status: { in: [MembershipStatus.Active, MembershipStatus.Suspended] },
     };
+    applyMappedFilter(where, query?.filter, {
+      all: { status: { in: [MembershipStatus.Active, MembershipStatus.Suspended] } },
+      active: { status: MembershipStatus.Active },
+      suspended: { status: MembershipStatus.Suspended },
+    });
+    const q = query?.q?.trim();
+    if (q) {
+      where.user = {
+        OR: [
+          { name: { contains: q, mode: "insensitive" } },
+          { email: { contains: q, mode: "insensitive" } },
+        ],
+      };
+    }
+
+    let orderBy: any = { user: { name: "asc" } };
+    if (query?.sortBy === "name" || query?.sortBy === "email") {
+      orderBy = { user: { [query.sortBy]: query.sortDir === "desc" ? "desc" : "asc" } };
+    } else {
+      orderBy = buildOrderBy(
+        query?.sortBy,
+        query?.sortDir,
+        ["createdAt", "updatedAt"],
+        { createdAt: "desc" },
+      );
+    }
 
     const [total, memberships] = await this.prisma.$transaction([
       this.prisma.tenantMembership.count({ where }),
       this.prisma.tenantMembership.findMany({
         where,
         include: { user: true },
-        orderBy: { user: { name: "asc" } },
+        orderBy,
         skip,
         take,
       }),

@@ -16,6 +16,9 @@ import {
 } from "./dto/customers.dto";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
 import { createClient } from "@supabase/supabase-js";
+import { applyMappedFilter } from "../common/listing/listing.filters";
+import { buildOrderBy } from "../common/listing/listing.sort";
+import { applyQSearch } from "../common/listing/listing.search";
 
 @Injectable()
 export class CustomersService {
@@ -62,17 +65,17 @@ export class CustomersService {
     meta: { page: number; pageSize: number; total: number };
   }> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
-    const searchRaw = String(query.search ?? "").trim();
-
     const where: any = { tenantId };
 
-    if (searchRaw) {
-      const normalized = this.normalizeCompanyName(searchRaw);
-      where.OR = [
-        { normalizedName: { contains: normalized } },
-        { name: { contains: searchRaw, mode: "insensitive" } },
-      ];
-    }
+    const q = (query.q ?? query.search)?.trim();
+    applyQSearch(where, q, ["name", "normalizedName"]);
+    applyMappedFilter(where, query.filter, {
+      active: { isActive: true },
+      inactive: { isActive: false },
+      suspended: { isActive: false },
+    });
+
+    const orderBy = buildOrderBy(query.sortBy, query.sortDir, ["name", "normalizedName", "isActive", "createdAt"], { name: "asc" });
 
     const select = {
       id: true,
@@ -85,7 +88,7 @@ export class CustomersService {
       this.prisma.customer_companies.count({ where }),
       this.prisma.customer_companies.findMany({
         where,
-        orderBy: { name: "asc" },
+        orderBy,
         skip,
         take,
         select,
@@ -118,18 +121,17 @@ export class CustomersService {
     if (!company) throw new NotFoundException("Customer company not found");
 
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
-    const searchRaw = String(query.search ?? "").trim();
-
     const where: any = { companyId };
 
-    if (searchRaw) {
-      const normalizedEmail = this.normalizeEmail(searchRaw);
-      where.OR = [
-        { normalizedEmail: { contains: normalizedEmail } },
-        { email: { contains: searchRaw, mode: "insensitive" } },
-        { name: { contains: searchRaw, mode: "insensitive" } },
-      ];
-    }
+    const q = (query.q ?? query.search)?.trim();
+    applyQSearch(where, q, ["name", "email", "normalizedEmail"]);
+
+    const orderBy = buildOrderBy(
+      query.sortBy,
+      query.sortDir,
+      ["name", "email", "createdAt"],
+      { name: "asc" },
+    );
 
     const select = { id: true, name: true, email: true };
 
@@ -137,7 +139,7 @@ export class CustomersService {
       this.prisma.customer_contacts.count({ where }),
       this.prisma.customer_contacts.findMany({
         where,
-        orderBy: [{ name: "asc" }, { email: "asc" }],
+        orderBy,
         skip,
         take,
         select,

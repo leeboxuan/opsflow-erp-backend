@@ -9,6 +9,8 @@ import {
   parsePaginationFromQuery,
   buildPaginationMeta,
 } from "../common/pagination";
+import { applyMappedFilter } from "../common/listing/listing.filters";
+import { buildOrderBy } from "../common/listing/listing.sort";
 import { CreateVehicleDto } from "./dto/create-vehicle.dto";
 import { UpdateVehicleDto } from "./dto/update-vehicle.dto";
 import {
@@ -85,20 +87,19 @@ export class VehiclesService {
 
     const where: any = { tenantId };
 
-    // filter: assigned | unassigned | all
-    const filter = query.filter ?? VEHICLE_LIST_FILTER.ALL;
-    if (filter === VEHICLE_LIST_FILTER.UNASSIGNED) {
-      where.driverId = null;
-    } else if (filter === VEHICLE_LIST_FILTER.ASSIGNED) {
-      where.driverId = query.driverId ?? { not: null };
-    } else if (query.driverId) {
+    const filterMap: Record<string, any> = {
+      [VEHICLE_LIST_FILTER.UNASSIGNED]: { driverId: null },
+      [VEHICLE_LIST_FILTER.ASSIGNED]: { driverId: query.driverId ?? { not: null } },
+    };
+    applyMappedFilter(where, query.filter, filterMap);
+    if (query.filter !== VEHICLE_LIST_FILTER.ASSIGNED && query.filter !== VEHICLE_LIST_FILTER.UNASSIGNED && query.driverId) {
       where.driverId = query.driverId;
     }
 
     if (query.status) where.status = query.status;
     if (query.type) where.type = query.type;
 
-    // q: search plateNo OR type OR vehicleDescription (case-insensitive)
+    // q: search plateNo, type, or vehicleDescription (special handling for VehicleType enum)
     const q = query.q?.trim();
     if (q) {
       const orConditions: any[] = [
@@ -114,11 +115,12 @@ export class VehiclesService {
       where.AND.push({ OR: orConditions });
     }
 
-    const sortBy = VEHICLE_SORT_FIELDS.includes(query.sortBy ?? "createdAt")
-      ? (query.sortBy as (typeof VEHICLE_SORT_FIELDS)[number])
-      : "createdAt";
-    const sortDir = query.sortDir === "asc" ? "asc" : "desc";
-    const orderBy = { [sortBy]: sortDir };
+    const orderBy = buildOrderBy(
+      query.sortBy,
+      query.sortDir === "asc" ? "asc" : "desc",
+      [...VEHICLE_SORT_FIELDS],
+      { createdAt: "desc" },
+    );
 
     const [total, data] = await this.prisma.$transaction([
       this.prisma.vehicle.count({ where }),

@@ -5,6 +5,9 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parsePaginationFromQuery, buildPaginationMeta } from '../common/pagination';
+import { applyMappedFilter } from '../common/listing/listing.filters';
+import { buildOrderBy } from '../common/listing/listing.sort';
+import { applyQSearch } from '../common/listing/listing.search';
 import { TripStatus, StopType } from '@prisma/client';
 import { CreateTripDto } from './dto/create-trip.dto';
 import {
@@ -117,11 +120,29 @@ export class TripService {
 
   async listTrips(
     tenantId: string,
-    query: { page?: unknown; pageSize?: unknown },
+    query: { q?: string; filter?: string; sortBy?: string; sortDir?: string; page?: unknown; pageSize?: unknown },
   ): Promise<{ data: TripDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
-    const where = { tenantId };
+    const where: any = { tenantId };
+
+    applyQSearch(where, query.q?.trim(), []);
+    applyMappedFilter(where, query.filter, {
+      Draft: { status: TripStatus.Draft },
+      Planned: { status: TripStatus.Planned },
+      Dispatched: { status: TripStatus.Dispatched },
+      InTransit: { status: TripStatus.InTransit },
+      Delivered: { status: TripStatus.Delivered },
+      Closed: { status: TripStatus.Closed },
+      Cancelled: { status: TripStatus.Cancelled },
+    });
+
+    const orderBy = buildOrderBy(
+      query.sortBy,
+      query.sortDir,
+      ["createdAt", "updatedAt", "plannedStartAt", "plannedEndAt", "status"],
+      { createdAt: "desc" },
+    );
 
     const include = {
       stops: {
@@ -140,7 +161,7 @@ export class TripService {
       this.prisma.trip.count({ where }),
       this.prisma.trip.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         skip,
         take,
         include,

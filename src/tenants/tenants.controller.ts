@@ -19,6 +19,9 @@ import { RoleGuard } from '../auth/guards/role.guard';
 import { Roles } from '../auth/guards/role.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { parsePaginationFromQuery, buildPaginationMeta } from '../common/pagination';
+import { applyMappedFilter } from '../common/listing/listing.filters';
+import { buildOrderBy } from '../common/listing/listing.sort';
+import { applyQSearch } from '../common/listing/listing.search';
 import { MembershipStatus, Role } from '@prisma/client';
 import { InviteMemberDto } from './dto/invite-member.dto';
 import { UpdateMembershipDto } from './dto/update-membership.dto';
@@ -63,17 +66,25 @@ export class TenantsController {
     }
 
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
-    const where = {
+    const where: any = {
       userId: user.userId,
       status: MembershipStatus.Active,
     };
+    const q = query.q?.trim();
+    if (q) {
+      where.tenant = { name: { contains: q, mode: 'insensitive' } };
+    }
+    const orderBy =
+      query.sortBy === 'name' || query.sortBy === 'slug'
+        ? { tenant: { [query.sortBy]: query.sortDir === 'desc' ? 'desc' : 'asc' } }
+        : buildOrderBy(query.sortBy, query.sortDir, ['createdAt'], { createdAt: 'desc' as const });
 
     const [total, memberships] = await this.prisma.$transaction([
       this.prisma.tenantMembership.count({ where }),
       this.prisma.tenantMembership.findMany({
         where,
         include: { tenant: true },
-        orderBy: { tenant: { name: 'asc' } },
+        orderBy: orderBy as any,
         skip,
         take,
       }),
@@ -128,14 +139,35 @@ export class TenantsController {
     const tenantId = req.tenant.tenantId;
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
-    const where = { tenantId };
+    const where: any = { tenantId };
+    const q = query.q?.trim();
+    if (q) {
+      where.user = {
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { email: { contains: q, mode: 'insensitive' } },
+        ],
+      };
+    }
+    applyMappedFilter(where, query.filter, {
+      active: { status: MembershipStatus.Active },
+      invited: { status: MembershipStatus.Invited },
+      suspended: { status: MembershipStatus.Suspended },
+    });
+
+    let orderBy: any = { createdAt: 'desc' };
+    if (query.sortBy === 'name' || query.sortBy === 'email') {
+      orderBy = { user: { [query.sortBy]: query.sortDir === 'desc' ? 'desc' : 'asc' } };
+    } else {
+      orderBy = buildOrderBy(query.sortBy, query.sortDir, ['createdAt', 'updatedAt'], { createdAt: 'desc' });
+    }
 
     const [total, memberships] = await this.prisma.$transaction([
       this.prisma.tenantMembership.count({ where }),
       this.prisma.tenantMembership.findMany({
         where,
         include: { user: true },
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         skip,
         take,
       }),

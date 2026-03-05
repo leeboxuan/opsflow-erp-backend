@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parsePaginationFromQuery, buildPaginationMeta } from '../common/pagination';
+import { buildOrderBy } from '../common/listing/listing.sort';
 import { UpdateLocationDto } from './dto/update-location.dto';
 import { LocationDto, DriverLocationDto } from './dto/location.dto';
 
@@ -80,17 +81,24 @@ export class LocationService {
 
   async getAllDriverLocations(
     tenantId: string,
-    query?: { page?: unknown; pageSize?: unknown },
+    query?: { q?: string; filter?: string; sortBy?: string; sortDir?: string; page?: unknown; pageSize?: unknown },
   ): Promise<{ data: DriverLocationDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
 
-    const where = { tenantId };
+    const where: any = { tenantId };
+
+    const orderBy = buildOrderBy(
+      query?.sortBy,
+      query?.sortDir,
+      ["updatedAt", "capturedAt"],
+      { updatedAt: "desc" },
+    );
 
     const [total, locations] = await (this.prisma as any).$transaction([
       (this.prisma as any).driverLocationLatest.count({ where }),
       (this.prisma as any).driverLocationLatest.findMany({
         where,
-        orderBy: { updatedAt: 'desc' },
+        orderBy,
         skip,
         take,
       }),

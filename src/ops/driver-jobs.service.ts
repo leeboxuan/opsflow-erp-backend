@@ -7,6 +7,7 @@ import {
 import { JobStatus, JobType, JobDocumentType } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
+import { buildOrderBy } from "../common/listing/listing.sort";
 import { AuditService } from "../audit/audit.service";
 import { SupabaseService } from "../auth/supabase.service";
 import { DriverCompleteJobDto } from "./dto/complete-job.dto";
@@ -74,7 +75,7 @@ export class DriverJobsService {
     tenantId: string,
     driverUserId: string,
     dateStr: string,
-    query?: { page?: unknown; pageSize?: unknown },
+    query?: { sortBy?: string; sortDir?: string; page?: unknown; pageSize?: unknown },
   ): Promise<{ data: JobDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const date = new Date(dateStr + "T00:00:00.000Z");
     const nextDay = new Date(date);
@@ -82,7 +83,7 @@ export class DriverJobsService {
 
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
 
-    const where = {
+    const where: any = {
       tenantId,
       assignedDriverId: driverUserId,
       status: {
@@ -94,11 +95,20 @@ export class DriverJobsService {
       },
     };
 
+    const orderBy = buildOrderBy(
+      query?.sortBy,
+      query?.sortDir,
+      ["pickupDate", "createdAt", "internalRef", "status"],
+      { pickupDate: "asc" },
+    );
+    const orderByArr = Array.isArray(orderBy) ? orderBy : [orderBy, { createdAt: "asc" as const }];
+    const orderByFinal = orderByArr.length === 1 ? [orderBy, { createdAt: "asc" as const }] : orderByArr;
+
     const [total, jobs] = await this.prisma.$transaction([
       this.prisma.job.count({ where }),
       this.prisma.job.findMany({
         where,
-        orderBy: [{ pickupDate: "asc" }, { createdAt: "asc" }],
+        orderBy: orderByFinal as any,
         skip,
         take,
       }),

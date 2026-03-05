@@ -22,6 +22,9 @@ import { PrismaService } from "../prisma/prisma.service";
 import { LocationService } from "../driver/location.service";
 import { Role, MembershipStatus } from "@prisma/client";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
+import { applyMappedFilter } from "../common/listing/listing.filters";
+import { buildOrderBy } from "../common/listing/listing.sort";
+import { applyQSearch } from "../common/listing/listing.search";
 import { CreateVehicleDto } from "./dto/create-vehicle.dto";
 import { VehicleDto } from "./dto/vehicle.dto";
 import { DriverLocationDto } from "../driver/dto/location.dto";
@@ -54,17 +57,43 @@ export class AdminController {
     const tenantId = req.tenant.tenantId;
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
-    const where = {
+    const where: any = {
       tenantId,
       NOT: { role: Role.DRIVER },
     };
+    const q = query.q?.trim();
+    if (q) {
+      where.user = {
+        OR: [
+          { name: { contains: q, mode: "insensitive" } },
+          { email: { contains: q, mode: "insensitive" } },
+        ],
+      };
+    }
+    applyMappedFilter(where, query.filter, {
+      active: { status: MembershipStatus.Active },
+      invited: { status: MembershipStatus.Invited },
+      suspended: { status: MembershipStatus.Suspended },
+    });
+
+    let orderBy: any;
+    if (query.sortBy === "name" || query.sortBy === "email") {
+      orderBy = { user: { [query.sortBy]: query.sortDir === "desc" ? "desc" : "asc" } };
+    } else {
+      orderBy = buildOrderBy(
+        query.sortBy,
+        query.sortDir,
+        ["createdAt", "updatedAt"],
+        { createdAt: "desc" },
+      );
+    }
 
     const [total, memberships] = await this.prisma.$transaction([
       this.prisma.tenantMembership.count({ where }),
       this.prisma.tenantMembership.findMany({
         where,
         include: { user: true },
-        orderBy: { user: { createdAt: "desc" } },
+        orderBy,
         skip,
         take,
       }),
@@ -356,13 +385,21 @@ export class AdminController {
     const tenantId = req.tenant.tenantId;
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
-    const where = { tenantId };
+    const where: any = { tenantId };
+    applyQSearch(where, query.q?.trim(), ["plateNo", "vehicleDescription"]);
+
+    const orderBy = buildOrderBy(
+      query.sortBy,
+      query.sortDir,
+      ["plateNo", "createdAt", "updatedAt", "type", "status"],
+      { plateNo: "asc" },
+    );
 
     const [total, vehicles] = await this.prisma.$transaction([
       this.prisma.vehicle.count({ where }),
       this.prisma.vehicle.findMany({
         where,
-        orderBy: { plateNo: "asc" },
+        orderBy,
         skip,
         take,
       }),

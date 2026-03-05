@@ -6,6 +6,9 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
+import { applyMappedFilter } from "../common/listing/listing.filters";
+import { buildOrderBy } from "../common/listing/listing.sort";
+import { applyQSearch } from "../common/listing/listing.search";
 import { CreateBatchDto } from "./dto/create-batch.dto";
 import { ReceiveUnitsDto } from "./dto/receive-units.dto";
 import { ReceiveStockDto } from "./dto/receive-stock.dto";
@@ -169,7 +172,7 @@ export class InventoryService {
    */
   async getItemsSummary(
     tenantId: string,
-    query: { search?: string; page?: unknown; pageSize?: unknown },
+    query: { q?: string; search?: string; page?: unknown; pageSize?: unknown },
     customerCompanyId?: string,
   ): Promise<{
     data: Array<{
@@ -183,19 +186,20 @@ export class InventoryService {
   }> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
     const where: any = { tenantId };
-    if (query.search) {
-      where.OR = [
-        { sku: { contains: query.search, mode: "insensitive" } },
-        { name: { contains: query.search, mode: "insensitive" } },
-        { reference: { contains: query.search, mode: "insensitive" } },
-      ];
-    }
+    const q = (query.q ?? query.search)?.trim();
+    applyQSearch(where, q, ["sku", "name", "reference"]);
+    const orderBy = buildOrderBy(
+      (query as any).sortBy,
+      (query as any).sortDir,
+      ["sku", "name", "reference", "createdAt"],
+      { sku: "asc" },
+    );
     const [total, items] = await this.prisma.$transaction([
       this.prisma.inventory_items.count({ where }),
       this.prisma.inventory_items.findMany({
         where,
         select: { id: true, sku: true, name: true, reference: true },
-        orderBy: { sku: "asc" },
+        orderBy,
         skip,
         take,
       }),
@@ -287,28 +291,29 @@ export class InventoryService {
     return updated;
   }
   /**
-   * GET /inventory/items?search=&page=&pageSize=
+   * GET /inventory/items — q, filter, sortBy, sortDir, page, pageSize
    */
   async searchItems(
     tenantId: string,
-    query: { search?: string; page?: unknown; pageSize?: unknown },
+    query: { q?: string; search?: string; sortBy?: string; sortDir?: string; page?: unknown; pageSize?: unknown },
   ): Promise<{ data: InventoryItemDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
     const where: any = { tenantId };
-    if (query.search) {
-      where.OR = [
-        { sku: { contains: query.search, mode: "insensitive" } },
-        { name: { contains: query.search, mode: "insensitive" } },
-        { reference: { contains: query.search, mode: "insensitive" } },
-      ];
-    }
+    const q = (query.q ?? query.search)?.trim();
+    applyQSearch(where, q, ["sku", "name", "reference"]);
+    const orderBy = buildOrderBy(
+      query.sortBy,
+      query.sortDir,
+      ["sku", "name", "reference", "createdAt"],
+      { sku: "asc" },
+    );
 
     const [total, items] = await this.prisma.$transaction([
       this.prisma.inventory_items.count({ where }),
       this.prisma.inventory_items.findMany({
         where,
         select: { id: true, sku: true, name: true, reference: true },
-        orderBy: { sku: "asc" },
+        orderBy,
         skip,
         take,
       }),
@@ -1117,26 +1122,42 @@ export class InventoryService {
   }
 
   /**
-   * GET /inventory/batches
+   * GET /inventory/batches — q, filter, sortBy, sortDir, page, pageSize, customerName, status
    */
   async listBatches(
     tenantId: string,
-    query: { customerName?: string; status?: string; page?: unknown; pageSize?: unknown },
+    query: {
+      q?: string;
+      filter?: string;
+      sortBy?: string;
+      sortDir?: string;
+      customerName?: string;
+      status?: string;
+      page?: unknown;
+      pageSize?: unknown;
+    },
   ): Promise<{ data: BatchDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
     const where: any = { tenantId };
     if (query.customerName) {
       where.customerName = { contains: query.customerName, mode: "insensitive" };
     }
-    if (query.status) {
-      where.status = query.status;
-    }
+    applyQSearch(where, query.q?.trim(), ["containerNumber", "customerName"]);
+    applyMappedFilter(where, query.filter, {
+      Draft: { status: "Draft" },
+      Open: { status: "Open" },
+      Completed: { status: "Completed" },
+      Cancelled: { status: "Cancelled" },
+    });
+    if (query.status) where.status = query.status;
+
+    const orderBy = buildOrderBy(query.sortBy, query.sortDir, ["createdAt", "containerNumber", "status"], { createdAt: "desc" });
 
     const [total, batches] = await this.prisma.$transaction([
       this.prisma.inventory_batches.count({ where }),
       this.prisma.inventory_batches.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy,
         skip,
         take,
       }),
@@ -1472,7 +1493,16 @@ export class InventoryService {
 
   async listUnits(
     tenantId: string,
-    query: { inventoryItemId?: string; status?: string; page?: unknown; pageSize?: unknown },
+    query: {
+      q?: string;
+      filter?: string;
+      sortBy?: string;
+      sortDir?: string;
+      inventoryItemId?: string;
+      status?: string;
+      page?: unknown;
+      pageSize?: unknown;
+    },
   ): Promise<{
     data: any[];
     meta: { page: number; pageSize: number; total: number };
@@ -1480,13 +1510,26 @@ export class InventoryService {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
     const where: any = { tenantId };
     if (query.inventoryItemId) where.inventoryItemId = query.inventoryItemId;
+    applyQSearch(where, query.q?.trim(), ["unitSku"]);
+    applyMappedFilter(where, query.filter, {
+      Available: { status: "Available" },
+      Reserved: { status: "Reserved" },
+      InTransit: { status: "InTransit" },
+      Delivered: { status: "Delivered" },
+      Returned: { status: "Returned" },
+      Damaged: { status: "Damaged" },
+      Cancelled: { status: "Cancelled" },
+      Dispatched: { status: "Dispatched" },
+    });
     if (query.status) where.status = query.status;
+
+    const orderBy = buildOrderBy(query.sortBy, query.sortDir, ["createdAt", "updatedAt", "unitSku"], { createdAt: "asc" });
 
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.inventory_units.count({ where }),
       this.prisma.inventory_units.findMany({
         where,
-        orderBy: { createdAt: "asc" },
+        orderBy,
         skip,
         take,
         select: {
@@ -1567,15 +1610,28 @@ export class InventoryService {
       };
     }
 
-    if (query.search && String(query.search).trim()) {
-      const s = String(query.search).trim();
-      where.OR = [
+    const searchTerm = (query.q ?? query.search) && String(query.q ?? query.search).trim();
+    if (searchTerm) {
+      const s = String(searchTerm).trim();
+      const orConditions = [
         { unitSku: { contains: s, mode: "insensitive" } },
         { inventory_item: { sku: { contains: s, mode: "insensitive" } } },
         { inventory_item: { name: { contains: s, mode: "insensitive" } } },
         { batch: { containerNumber: { contains: s, mode: "insensitive" } } },
       ];
+      if (where.OR) {
+        where.OR = [...(Array.isArray(where.OR) ? where.OR : [where.OR]), ...orConditions];
+      } else {
+        where.OR = orConditions;
+      }
     }
+
+    const orderBy = buildOrderBy(
+      query.sortBy,
+      query.sortDir,
+      ["updatedAt", "createdAt", "unitSku", "id"],
+      { updatedAt: "desc" },
+    );
 
     const select = {
       id: true,
@@ -1596,7 +1652,7 @@ export class InventoryService {
       this.prisma.inventory_units.count({ where }),
       this.prisma.inventory_units.findMany({
         where,
-        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        orderBy: [orderBy, { id: "desc" }],
         skip,
         take,
         select,

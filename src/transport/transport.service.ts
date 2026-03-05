@@ -15,6 +15,9 @@ import {
 
 import { PrismaService } from "../prisma/prisma.service";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
+import { applyMappedFilter } from "../common/listing/listing.filters";
+import { buildOrderBy } from "../common/listing/listing.sort";
+import { applyQSearch } from "../common/listing/listing.search";
 import { EventLogService } from "./event-log.service";
 
 import { CreateOrderDto } from "./dto/create-order.dto";
@@ -415,7 +418,7 @@ export class TransportService {
 
   async listOrders(
     tenantId: string,
-    query: { page?: unknown; pageSize?: unknown },
+    query: { q?: string; filter?: string; sortBy?: string; sortDir?: string; page?: unknown; pageSize?: unknown },
     customerCompanyId?: string,
   ): Promise<{ data: OrderDto[]; meta: { page: number; pageSize: number; total: number } }> {
     if (!tenantId) throw new BadRequestException("tenantId is required");
@@ -425,11 +428,30 @@ export class TransportService {
     const where: any = { tenantId };
     if (customerCompanyId) where.customerCompanyId = customerCompanyId;
 
+    applyQSearch(where, query.q?.trim(), ["customerName", "customerRef"]);
+    applyMappedFilter(where, query.filter, {
+      Open: { status: OrderStatus.Open },
+      Confirmed: { status: OrderStatus.Confirmed },
+      Planned: { status: OrderStatus.Planned },
+      Dispatched: { status: OrderStatus.Dispatched },
+      InTransit: { status: OrderStatus.InTransit },
+      Delivered: { status: OrderStatus.Delivered },
+      Closed: { status: OrderStatus.Closed },
+      Cancelled: { status: OrderStatus.Cancelled },
+    });
+
+    const orderBy = buildOrderBy(
+      query.sortBy,
+      query.sortDir,
+      ["createdAt", "updatedAt", "customerName", "status"],
+      { createdAt: "desc" },
+    );
+
     const [total, orders] = await this.prisma.$transaction([
       this.prisma.transportOrder.count({ where }),
       this.prisma.transportOrder.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy,
         skip,
         take,
       }),

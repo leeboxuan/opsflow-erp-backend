@@ -1,6 +1,9 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
+import { applyMappedFilter } from "../common/listing/listing.filters";
+import { buildOrderBy } from "../common/listing/listing.sort";
+import { applyQSearch } from "../common/listing/listing.search";
 import { CreateInvoiceDto, InvoiceDto } from "./dto/invoice.dto";
 import { OrderStatus } from "@prisma/client";
 
@@ -24,14 +27,29 @@ export class InvoicesService {
 
   async listInvoices(
     tenantId: string,
-    query?: { page?: unknown; pageSize?: unknown },
+    query?: { q?: string; filter?: string; sortBy?: string; sortDir?: string; page?: unknown; pageSize?: unknown },
   ): Promise<{
     data: any[];
     meta: { page: number; pageSize: number; total: number };
   }> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
 
-    const where = { tenantId };
+    const where: any = { tenantId };
+    applyQSearch(where, query?.q?.trim(), ["invoiceNo", "customerName"]);
+    applyMappedFilter(where, query?.filter, {
+      Draft: { status: "Draft" },
+      Issued: { status: "Issued" },
+      Paid: { status: "Paid" },
+      Void: { status: "Void" },
+    });
+
+    const orderBy = buildOrderBy(
+      query?.sortBy,
+      query?.sortDir,
+      ["createdAt", "updatedAt", "invoiceNo", "status", "issueDate", "issuedAt"],
+      { createdAt: "desc" },
+    );
+
     const include = {
       lineItems: true,
       orders: { select: { id: true } },
@@ -41,7 +59,7 @@ export class InvoicesService {
       this.prisma.invoice.count({ where }),
       this.prisma.invoice.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy,
         skip,
         take,
         include,
