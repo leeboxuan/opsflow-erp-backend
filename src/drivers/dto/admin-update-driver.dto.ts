@@ -11,4 +11,9 @@ export class AdminUpdateDriverDto {
   @IsOptional()
   @IsString()
   phone?: string;
+
+  @ApiProperty({ description: "Default vehicle id for job assignment", required: false })
+  @IsOptional()
+  @IsString()
+  defaultVehicleId?: string;
 }

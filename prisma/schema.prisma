@@ -36,6 +36,10 @@ model Tenant {
   Invoice                    Invoice[]
   InvoiceLineItem            InvoiceLineItem[]
   transportInternalRefCounters transport_internal_ref_counters[]
+  jobs                     Job[]
+  jobDocuments             JobDocument[]
+  jobInternalRefCounters   job_internal_ref_counters[]
+  auditLogs                AuditLog[]
 
   @@map("tenants")
 }
@@ -61,6 +65,7 @@ model User {
 
   customerCompany customer_companies? @relation("UserCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: SetNull)
   customerContact customer_contacts?  @relation("UserCustomerContact", fields: [customerContactId], references: [id], onDelete: SetNull)
+  jobsAssigned    Job[]               @relation("JobAssignedDriver")
 
   @@index([customerCompanyId])
   @@index([customerContactId])
@@ -112,6 +117,7 @@ model customer_companies {
   batches         inventory_batches[] @relation("InventoryBatchCustomerCompany")
   users           User[]              @relation("UserCustomerCompany")
   transportOrders TransportOrder[]    @relation("TransportOrderCustomerCompany")
+  jobs            Job[]               @relation("JobCustomerCompany")
 
   @@unique([tenantId, normalizedName])
   @@index([tenantId])
@@ -243,6 +249,7 @@ model Vehicle {
   updatedAt     DateTime @updatedAt
   trips         Trip[]
   tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driversDefault drivers[]
 
   @@unique([tenantId, vehicleNumber])
   @@index([tenantId])
@@ -395,6 +402,7 @@ model drivers {
   email                      String
   name                       String
   phone                      String
+  defaultVehicleId           String?
   createdAt                  DateTime                  @default(now())
   updatedAt                  DateTime
   userId                     String?
@@ -403,10 +411,111 @@ model drivers {
   tenants                    Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   users                      User?                     @relation(fields: [userId], references: [id])
   trips                      Trip[]
+  defaultVehicle             Vehicle?                  @relation(fields: [defaultVehicleId], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, email])
   @@unique([tenantId, userId])
   @@index([tenantId])
+  @@index([tenantId, defaultVehicleId])
+}
+
+model Job {
+  id                 String     @id @default(cuid())
+  tenantId           String
+  customerCompanyId  String
+  internalRef        String
+  externalRef        String?
+  jobType            JobType
+  status             JobStatus  @default(Draft)
+  notes              String?
+  pickupDate         DateTime?
+  pickupAddress1     String
+  pickupAddress2     String?
+  pickupPostal       String?
+  pickupContactName  String?
+  pickupContactPhone String?
+  deliveryAddress1   String
+  deliveryAddress2   String?
+  deliveryPostal     String?
+  receiverName       String
+  receiverPhone      String
+  assignedDriverId   String?
+  assignedVehicleId  String?
+  assignedAt         DateTime?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  deliveredAt        DateTime?
+  podRecipientName   String?
+  cancelledReason    String?
+  cancelledAt        DateTime?
+  cancelledByUserId  String?
+  lastLat            Float?
+  lastLng            Float?
+  lastLocationAt     DateTime?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerCompany customer_companies  @relation("JobCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: Restrict)
+  assignedDriver  User?               @relation("JobAssignedDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
+  documents       JobDocument[]
+
+  @@unique([tenantId, internalRef])
+  @@index([tenantId, customerCompanyId])
+  @@index([tenantId, status])
+  @@index([tenantId, pickupDate])
+  @@index([tenantId, assignedDriverId])
+  @@map("jobs")
+}
+
+model JobDocument {
+  id               String          @id @default(cuid())
+  tenantId         String
+  jobId            String
+  type             JobDocumentType
+  storageKey       String
+  originalName     String
+  mimeType         String
+  sizeBytes        Int?
+  uploadedByUserId String?
+  createdAt        DateTime        @default(now())
+
+  job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, jobId])
+  @@index([tenantId, type])
+  @@map("job_documents")
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  tenantId    String
+  actorUserId String?
+  entityType  String
+  entityId    String
+  action      String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, createdAt])
+  @@map("audit_logs")
+}
+
+model job_internal_ref_counters {
+  tenantId   String
+  yyyymm    String
+  nextSeq   Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, yyyymm])
+  @@index([tenantId])
+  @@map("job_internal_ref_counters")
 }
 
 model inventory_items {
@@ -498,6 +607,29 @@ enum DoStatus {
 enum UserRole {
   SUPERADMIN
   USER
+}
+
+enum JobType {
+  LCL
+  IMPORT
+  EXPORT
+}
+
+enum JobStatus {
+  Draft
+  Assigned
+  InProgress
+  PendingDepot
+  Completed
+  Cancelled
+}
+
+enum JobDocumentType {
+  QUOTATION
+  DO
+  POD_PHOTO
+  SIGNATURE
+  OTHER
 }
 
 enum InventoryBatchStatus {

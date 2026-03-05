@@ -120,12 +120,22 @@ export class AdminDriversService {
     const name = (dto.name ?? user.name ?? "").trim() || user.email;
     const phone = ((dto.phone ?? (user as any).phone ?? "") as string).trim() || "-";
 
+    if (dto.defaultVehicleId !== undefined) {
+      const vehicle = await this.prisma.vehicle.findFirst({
+        where: { id: dto.defaultVehicleId, tenantId },
+      });
+      if (dto.defaultVehicleId && !vehicle) {
+        throw new BadRequestException("Vehicle not found");
+      }
+    }
+
     await this.prisma.drivers.upsert({
       where: { tenantId_email: { tenantId, email: user.email } },
       update: {
         name,
         phone,
         userId: user.id,
+        ...(dto.defaultVehicleId !== undefined && { defaultVehicleId: dto.defaultVehicleId || null }),
         updatedAt: new Date(),
       },
       create: {
