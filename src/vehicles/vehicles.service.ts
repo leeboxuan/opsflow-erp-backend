@@ -29,11 +29,13 @@ function toVehicleDto(v: any): VehicleDto {
     status: v.status,
     vehicleDescription: v.vehicleDescription,
     driverId: v.driverId,
+    driver: v.driver
+      ? { id: v.driver.id, name: v.driver.name ?? null, email: v.driver.email ?? null }
+      : null,
     createdAt: v.createdAt,
     updatedAt: v.updatedAt,
   };
 }
-
 @Injectable()
 export class VehiclesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -137,6 +139,9 @@ export class VehiclesService {
         orderBy,
         skip,
         take,
+        include: {
+          driver: { select: { id: true, name: true, email: true } },
+        },
       }),
     ]);
 
@@ -149,6 +154,9 @@ export class VehiclesService {
   async getById(tenantId: string, id: string): Promise<VehicleDto> {
     const vehicle = await this.prisma.vehicle.findFirst({
       where: { id, tenantId },
+      include: {
+        driver: { select: { id: true, name: true, email: true } },
+      },
     });
     if (!vehicle) throw new NotFoundException("Vehicle not found");
     return toVehicleDto(vehicle);

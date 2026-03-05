@@ -9,6 +9,7 @@ export interface VehicleDto {
   status: VehicleStatus;
   vehicleDescription: string | null;
   driverId: string | null;
+  driver?: { id: string; name: string | null; email: string | null } | null;
   createdAt: Date;
   updatedAt: Date;
 }
