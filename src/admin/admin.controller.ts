@@ -339,17 +339,17 @@ export class AdminController {
 
     const vehicles = await this.prisma.vehicle.findMany({
       where: { tenantId },
-      orderBy: {
-        vehicleNumber: "asc",
-      },
+      orderBy: { plateNo: "asc" },
     });
 
     return vehicles.map(
       (vehicle): VehicleDto => ({
         id: vehicle.id,
-        vehicleNumber: vehicle.vehicleNumber,
-        type: (vehicle as { type?: string | null }).type ?? null,
+        plateNo: vehicle.plateNo,
+        type: vehicle.type,
+        status: vehicle.status,
         vehicleDescription: vehicle.vehicleDescription,
+        driverId: vehicle.driverId,
         createdAt: vehicle.createdAt,
         updatedAt: vehicle.updatedAt,
       }),
@@ -363,36 +363,38 @@ export class AdminController {
     @Body() dto: CreateVehicleDto,
   ): Promise<VehicleDto> {
     const tenantId = req.tenant.tenantId;
+    const plateNo = dto.plateNo.trim().replace(/\s+/g, " ").toUpperCase();
 
-    // Check if vehicle number already exists for this tenant
     const existing = await this.prisma.vehicle.findUnique({
       where: {
-        tenantId_vehicleNumber: {
-          tenantId,
-          vehicleNumber: dto.vehicleNumber,
-        },
+        tenantId_plateNo: { tenantId, plateNo },
       },
     });
 
     if (existing) {
       throw new BadRequestException(
-        "Vehicle with this number already exists for this tenant",
+        "Vehicle plate number already exists",
       );
     }
 
     const vehicle = await this.prisma.vehicle.create({
       data: {
         tenantId,
-        vehicleNumber: dto.vehicleNumber,
+        plateNo,
+        type: dto.type,
+        status: dto.status ?? ("ACTIVE" as const),
         vehicleDescription: dto.vehicleDescription || null,
+        driverId: dto.driverId || null,
       },
     });
 
     return {
       id: vehicle.id,
-      vehicleNumber: vehicle.vehicleNumber,
-      type: dto.type ?? null,
+      plateNo: vehicle.plateNo,
+      type: vehicle.type,
+      status: vehicle.status,
       vehicleDescription: vehicle.vehicleDescription,
+      driverId: vehicle.driverId,
       createdAt: vehicle.createdAt,
       updatedAt: vehicle.updatedAt,
     };

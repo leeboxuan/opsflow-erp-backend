@@ -1111,7 +1111,7 @@ export class TransportService {
       assignedVehicle: trip.vehicles
         ? {
             id: trip.vehicles.id,
-            vehicleNumber: trip.vehicles.vehicleNumber,
+            plateNo: trip.vehicles.plateNo,
             type: trip.vehicles.type ?? null,
           }
         : null,

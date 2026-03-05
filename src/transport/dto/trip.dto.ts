@@ -28,7 +28,7 @@ export interface PodDto {
 
 export interface VehicleInfoDto {
   id: string;
-  vehicleNumber: string;
+  plateNo: string;
   type: string | null;
 }
 

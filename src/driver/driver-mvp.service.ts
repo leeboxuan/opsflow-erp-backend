@@ -496,8 +496,9 @@ export class DriverMvpService {
 
     let vehicleId = trip.vehicleId;
     if (dto.vehicleNo) {
+      const plateNo = String(dto.vehicleNo).trim().replace(/\s+/g, " ").toUpperCase();
       const vehicle = await this.prisma.vehicle.findFirst({
-        where: { tenantId, vehicleNumber: dto.vehicleNo },
+        where: { tenantId, plateNo },
       });
       if (!vehicle) throw new NotFoundException("Vehicle not found");
       vehicleId = vehicle.id;

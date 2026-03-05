@@ -7,8 +7,8 @@ export class AssignVehicleDto {
   @IsString()
   vehicleId?: string;
 
-  @ApiProperty({ example: 'ABC-1234', required: false })
+  @ApiProperty({ example: 'SBA 1234 A', required: false })
   @IsOptional()
   @IsString()
-  vehicleNumber?: string;
+  plateNo?: string;
 }

@@ -66,6 +66,7 @@ model User {
   customerCompany customer_companies? @relation("UserCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: SetNull)
   customerContact customer_contacts?  @relation("UserCustomerContact", fields: [customerContactId], references: [id], onDelete: SetNull)
   jobsAssigned    Job[]               @relation("JobAssignedDriver")
+  vehiclesAssigned Vehicle[]          @relation("VehicleDriver")
 
   @@index([customerCompanyId])
   @@index([customerContactId])
@@ -241,18 +242,25 @@ model Trip {
 }
 
 model Vehicle {
-  id                  String   @id @default(cuid())
+  id                  String        @id @default(cuid())
   tenantId            String
-  vehicleNumber       String
+  plateNo             String
+  type                VehicleType
+  status              VehicleStatus @default(ACTIVE)
   vehicleDescription  String?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  driverId            String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
   trips               Trip[]
-  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant              Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   driversDefault      drivers[]
+  driver              User?         @relation("VehicleDriver", fields: [driverId], references: [id], onDelete: SetNull)
 
-  @@unique([tenantId, vehicleNumber])
+  @@unique([tenantId, plateNo])
   @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, type])
+  @@index([tenantId, driverId])
   @@map("vehicles")
 }
 
@@ -630,6 +638,23 @@ enum JobDocumentType {
   POD_PHOTO
   SIGNATURE
   OTHER
+}
+
+enum VehicleType {
+  VAN
+  TRUCK_10FT
+  TRUCK_14FT
+  TRUCK_24FT
+  TRAILER
+  PRIME_MOVER
+  LORRY_CRANE
+  MOTORCYCLE
+}
+
+enum VehicleStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
 }
 
 enum InventoryBatchStatus {

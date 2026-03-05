@@ -243,7 +243,7 @@ export class TripService {
     if (trip.vehicles) {
       assignedVehicle = {
         id: trip.vehicles.id,
-        vehicleNumber: trip.vehicles.vehicleNumber,
+        plateNo: trip.vehicles.plateNo,
         type: trip.vehicles.type ?? null,
       };
     }
@@ -611,7 +611,7 @@ export class TripService {
       throw new NotFoundException('Trip not found');
     }
 
-    // Find vehicle by ID or vehicleNumber
+    // Find vehicle by ID or plateNo
     let vehicle;
     if (dto.vehicleId) {
       vehicle = await this.prisma.vehicle.findFirst({
@@ -620,12 +620,13 @@ export class TripService {
           tenantId,
         },
       });
-    } else if (dto.vehicleNumber) {
+    } else if (dto.plateNo) {
+      const normalized = dto.plateNo.trim().replace(/\s+/g, " ").toUpperCase();
       vehicle = await this.prisma.vehicle.findUnique({
         where: {
-          tenantId_vehicleNumber: {
+          tenantId_plateNo: {
             tenantId,
-            vehicleNumber: dto.vehicleNumber,
+            plateNo: normalized,
           },
         },
       });
@@ -660,7 +661,7 @@ export class TripService {
     // Log event
     await this.eventLogService.logEvent(tenantId, 'Trip', tripId, 'VEHICLE_ASSIGNED', {
       vehicleId: vehicle.id,
-      vehicleNumber: vehicle.vehicleNumber,
+      plateNo: vehicle.plateNo,
     });
 
     return this.toDto(

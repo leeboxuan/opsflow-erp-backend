@@ -870,8 +870,8 @@ export interface components {
         AssignVehicleDto: {
             /** @example clx1234567890abcdef */
             vehicleId?: string;
-            /** @example ABC-1234 */
-            vehicleNumber?: string;
+            /** @example SBA 1234 A */
+            plateNo?: string;
         };
         UpdateStopDto: Record<string, never>;
         CreatePodDto: {
@@ -904,12 +904,16 @@ export interface components {
             phone?: string;
         };
         CreateVehicleDto: {
-            /** @example ABC-1234 */
-            vehicleNumber: string;
-            /** @example Van */
-            type?: string;
+            /** @example SBA 1234 A */
+            plateNo: string;
+            /** @example VAN */
+            type: string;
+            /** @example ACTIVE */
+            status?: string;
             /** @example Description of the vehicle */
             vehicleDescription?: string;
+            /** Driver user id */
+            driverId?: string;
         };
         AcceptTripDto: {
             /** @example ABC-1234 */
