@@ -59,7 +59,7 @@ export class VehiclesService {
 
     if (dto.driverId) {
       const user = await this.prisma.user.findFirst({
-        where: { id: dto.driverId },
+        where: { id: dto.driverId, tenantId },
       });
       if (!user) {
         throw new BadRequestException("Driver user not found");
@@ -89,10 +89,16 @@ export class VehiclesService {
 
     const filterMap: Record<string, any> = {
       [VEHICLE_LIST_FILTER.UNASSIGNED]: { driverId: null },
-      [VEHICLE_LIST_FILTER.ASSIGNED]: { driverId: query.driverId ?? { not: null } },
+      [VEHICLE_LIST_FILTER.ASSIGNED]: {
+        driverId: query.driverId ?? { not: null },
+      },
     };
     applyMappedFilter(where, query.filter, filterMap);
-    if (query.filter !== VEHICLE_LIST_FILTER.ASSIGNED && query.filter !== VEHICLE_LIST_FILTER.UNASSIGNED && query.driverId) {
+    if (
+      query.filter !== VEHICLE_LIST_FILTER.ASSIGNED &&
+      query.filter !== VEHICLE_LIST_FILTER.UNASSIGNED &&
+      query.driverId
+    ) {
       where.driverId = query.driverId;
     }
 
@@ -108,7 +114,9 @@ export class VehiclesService {
       ];
       const qUpper = q.toUpperCase().replace(/-/g, "_");
       const matchingType = Object.values(VehicleType).find(
-        (t) => t === qUpper || t.replace(/_/g, " ").toLowerCase() === q.toLowerCase(),
+        (t) =>
+          t === qUpper ||
+          t.replace(/_/g, " ").toLowerCase() === q.toLowerCase(),
       );
       if (matchingType) orConditions.push({ type: matchingType });
       where.AND = where.AND || [];
@@ -157,7 +165,9 @@ export class VehiclesService {
     if (!vehicle) throw new NotFoundException("Vehicle not found");
 
     const plateNo =
-      dto.plateNo !== undefined ? this.normalizePlateNo(dto.plateNo) : undefined;
+      dto.plateNo !== undefined
+        ? this.normalizePlateNo(dto.plateNo)
+        : undefined;
     if (plateNo !== undefined) {
       const existing = await this.prisma.vehicle.findFirst({
         where: {
@@ -173,7 +183,7 @@ export class VehiclesService {
 
     if (dto.driverId !== undefined && dto.driverId !== null) {
       const user = await this.prisma.user.findFirst({
-        where: { id: dto.driverId },
+        where: { id: dto.driverId, tenantId },
       });
       if (!user) throw new BadRequestException("Driver user not found");
     }
@@ -224,5 +234,61 @@ export class VehiclesService {
     if (!vehicle) throw new NotFoundException("Vehicle not found");
     await this.prisma.vehicle.delete({ where: { id } });
     return { id };
+  }
+
+
+  async assignDriver(
+    tenantId: string,
+    vehicleId: string,
+    driverId: string | null,
+  ): Promise<VehicleDto> {
+    return this.prisma.$transaction(async (tx) => {
+      const vehicle = await tx.vehicle.findFirst({
+        where: { id: vehicleId, tenantId },
+      });
+      if (!vehicle) throw new NotFoundException("Vehicle not found");
+  
+      // Unassign
+      if (driverId === null) {
+        const updated = await tx.vehicle.update({
+          where: { id: vehicleId },
+          data: { driverId: null },
+        });
+        return toVehicleDto(updated);
+      }
+  
+      // Validate driver belongs to tenant (and optionally role)
+      const driverUser = await tx.user.findFirst({
+        where: { id: driverId, tenantId },
+        select: { id: true },
+      });
+      if (!driverUser) {
+        throw new BadRequestException("Driver user not found");
+      }
+  
+      // OPTIONAL: enforce driver role here if you have it
+      // if (driverUser.role !== "DRIVER") throw new BadRequestException("User is not a driver");
+  
+      // If this driver is assigned to another vehicle, unassign it first (1 driver -> 1 vehicle)
+      const existingVehicleForDriver = await tx.vehicle.findFirst({
+        where: { tenantId, driverId, id: { not: vehicleId } },
+        select: { id: true },
+      });
+  
+      if (existingVehicleForDriver) {
+        await tx.vehicle.update({
+          where: { id: existingVehicleForDriver.id },
+          data: { driverId: null },
+        });
+      }
+  
+      // Assign to target vehicle
+      const updated = await tx.vehicle.update({
+        where: { id: vehicleId },
+        data: { driverId },
+      });
+  
+      return toVehicleDto(updated);
+    });
   }
 }

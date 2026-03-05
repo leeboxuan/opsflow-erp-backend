@@ -17,6 +17,7 @@ import { VehiclesService } from "./vehicles.service";
 import { CreateVehicleDto } from "./dto/create-vehicle.dto";
 import { UpdateVehicleDto } from "./dto/update-vehicle.dto";
 import { ListVehiclesQueryDto } from "./dto/list-vehicles.query.dto";
+import { AssignVehicleDriverDto } from "./dto/assign-vehicle-driver.dto";
 
 @ApiTags("vehicles")
 @Controller("vehicles")
@@ -76,5 +77,20 @@ export class VehiclesController {
   async delete(@Req() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
     return this.vehiclesService.delete(tenantId, id);
+  }
+
+  @Patch(":id/assign-driver")
+  @ApiOperation({ summary: "Assign/unassign a driver to a vehicle" })
+  async assignDriver(
+    @Req() req: any,
+    @Param("id") id: string,
+    @Body() dto: AssignVehicleDriverDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    return this.vehiclesService.assignDriver(
+      tenantId,
+      id,
+      dto.driverId ?? null,
+    );
   }
 }
