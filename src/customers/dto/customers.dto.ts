@@ -2,59 +2,25 @@ import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   IsOptional,
   IsString,
-  IsInt,
-  Min,
-  Max,
   IsEmail,
   IsBoolean,
   MinLength,
 } from "class-validator";
 import { Type } from "class-transformer";
+import { ListQueryBaseDto } from "../../common/dto";
 
-export class ListCompaniesQueryDto {
+export class ListCompaniesQueryDto extends ListQueryBaseDto {
   @ApiPropertyOptional({ description: "Search by company name" })
   @IsOptional()
   @IsString()
   search?: string;
-
-  @ApiPropertyOptional({ default: 1, minimum: 1, maximum: 100 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  page?: number = 1;
-
-  @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  pageSize?: number = 20;
 }
 
-export class ListContactsQueryDto {
+export class ListContactsQueryDto extends ListQueryBaseDto {
   @ApiPropertyOptional({ description: "Search by contact name/email" })
   @IsOptional()
   @IsString()
   search?: string;
-
-  @ApiPropertyOptional({ default: 1, minimum: 1, maximum: 100 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  page?: number = 1;
-
-  @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  pageSize?: number = 20;
 }
 
 export class CustomerCompanyDto {

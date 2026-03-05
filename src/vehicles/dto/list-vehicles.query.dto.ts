@@ -2,6 +2,7 @@ import { ApiPropertyOptional } from "@nestjs/swagger";
 import { IsOptional, IsString, IsEnum, IsInt, Min, Max, IsIn } from "class-validator";
 import { Type } from "class-transformer";
 import { VehicleType, VehicleStatus } from "@prisma/client";
+import { SORT_DIR_VALUES } from "../../common/constants";
 
 export const VEHICLE_LIST_FILTER = {
   ALL: "all",
@@ -11,6 +12,7 @@ export const VEHICLE_LIST_FILTER = {
 export type VehicleListFilter =
   (typeof VEHICLE_LIST_FILTER)[keyof typeof VEHICLE_LIST_FILTER];
 
+/** @deprecated Use SORT_DIR_VALUES from common/constants */
 export const SORT_DIR = { ASC: "asc", DESC: "desc" } as const;
 export type SortDir = (typeof SORT_DIR)[keyof typeof SORT_DIR];
 
@@ -78,8 +80,8 @@ export class ListVehiclesQueryDto {
   @IsIn(VEHICLE_SORT_FIELDS)
   sortBy?: VehicleSortBy = "createdAt";
 
-  @ApiPropertyOptional({ enum: Object.values(SORT_DIR), default: "desc" })
+  @ApiPropertyOptional({ enum: SORT_DIR_VALUES, default: "desc" })
   @IsOptional()
-  @IsIn(Object.values(SORT_DIR))
+  @IsIn(SORT_DIR_VALUES)
   sortDir?: SortDir = "desc";
 }

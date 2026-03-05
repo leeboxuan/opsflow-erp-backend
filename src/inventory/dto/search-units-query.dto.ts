@@ -1,8 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
+import { ListQueryBaseDto } from '../../common/dto';
 
-export class SearchUnitsQueryDto {
+export class SearchUnitsQueryDto extends ListQueryBaseDto {
   @ApiPropertyOptional({
     description: 'Prefix match on unitSku (best for performance)',
     example: 'LLSG-CB',
@@ -41,20 +41,4 @@ export class SearchUnitsQueryDto {
   @IsOptional()
   @IsString()
   transportOrderId?: string;
-
-  @ApiPropertyOptional({ default: 1, minimum: 1, maximum: 100 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  page?: number = 1;
-
-  @ApiPropertyOptional({ default: 20, maximum: 100 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  pageSize?: number = 20;
 }
