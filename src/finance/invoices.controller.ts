@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   Request,
   UseGuards,
 } from "@nestjs/common";
@@ -14,6 +15,7 @@ import { RoleGuard, Roles } from "@/auth/guards/role.guard";
 import { Role } from "@prisma/client";
 import { InvoicesService } from "./invoices.service";
 import { CreateInvoiceDto } from "./dto/invoice.dto";
+import { ListInvoicesQueryDto } from "./dto/list-invoices-query.dto";
 
 @ApiTags("Finance")
 @Controller("finance/invoices")
@@ -24,9 +26,9 @@ export class InvoicesController {
   constructor(private readonly invoices: InvoicesService) {}
 
   @Get()
-  async list(@Request() req: any) {
+  async list(@Request() req: any, @Query() query: ListInvoicesQueryDto) {
     const tenantId = req.tenant.tenantId;
-    return this.invoices.listInvoices(tenantId);
+    return this.invoices.listInvoices(tenantId, query);
   }
 
   @Get(":id")

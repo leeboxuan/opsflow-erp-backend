@@ -5,6 +5,7 @@ import {
   ConflictException,
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
 import { CreateBatchDto } from "./dto/create-batch.dto";
 import { ReceiveUnitsDto } from "./dto/receive-units.dto";
 import { ReceiveStockDto } from "./dto/receive-stock.dto";
@@ -163,54 +164,51 @@ export class InventoryService {
   }
 
   /**
-   * GET /inventory/items/summary?search=
+   * GET /inventory/items/summary?search=&page=&pageSize=
    * Returns items with counts by status (available, reserved, inTransit, delivered, total).
    */
   async getItemsSummary(
     tenantId: string,
-    search?: string,
+    query: { search?: string; page?: unknown; pageSize?: unknown },
     customerCompanyId?: string,
-  ): Promise<
-    Array<{
+  ): Promise<{
+    data: Array<{
       id: string;
       sku: string;
       name: string;
       reference: string | null;
-      counts: {
-        available: number;
-        reserved: number;
-        inTransit: number;
-        delivered: number;
-        total: number;
-      };
-    }>
-  > {
+      counts: { available: number; reserved: number; inTransit: number; delivered: number; total: number };
+    }>;
+    meta: { page: number; pageSize: number; total: number };
+  }> {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
     const where: any = { tenantId };
-    if (search) {
+    if (query.search) {
       where.OR = [
-        { sku: { contains: search, mode: "insensitive" } },
-        { name: { contains: search, mode: "insensitive" } },
-        { reference: { contains: search, mode: "insensitive" } },
+        { sku: { contains: query.search, mode: "insensitive" } },
+        { name: { contains: query.search, mode: "insensitive" } },
+        { reference: { contains: query.search, mode: "insensitive" } },
       ];
     }
-    const items = await this.prisma.inventory_items.findMany({
-      where,
-      select: { id: true, sku: true, name: true, reference: true },
-      orderBy: { sku: "asc" },
-    });
-    const units = await this.prisma.inventory_units.findMany({
-      where: { tenantId },
-      select: { inventoryItemId: true, status: true },
-    });
-    const byItem = new Map<
-      string,
-      {
-        available: number;
-        reserved: number;
-        inTransit: number;
-        delivered: number;
-      }
-    >();
+    const [total, items] = await this.prisma.$transaction([
+      this.prisma.inventory_items.count({ where }),
+      this.prisma.inventory_items.findMany({
+        where,
+        select: { id: true, sku: true, name: true, reference: true },
+        orderBy: { sku: "asc" },
+        skip,
+        take,
+      }),
+    ]);
+    const itemIds = items.map((i) => i.id);
+    const units =
+      itemIds.length === 0
+        ? []
+        : await this.prisma.inventory_units.findMany({
+            where: { tenantId, inventoryItemId: { in: itemIds } },
+            select: { inventoryItemId: true, status: true },
+          });
+    const byItem = new Map<string, { available: number; reserved: number; inTransit: number; delivered: number }>();
     for (const u of units) {
       let c = byItem.get(u.inventoryItemId);
       if (!c) {
@@ -232,28 +230,18 @@ export class InventoryService {
           break;
       }
     }
-    return items.map((item) => {
-      const c = byItem.get(item.id) ?? {
-        available: 0,
-        reserved: 0,
-        inTransit: 0,
-        delivered: 0,
-      };
-      const total = c.available + c.reserved + c.inTransit + c.delivered;
+    const data = items.map((item) => {
+      const c = byItem.get(item.id) ?? { available: 0, reserved: 0, inTransit: 0, delivered: 0 };
+      const totalCount = c.available + c.reserved + c.inTransit + c.delivered;
       return {
         id: item.id,
         sku: item.sku,
         name: item.name,
         reference: item.reference,
-        counts: {
-          available: c.available,
-          reserved: c.reserved,
-          inTransit: c.inTransit,
-          delivered: c.delivered,
-          total,
-        },
+        counts: { ...c, total: totalCount },
       };
     });
+    return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   async updateUnitStatus(
@@ -299,58 +287,58 @@ export class InventoryService {
     return updated;
   }
   /**
-   * GET /inventory/items?search=
+   * GET /inventory/items?search=&page=&pageSize=
    */
   async searchItems(
     tenantId: string,
-    search?: string,
-  ): Promise<InventoryItemDto[]> {
+    query: { search?: string; page?: unknown; pageSize?: unknown },
+  ): Promise<{ data: InventoryItemDto[]; meta: { page: number; pageSize: number; total: number } }> {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
     const where: any = { tenantId };
-    if (search) {
+    if (query.search) {
       where.OR = [
-        { sku: { contains: search, mode: "insensitive" } },
-        { name: { contains: search, mode: "insensitive" } },
-        { reference: { contains: search, mode: "insensitive" } },
+        { sku: { contains: query.search, mode: "insensitive" } },
+        { name: { contains: query.search, mode: "insensitive" } },
+        { reference: { contains: query.search, mode: "insensitive" } },
       ];
     }
 
-    const items = await this.prisma.inventory_items.findMany({
-      where,
-      select: {
-        id: true,
-        sku: true,
-        name: true,
-        reference: true,
-        // we don't trust cached availableQty; we compute below
-      },
-      orderBy: { sku: "asc" },
-    });
+    const [total, items] = await this.prisma.$transaction([
+      this.prisma.inventory_items.count({ where }),
+      this.prisma.inventory_items.findMany({
+        where,
+        select: { id: true, sku: true, name: true, reference: true },
+        orderBy: { sku: "asc" },
+        skip,
+        take,
+      }),
+    ]);
 
     const ids = items.map((i) => i.id);
-    if (ids.length === 0) return [];
-
-    const counts = await this.prisma.inventory_units.groupBy({
-      by: ["inventoryItemId"],
-      where: {
-        tenantId,
-        inventoryItemId: { in: ids },
-        status: InventoryUnitStatus.Available,
-      },
-      _count: { _all: true },
-    });
-
-    const availableByItemId = new Map<string, number>();
-    for (const c of counts) {
-      availableByItemId.set(c.inventoryItemId, c._count._all);
+    let availableByItemId = new Map<string, number>();
+    if (ids.length > 0) {
+      const counts = await this.prisma.inventory_units.groupBy({
+        by: ["inventoryItemId"],
+        where: {
+          tenantId,
+          inventoryItemId: { in: ids },
+          status: InventoryUnitStatus.Available,
+        },
+        _count: { _all: true },
+      });
+      for (const c of counts) {
+        availableByItemId.set(c.inventoryItemId, c._count._all);
+      }
     }
 
-    return items.map((item) => ({
+    const data = items.map((item) => ({
       id: item.id,
       sku: item.sku,
       name: item.name,
       reference: item.reference,
       availableQty: availableByItemId.get(item.id) ?? 0,
     }));
+    return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   /**
@@ -1133,31 +1121,35 @@ export class InventoryService {
    */
   async listBatches(
     tenantId: string,
-    customerName?: string,
-    status?: InventoryBatchStatus,
-  ): Promise<BatchDto[]> {
+    query: { customerName?: string; status?: string; page?: unknown; pageSize?: unknown },
+  ): Promise<{ data: BatchDto[]; meta: { page: number; pageSize: number; total: number } }> {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
     const where: any = { tenantId };
-    if (customerName) {
-      where.customerName = { contains: customerName, mode: "insensitive" };
+    if (query.customerName) {
+      where.customerName = { contains: query.customerName, mode: "insensitive" };
     }
-    if (status) {
-      where.status = status;
+    if (query.status) {
+      where.status = query.status;
     }
 
-    const batches = await this.prisma.inventory_batches.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-    });
+    const [total, batches] = await this.prisma.$transaction([
+      this.prisma.inventory_batches.count({ where }),
+      this.prisma.inventory_batches.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take,
+      }),
+    ]);
 
-    // Get counts for each batch
-    const batchesWithCounts = await Promise.all(
+    const data = await Promise.all(
       batches.map(async (batch) => {
         const counts = await this.getBatchCounts(tenantId, batch.id);
         return this.toBatchDto(batch, counts);
       }),
     );
 
-    return batchesWithCounts;
+    return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   /**
@@ -1480,30 +1472,38 @@ export class InventoryService {
 
   async listUnits(
     tenantId: string,
-    inventoryItemId: string,
-    status: string,
-    limit = 50,
-  ) {
-    return this.prisma.inventory_units.findMany({
-      where: {
-        tenantId,
-        inventoryItemId,
-        status: status as any,
-      },
-      orderBy: { createdAt: "asc" },
-      take: limit,
-      select: {
-        id: true,
-        unitSku: true,
-        status: true,
-        createdAt: true,
-        updatedAt: true,
-        batchId: true,
-        transportOrderId: true,
-        inventory_item: { select: { sku: true, name: true } },
-        batch: { select: { containerNumber: true } },
-      },
-    });
+    query: { inventoryItemId?: string; status?: string; page?: unknown; pageSize?: unknown },
+  ): Promise<{
+    data: any[];
+    meta: { page: number; pageSize: number; total: number };
+  }> {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
+    const where: any = { tenantId };
+    if (query.inventoryItemId) where.inventoryItemId = query.inventoryItemId;
+    if (query.status) where.status = query.status;
+
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.inventory_units.count({ where }),
+      this.prisma.inventory_units.findMany({
+        where,
+        orderBy: { createdAt: "asc" },
+        skip,
+        take,
+        select: {
+          id: true,
+          unitSku: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+          batchId: true,
+          transportOrderId: true,
+          inventory_item: { select: { sku: true, name: true } },
+          batch: { select: { containerNumber: true } },
+        },
+      }),
+    ]);
+
+    return { data: rows, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   /**
@@ -1524,7 +1524,7 @@ export class InventoryService {
     query: SearchUnitsQueryDto,
     customerCompanyId?: string,
   ): Promise<{
-    rows: Array<{
+    data: Array<{
       id: string;
       unitSku: string;
       status: string;
@@ -1539,9 +1539,7 @@ export class InventoryService {
       createdAt: Date;
       updatedAt: Date;
     }>;
-    nextCursor: string | null;
-    hasMore: boolean;
-    totalCount: number;
+    meta: { page: number; pageSize: number; total: number };
     stats: {
       total: number;
       available: number;
@@ -1551,8 +1549,7 @@ export class InventoryService {
       other: number;
     };
   }> {
-    const limit = Math.min(Number(query.limit ?? 25), 200);
-    const cursor = query.cursor?.trim() || null;
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
     const where: any = { tenantId };
 
@@ -1580,39 +1577,38 @@ export class InventoryService {
       ];
     }
 
-    const unitsPlusOne = await this.prisma.inventory_units.findMany({
-      where,
-      take: limit + 1,
-      ...(cursor
-        ? {
-            cursor: { id: cursor },
-            skip: 1,
-          }
-        : {}),
-      // stable order: updatedAt desc + id desc
-      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-      select: {
-        id: true,
-        unitSku: true,
-        status: true,
-        inventoryItemId: true,
-        batchId: true,
-        transportOrderId: true,
-        tripId: true as any,
-        stopId: true as any,
-        createdAt: true,
-        updatedAt: true,
-        inventory_item: { select: { sku: true, name: true } },
-        batch: { select: { containerNumber: true } },
-      },
-    });
+    const select = {
+      id: true,
+      unitSku: true,
+      status: true,
+      inventoryItemId: true,
+      batchId: true,
+      transportOrderId: true,
+      tripId: true as any,
+      stopId: true as any,
+      createdAt: true,
+      updatedAt: true,
+      inventory_item: { select: { sku: true, name: true } },
+      batch: { select: { containerNumber: true } },
+    };
 
-    const totalCount = await this.prisma.inventory_units.count({ where });
+    const [total, units, grouped] = await this.prisma.$transaction([
+      this.prisma.inventory_units.count({ where }),
+      this.prisma.inventory_units.findMany({
+        where,
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        skip,
+        take,
+        select,
+      }),
+      this.prisma.inventory_units.groupBy({
+        by: ["status"],
+        where,
+        _count: { _all: true },
+      }),
+    ]);
 
-    const hasMore = unitsPlusOne.length > limit;
-    const page = hasMore ? unitsPlusOne.slice(0, limit) : unitsPlusOne;
-
-    const rows = page.map((u: any) => ({
+    const data = units.map((u: any) => ({
       id: u.id,
       unitSku: u.unitSku,
       status: u.status,
@@ -1627,13 +1623,6 @@ export class InventoryService {
       createdAt: u.createdAt,
       updatedAt: u.updatedAt,
     }));
-
-    const nextCursor = hasMore ? (rows[rows.length - 1]?.id ?? null) : null;
-    const grouped = await this.prisma.inventory_units.groupBy({
-      by: ["status"],
-      where,
-      _count: { _all: true },
-    });
 
     const stats = grouped.reduce(
       (acc, g) => {
@@ -1655,7 +1644,12 @@ export class InventoryService {
         other: 0,
       },
     );
-    return { rows, nextCursor, hasMore, totalCount, stats };
+
+    return {
+      data,
+      meta: buildPaginationMeta(page, pageSize, total),
+      stats,
+    };
   }
 
   /**

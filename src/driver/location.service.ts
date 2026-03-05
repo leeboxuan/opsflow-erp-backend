@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { parsePaginationFromQuery, buildPaginationMeta } from '../common/pagination';
 import { UpdateLocationDto } from './dto/update-location.dto';
 import { LocationDto, DriverLocationDto } from './dto/location.dto';
 
@@ -79,25 +80,30 @@ export class LocationService {
 
   async getAllDriverLocations(
     tenantId: string,
-  ): Promise<DriverLocationDto[]> {
-    const locations = await (this.prisma as any).driverLocationLatest.findMany({
-      where: { tenantId },
-      orderBy: {
-        updatedAt: 'desc',
-      },
-    });
+    query?: { page?: unknown; pageSize?: unknown },
+  ): Promise<{ data: DriverLocationDto[]; meta: { page: number; pageSize: number; total: number } }> {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
 
-    // Get user info for each driver
+    const where = { tenantId };
+
+    const [total, locations] = await (this.prisma as any).$transaction([
+      (this.prisma as any).driverLocationLatest.count({ where }),
+      (this.prisma as any).driverLocationLatest.findMany({
+        where,
+        orderBy: { updatedAt: 'desc' },
+        skip,
+        take,
+      }),
+    ]);
+
     const locationsWithUsers = await Promise.all(
-      locations.map(async (location) => {
+      locations.map(async (location: any) => {
         const membership = await (this.prisma as any).tenantMembership.findFirst({
           where: {
             tenantId,
             userId: location.driverUserId,
           },
-          include: {
-            user: true,
-          },
+          include: { user: true },
         });
 
         return {
@@ -108,7 +114,8 @@ export class LocationService {
       }),
     );
 
-    return locationsWithUsers.map((loc) => this.toDriverLocationDto(loc));
+    const data = locationsWithUsers.map((loc: any) => this.toDriverLocationDto(loc));
+    return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   private toLocationDto(location: any): LocationDto {

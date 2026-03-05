@@ -4,6 +4,7 @@ import {
   IsString,
   IsInt,
   Min,
+  Max,
   IsEmail,
   IsBoolean,
   MinLength,
@@ -16,15 +17,20 @@ export class ListCompaniesQueryDto {
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({
-    description: "Max results (default 20, max 100)",
-    default: 20,
-  })
+  @ApiPropertyOptional({ default: 1, minimum: 1 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  limit?: number;
+  page?: number = 1;
+
+  @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize?: number = 20;
 }
 
 export class ListContactsQueryDto {
@@ -33,15 +39,20 @@ export class ListContactsQueryDto {
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({
-    description: "Max results (default 20, max 100)",
-    default: 20,
-  })
+  @ApiPropertyOptional({ default: 1, minimum: 1 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  limit?: number;
+  page?: number = 1;
+
+  @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize?: number = 20;
 }
 
 export class CustomerCompanyDto {

@@ -5,6 +5,7 @@ import {
   Patch,
   Body,
   Param,
+  Query,
   UseGuards,
   Request,
   ForbiddenException,
@@ -17,9 +18,11 @@ import { TenantGuard } from '../auth/guards/tenant.guard';
 import { RoleGuard } from '../auth/guards/role.guard';
 import { Roles } from '../auth/guards/role.guard';
 import { PrismaService } from '../prisma/prisma.service';
+import { parsePaginationFromQuery, buildPaginationMeta } from '../common/pagination';
 import { MembershipStatus, Role } from '@prisma/client';
 import { InviteMemberDto } from './dto/invite-member.dto';
 import { UpdateMembershipDto } from './dto/update-membership.dto';
+import { TenantListQueryDto } from './dto/list-query.dto';
 
 export interface TenantDto {
   id: string;
@@ -49,32 +52,34 @@ export class TenantsController {
   @UseGuards(AuthGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Get all tenants for current user' })
-  async getTenants(@Request() req: any): Promise<TenantDto[]> {
+  async getTenants(
+    @Request() req: any,
+    @Query() query: TenantListQueryDto,
+  ): Promise<{ data: TenantDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const user = req.user;
 
-    // Use userId from req.user (set by AuthGuard)
     if (!user || !user.userId) {
-      return [];
+      return { data: [], meta: buildPaginationMeta(1, 20, 0) };
     }
 
-    // Get all tenants where user has active membership
-    const memberships = await this.prisma.tenantMembership.findMany({
-      where: {
-        userId: user.userId,
-        status: MembershipStatus.Active,
-      },
-      include: {
-        tenant: true,
-      },
-      orderBy: {
-        tenant: {
-          name: 'asc',
-        },
-      },
-    });
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
+    const where = {
+      userId: user.userId,
+      status: MembershipStatus.Active,
+    };
 
-    // Map Prisma results to DTO shape
-    return memberships.map(
+    const [total, memberships] = await this.prisma.$transaction([
+      this.prisma.tenantMembership.count({ where }),
+      this.prisma.tenantMembership.findMany({
+        where,
+        include: { tenant: true },
+        orderBy: { tenant: { name: 'asc' } },
+        skip,
+        take,
+      }),
+    ]);
+
+    const data = memberships.map(
       (membership): TenantDto => ({
         id: membership.tenant.id,
         name: membership.tenant.name,
@@ -83,6 +88,8 @@ export class TenantsController {
         createdAt: membership.tenant.createdAt,
       }),
     );
+
+    return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   @Get('me')
@@ -114,22 +121,27 @@ export class TenantsController {
   @Roles(Role.ADMIN, Role.OPS)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'List all members of current tenant (Admin/Ops only)' })
-  async getMembers(@Request() req: any): Promise<MemberDto[]> {
+  async getMembers(
+    @Request() req: any,
+    @Query() query: TenantListQueryDto,
+  ): Promise<{ data: MemberDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
-    const memberships = await this.prisma.tenantMembership.findMany({
-      where: {
-        tenantId,
-      },
-      include: {
-        user: true,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    const where = { tenantId };
 
-    return memberships.map(
+    const [total, memberships] = await this.prisma.$transaction([
+      this.prisma.tenantMembership.count({ where }),
+      this.prisma.tenantMembership.findMany({
+        where,
+        include: { user: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+    ]);
+
+    const data = memberships.map(
       (membership): MemberDto => ({
         id: membership.id,
         userId: membership.userId,
@@ -141,6 +153,8 @@ export class TenantsController {
         updatedAt: membership.updatedAt,
       }),
     );
+
+    return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   @Post('invite')

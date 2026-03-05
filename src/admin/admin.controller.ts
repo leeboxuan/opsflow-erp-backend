@@ -4,6 +4,7 @@ import {
   Post,
   Body,
   Param,
+  Query,
   UseGuards,
   Request,
   NotFoundException,
@@ -20,6 +21,7 @@ import { Roles } from "../auth/guards/role.guard";
 import { PrismaService } from "../prisma/prisma.service";
 import { LocationService } from "../driver/location.service";
 import { Role, MembershipStatus } from "@prisma/client";
+import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
 import { CreateVehicleDto } from "./dto/create-vehicle.dto";
 import { VehicleDto } from "./dto/vehicle.dto";
 import { DriverLocationDto } from "../driver/dto/location.dto";
@@ -27,6 +29,7 @@ import { SupabaseService } from "../auth/supabase.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { UserDto } from "./dto/user.dto";
+import { AdminListQueryDto } from "./dto/list-query.dto";
 import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
 
 @ApiTags("admin")
@@ -44,20 +47,30 @@ export class AdminController {
 
   @Get("users")
   @ApiOperation({ summary: "List all web users (Admin/Ops only)" })
-  async getUsers(@Request() req: any): Promise<UserDto[]> {
+  async getUsers(
+    @Request() req: any,
+    @Query() query: AdminListQueryDto,
+  ): Promise<{ data: UserDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
-    const memberships = await this.prisma.tenantMembership.findMany({
-      where: {
-        tenantId,
-        // treat "Users page" as web users (exclude drivers)
-        NOT: { role: Role.DRIVER },
-      },
-      include: { user: true },
-      orderBy: { user: { createdAt: "desc" } },
-    });
+    const where = {
+      tenantId,
+      NOT: { role: Role.DRIVER },
+    };
 
-    return memberships.map((m) => ({
+    const [total, memberships] = await this.prisma.$transaction([
+      this.prisma.tenantMembership.count({ where }),
+      this.prisma.tenantMembership.findMany({
+        where,
+        include: { user: true },
+        orderBy: { user: { createdAt: "desc" } },
+        skip,
+        take,
+      }),
+    ]);
+
+    const data = memberships.map((m) => ({
       id: m.user.id,
       email: m.user.email,
       name: m.user.name,
@@ -67,6 +80,8 @@ export class AdminController {
       createdAt: m.user.createdAt,
       updatedAt: m.user.updatedAt,
     }));
+
+    return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   // @Post("users")
@@ -334,15 +349,26 @@ export class AdminController {
 
   @Get("vehicles")
   @ApiOperation({ summary: "List all vehicles (Admin/Ops only)" })
-  async getVehicles(@Request() req: any): Promise<VehicleDto[]> {
+  async getVehicles(
+    @Request() req: any,
+    @Query() query: AdminListQueryDto,
+  ): Promise<{ data: VehicleDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
-    const vehicles = await this.prisma.vehicle.findMany({
-      where: { tenantId },
-      orderBy: { plateNo: "asc" },
-    });
+    const where = { tenantId };
 
-    return vehicles.map(
+    const [total, vehicles] = await this.prisma.$transaction([
+      this.prisma.vehicle.count({ where }),
+      this.prisma.vehicle.findMany({
+        where,
+        orderBy: { plateNo: "asc" },
+        skip,
+        take,
+      }),
+    ]);
+
+    const data = vehicles.map(
       (vehicle): VehicleDto => ({
         id: vehicle.id,
         plateNo: vehicle.plateNo,
@@ -354,6 +380,8 @@ export class AdminController {
         updatedAt: vehicle.updatedAt,
       }),
     );
+
+    return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   @Post("vehicles")
@@ -402,9 +430,12 @@ export class AdminController {
 
   @Get("locations")
   @ApiOperation({ summary: "Get all driver locations (Admin/Ops only)" })
-  async getLocations(@Request() req: any): Promise<DriverLocationDto[]> {
+  async getLocations(
+    @Request() req: any,
+    @Query() query: AdminListQueryDto,
+  ): Promise<{ data: DriverLocationDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
-    return this.locationService.getAllDriverLocations(tenantId);
+    return this.locationService.getAllDriverLocations(tenantId, query);
   }
 
 

@@ -75,6 +75,6 @@ export class VehiclesController {
   @ApiOperation({ summary: "Delete vehicle (hard delete)" })
   async delete(@Req() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
-    await this.vehiclesService.delete(tenantId, id);
+    return this.vehiclesService.delete(tenantId, id);
   }
 }

@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
 import { CreateInvoiceDto, InvoiceDto } from "./dto/invoice.dto";
 import { OrderStatus } from "@prisma/client";
 
@@ -21,17 +22,34 @@ function extractDraftMeta(snapshot: any) {
 export class InvoicesService {
   constructor(private prisma: PrismaService) {}
 
-  async listInvoices(tenantId: string) {
-    const invoices = await this.prisma.invoice.findMany({
-      where: { tenantId },
-      orderBy: { createdAt: "desc" },
-      include: {
-        lineItems: true,
-        orders: { select: { id: true } },
-      },
-    });
+  async listInvoices(
+    tenantId: string,
+    query?: { page?: unknown; pageSize?: unknown },
+  ): Promise<{
+    data: any[];
+    meta: { page: number; pageSize: number; total: number };
+  }> {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
 
-    return invoices.map((inv) => this.toDtoWithNames(inv));
+    const where = { tenantId };
+    const include = {
+      lineItems: true,
+      orders: { select: { id: true } },
+    };
+
+    const [total, invoices] = await this.prisma.$transaction([
+      this.prisma.invoice.count({ where }),
+      this.prisma.invoice.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take,
+        include,
+      }),
+    ]);
+
+    const data = invoices.map((inv) => this.toDtoWithNames(inv));
+    return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   async getInvoice(tenantId: string, id: string) {

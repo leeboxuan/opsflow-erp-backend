@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class SearchUnitsQueryDto {
   @ApiPropertyOptional({
@@ -42,17 +42,18 @@ export class SearchUnitsQueryDto {
   @IsString()
   transportOrderId?: string;
 
-  @ApiPropertyOptional({
-    description: 'Cursor (inventory_units.id). Use the nextCursor from the previous response.',
-  })
-  @IsOptional()
-  @IsString()
-  cursor?: string;
-
-  @ApiPropertyOptional({ description: 'Max results (default 25, max 200)', default: 25 })
+  @ApiPropertyOptional({ default: 1 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  limit?: number;
+  page?: number = 1;
+
+  @ApiPropertyOptional({ default: 20, maximum: 100 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize?: number = 20;
 }

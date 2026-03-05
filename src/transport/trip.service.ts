@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { parsePaginationFromQuery, buildPaginationMeta } from '../common/pagination';
 import { TripStatus, StopType } from '@prisma/client';
 import { CreateTripDto } from './dto/create-trip.dto';
 import {
@@ -116,50 +117,38 @@ export class TripService {
 
   async listTrips(
     tenantId: string,
-    cursor?: string,
-    limit: number = 20,
-  ): Promise<{ trips: TripDto[]; nextCursor?: string }> {
-    const take = Math.min(limit, 100);
+    query: { page?: unknown; pageSize?: unknown },
+  ): Promise<{ data: TripDto[]; meta: { page: number; pageSize: number; total: number } }> {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
-    const where = {
-      tenantId,
-      ...(cursor && {
-        id: {
-          gt: cursor,
+    const where = { tenantId };
+
+    const include = {
+      stops: {
+        orderBy: { sequence: 'asc' as const },
+        include: {
+          pods: {
+            take: 1,
+            orderBy: { createdAt: 'desc' as const },
+          },
         },
-      }),
+      },
+      vehicles: true,
     };
 
-    const trips = await this.prisma.trip.findMany({
-      where,
-      take: take + 1,
-      orderBy: {
-        createdAt: 'desc',
-      },
-      include: {
-        stops: {
-          orderBy: {
-            sequence: 'asc',
-          },
-          include: {
-            pods: {
-              take: 1,
-              orderBy: {
-                createdAt: 'desc',
-              },
-            },
-          },
-        },
-        vehicles: true,
-      },
-    });
-
-    const hasMore = trips.length > take;
-    const result = hasMore ? trips.slice(0, take) : trips;
-    const nextCursor = hasMore ? result[result.length - 1].id : undefined;
+    const [total, trips] = await this.prisma.$transaction([
+      this.prisma.trip.count({ where }),
+      this.prisma.trip.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+        include,
+      }),
+    ]);
 
     const tripsWithDetails = await Promise.all(
-      result.map((trip) =>
+      trips.map((trip) =>
         this.toDto(
           trip,
           trip.stops.map((stop) => ({
@@ -171,8 +160,8 @@ export class TripService {
     );
 
     return {
-      trips: tripsWithDetails,
-      nextCursor,
+      data: tripsWithDetails,
+      meta: buildPaginationMeta(page, pageSize, total),
     };
   }
 

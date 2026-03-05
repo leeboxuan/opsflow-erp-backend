@@ -14,6 +14,7 @@ import {
 } from "@prisma/client";
 
 import { PrismaService } from "../prisma/prisma.service";
+import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
 import { EventLogService } from "./event-log.service";
 
 import { CreateOrderDto } from "./dto/create-order.dto";
@@ -414,32 +415,29 @@ export class TransportService {
 
   async listOrders(
     tenantId: string,
-    cursor?: string,
-    limit: number = 20,
+    query: { page?: unknown; pageSize?: unknown },
     customerCompanyId?: string,
-  ): Promise<{ orders: OrderDto[]; nextCursor?: string }> {
-    console.log("[Transport] tenantId:", tenantId);
-
+  ): Promise<{ data: OrderDto[]; meta: { page: number; pageSize: number; total: number } }> {
     if (!tenantId) throw new BadRequestException("tenantId is required");
 
-    const take = Math.min(limit, 100);
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
     const where: any = { tenantId };
     if (customerCompanyId) where.customerCompanyId = customerCompanyId;
 
-    const orders = await this.prisma.transportOrder.findMany({
-      where,
-      take: take + 1,
-      orderBy: { createdAt: "desc" },
-    });
-
-    const hasMore = orders.length > take;
-    const result = hasMore ? orders.slice(0, take) : orders;
-    const nextCursor = hasMore ? result[result.length - 1].id : undefined;
+    const [total, orders] = await this.prisma.$transaction([
+      this.prisma.transportOrder.count({ where }),
+      this.prisma.transportOrder.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take,
+      }),
+    ]);
 
     return {
-      orders: result.map((o) => this.toDto(o)),
-      nextCursor,
+      data: orders.map((o) => this.toDto(o)),
+      meta: buildPaginationMeta(page, pageSize, total),
     };
   }
 

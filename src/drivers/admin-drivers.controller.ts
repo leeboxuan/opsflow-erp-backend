@@ -10,6 +10,7 @@ import { AdminDriversService } from "./admin-drivers.service";
 import { AdminCreateDriverDto } from "./dto/admin-create-driver.dto";
 import { AdminUpdateDriverDto } from "./dto/admin-update-driver.dto";
 import { AdminDriverDto } from "./dto/admin-driver.dto";
+import { ListDriversQueryDto } from "./dto/list-drivers-query.dto";
 import type { DriverWalletDto } from "../driver/dto/driver-trip.dto";
 
 @ApiTags("admin-drivers")
@@ -22,8 +23,11 @@ export class AdminDriversController {
 
   @Get()
   @ApiOperation({ summary: "List drivers (Admin/Ops only) — includes suspended" })
-  async list(@Request() req: any): Promise<AdminDriverDto[]> {
-    return this.adminDriversService.listDrivers(req.tenant.tenantId);
+  async list(
+    @Request() req: any,
+    @Query() query: ListDriversQueryDto,
+  ): Promise<{ data: AdminDriverDto[]; meta: { page: number; pageSize: number; total: number } }> {
+    return this.adminDriversService.listDrivers(req.tenant.tenantId, query);
   }
 
   @Post()

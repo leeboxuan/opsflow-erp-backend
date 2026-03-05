@@ -26,6 +26,7 @@ import { RoleGuard } from "../auth/guards/role.guard";
 import { Roles } from "../auth/guards/role.guard";
 import { Role } from "@prisma/client";
 import { DriverJobsService } from "./driver-jobs.service";
+import { DriverJobsListQueryDto } from "./dto/driver-jobs-list-query.dto";
 import { DriverCompleteJobDto } from "./dto/complete-job.dto";
 import { JobLocationDto } from "./dto/location.dto";
 
@@ -41,12 +42,12 @@ export class DriverJobsController {
   @ApiOperation({ summary: "List jobs assigned to driver for date (default today)" })
   async list(
     @Req() req: any,
-    @Query("date") date?: string,
-  ) {
+    @Query() query: DriverJobsListQueryDto,
+  ): Promise<{ data: any[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
-    const dateStr = date ?? new Date().toISOString().slice(0, 10);
-    return this.driverJobs.listByDriver(tenantId, userId, dateStr);
+    const dateStr = query.date ?? new Date().toISOString().slice(0, 10);
+    return this.driverJobs.listByDriver(tenantId, userId, dateStr, query);
   }
 
   @Get(":jobId")

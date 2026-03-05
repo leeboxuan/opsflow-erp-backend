@@ -14,6 +14,7 @@ import {
   CreateCustomerCompanyDto,
   UpdateCustomerCompanyDto,
 } from "./dto/customers.dto";
+import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
 import { createClient } from "@supabase/supabase-js";
 
 @Injectable()
@@ -53,8 +54,14 @@ export class CustomersService {
     return String(email ?? "").trim().toLowerCase();
   }
 
-  async searchCompanies(tenantId: string, query: ListCompaniesQueryDto) {
-    const limit = Math.min(Number(query.limit ?? 20), 100);
+  async searchCompanies(
+    tenantId: string,
+    query: ListCompaniesQueryDto,
+  ): Promise<{
+    data: Array<{ id: string; name: string; isActive: boolean; contactCount: number; userCount: number }>;
+    meta: { page: number; pageSize: number; total: number };
+  }> {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
     const searchRaw = String(query.search ?? "").trim();
 
     const where: any = { tenantId };
@@ -67,44 +74,50 @@ export class CustomersService {
       ];
     }
 
-    const companies = await this.prisma.customer_companies.findMany({
-      where,
-      orderBy: { name: "asc" },
-      take: limit,
-      select: {
-        id: true,
-        name: true,
-        isActive: true,
-        _count: {
-          select: {
-            contacts: true,
-            users: true,
-          },
-        },
-      },
-    });
+    const select = {
+      id: true,
+      name: true,
+      isActive: true,
+      _count: { select: { contacts: true, users: true } },
+    };
 
-    return companies.map((c) => ({
+    const [total, companies] = await this.prisma.$transaction([
+      this.prisma.customer_companies.count({ where }),
+      this.prisma.customer_companies.findMany({
+        where,
+        orderBy: { name: "asc" },
+        skip,
+        take,
+        select,
+      }),
+    ]);
+
+    const data = companies.map((c) => ({
       id: c.id,
       name: c.name,
       isActive: c.isActive,
       contactCount: c._count.contacts,
       userCount: c._count.users,
     }));
+
+    return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   async listContacts(
     tenantId: string,
     companyId: string,
     query: ListContactsQueryDto,
-  ) {
+  ): Promise<{
+    data: Array<{ id: string; name: string; email: string }>;
+    meta: { page: number; pageSize: number; total: number };
+  }> {
     const company = await this.prisma.customer_companies.findFirst({
       where: { id: companyId, tenantId },
       select: { id: true },
     });
     if (!company) throw new NotFoundException("Customer company not found");
 
-    const limit = Math.min(Number(query.limit ?? 20), 100);
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
     const searchRaw = String(query.search ?? "").trim();
 
     const where: any = { companyId };
@@ -118,16 +131,20 @@ export class CustomersService {
       ];
     }
 
-    return this.prisma.customer_contacts.findMany({
-      where,
-      orderBy: [{ name: "asc" }, { email: "asc" }],
-      take: limit,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-      },
-    });
+    const select = { id: true, name: true, email: true };
+
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.customer_contacts.count({ where }),
+      this.prisma.customer_contacts.findMany({
+        where,
+        orderBy: [{ name: "asc" }, { email: "asc" }],
+        skip,
+        take,
+        select,
+      }),
+    ]);
+
+    return { data: rows, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   async createCompany(tenantId: string, dto: CreateCustomerCompanyDto) {

@@ -25,6 +25,7 @@ import {
 } from "./transport.service";
 import { CreateOrderDto } from "./dto/create-order.dto";
 import { CreateOrdersBatchDto } from "./dto/create-orders-batch.dto";
+import { ListOrdersQueryDto } from "./dto/list-orders-query.dto";
 import { OrderDto } from "./dto/order.dto";
 import { TripDto } from "./dto/trip.dto";
 import { RoleGuard, Roles } from "@/auth/guards/role.guard";
@@ -102,23 +103,14 @@ export class TransportController {
   @Get()
   async listOrders(
     @Request() req: any,
-    @Query("cursor") cursor?: string,
-    @Query("limit") limit?: string,
-  ): Promise<{ orders: OrderDto[]; nextCursor?: string }> {
-    // Extract tenantId from request context (set by TenantGuard)
-    // tenantId is REQUIRED - all roles must operate under a tenant
+    @Query() query: ListOrdersQueryDto,
+  ): Promise<{ data: OrderDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
-    const limitNum = limit ? parseInt(limit, 10) : 20;
     const customerCompanyId =
       req.tenant.role === Role.CUSTOMER
         ? req.tenant.customerCompanyId
         : undefined;
-    return this.transportService.listOrders(
-      tenantId,
-      cursor,
-      limitNum,
-      customerCompanyId,
-    );
+    return this.transportService.listOrders(tenantId, query, customerCompanyId);
   }
 
   @Get("next-internal-ref")

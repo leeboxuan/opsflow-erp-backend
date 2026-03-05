@@ -37,12 +37,10 @@ export class CustomersController {
 
   @Get("companies")
   @ApiOperation({ summary: "Search customer companies (tenant-scoped)" })
-  @ApiQuery({ name: "search", required: false, description: "Search by company name" })
-  @ApiQuery({ name: "limit", required: false, description: "Max results (default 20, max 100)" })
   async listCompanies(
     @Request() req: any,
     @Query() query: ListCompaniesQueryDto,
-  ): Promise<CustomerCompanyDto[]> {
+  ): Promise<{ data: CustomerCompanyDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
     return this.customersService.searchCompanies(tenantId, query);
   }
@@ -61,13 +59,11 @@ export class CustomersController {
 
   @Get("companies/:companyId/contacts")
   @ApiOperation({ summary: "List/search contacts for a company (tenant-safe)" })
-  @ApiQuery({ name: "search", required: false, description: "Search by contact name/email" })
-  @ApiQuery({ name: "limit", required: false, description: "Max results (default 20, max 100)" })
   async listContacts(
     @Request() req: any,
     @Param("companyId") companyId: string,
     @Query() query: ListContactsQueryDto,
-  ): Promise<CustomerContactDto[]> {
+  ): Promise<{ data: CustomerContactDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
     return this.customersService.listContacts(tenantId, companyId, query);
   }

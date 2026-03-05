@@ -3,11 +3,19 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
-import { VehicleStatus } from "@prisma/client";
+import { VehicleStatus, VehicleType } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import {
+  parsePaginationFromQuery,
+  buildPaginationMeta,
+} from "../common/pagination";
 import { CreateVehicleDto } from "./dto/create-vehicle.dto";
 import { UpdateVehicleDto } from "./dto/update-vehicle.dto";
-import { ListVehiclesQueryDto } from "./dto/list-vehicles.query.dto";
+import {
+  ListVehiclesQueryDto,
+  VEHICLE_LIST_FILTER,
+  VEHICLE_SORT_FIELDS,
+} from "./dto/list-vehicles.query.dto";
 import type { VehicleDto, ListVehiclesResult } from "./vehicles.types";
 
 function toVehicleDto(v: any): VehicleDto {
@@ -73,31 +81,58 @@ export class VehiclesService {
     tenantId: string,
     query: ListVehiclesQueryDto,
   ): Promise<ListVehiclesResult> {
-    const page = Math.max(1, query.page ?? 1);
-    const pageSize = Math.min(100, Math.max(1, query.pageSize ?? 20));
-    const skip = (page - 1) * pageSize;
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
     const where: any = { tenantId };
-    if (query.q?.trim()) {
-      where.plateNo = { contains: query.q.trim(), mode: "insensitive" };
+
+    // filter: assigned | unassigned | all
+    const filter = query.filter ?? VEHICLE_LIST_FILTER.ALL;
+    if (filter === VEHICLE_LIST_FILTER.UNASSIGNED) {
+      where.driverId = null;
+    } else if (filter === VEHICLE_LIST_FILTER.ASSIGNED) {
+      where.driverId = query.driverId ?? { not: null };
+    } else if (query.driverId) {
+      where.driverId = query.driverId;
     }
+
     if (query.status) where.status = query.status;
     if (query.type) where.type = query.type;
-    if (query.driverId) where.driverId = query.driverId;
 
-    const [data, total] = await Promise.all([
+    // q: search plateNo OR type OR vehicleDescription (case-insensitive)
+    const q = query.q?.trim();
+    if (q) {
+      const orConditions: any[] = [
+        { plateNo: { contains: q, mode: "insensitive" } },
+        { vehicleDescription: { contains: q, mode: "insensitive" } },
+      ];
+      const qUpper = q.toUpperCase().replace(/-/g, "_");
+      const matchingType = Object.values(VehicleType).find(
+        (t) => t === qUpper || t.replace(/_/g, " ").toLowerCase() === q.toLowerCase(),
+      );
+      if (matchingType) orConditions.push({ type: matchingType });
+      where.AND = where.AND || [];
+      where.AND.push({ OR: orConditions });
+    }
+
+    const sortBy = VEHICLE_SORT_FIELDS.includes(query.sortBy ?? "createdAt")
+      ? (query.sortBy as (typeof VEHICLE_SORT_FIELDS)[number])
+      : "createdAt";
+    const sortDir = query.sortDir === "asc" ? "asc" : "desc";
+    const orderBy = { [sortBy]: sortDir };
+
+    const [total, data] = await this.prisma.$transaction([
+      this.prisma.vehicle.count({ where }),
       this.prisma.vehicle.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy,
         skip,
-        take: pageSize,
+        take,
       }),
-      this.prisma.vehicle.count({ where }),
     ]);
 
     return {
       data: data.map(toVehicleDto),
-      meta: { page, pageSize, total },
+      meta: buildPaginationMeta(page, pageSize, total),
     };
   }
 
@@ -180,11 +215,12 @@ export class VehiclesService {
     return toVehicleDto(updated);
   }
 
-  async delete(tenantId: string, id: string): Promise<void> {
+  async delete(tenantId: string, id: string): Promise<{ id: string }> {
     const vehicle = await this.prisma.vehicle.findFirst({
       where: { id, tenantId },
     });
     if (!vehicle) throw new NotFoundException("Vehicle not found");
     await this.prisma.vehicle.delete({ where: { id } });
+    return { id };
   }
 }

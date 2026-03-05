@@ -7,6 +7,11 @@ import { JobStatus, JobType, JobDocumentType, Role } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { SupabaseService } from "../auth/supabase.service";
+import {
+  parsePaginationFromQuery,
+  buildPaginationMeta,
+  type PaginatedResponse,
+} from "../common/pagination";
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
 import { AssignJobDto } from "./dto/assign-job.dto";
@@ -114,7 +119,9 @@ export class OpsJobsService {
   async list(
     tenantId: string,
     query: JobListQueryDto,
-  ): Promise<JobDto[]> {
+  ): Promise<PaginatedResponse<JobDto>> {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
+
     const where: any = { tenantId };
 
     if (query.status) {
@@ -144,14 +151,20 @@ export class OpsJobsService {
       ];
     }
 
-    const limit = Math.min(query.limit ?? 50, 500);
-    const jobs = await this.prisma.job.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      take: limit,
-    });
+    const [total, jobs] = await this.prisma.$transaction([
+      this.prisma.job.count({ where }),
+      this.prisma.job.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take,
+      }),
+    ]);
 
-    return jobs.map(toJobDto);
+    return {
+      data: jobs.map(toJobDto),
+      meta: buildPaginationMeta(page, pageSize, total),
+    };
   }
 
   async create(

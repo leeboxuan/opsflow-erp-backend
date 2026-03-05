@@ -1,4 +1,5 @@
 import { VehicleType, VehicleStatus } from "@prisma/client";
+import type { PaginatedResponse } from "../common/pagination";
 
 export interface VehicleDto {
   id: string;
@@ -12,11 +13,4 @@ export interface VehicleDto {
   updatedAt: Date;
 }
 
-export interface ListVehiclesResult {
-  data: VehicleDto[];
-  meta: {
-    page: number;
-    pageSize: number;
-    total: number;
-  };
-}
+export type ListVehiclesResult = PaginatedResponse<VehicleDto>;

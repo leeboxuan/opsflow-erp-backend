@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import { JobStatus, JobType, JobDocumentType } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
 import { AuditService } from "../audit/audit.service";
 import { SupabaseService } from "../auth/supabase.service";
 import { DriverCompleteJobDto } from "./dto/complete-job.dto";
@@ -73,27 +74,40 @@ export class DriverJobsService {
     tenantId: string,
     driverUserId: string,
     dateStr: string,
-  ): Promise<JobDto[]> {
+    query?: { page?: unknown; pageSize?: unknown },
+  ): Promise<{ data: JobDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const date = new Date(dateStr + "T00:00:00.000Z");
     const nextDay = new Date(date);
     nextDay.setUTCDate(nextDay.getUTCDate() + 1);
 
-    const jobs = await this.prisma.job.findMany({
-      where: {
-        tenantId,
-        assignedDriverId: driverUserId,
-        status: {
-          in: [JobStatus.Assigned, JobStatus.InProgress, JobStatus.PendingDepot, JobStatus.Completed],
-        },
-        pickupDate: {
-          gte: date,
-          lt: nextDay,
-        },
-      },
-      orderBy: [{ pickupDate: "asc" }, { createdAt: "asc" }],
-    });
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
 
-    return jobs.map(toJobDto);
+    const where = {
+      tenantId,
+      assignedDriverId: driverUserId,
+      status: {
+        in: [JobStatus.Assigned, JobStatus.InProgress, JobStatus.PendingDepot, JobStatus.Completed],
+      },
+      pickupDate: {
+        gte: date,
+        lt: nextDay,
+      },
+    };
+
+    const [total, jobs] = await this.prisma.$transaction([
+      this.prisma.job.count({ where }),
+      this.prisma.job.findMany({
+        where,
+        orderBy: [{ pickupDate: "asc" }, { createdAt: "asc" }],
+        skip,
+        take,
+      }),
+    ]);
+
+    return {
+      data: jobs.map(toJobDto),
+      meta: buildPaginationMeta(page, pageSize, total),
+    };
   }
 
   async getOneForDriver(

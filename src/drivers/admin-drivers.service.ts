@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { MembershipStatus, Role } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
 import { AdminCreateDriverDto } from "./dto/admin-create-driver.dto";
 import { AdminUpdateDriverDto } from "./dto/admin-update-driver.dto";
 import { AdminDriverDto } from "./dto/admin-driver.dto";
@@ -10,18 +11,30 @@ import type { DriverWalletDto, DriverWalletTransactionDto } from "../driver/dto/
 export class AdminDriversService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async listDrivers(tenantId: string): Promise<AdminDriverDto[]> {
-    const memberships = await this.prisma.tenantMembership.findMany({
-      where: {
-        tenantId,
-        role: Role.DRIVER,
-        status: { in: [MembershipStatus.Active, MembershipStatus.Suspended] },
-      },
-      include: { user: true },
-      orderBy: { user: { name: "asc" } },
-    });
+  async listDrivers(
+    tenantId: string,
+    query?: { page?: unknown; pageSize?: unknown },
+  ): Promise<{ data: AdminDriverDto[]; meta: { page: number; pageSize: number; total: number } }> {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
 
-    return memberships.map((m) => ({
+    const where = {
+      tenantId,
+      role: Role.DRIVER,
+      status: { in: [MembershipStatus.Active, MembershipStatus.Suspended] },
+    };
+
+    const [total, memberships] = await this.prisma.$transaction([
+      this.prisma.tenantMembership.count({ where }),
+      this.prisma.tenantMembership.findMany({
+        where,
+        include: { user: true },
+        orderBy: { user: { name: "asc" } },
+        skip,
+        take,
+      }),
+    ]);
+
+    const data = memberships.map((m) => ({
       id: m.user.id,
       email: m.user.email,
       name: m.user.name,
@@ -32,6 +45,8 @@ export class AdminDriversService {
       createdAt: m.user.createdAt,
       updatedAt: m.user.updatedAt,
     }));
+
+    return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   async createDriver(tenantId: string, dto: AdminCreateDriverDto): Promise<AdminDriverDto> {

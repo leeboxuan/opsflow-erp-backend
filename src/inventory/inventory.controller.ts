@@ -25,10 +25,10 @@ import { InventoryItemDto } from './dto/inventory-item.dto';
 import { ReleaseUnitsDto } from './dto/release-units.dto';
 import { StockInDto } from './dto/stock-in.dto';
 import { SearchUnitsQueryDto } from './dto/search-units-query.dto';
+import { ListItemsQueryDto, ListBatchesQueryDto, ListUnitsQueryDto } from './dto/list-query.dto';
 import { Patch } from '@nestjs/common';
 import { RoleGuard, Roles } from '../auth/guards/role.guard';
 import { UpdateUnitStatusDto } from './dto/update-unit-status.dto';
-import { SearchUnitsResponseDto } from './dto/search-units-response.dto';
 import { Role } from '@prisma/client';
 
 /** Allowed batch status filter (matches Prisma InventoryBatchStatus) */
@@ -44,40 +44,33 @@ export class InventoryController {
 
   @Get('items/summary')
   @ApiOperation({ summary: 'Get inventory items with unit counts by status' })
-  @ApiQuery({ name: 'search', required: false, description: 'Search term for SKU, name, or reference' })
   async getItemsSummary(
     @Request() req: any,
-    @Query('search') search?: string,
-  ): Promise<
-    Array<{
+    @Query() query: ListItemsQueryDto,
+  ): Promise<{
+    data: Array<{
       id: string;
       sku: string;
       name: string;
       reference: string | null;
-      counts: {
-        available: number;
-        reserved: number;
-        inTransit: number;
-        delivered: number;
-        total: number;
-      };
-    }>
-  > {
+      counts: { available: number; reserved: number; inTransit: number; delivered: number; total: number };
+    }>;
+    meta: { page: number; pageSize: number; total: number };
+  }> {
     const tenantId = req.tenant.tenantId;
     const customerCompanyId =
-  req.tenant.role === "CUSTOMER" ? req.tenant.customerCompanyId : undefined;
-    return this.inventoryService.getItemsSummary(tenantId, search, customerCompanyId);
+      req.tenant.role === "CUSTOMER" ? req.tenant.customerCompanyId : undefined;
+    return this.inventoryService.getItemsSummary(tenantId, query, customerCompanyId);
   }
 
   @Get('items')
   @ApiOperation({ summary: 'Search inventory items' })
-  @ApiQuery({ name: 'search', required: false, description: 'Search term for SKU, name, or reference' })
   async getItems(
     @Request() req: any,
-    @Query('search') search?: string,
-  ): Promise<InventoryItemDto[]> {
+    @Query() query: ListItemsQueryDto,
+  ): Promise<{ data: InventoryItemDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
-    return this.inventoryService.searchItems(tenantId, search);
+    return this.inventoryService.searchItems(tenantId, query);
   }
 
   @Post('batches')
@@ -140,15 +133,12 @@ export class InventoryController {
 
   @Get('batches')
   @ApiOperation({ summary: 'List inventory batches' })
-  @ApiQuery({ name: 'customerName', required: false })
-  @ApiQuery({ name: 'status', required: false, enum: BATCH_STATUS_VALUES })
   async listBatches(
     @Request() req: any,
-    @Query('customerName') customerName?: string,
-    @Query('status') status?: BatchStatusQuery,
-  ): Promise<BatchDto[]> {
+    @Query() query: ListBatchesQueryDto,
+  ): Promise<{ data: BatchDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
-    return this.inventoryService.listBatches(tenantId, customerName, status);
+    return this.inventoryService.listBatches(tenantId, query);
   }
 
   @Get('batches/:batchId')
@@ -217,34 +207,31 @@ export class InventoryController {
   @Get('units')
   async listUnits(
     @Request() req: any,
-    @Query('inventoryItemId') inventoryItemId: string,
-    @Query('status') status: string = 'Available',
-    @Query('limit') limit: string = '50',
-  ) {
-    if (!inventoryItemId) {
+    @Query() query: ListUnitsQueryDto,
+  ): Promise<{ data: any[]; meta: { page: number; pageSize: number; total: number } }> {
+    if (!query.inventoryItemId) {
       throw new BadRequestException('inventoryItemId is required. Use /inventory/units/search for ops register.');
     }
     const tenantId = req.tenant.tenantId;
-    return this.inventoryService.listUnits(tenantId, inventoryItemId, status, Number(limit));
+    return this.inventoryService.listUnits(tenantId, query);
   }
 
   @Get('units/search')
-  @ApiOperation({ summary: 'Search inventory units (ops unit register) - cursor paginated' })
+  @ApiOperation({ summary: 'Search inventory units (ops unit register)' })
   @ApiQuery({ name: 'prefix', required: false, description: 'unitSku startsWith' })
   @ApiQuery({ name: 'search', required: false, description: 'contains match on unitSku / item sku / item name / batch code' })
   @ApiQuery({ name: 'itemSku', required: false, description: 'filter by item SKU (inventory_items.sku)' })
   @ApiQuery({ name: 'status', required: false, description: 'filter by unit status' })
   @ApiQuery({ name: 'batchId', required: false })
   @ApiQuery({ name: 'transportOrderId', required: false })
-  @ApiQuery({ name: 'cursor', required: false, description: 'cursor (inventory_units.id) from previous page' })
-  @ApiQuery({ name: 'limit', required: false })
-  @ApiOkResponse({ type: SearchUnitsResponseDto })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'pageSize', required: false })
 
   async searchUnits(
     @Request() req: any,
     @Query() query: SearchUnitsQueryDto,
   ): Promise<{
-    rows: Array<{
+    data: Array<{
       id: string;
       unitSku: string;
       status: string;
@@ -259,9 +246,7 @@ export class InventoryController {
       createdAt: Date;
       updatedAt: Date;
     }>;
-    nextCursor: string | null;
-    hasMore: boolean;
-    totalCount: number;
+    meta: { page: number; pageSize: number; total: number };
     stats: {
       total: number;
       available: number;
@@ -274,33 +259,7 @@ export class InventoryController {
     const tenantId = req.tenant.tenantId;
     const customerCompanyId =
       req.tenant.role === "CUSTOMER" ? req.tenant.customerCompanyId : undefined;
-    const result = await this.inventoryService.searchUnits(tenantId, query, customerCompanyId);
-    // Ensure the structure matches the expected return type
-    if (Array.isArray(result)) {
-      const rows = result;
-      const stats = rows.reduce(
-        (acc, row) => {
-          acc.total += 1;
-          const s = row.status;
-          if (s === 'Available') acc.available += 1;
-          else if (s === 'Reserved') acc.reserved += 1;
-          else if (s === 'InTransit') acc.inTransit += 1;
-          else if (s === 'Delivered') acc.delivered += 1;
-          else acc.other += 1;
-          return acc;
-        },
-        { total: 0, available: 0, reserved: 0, inTransit: 0, delivered: 0, other: 0 },
-      );
-      return {
-        rows,
-        nextCursor: null,
-        hasMore: false,
-        totalCount: rows.length,
-        stats,
-      };
-    }
-
-    return result;
+    return this.inventoryService.searchUnits(tenantId, query, customerCompanyId);
   }
 
   @Post('stock-in')

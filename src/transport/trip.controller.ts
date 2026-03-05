@@ -16,6 +16,7 @@ import { RoleGuard } from '../auth/guards/role.guard';
 import { Roles } from '../auth/guards/role.guard';
 import { TripService } from './trip.service';
 import { CreateTripDto } from './dto/create-trip.dto';
+import { ListTripsQueryDto } from './dto/list-trips-query.dto';
 import { TripDto } from './dto/trip.dto';
 import { AssignDriverDto } from '../driver/dto/assign-driver.dto';
 import { AssignVehicleDto } from '../driver/dto/assign-vehicle.dto';
@@ -42,12 +43,10 @@ export class TripController {
   @ApiOperation({ summary: 'List trips' })
   async listTrips(
     @Request() req: any,
-    @Query('cursor') cursor?: string,
-    @Query('limit') limit?: string,
-  ): Promise<{ trips: TripDto[]; nextCursor?: string }> {
+    @Query() query: ListTripsQueryDto,
+  ): Promise<{ data: TripDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
-    const limitNum = limit ? parseInt(limit, 10) : 20;
-    return this.tripService.listTrips(tenantId, cursor, limitNum);
+    return this.tripService.listTrips(tenantId, query);
   }
 
   @Get(':id')
