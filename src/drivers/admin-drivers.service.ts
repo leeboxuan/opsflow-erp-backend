@@ -1,13 +1,23 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { MembershipStatus, Role } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
-import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
+import {
+  parsePaginationFromQuery,
+  buildPaginationMeta,
+} from "../common/pagination";
 import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { AdminCreateDriverDto } from "./dto/admin-create-driver.dto";
 import { AdminUpdateDriverDto } from "./dto/admin-update-driver.dto";
 import { AdminDriverDto } from "./dto/admin-driver.dto";
-import type { DriverWalletDto, DriverWalletTransactionDto } from "../driver/dto/driver-trip.dto";
+import type {
+  DriverWalletDto,
+  DriverWalletTransactionDto,
+} from "../driver/dto/driver-trip.dto";
 
 @Injectable()
 export class AdminDriversService {
@@ -15,9 +25,21 @@ export class AdminDriversService {
 
   async listDrivers(
     tenantId: string,
-    query?: { q?: string; filter?: string; sortBy?: string; sortDir?: string; page?: unknown; pageSize?: unknown },
-  ): Promise<{ data: AdminDriverDto[]; meta: { page: number; pageSize: number; total: number } }> {
-    const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
+    query?: {
+      q?: string;
+      filter?: string;
+      sortBy?: string;
+      sortDir?: string;
+      page?: unknown;
+      pageSize?: unknown;
+    },
+  ): Promise<{
+    data: AdminDriverDto[];
+    meta: { page: number; pageSize: number; total: number };
+  }> {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(
+      query ?? {},
+    );
 
     const where: any = {
       tenantId,
@@ -25,7 +47,9 @@ export class AdminDriversService {
       status: { in: [MembershipStatus.Active, MembershipStatus.Suspended] },
     };
     applyMappedFilter(where, query?.filter, {
-      all: { status: { in: [MembershipStatus.Active, MembershipStatus.Suspended] } },
+      all: {
+        status: { in: [MembershipStatus.Active, MembershipStatus.Suspended] },
+      },
       active: { status: MembershipStatus.Active },
       suspended: { status: MembershipStatus.Suspended },
     });
@@ -41,7 +65,9 @@ export class AdminDriversService {
 
     let orderBy: any = { user: { name: "asc" } };
     if (query?.sortBy === "name" || query?.sortBy === "email") {
-      orderBy = { user: { [query.sortBy]: query.sortDir === "desc" ? "desc" : "asc" } };
+      orderBy = {
+        user: { [query.sortBy]: query.sortDir === "desc" ? "desc" : "asc" },
+      };
     } else {
       orderBy = buildOrderBy(
         query?.sortBy,
@@ -62,22 +88,62 @@ export class AdminDriversService {
       }),
     ]);
 
-    const data = memberships.map((m) => ({
-      id: m.user.id,
-      email: m.user.email,
-      name: m.user.name,
-      phone: (m.user as any).phone ?? null,
-      status: m.status,
-      isSuspended: m.status === MembershipStatus.Suspended,
-      membershipId: m.id,
-      createdAt: m.user.createdAt,
-      updatedAt: m.user.updatedAt,
-    }));
+    const userIds = memberships.map((m) => m.userId);
 
-    return { data, meta: buildPaginationMeta(page, pageSize, total) };
+    // One query: fetch vehicles assigned to these drivers (tenant scoped)
+    const assignedVehicles = await this.prisma.vehicle.findMany({
+      where: {
+        tenantId,
+        driverId: { in: userIds },
+      },
+      select: {
+        id: true,
+        plateNo: true,
+        type: true,
+        driverId: true,
+      },
+    });
+
+    // Build a map driverId -> vehicle
+    const vehicleByDriverId = new Map<
+      string,
+      { id: string; plateNo: string; type: any }
+    >();
+    for (const v of assignedVehicles) {
+      if (v.driverId) vehicleByDriverId.set(v.driverId, v);
+    }
+
+    const data = memberships.map((m) => {
+      const v = vehicleByDriverId.get(m.userId) ?? null;
+
+      return {
+        id: m.user.id,
+        email: m.user.email,
+        name: m.user.name,
+        phone: (m.user as any).phone ?? null,
+        status: m.status,
+        isSuspended: m.status === MembershipStatus.Suspended,
+        membershipId: m.id,
+        createdAt: m.user.createdAt,
+        updatedAt: m.user.updatedAt,
+
+        // ✅ add these
+        assignedVehicleId: v?.id ?? null,
+        assignedVehiclePlateNo: v?.plateNo ?? null,
+        assignedVehicleType: v?.type ?? null,
+      };
+    });
+
+    return {
+      data,
+      meta: buildPaginationMeta(page, pageSize, total),
+    };
   }
 
-  async createDriver(tenantId: string, dto: AdminCreateDriverDto): Promise<AdminDriverDto> {
+  async createDriver(
+    tenantId: string,
+    dto: AdminCreateDriverDto,
+  ): Promise<AdminDriverDto> {
     const result = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.upsert({
         where: { email: dto.email },
@@ -105,7 +171,8 @@ export class AdminDriversService {
 
       // ✅ Wallet depends on prisma.drivers row
       const name = (dto.name ?? user.name ?? "").trim() || user.email;
-      const phone = ((dto.phone ?? (user as any).phone ?? "") as string).trim() || "-";
+      const phone =
+        ((dto.phone ?? (user as any).phone ?? "") as string).trim() || "-";
 
       await tx.drivers.upsert({
         where: { tenantId_email: { tenantId, email: user.email } },
@@ -142,7 +209,11 @@ export class AdminDriversService {
     };
   }
 
-  async updateDriver(tenantId: string, driverUserId: string, dto: AdminUpdateDriverDto): Promise<AdminDriverDto> {
+  async updateDriver(
+    tenantId: string,
+    driverUserId: string,
+    dto: AdminUpdateDriverDto,
+  ): Promise<AdminDriverDto> {
     const membership = await this.prisma.tenantMembership.findUnique({
       where: { tenantId_userId: { tenantId, userId: driverUserId } },
       include: { user: true },
@@ -161,7 +232,8 @@ export class AdminDriversService {
     });
 
     const name = (dto.name ?? user.name ?? "").trim() || user.email;
-    const phone = ((dto.phone ?? (user as any).phone ?? "") as string).trim() || "-";
+    const phone =
+      ((dto.phone ?? (user as any).phone ?? "") as string).trim() || "-";
 
     if (dto.defaultVehicleId !== undefined) {
       const vehicle = await this.prisma.vehicle.findFirst({
@@ -178,7 +250,9 @@ export class AdminDriversService {
         name,
         phone,
         userId: user.id,
-        ...(dto.defaultVehicleId !== undefined && { defaultVehicleId: dto.defaultVehicleId || null }),
+        ...(dto.defaultVehicleId !== undefined && {
+          defaultVehicleId: dto.defaultVehicleId || null,
+        }),
         updatedAt: new Date(),
       },
       create: {
@@ -234,7 +308,11 @@ export class AdminDriversService {
   }
 
   // ✅ Admin wallet endpoint for Drivers panel
-  async getDriverWallet(tenantId: string, driverUserId: string, month: string): Promise<DriverWalletDto> {
+  async getDriverWallet(
+    tenantId: string,
+    driverUserId: string,
+    month: string,
+  ): Promise<DriverWalletDto> {
     const [y, m] = month.split("-").map(Number);
     if (!y || !m || m < 1 || m > 12) {
       throw new BadRequestException("Invalid month format; use YYYY-MM");
