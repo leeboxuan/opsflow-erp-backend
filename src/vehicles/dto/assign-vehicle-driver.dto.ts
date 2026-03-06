@@ -1,8 +1,8 @@
-import { IsOptional, IsString, ValidateIf } from "class-validator";
+import { IsOptional, IsString } from "class-validator";
 
 export class AssignVehicleDriverDto {
+  // allow null to unassign
   @IsOptional()
-  @ValidateIf((o) => o.driverId !== null)
   @IsString()
   driverId?: string | null;
 }

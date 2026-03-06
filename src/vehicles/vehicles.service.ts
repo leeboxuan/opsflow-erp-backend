@@ -245,52 +245,53 @@ export class VehiclesService {
   }
 
 
-  async assignDriver(
-    tenantId: string,
-    vehicleId: string,
-    driverId: string | null,
-  ): Promise<VehicleDto> {
-    return this.prisma.$transaction(async (tx) => {
-      const vehicle = await tx.vehicle.findFirst({
-        where: { id: vehicleId, tenantId },
+  async assignDriver(tenantId: string, vehicleId: string, driverId: string | null) {
+    // 1) ensure vehicle is in tenant
+    const vehicle = await this.prisma.vehicle.findFirst({
+      where: { id: vehicleId, tenantId },
+      select: { id: true, driverId: true },
+    });
+    if (!vehicle) throw new NotFoundException("Vehicle not found");
+  
+    // Unassign
+    if (!driverId) {
+      const updated = await this.prisma.vehicle.update({
+        where: { id: vehicleId },
+        data: { driverId: null },
       });
-      if (!vehicle) throw new NotFoundException("Vehicle not found");
+      return toVehicleDto(updated);
+    }
   
-      // Unassign
-      if (driverId === null) {
-        const updated = await tx.vehicle.update({
-          where: { id: vehicleId },
-          data: { driverId: null },
-        });
-        return toVehicleDto(updated);
-      }
+    // 2) validate driver exists AND belongs to tenant via membership
+    const driver = await this.prisma.user.findFirst({
+      where: {
+        id: driverId,
+        // if you have roles, enforce driver role too
+        // role: "DRIVER",
+        memberships: {
+          some: {
+            tenantId,
+            // optionally enforce active membership if you have status field
+            // status: "ACTIVE",
+          },
+        },
+      },
+      select: { id: true },
+    });
   
-      // Validate driver belongs to tenant (and optionally role)
-      const driverUser = await tx.user.findFirst({
-        where: { id: driverId, tenantId },
-        select: { id: true },
+    if (!driver) {
+      throw new BadRequestException("Driver not found in this tenant");
+    }
+  
+    // 3) enforce 1 driver -> 1 vehicle (optional but usually desired)
+    // If you want to allow one driver to have multiple vehicles, delete this block.
+    return await this.prisma.$transaction(async (tx) => {
+      // unassign this driver from any other vehicle in this tenant
+      await tx.vehicle.updateMany({
+        where: { tenantId, driverId },
+        data: { driverId: null },
       });
-      if (!driverUser) {
-        throw new BadRequestException("Driver user not found");
-      }
   
-      // OPTIONAL: enforce driver role here if you have it
-      // if (driverUser.role !== "DRIVER") throw new BadRequestException("User is not a driver");
-  
-      // If this driver is assigned to another vehicle, unassign it first (1 driver -> 1 vehicle)
-      const existingVehicleForDriver = await tx.vehicle.findFirst({
-        where: { tenantId, driverId, id: { not: vehicleId } },
-        select: { id: true },
-      });
-  
-      if (existingVehicleForDriver) {
-        await tx.vehicle.update({
-          where: { id: existingVehicleForDriver.id },
-          data: { driverId: null },
-        });
-      }
-  
-      // Assign to target vehicle
       const updated = await tx.vehicle.update({
         where: { id: vehicleId },
         data: { driverId },

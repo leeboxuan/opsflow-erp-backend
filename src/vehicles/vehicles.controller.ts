@@ -80,7 +80,7 @@ export class VehiclesController {
   }
 
   @Patch(":id/assign-driver")
-  @ApiOperation({ summary: "Assign/unassign a driver to a vehicle" })
+  @ApiOperation({ summary: "Assign/unassign a driver to this vehicle" })
   async assignDriver(
     @Req() req: any,
     @Param("id") id: string,
