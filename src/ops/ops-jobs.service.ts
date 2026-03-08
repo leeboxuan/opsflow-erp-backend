@@ -61,10 +61,7 @@ function toDocDto(d: any): JobDocumentDto {
 function toJobDto(j: any): JobDto {
   const assignedDriverName =
     j.assignedDriver
-      ? [j.assignedDriver.firstName, j.assignedDriver.lastName]
-          .filter(Boolean)
-          .join(" ")
-          .trim() || j.assignedDriver.email || null
+      ? (j.assignedDriver.name?.trim() || j.assignedDriver.email || null)
       : null;
 
   return {
@@ -234,7 +231,7 @@ export class OpsJobsService {
             select: { id: true, name: true },
           },
           assignedDriver: {
-            select: { id: true, firstName: true, lastName: true, email: true },
+            select: { id: true, name: true, email: true },
           },
         },
       }),
@@ -301,7 +298,7 @@ export class OpsJobsService {
           select: { id: true, name: true },
         },
         assignedDriver: {
-          select: { id: true, firstName: true, lastName: true, email: true },
+          select: { id: true, name: true, email: true },
         },
         documents: {
           orderBy: { createdAt: "desc" },
@@ -384,7 +381,7 @@ export class OpsJobsService {
           select: { id: true, name: true },
         },
         assignedDriver: {
-          select: { id: true, firstName: true, lastName: true, email: true },
+          select: { id: true, name: true, email: true },
         },
       },
     });
@@ -470,7 +467,7 @@ export class OpsJobsService {
           select: { id: true, name: true },
         },
         assignedDriver: {
-          select: { id: true, firstName: true, lastName: true, email: true },
+          select: { id: true, name: true, email: true },
         },
       },
     });
@@ -515,7 +512,7 @@ export class OpsJobsService {
           select: { id: true, name: true },
         },
         assignedDriver: {
-          select: { id: true, firstName: true, lastName: true, email: true },
+          select: { id: true, name: true, email: true },
         },
       },
     });
@@ -592,7 +589,7 @@ export class OpsJobsService {
           select: { id: true, name: true },
         },
         assignedDriver: {
-          select: { id: true, firstName: true, lastName: true, email: true },
+          select: { id: true, name: true, email: true },
         },
       },
     });
