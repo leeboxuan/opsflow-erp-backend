@@ -20,7 +20,12 @@ import { UpdateJobDto } from "./dto/update-job.dto";
 import { AssignJobDto } from "./dto/assign-job.dto";
 import { CancelJobDto } from "./dto/cancel-job.dto";
 import { JobListQueryDto } from "./dto/job-list-query.dto";
-import { JobDto, JobDocumentDto, JobTrackingDto, AuditLogEntryDto } from "./dto/job.dto";
+import {
+  JobDto,
+  JobDocumentDto,
+  JobTrackingDto,
+  AuditLogEntryDto,
+} from "./dto/job.dto";
 import type {
   ImportJobRowDto,
   ImportPreviewRowDto,
@@ -41,6 +46,18 @@ const QUOTATION_MIMES = [
 ];
 const QUOTATION_EXT = /\.(pdf|xlsx|xls)$/i;
 
+function toDocDto(d: any): JobDocumentDto {
+  return {
+    id: d.id,
+    type: d.type,
+    originalName: d.originalName,
+    mimeType: d.mimeType,
+    sizeBytes: d.sizeBytes ?? null,
+    createdAt: d.createdAt,
+    url: d.url ?? null,
+  };
+}
+
 function toJobDto(j: any): JobDto {
   const assignedDriverName =
     j.assignedDriver
@@ -48,13 +65,6 @@ function toJobDto(j: any): JobDto {
           .filter(Boolean)
           .join(" ")
           .trim() || j.assignedDriver.email || null
-      : null;
-
-  const assignedVehicleName =
-    j.assignedVehicle
-      ? [j.assignedVehicle.plateNo, j.assignedVehicle.vehicleDescription]
-          .filter(Boolean)
-          .join(" • ")
       : null;
 
   return {
@@ -85,7 +95,7 @@ function toJobDto(j: any): JobDto {
     assignedDriverId: j.assignedDriverId,
     assignedDriverName,
     assignedVehicleId: j.assignedVehicleId,
-    assignedVehicleName,
+    assignedVehicleName: null,
 
     assignedAt: j.assignedAt,
     startedAt: j.startedAt,
@@ -105,18 +115,6 @@ function toJobDto(j: any): JobDto {
     updatedAt: j.updatedAt,
 
     documents: j.documents?.map((d: any) => toDocDto(d)),
-  };
-}
-
-function toDocDto(d: any): JobDocumentDto {
-  return {
-    id: d.id,
-    type: d.type,
-    originalName: d.originalName,
-    mimeType: d.mimeType,
-    sizeBytes: d.sizeBytes ?? null,
-    createdAt: d.createdAt,
-    url: d.url ?? null,
   };
 }
 
@@ -148,6 +146,23 @@ export class OpsJobsService {
     return `JOB-${yyyy}${MM}-${seq}`;
   }
 
+  private async attachSignedUrl(doc: any): Promise<JobDocumentDto> {
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase.storage
+      .from(JOB_DOCUMENTS_BUCKET)
+      .createSignedUrl(doc.storageKey, 60 * 60);
+
+    return {
+      id: doc.id,
+      type: doc.type,
+      originalName: doc.originalName,
+      mimeType: doc.mimeType,
+      sizeBytes: doc.sizeBytes ?? null,
+      createdAt: doc.createdAt,
+      url: error ? null : data?.signedUrl ?? null,
+    };
+  }
+
   async list(
     tenantId: string,
     query: JobListQueryDto,
@@ -159,16 +174,22 @@ export class OpsJobsService {
     if (query.status) {
       where.status = query.status as JobStatus;
     }
+
     if (query.companyId) {
       where.customerCompanyId = query.companyId;
     }
+
     if (query.pickupDateFrom || query.pickupDateTo) {
       where.pickupDate = {};
       if (query.pickupDateFrom) {
-        where.pickupDate.gte = new Date(query.pickupDateFrom + "T00:00:00.000Z");
+        where.pickupDate.gte = new Date(
+          query.pickupDateFrom + "T00:00:00.000Z",
+        );
       }
       if (query.pickupDateTo) {
-        where.pickupDate.lte = new Date(query.pickupDateTo + "T23:59:59.999Z");
+        where.pickupDate.lte = new Date(
+          query.pickupDateTo + "T23:59:59.999Z",
+        );
       }
     }
 
@@ -189,6 +210,7 @@ export class OpsJobsService {
       Completed: { status: JobStatus.Completed },
       Cancelled: { status: JobStatus.Cancelled },
     });
+
     if (query.status) {
       where.status = query.status as JobStatus;
     }
@@ -213,9 +235,6 @@ export class OpsJobsService {
           },
           assignedDriver: {
             select: { id: true, firstName: true, lastName: true, email: true },
-          },
-          assignedVehicle: {
-            select: { id: true, plateNo: true, vehicleDescription: true },
           },
         },
       }),
@@ -284,13 +303,24 @@ export class OpsJobsService {
         assignedDriver: {
           select: { id: true, firstName: true, lastName: true, email: true },
         },
-        assignedVehicle: {
-          select: { id: true, plateNo: true, vehicleDescription: true },
+        documents: {
+          orderBy: { createdAt: "desc" },
         },
       },
     });
-    if (!job) throw new NotFoundException("Job not found");
-    return toJobDto(job);
+
+    if (!job) {
+      throw new NotFoundException("Job not found");
+    }
+
+    const dto = toJobDto(job);
+    if (!job.documents?.length) return dto;
+
+    dto.documents = await Promise.all(
+      job.documents.map((doc: any) => this.attachSignedUrl(doc)),
+    );
+
+    return dto;
   }
 
   async update(
@@ -303,28 +333,60 @@ export class OpsJobsService {
       where: { id: jobId, tenantId },
     });
     if (!job) throw new NotFoundException("Job not found");
-    if (job.status === JobStatus.Completed || job.status === JobStatus.Cancelled) {
-      throw new BadRequestException("Cannot edit job in Completed or Cancelled status");
+
+    if (
+      job.status === JobStatus.Completed ||
+      job.status === JobStatus.Cancelled
+    ) {
+      throw new BadRequestException(
+        "Cannot edit job in Completed or Cancelled status",
+      );
+    }
+
+    if (dto.customerCompanyId !== undefined) {
+      const company = await this.prisma.customer_companies.findFirst({
+        where: { id: dto.customerCompanyId, tenantId },
+      });
+      if (!company) {
+        throw new BadRequestException("Customer company not found");
+      }
     }
 
     const data: any = {};
     if (dto.jobType !== undefined) data.jobType = dto.jobType;
-    if (dto.customerCompanyId !== undefined) data.customerCompanyId = dto.customerCompanyId;
-    if (dto.pickupDate !== undefined) data.pickupDate = dto.pickupDate ? new Date(dto.pickupDate) : null;
-    if (dto.pickupAddress1 !== undefined) data.pickupAddress1 = dto.pickupAddress1;
-    if (dto.pickupAddress2 !== undefined) data.pickupAddress2 = dto.pickupAddress2;
+    if (dto.customerCompanyId !== undefined)
+      data.customerCompanyId = dto.customerCompanyId;
+    if (dto.pickupDate !== undefined)
+      data.pickupDate = dto.pickupDate ? new Date(dto.pickupDate) : null;
+    if (dto.pickupAddress1 !== undefined)
+      data.pickupAddress1 = dto.pickupAddress1;
+    if (dto.pickupAddress2 !== undefined)
+      data.pickupAddress2 = dto.pickupAddress2;
     if (dto.pickupPostal !== undefined) data.pickupPostal = dto.pickupPostal;
-    if (dto.pickupContactName !== undefined) data.pickupContactName = dto.pickupContactName;
-    if (dto.pickupContactPhone !== undefined) data.pickupContactPhone = dto.pickupContactPhone;
-    if (dto.deliveryAddress1 !== undefined) data.deliveryAddress1 = dto.deliveryAddress1;
-    if (dto.deliveryAddress2 !== undefined) data.deliveryAddress2 = dto.deliveryAddress2;
-    if (dto.deliveryPostal !== undefined) data.deliveryPostal = dto.deliveryPostal;
+    if (dto.pickupContactName !== undefined)
+      data.pickupContactName = dto.pickupContactName;
+    if (dto.pickupContactPhone !== undefined)
+      data.pickupContactPhone = dto.pickupContactPhone;
+    if (dto.deliveryAddress1 !== undefined)
+      data.deliveryAddress1 = dto.deliveryAddress1;
+    if (dto.deliveryAddress2 !== undefined)
+      data.deliveryAddress2 = dto.deliveryAddress2;
+    if (dto.deliveryPostal !== undefined)
+      data.deliveryPostal = dto.deliveryPostal;
     if (dto.receiverName !== undefined) data.receiverName = dto.receiverName;
     if (dto.receiverPhone !== undefined) data.receiverPhone = dto.receiverPhone;
 
     const updated = await this.prisma.job.update({
       where: { id: jobId },
       data,
+      include: {
+        customerCompany: {
+          select: { id: true, name: true },
+        },
+        assignedDriver: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
     });
 
     await this.audit.log(
@@ -349,9 +411,11 @@ export class OpsJobsService {
       where: { id: jobId, tenantId },
     });
     if (!job) throw new NotFoundException("Job not found");
+
     if (job.status !== JobStatus.Draft && job.status !== JobStatus.Assigned) {
       throw new BadRequestException("Job must be Draft or Assigned to assign");
     }
+
     if (job.startedAt) {
       throw new BadRequestException("Cannot reassign job that has been started");
     }
@@ -364,24 +428,33 @@ export class OpsJobsService {
       },
     });
     if (!membership) {
-      throw new BadRequestException("Driver not found or not a DRIVER in this tenant");
+      throw new BadRequestException(
+        "Driver not found or not a DRIVER in this tenant",
+      );
     }
 
     let vehicleId: string | null = dto.vehicleId ?? null;
+
     if (!vehicleId) {
       const driver = await this.prisma.drivers.findFirst({
         where: { tenantId, userId: dto.driverId },
-        include: { defaultVehicle: true },
+        select: { defaultVehicleId: true },
       });
+
       if (!driver?.defaultVehicleId) {
-        throw new BadRequestException("Driver has no default vehicle; provide vehicleId");
+        throw new BadRequestException(
+          "Driver has no default vehicle; provide vehicleId",
+        );
       }
+
       vehicleId = driver.defaultVehicleId;
     } else {
       const vehicle = await this.prisma.vehicle.findFirst({
         where: { id: vehicleId, tenantId },
       });
-      if (!vehicle) throw new BadRequestException("Vehicle not found");
+      if (!vehicle) {
+        throw new BadRequestException("Vehicle not found");
+      }
     }
 
     const updated = await this.prisma.job.update({
@@ -391,6 +464,14 @@ export class OpsJobsService {
         assignedVehicleId: vehicleId,
         assignedAt: new Date(),
         status: JobStatus.Assigned,
+      },
+      include: {
+        customerCompany: {
+          select: { id: true, name: true },
+        },
+        assignedDriver: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
       },
     });
 
@@ -416,6 +497,7 @@ export class OpsJobsService {
       where: { id: jobId, tenantId },
     });
     if (!job) throw new NotFoundException("Job not found");
+
     if (job.status === JobStatus.Completed) {
       throw new BadRequestException("Cannot cancel a Completed job");
     }
@@ -427,6 +509,14 @@ export class OpsJobsService {
         cancelledAt: new Date(),
         cancelledReason: dto.reason,
         cancelledByUserId: actorUserId ?? null,
+      },
+      include: {
+        customerCompany: {
+          select: { id: true, name: true },
+        },
+        assignedDriver: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
       },
     });
 
@@ -454,7 +544,9 @@ export class OpsJobsService {
 
     const canDelete =
       job.status === JobStatus.Draft ||
-      (job.status === JobStatus.Assigned && !job.startedAt && !job.assignedDriverId);
+      (job.status === JobStatus.Assigned &&
+        !job.startedAt &&
+        !job.assignedDriverId);
 
     if (!canDelete) {
       throw new BadRequestException(
@@ -478,9 +570,13 @@ export class OpsJobsService {
       where: { id: jobId, tenantId },
     });
     if (!job) throw new NotFoundException("Job not found");
+
     if (job.jobType === JobType.LCL) {
-      throw new BadRequestException("Verify depot only applies to IMPORT/EXPORT jobs");
+      throw new BadRequestException(
+        "Verify depot only applies to IMPORT/EXPORT jobs",
+      );
     }
+
     if (job.status !== JobStatus.PendingDepot) {
       throw new BadRequestException("Job must be in PendingDepot status");
     }
@@ -490,6 +586,14 @@ export class OpsJobsService {
       data: {
         status: JobStatus.Completed,
         completedAt: job.completedAt ?? new Date(),
+      },
+      include: {
+        customerCompany: {
+          select: { id: true, name: true },
+        },
+        assignedDriver: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
       },
     });
 
@@ -519,11 +623,12 @@ export class OpsJobsService {
     const mime = String(file.mimetype ?? "").toLowerCase();
     const name = (file.originalname ?? "").toLowerCase();
     const allowedMime =
-      QUOTATION_MIMES.some((m) => mime === m) ||
-      QUOTATION_EXT.test(name);
+      QUOTATION_MIMES.some((m) => mime === m) || QUOTATION_EXT.test(name);
+
     if (!allowedMime) {
       throw new BadRequestException(
-        "Quotation must be PDF, XLSX, or XLS. Got: " + (mime || file.originalname || "unknown"),
+        "Quotation must be PDF, XLSX, or XLS. Got: " +
+          (mime || file.originalname || "unknown"),
       );
     }
 
@@ -533,7 +638,10 @@ export class OpsJobsService {
     const supabase = this.supabaseService.getClient();
     const { error } = await supabase.storage
       .from(JOB_DOCUMENTS_BUCKET)
-      .upload(key, file.buffer, { contentType: file.mimetype ?? "application/octet-stream", upsert: true });
+      .upload(key, file.buffer, {
+        contentType: file.mimetype ?? "application/octet-stream",
+        upsert: true,
+      });
 
     if (error) {
       throw new BadRequestException(`Storage upload failed: ${error.message}`);
@@ -561,21 +669,25 @@ export class OpsJobsService {
       actorUserId,
     );
 
-    return this.attachSignedUrl(doc);  }
+    return this.attachSignedUrl(doc);
+  }
 
-    async listDocuments(tenantId: string, jobId: string): Promise<JobDocumentDto[]> {
-      const job = await this.prisma.job.findFirst({
-        where: { id: jobId, tenantId },
-      });
-      if (!job) throw new NotFoundException("Job not found");
-  
-      const docs = await this.prisma.jobDocument.findMany({
-        where: { tenantId, jobId },
-        orderBy: { createdAt: "desc" },
-      });
-  
-      return Promise.all(docs.map((doc) => this.attachSignedUrl(doc)));
-    }
+  async listDocuments(
+    tenantId: string,
+    jobId: string,
+  ): Promise<JobDocumentDto[]> {
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+    });
+    if (!job) throw new NotFoundException("Job not found");
+
+    const docs = await this.prisma.jobDocument.findMany({
+      where: { tenantId, jobId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return Promise.all(docs.map((doc) => this.attachSignedUrl(doc)));
+  }
 
   async getAudit(
     tenantId: string,
@@ -593,6 +705,7 @@ export class OpsJobsService {
       jobId,
       limit ?? 100,
     );
+
     return entries.map((e) => ({
       id: e.id,
       actorUserId: e.actorUserId,
@@ -616,7 +729,9 @@ export class OpsJobsService {
         status: true,
       },
     });
+
     if (!job) throw new NotFoundException("Job not found");
+
     return {
       lastLat: job.lastLat,
       lastLng: job.lastLng,
@@ -629,24 +744,37 @@ export class OpsJobsService {
 
   /**
    * Parse Excel into typed rows. No DB writes.
-   * Column order: 0=companyCode/companyId, 1=jobType, 2=pickupAddress, 3=deliveryAddress,
-   * 4=receiverName, 5=receiverPhone, 6=pickupDate, 7=driverEmail (optional).
-   * If first row looks like headers (contains "company", "job type", etc.), it is skipped.
+   * Column order:
+   * 0=companyCode/companyId,
+   * 1=jobType,
+   * 2=pickupAddress,
+   * 3=deliveryAddress,
+   * 4=receiverName,
+   * 5=receiverPhone,
+   * 6=pickupDate,
+   * 7=driverEmail (optional).
    */
-  private parseExcelToRows(buffer: Buffer): { rowNumber: number; data: ImportJobRowDto }[] {
+  private parseExcelToRows(
+    buffer: Buffer,
+  ): { rowNumber: number; data: ImportJobRowDto }[] {
     let XLSX: any;
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       XLSX = require("xlsx");
     } catch {
-      throw new BadRequestException("Excel import requires xlsx package (npm install xlsx)");
+      throw new BadRequestException(
+        "Excel import requires xlsx package (npm install xlsx)",
+      );
     }
 
     const workbook = XLSX.read(buffer, { type: "buffer" });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     if (!sheet) return [];
 
-    const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+    const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      defval: "",
+    });
     if (rawRows.length < 1) return [];
 
     const first = rawRows[0] as any[];
@@ -654,7 +782,9 @@ export class OpsJobsService {
       first?.some(
         (c) =>
           typeof c === "string" &&
-          /company|job\s*type|pickup|delivery|receiver|date|driver/i.test(String(c)),
+          /company|job\s*type|pickup|delivery|receiver|date|driver/i.test(
+            String(c),
+          ),
       ) ?? false;
 
     const start = isHeaderRow ? 1 : 0;
@@ -667,7 +797,9 @@ export class OpsJobsService {
 
     for (let i = start; i < rawRows.length; i++) {
       const row = rawRows[i] as any[];
-      if (!row || row.every((c) => c == null || String(c).trim() === "")) continue;
+      if (!row || row.every((c) => c == null || String(c).trim() === "")) {
+        continue;
+      }
 
       const col0 = get(row, 0);
       const jobTypeStr = get(row, 1).toUpperCase();
@@ -692,10 +824,12 @@ export class OpsJobsService {
         receiverPhone,
         pickupDate: pickupDate || "",
       } as ImportJobRowDto;
+
       if (col0) {
         if (/^c[a-z0-9]{24}$/i.test(col0)) (data as any).companyId = col0;
         else (data as any).companyCode = col0;
       }
+
       if (driverEmail) (data as any).driverEmail = driverEmail;
 
       out.push({ rowNumber: i + 1, data });
@@ -704,9 +838,6 @@ export class OpsJobsService {
     return out;
   }
 
-  /**
-   * Validate a single row and resolve company + optional driver. Returns errors and resolved ids.
-   */
   private async validateAndResolveRow(
     tenantId: string,
     row: ImportJobRowDto | ImportConfirmRowDto,
@@ -731,10 +862,14 @@ export class OpsJobsService {
     if (!row.deliveryAddress?.trim()) errors.push("deliveryAddress is required");
     if (!row.receiverName?.trim()) errors.push("receiverName is required");
     if (!row.receiverPhone?.trim()) errors.push("receiverPhone is required");
-    if (!row.pickupDate?.trim()) errors.push("pickupDate is required");
-    else {
+
+    if (!row.pickupDate?.trim()) {
+      errors.push("pickupDate is required");
+    } else {
       const d = new Date(row.pickupDate);
-      if (Number.isNaN(d.getTime())) errors.push("pickupDate must be a valid date (YYYY-MM-DD)");
+      if (Number.isNaN(d.getTime())) {
+        errors.push("pickupDate must be a valid date (YYYY-MM-DD)");
+      }
     }
 
     let customerCompanyId: string | undefined;
@@ -771,9 +906,6 @@ export class OpsJobsService {
     return { errors, customerCompanyId, driverId };
   }
 
-  /**
-   * Preview: parse Excel, validate rows, return parsed data + errors. No DB writes.
-   */
   async importPreview(
     tenantId: string,
     buffer: Buffer,
@@ -782,10 +914,9 @@ export class OpsJobsService {
     const rows: ImportPreviewRowDto[] = [];
 
     for (const { rowNumber, data } of parsed) {
-      const { errors, customerCompanyId, driverId } = await this.validateAndResolveRow(
-        tenantId,
-        data,
-      );
+      const { errors, customerCompanyId, driverId } =
+        await this.validateAndResolveRow(tenantId, data);
+
       rows.push({
         rowNumber,
         data,
@@ -798,14 +929,14 @@ export class OpsJobsService {
     return { rows };
   }
 
-  /**
-   * Confirm: validate rows again, create Draft jobs, return summary.
-   */
   async importConfirm(
     tenantId: string,
     requestRows: ImportConfirmRowDto[],
     actorUserId: string | null,
-  ): Promise<{ createdCount: number; failedRows: { rowNumber: number; reason: string }[] }> {
+  ): Promise<{
+    createdCount: number;
+    failedRows: { rowNumber: number; reason: string }[];
+  }> {
     const failedRows: { rowNumber: number; reason: string }[] = [];
     let createdCount = 0;
 
@@ -813,17 +944,19 @@ export class OpsJobsService {
       const row = requestRows[i];
       const rowNum = row.rowNumber ?? i + 1;
 
-      const { errors, customerCompanyId, driverId } = await this.validateAndResolveRow(
-        tenantId,
-        row as ImportJobRowDto,
-      );
+      const { errors, customerCompanyId, driverId } =
+        await this.validateAndResolveRow(tenantId, row as ImportJobRowDto);
 
       if (errors.length > 0) {
         failedRows.push({ rowNumber: rowNum, reason: errors.join("; ") });
         continue;
       }
+
       if (!customerCompanyId) {
-        failedRows.push({ rowNumber: rowNum, reason: "Company could not be resolved" });
+        failedRows.push({
+          rowNumber: rowNum,
+          reason: "Company could not be resolved",
+        });
         continue;
       }
 
@@ -836,6 +969,7 @@ export class OpsJobsService {
 
       try {
         let assignedVehicleId: string | null = null;
+
         if (driverId) {
           const driver = await this.prisma.drivers.findFirst({
             where: { tenantId, userId: driverId },
@@ -845,6 +979,7 @@ export class OpsJobsService {
         }
 
         const internalRef = await this.getNextInternalRef(tenantId);
+
         const job = await this.prisma.job.create({
           data: {
             tenantId,
@@ -868,17 +1003,26 @@ export class OpsJobsService {
             }),
           },
         });
+
         createdCount++;
+
         await this.audit.log(
           tenantId,
           "CREATE",
           "JOB",
           job.id,
-          { internalRef: job.internalRef, source: "import_confirm", row: rowNum },
+          {
+            internalRef: job.internalRef,
+            source: "import_confirm",
+            row: rowNum,
+          },
           actorUserId,
         );
       } catch (e: any) {
-        failedRows.push({ rowNumber: rowNum, reason: e?.message ?? "Create failed" });
+        failedRows.push({
+          rowNumber: rowNum,
+          reason: e?.message ?? "Create failed",
+        });
       }
     }
 
@@ -907,8 +1051,7 @@ export class OpsJobsService {
 
   private static normalizePhone(v: unknown): string {
     if (v == null) return "";
-    const s = String(v).replace(/\s+/g, " ").trim();
-    return s;
+    return String(v).replace(/\s+/g, " ").trim();
   }
 
   private static cell(row: any[], idx: number): string {
@@ -917,26 +1060,28 @@ export class OpsJobsService {
     return String(v).replace(/\s+/g, " ").trim();
   }
 
-  /**
-   * Parse LCL Order In template: first sheet, header row, group by Order Ref.
-   * Returns one entry per unique Order Ref with aggregated items and special request.
-   */
   private parseLclExcel(buffer: Buffer): LclImportPreviewRowDto[] {
     let XLSX: any;
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       XLSX = require("xlsx");
     } catch {
-      throw new BadRequestException("Excel import requires xlsx package (npm install xlsx)");
+      throw new BadRequestException(
+        "Excel import requires xlsx package (npm install xlsx)",
+      );
     }
 
     const workbook = XLSX.read(buffer, { type: "buffer" });
     const firstSheetName = workbook.SheetNames[0];
     if (!firstSheetName) return [];
+
     const sheet = workbook.Sheets[firstSheetName];
     if (!sheet) return [];
 
-    const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+    const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      defval: "",
+    });
     if (rawRows.length < 2) return [];
 
     const headerRow = rawRows[0] as string[];
@@ -993,25 +1138,54 @@ export class OpsJobsService {
 
     for (let i = 1; i < rawRows.length; i++) {
       const row = rawRows[i] as any[];
-      if (!row || row.every((c) => c == null || String(c).trim() === "")) continue;
+      if (!row || row.every((c) => c == null || String(c).trim() === "")) {
+        continue;
+      }
 
       const orderRef = OpsJobsService.cell(row, idx.orderRef);
       if (!orderRef) continue;
 
       const deliveryAddress1 = OpsJobsService.cell(row, idx.deliveryAddress1);
-      const deliveryAddress2 = idx.deliveryAddress2 >= 0 ? OpsJobsService.cell(row, idx.deliveryAddress2) : "";
-      const deliveryCity = idx.deliveryCity >= 0 ? OpsJobsService.cell(row, idx.deliveryCity) : "";
-      const deliveryPostalCode = idx.deliveryPostalCode >= 0 ? OpsJobsService.cell(row, idx.deliveryPostalCode) : "";
-      const deliveryCountry = idx.deliveryCountry >= 0 ? OpsJobsService.cell(row, idx.deliveryCountry) : "";
-      const deliveryFirstName = idx.deliveryFirstName >= 0 ? OpsJobsService.cell(row, idx.deliveryFirstName) : "";
-      const deliveryLastName = idx.deliveryLastName >= 0 ? OpsJobsService.cell(row, idx.deliveryLastName) : "";
-      const firstName = idx.firstName >= 0 ? OpsJobsService.cell(row, idx.firstName) : "";
-      const lastName = idx.lastName >= 0 ? OpsJobsService.cell(row, idx.lastName) : "";
-      const phone = idx.phone >= 0 ? OpsJobsService.normalizePhone(row[idx.phone]) : "";
-      const mobile = idx.mobile >= 0 ? OpsJobsService.normalizePhone(row[idx.mobile]) : "";
-      const itemCode = idx.itemCode >= 0 ? OpsJobsService.cell(row, idx.itemCode) : "";
-      const itemQty = idx.itemQty >= 0 ? OpsJobsService.cell(row, idx.itemQty) : "";
-      const specialRequest = idx.specialRequest >= 0 ? OpsJobsService.cell(row, idx.specialRequest) : "";
+      const deliveryAddress2 =
+        idx.deliveryAddress2 >= 0
+          ? OpsJobsService.cell(row, idx.deliveryAddress2)
+          : "";
+      const deliveryCity =
+        idx.deliveryCity >= 0
+          ? OpsJobsService.cell(row, idx.deliveryCity)
+          : "";
+      const deliveryPostalCode =
+        idx.deliveryPostalCode >= 0
+          ? OpsJobsService.cell(row, idx.deliveryPostalCode)
+          : "";
+      const deliveryCountry =
+        idx.deliveryCountry >= 0
+          ? OpsJobsService.cell(row, idx.deliveryCountry)
+          : "";
+      const deliveryFirstName =
+        idx.deliveryFirstName >= 0
+          ? OpsJobsService.cell(row, idx.deliveryFirstName)
+          : "";
+      const deliveryLastName =
+        idx.deliveryLastName >= 0
+          ? OpsJobsService.cell(row, idx.deliveryLastName)
+          : "";
+      const firstName =
+        idx.firstName >= 0 ? OpsJobsService.cell(row, idx.firstName) : "";
+      const lastName =
+        idx.lastName >= 0 ? OpsJobsService.cell(row, idx.lastName) : "";
+      const phone =
+        idx.phone >= 0 ? OpsJobsService.normalizePhone(row[idx.phone]) : "";
+      const mobile =
+        idx.mobile >= 0 ? OpsJobsService.normalizePhone(row[idx.mobile]) : "";
+      const itemCode =
+        idx.itemCode >= 0 ? OpsJobsService.cell(row, idx.itemCode) : "";
+      const itemQty =
+        idx.itemQty >= 0 ? OpsJobsService.cell(row, idx.itemQty) : "";
+      const specialRequest =
+        idx.specialRequest >= 0
+          ? OpsJobsService.cell(row, idx.specialRequest)
+          : "";
 
       let g = groups.get(orderRef);
       if (!g) {
@@ -1037,16 +1211,24 @@ export class OpsJobsService {
       if (itemCode) {
         g.items.push({ code: itemCode, qty: itemQty || "1" });
       }
+
       if (specialRequest) {
         g.specialRequests.add(specialRequest);
       }
-      if (deliveryAddress1 && !g.deliveryAddress1) g.deliveryAddress1 = deliveryAddress1;
-      if (deliveryAddress2 && !g.deliveryAddress2) g.deliveryAddress2 = deliveryAddress2;
+
+      if (deliveryAddress1 && !g.deliveryAddress1)
+        g.deliveryAddress1 = deliveryAddress1;
+      if (deliveryAddress2 && !g.deliveryAddress2)
+        g.deliveryAddress2 = deliveryAddress2;
       if (deliveryCity && !g.deliveryCity) g.deliveryCity = deliveryCity;
-      if (deliveryPostalCode && !g.deliveryPostalCode) g.deliveryPostalCode = deliveryPostalCode;
-      if (deliveryCountry && !g.deliveryCountry) g.deliveryCountry = deliveryCountry;
-      if (deliveryFirstName && !g.deliveryFirstName) g.deliveryFirstName = deliveryFirstName;
-      if (deliveryLastName && !g.deliveryLastName) g.deliveryLastName = deliveryLastName;
+      if (deliveryPostalCode && !g.deliveryPostalCode)
+        g.deliveryPostalCode = deliveryPostalCode;
+      if (deliveryCountry && !g.deliveryCountry)
+        g.deliveryCountry = deliveryCountry;
+      if (deliveryFirstName && !g.deliveryFirstName)
+        g.deliveryFirstName = deliveryFirstName;
+      if (deliveryLastName && !g.deliveryLastName)
+        g.deliveryLastName = deliveryLastName;
       if (firstName && !g.firstName) g.firstName = firstName;
       if (lastName && !g.lastName) g.lastName = lastName;
       if (phone && !g.phone) g.phone = phone;
@@ -1054,18 +1236,24 @@ export class OpsJobsService {
     }
 
     const result: LclImportPreviewRowDto[] = [];
+
     for (const g of groups.values()) {
       const receiverName =
         [g.deliveryFirstName, g.deliveryLastName].filter(Boolean).join(" ") ||
         [g.firstName, g.lastName].filter(Boolean).join(" ") ||
         "";
+
       const receiverPhone = g.mobile || g.phone || "";
+
       const itemsSummary =
         g.items.length > 0
           ? g.items.map((it) => `${it.code} x${it.qty}`).join("; ")
           : undefined;
+
       const specialRequest =
-        g.specialRequests.size > 0 ? [...g.specialRequests].filter(Boolean).join(" | ") : undefined;
+        g.specialRequests.size > 0
+          ? [...g.specialRequests].filter(Boolean).join(" | ")
+          : undefined;
 
       result.push({
         rowKey: g.orderRef,
@@ -1082,12 +1270,10 @@ export class OpsJobsService {
         errors: [],
       });
     }
+
     return result;
   }
 
-  /**
-   * Validate one LCL preview row (and optionally fill errors). Uses request-level pickup defaults.
-   */
   private validateLclRow(
     row: LclImportPreviewRowDto,
     pickup: {
@@ -1098,14 +1284,23 @@ export class OpsJobsService {
     },
   ): string[] {
     const errors: string[] = [];
+
     if (!pickup.customerCompanyId) errors.push("customerCompanyId is required");
     if (!pickup.pickupDate?.trim()) errors.push("pickupDate is required");
     if (!pickup.pickupAddress1?.trim()) errors.push("pickupAddress1 is required");
     if (!row.deliveryAddress1?.trim()) errors.push("deliveryAddress1 is required");
+
     const receiverName = (row.receiverName || "").trim();
     if (!receiverName) errors.push("receiverName is required");
-    const receiverPhone = (row.receiverPhone || "").trim() || (pickup.pickupContactPhone || "").trim();
-    if (!receiverPhone) errors.push("receiverPhone is required (or set pickupContactPhone as default)");
+
+    const receiverPhone =
+      (row.receiverPhone || "").trim() ||
+      (pickup.pickupContactPhone || "").trim();
+
+    if (!receiverPhone) {
+      errors.push("receiverPhone is required (or set pickupContactPhone as default)");
+    }
+
     return errors;
   }
 
@@ -1126,21 +1321,29 @@ export class OpsJobsService {
       where: { id: params.customerCompanyId, tenantId },
     });
     if (!company) {
-      throw new BadRequestException("Customer company not found or does not belong to tenant");
+      throw new BadRequestException(
+        "Customer company not found or does not belong to tenant",
+      );
     }
 
     const rows = this.parseLclExcel(buffer);
+
     const pickupDefaults = {
       pickupDate: params.pickupDate,
       pickupAddress1: params.pickupAddress1,
       ...(params.pickupAddress2 && { pickupAddress2: params.pickupAddress2 }),
       ...(params.pickupPostal && { pickupPostal: params.pickupPostal }),
-      ...(params.pickupContactName && { pickupContactName: params.pickupContactName }),
-      ...(params.pickupContactPhone && { pickupContactPhone: params.pickupContactPhone }),
+      ...(params.pickupContactName && {
+        pickupContactName: params.pickupContactName,
+      }),
+      ...(params.pickupContactPhone && {
+        pickupContactPhone: params.pickupContactPhone,
+      }),
     };
 
     let valid = 0;
     let invalid = 0;
+
     for (const row of rows) {
       row.errors = this.validateLclRow(row, {
         customerCompanyId: params.customerCompanyId,
@@ -1148,6 +1351,7 @@ export class OpsJobsService {
         pickupAddress1: params.pickupAddress1,
         pickupContactPhone: params.pickupContactPhone,
       });
+
       if (row.errors.length === 0) valid++;
       else invalid++;
     }
@@ -1170,11 +1374,14 @@ export class OpsJobsService {
       where: { id: dto.customerCompanyId, tenantId },
     });
     if (!company) {
-      throw new BadRequestException("Customer company not found or does not belong to tenant");
+      throw new BadRequestException(
+        "Customer company not found or does not belong to tenant",
+      );
     }
 
     const failedRows: { rowKey: string; reason: string }[] = [];
-    const created: { id: string; internalRef: string; externalRef: string | null }[] = [];
+    const created: { id: string; internalRef: string; externalRef: string | null }[] =
+      [];
     let createdCount = 0;
 
     const pickupDate = dto.pickupDate ? new Date(dto.pickupDate) : null;
@@ -1205,6 +1412,7 @@ export class OpsJobsService {
           pickupContactPhone: dto.pickupContactPhone,
         },
       );
+
       if (errors.length > 0) {
         failedRows.push({ rowKey: row.rowKey, reason: errors.join("; ") });
         continue;
@@ -1214,12 +1422,16 @@ export class OpsJobsService {
       if (row.itemsSummary) notesParts.push(row.itemsSummary);
       if (row.specialRequest) notesParts.push(row.specialRequest);
       if (row.deliveryCity || row.deliveryCountry) {
-        notesParts.push([row.deliveryCity, row.deliveryCountry].filter(Boolean).join(", "));
+        notesParts.push(
+          [row.deliveryCity, row.deliveryCountry].filter(Boolean).join(", "),
+        );
       }
+
       const notes = notesParts.length > 0 ? notesParts.join(" | ") : null;
 
       try {
         const internalRef = await this.getNextInternalRef(tenantId);
+
         const job = await this.prisma.job.create({
           data: {
             tenantId,
@@ -1242,43 +1454,34 @@ export class OpsJobsService {
             receiverPhone: row.receiverPhone,
           },
         });
+
         createdCount++;
         created.push({
           id: job.id,
           internalRef: job.internalRef,
           externalRef: job.externalRef,
         });
+
         await this.audit.log(
           tenantId,
           "CREATE",
           "JOB",
           job.id,
-          { internalRef: job.internalRef, externalRef: job.externalRef, source: "LCL_EXCEL_IMPORT" },
+          {
+            internalRef: job.internalRef,
+            externalRef: job.externalRef,
+            source: "LCL_EXCEL_IMPORT",
+          },
           actorUserId,
         );
       } catch (e: any) {
-        failedRows.push({ rowKey: row.rowKey, reason: e?.message ?? "Create failed" });
+        failedRows.push({
+          rowKey: row.rowKey,
+          reason: e?.message ?? "Create failed",
+        });
       }
     }
 
     return { createdCount, failedRows, created };
-  }
-
-
-  private async attachSignedUrl(doc: any): Promise<JobDocumentDto> {
-    const supabase = this.supabaseService.getClient();
-    const { data, error } = await supabase.storage
-      .from(JOB_DOCUMENTS_BUCKET)
-      .createSignedUrl(doc.storageKey, 60 * 60);
-
-    return {
-      id: doc.id,
-      type: doc.type,
-      originalName: doc.originalName,
-      mimeType: doc.mimeType,
-      sizeBytes: doc.sizeBytes ?? null,
-      createdAt: doc.createdAt,
-      url: error ? null : data?.signedUrl ?? null,
-    };
   }
 }
