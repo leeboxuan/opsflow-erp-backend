@@ -42,41 +42,68 @@ const QUOTATION_MIMES = [
 const QUOTATION_EXT = /\.(pdf|xlsx|xls)$/i;
 
 function toJobDto(j: any): JobDto {
+  const assignedDriverName =
+    j.assignedDriver
+      ? [j.assignedDriver.firstName, j.assignedDriver.lastName]
+          .filter(Boolean)
+          .join(" ")
+          .trim() || j.assignedDriver.email || null
+      : null;
+
+  const assignedVehicleName =
+    j.assignedVehicle
+      ? [j.assignedVehicle.plateNo, j.assignedVehicle.vehicleDescription]
+          .filter(Boolean)
+          .join(" • ")
+      : null;
+
   return {
     id: j.id,
     tenantId: j.tenantId,
     customerCompanyId: j.customerCompanyId,
+    companyName: j.customerCompany?.name ?? null,
+
     internalRef: j.internalRef,
     externalRef: j.externalRef ?? null,
     jobType: j.jobType,
     status: j.status,
     notes: j.notes ?? null,
+
     pickupDate: j.pickupDate,
     pickupAddress1: j.pickupAddress1,
     pickupAddress2: j.pickupAddress2,
     pickupPostal: j.pickupPostal,
     pickupContactName: j.pickupContactName,
     pickupContactPhone: j.pickupContactPhone,
+
     deliveryAddress1: j.deliveryAddress1,
     deliveryAddress2: j.deliveryAddress2,
     deliveryPostal: j.deliveryPostal,
     receiverName: j.receiverName,
     receiverPhone: j.receiverPhone,
+
     assignedDriverId: j.assignedDriverId,
+    assignedDriverName,
     assignedVehicleId: j.assignedVehicleId,
+    assignedVehicleName,
+
     assignedAt: j.assignedAt,
     startedAt: j.startedAt,
     completedAt: j.completedAt,
     deliveredAt: j.deliveredAt,
     podRecipientName: j.podRecipientName,
+
     cancelledReason: j.cancelledReason,
     cancelledAt: j.cancelledAt,
     cancelledByUserId: j.cancelledByUserId,
+
     lastLat: j.lastLat,
     lastLng: j.lastLng,
     lastLocationAt: j.lastLocationAt,
+
     createdAt: j.createdAt,
     updatedAt: j.updatedAt,
+
     documents: j.documents?.map((d: any) => toDocDto(d)),
   };
 }
@@ -87,7 +114,9 @@ function toDocDto(d: any): JobDocumentDto {
     type: d.type,
     originalName: d.originalName,
     mimeType: d.mimeType,
+    sizeBytes: d.sizeBytes ?? null,
     createdAt: d.createdAt,
+    url: d.url ?? null,
   };
 }
 
@@ -178,6 +207,17 @@ export class OpsJobsService {
         orderBy,
         skip,
         take,
+        include: {
+          customerCompany: {
+            select: { id: true, name: true },
+          },
+          assignedDriver: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+          assignedVehicle: {
+            select: { id: true, plateNo: true, vehicleDescription: true },
+          },
+        },
       }),
     ]);
 
@@ -237,7 +277,17 @@ export class OpsJobsService {
   async getOne(tenantId: string, jobId: string): Promise<JobDto> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
-      include: { documents: true },
+      include: {
+        customerCompany: {
+          select: { id: true, name: true },
+        },
+        assignedDriver: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+        assignedVehicle: {
+          select: { id: true, plateNo: true, vehicleDescription: true },
+        },
+      },
     });
     if (!job) throw new NotFoundException("Job not found");
     return toJobDto(job);
@@ -511,21 +561,21 @@ export class OpsJobsService {
       actorUserId,
     );
 
-    return toDocDto(doc);
-  }
+    return this.attachSignedUrl(doc);  }
 
-  async listDocuments(tenantId: string, jobId: string): Promise<JobDocumentDto[]> {
-    const job = await this.prisma.job.findFirst({
-      where: { id: jobId, tenantId },
-    });
-    if (!job) throw new NotFoundException("Job not found");
-
-    const docs = await this.prisma.jobDocument.findMany({
-      where: { tenantId, jobId },
-      orderBy: { createdAt: "desc" },
-    });
-    return docs.map(toDocDto);
-  }
+    async listDocuments(tenantId: string, jobId: string): Promise<JobDocumentDto[]> {
+      const job = await this.prisma.job.findFirst({
+        where: { id: jobId, tenantId },
+      });
+      if (!job) throw new NotFoundException("Job not found");
+  
+      const docs = await this.prisma.jobDocument.findMany({
+        where: { tenantId, jobId },
+        orderBy: { createdAt: "desc" },
+      });
+  
+      return Promise.all(docs.map((doc) => this.attachSignedUrl(doc)));
+    }
 
   async getAudit(
     tenantId: string,
@@ -1212,5 +1262,23 @@ export class OpsJobsService {
     }
 
     return { createdCount, failedRows, created };
+  }
+
+
+  private async attachSignedUrl(doc: any): Promise<JobDocumentDto> {
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase.storage
+      .from(JOB_DOCUMENTS_BUCKET)
+      .createSignedUrl(doc.storageKey, 60 * 60);
+
+    return {
+      id: doc.id,
+      type: doc.type,
+      originalName: doc.originalName,
+      mimeType: doc.mimeType,
+      sizeBytes: doc.sizeBytes ?? null,
+      createdAt: doc.createdAt,
+      url: error ? null : data?.signedUrl ?? null,
+    };
   }
 }

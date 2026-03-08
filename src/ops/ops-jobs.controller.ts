@@ -30,7 +30,7 @@ import { ImportConfirmRequestDto } from "./dto/import-job-row.dto";
 import { LclImportConfirmRequestDto } from "./dto/lcl-import.dto";
 
 @ApiTags("ops-jobs")
-@Controller("ops/jobs")
+@Controller("jobs")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
 @Roles(Role.ADMIN, Role.OPS)
 @ApiBearerAuth("JWT-auth")
