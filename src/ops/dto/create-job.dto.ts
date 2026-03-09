@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsEnum, IsOptional, IsString, IsDateString, MinLength, IsArray, ValidateNested } from "class-validator";
+import { IsEnum, IsOptional, IsString, IsDateString, MinLength, IsArray, ValidateNested, IsNumber, Min } from "class-validator";
 import { JobType } from "@prisma/client";
 import { Type } from "class-transformer";
 
@@ -14,6 +14,12 @@ export class CreateJobItemDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  qty?: number;
+
 }
 
 export class CreateJobDto {
