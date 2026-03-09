@@ -9,37 +9,38 @@ datasource db {
 }
 
 model Tenant {
-  id                         String                       @id @default(cuid())
-  name                       String
-  slug                       String                       @unique
-  createdAt                  DateTime                     @default(now())
-  updatedAt                  DateTime                     @updatedAt
-  driver_wallet_entries      driver_wallet_entries[]
-  driverWalletTransactions   DriverWalletTransaction[]
-  drivers                    drivers[]
-  driverLocationLatest       DriverLocationLatest[]
-  eventLogs                  EventLog[]
-  inventory_items            inventory_items[]
-  inventory_batches          inventory_batches[]
-  inventory_batch_items      inventory_batch_items[]
-  inventory_units            inventory_units[]
-  podPhotoDocuments          PodPhotoDocument[]
-  pods                       Pod[]
-  stops                      Stop[]
-  memberships                TenantMembership[]
-  transportOrders            TransportOrder[]
-  transport_order_items      transport_order_items[]
-  trips                      Trip[]
-  vehicles                   Vehicle[]
-  transport_order_item_units transport_order_item_units[]
-  customer_companies         customer_companies[]
-  Invoice                    Invoice[]
-  InvoiceLineItem            InvoiceLineItem[]
+  id                           String                            @id @default(cuid())
+  name                         String
+  slug                         String                            @unique
+  createdAt                    DateTime                          @default(now())
+  updatedAt                    DateTime                          @updatedAt
+  driver_wallet_entries        driver_wallet_entries[]
+  driverWalletTransactions     DriverWalletTransaction[]
+  drivers                      drivers[]
+  driverLocationLatest         DriverLocationLatest[]
+  eventLogs                    EventLog[]
+  inventory_items              inventory_items[]
+  inventory_batches            inventory_batches[]
+  inventory_batch_items        inventory_batch_items[]
+  inventory_units              inventory_units[]
+  podPhotoDocuments            PodPhotoDocument[]
+  pods                         Pod[]
+  stops                        Stop[]
+  memberships                  TenantMembership[]
+  transportOrders              TransportOrder[]
+  transport_order_items        transport_order_items[]
+  trips                        Trip[]
+  vehicles                     Vehicle[]
+  transport_order_item_units   transport_order_item_units[]
+  customer_companies           customer_companies[]
+  Invoice                      Invoice[]
+  InvoiceLineItem              InvoiceLineItem[]
   transportInternalRefCounters transport_internal_ref_counters[]
-  jobs                     Job[]
-  jobDocuments             JobDocument[]
-  jobInternalRefCounters   job_internal_ref_counters[]
-  auditLogs                AuditLog[]
+  jobs                         Job[]
+  jobDocuments                 JobDocument[]
+  jobInternalRefCounters       job_internal_ref_counters[]
+  auditLogs                    AuditLog[]
+  JobItem                      JobItem[]
 
   @@map("tenants")
 }
@@ -63,10 +64,10 @@ model User {
   customerCompanyId String?
   customerContactId String?
 
-  customerCompany customer_companies? @relation("UserCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: SetNull)
-  customerContact customer_contacts?  @relation("UserCustomerContact", fields: [customerContactId], references: [id], onDelete: SetNull)
-  jobsAssigned    Job[]               @relation("JobAssignedDriver")
-  vehiclesAssigned Vehicle[]          @relation("VehicleDriver")
+  customerCompany  customer_companies? @relation("UserCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: SetNull)
+  customerContact  customer_contacts?  @relation("UserCustomerContact", fields: [customerContactId], references: [id], onDelete: SetNull)
+  jobsAssigned     Job[]               @relation("JobAssignedDriver")
+  vehiclesAssigned Vehicle[]           @relation("VehicleDriver")
 
   @@index([customerCompanyId])
   @@index([customerContactId])
@@ -76,22 +77,22 @@ model User {
 }
 
 model customer_companies {
-  id             String   @id @default(cuid())
-  tenantId       String
+  id       String @id @default(cuid())
+  tenantId String
 
   // Core identity
   name           String
   normalizedName String
 
   // Company contact
-  email          String?
-  phone          String?
+  email String?
+  phone String?
 
   // Address
-  addressLine1   String?
-  addressLine2   String?
-  postalCode     String?
-  country        String?  @default("SG")
+  addressLine1 String?
+  addressLine2 String?
+  postalCode   String?
+  country      String? @default("SG")
 
   // Billing
   billingSameAsAddress Boolean @default(false)
@@ -101,17 +102,17 @@ model customer_companies {
   billingCountry       String? @default("SG")
 
   // PIC
-  picName        String?
-  picMobile      String?
-  picEmail       String?
+  picName   String?
+  picMobile String?
+  picEmail  String?
 
   // Helpful extras
-  uen            String?
-  notes          String?
-  isActive       Boolean  @default(true)
+  uen      String?
+  notes    String?
+  isActive Boolean @default(true)
 
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   contacts        customer_contacts[]
@@ -242,19 +243,19 @@ model Trip {
 }
 
 model Vehicle {
-  id                  String        @id @default(cuid())
-  tenantId            String
-  plateNo             String
-  type                VehicleType
-  status              VehicleStatus @default(ACTIVE)
-  vehicleDescription  String?
-  driverId            String?
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
-  trips               Trip[]
-  tenant              Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  driversDefault      drivers[]
-  driver              User?         @relation("VehicleDriver", fields: [driverId], references: [id], onDelete: SetNull)
+  id                 String        @id @default(cuid())
+  tenantId           String
+  plateNo            String
+  type               VehicleType
+  status             VehicleStatus @default(ACTIVE)
+  vehicleDescription String?
+  driverId           String?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  trips              Trip[]
+  tenant             Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driversDefault     drivers[]
+  driver             User?         @relation("VehicleDriver", fields: [driverId], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, plateNo])
   @@index([tenantId])
@@ -428,13 +429,13 @@ model drivers {
 }
 
 model Job {
-  id                 String     @id @default(cuid())
+  id                 String    @id @default(cuid())
   tenantId           String
   customerCompanyId  String
   internalRef        String
   externalRef        String?
   jobType            JobType
-  status             JobStatus  @default(Draft)
+  status             JobStatus @default(Draft)
   notes              String?
   pickupDate         DateTime?
   pickupAddress1     String
@@ -460,13 +461,14 @@ model Job {
   lastLat            Float?
   lastLng            Float?
   lastLocationAt     DateTime?
-  createdAt          DateTime   @default(now())
-  updatedAt          DateTime   @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customerCompany customer_companies  @relation("JobCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: Restrict)
-  assignedDriver  User?               @relation("JobAssignedDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerCompany customer_companies @relation("JobCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: Restrict)
+  assignedDriver  User?              @relation("JobAssignedDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
   documents       JobDocument[]
+  items           JobItem[]
 
   @@unique([tenantId, internalRef])
   @@index([tenantId, customerCompanyId])
@@ -474,6 +476,26 @@ model Job {
   @@index([tenantId, pickupDate])
   @@index([tenantId, assignedDriverId])
   @@map("jobs")
+}
+
+model JobItem {
+  id       String @id @default(cuid())
+  tenantId String
+  jobId    String
+
+  itemCode    String
+  description String?
+  qty         Int     @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, jobId])
+  @@index([tenantId, itemCode])
+  @@map("job_items")
 }
 
 model JobDocument {
@@ -514,7 +536,7 @@ model AuditLog {
 }
 
 model job_internal_ref_counters {
-  tenantId   String
+  tenantId  String
   yyyymm    String
   nextSeq   Int
   createdAt DateTime @default(now())

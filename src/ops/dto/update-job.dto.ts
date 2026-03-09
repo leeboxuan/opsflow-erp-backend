@@ -1,7 +1,16 @@
-import { ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { IsEnum, IsOptional, IsString, IsDateString, MinLength } from "class-validator";
 import { JobType } from "@prisma/client";
+import { Type } from "class-transformer";
+import { IsArray, ValidateNested } from "class-validator";
 
+export class UpdateJobItemDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  itemCode: string;
+}
+  
 export class UpdateJobDto {
   @ApiPropertyOptional({ enum: JobType })
   @IsOptional()
@@ -71,4 +80,17 @@ export class UpdateJobDto {
   @IsString()
   @MinLength(1)
   receiverPhone?: string;
+
+  @ApiPropertyOptional({ type: [UpdateJobItemDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => UpdateJobItemDto)
+  items?: UpdateJobItemDto[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  notes?: string;
 }

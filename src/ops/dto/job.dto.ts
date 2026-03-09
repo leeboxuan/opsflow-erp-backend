@@ -72,6 +72,7 @@ export class JobDto {
   updatedAt: Date;
 
   documents?: JobDocumentDto[];
+  items?: JobItemDto[];
 }
 
 export class JobTrackingDto {
@@ -91,4 +92,15 @@ export class AuditLogEntryDto {
   action: string;
   metadata: Record<string, unknown> | null;
   createdAt: Date;
+}
+
+export class JobItemDto {
+  id: string;
+  tenantId: string;
+  jobId: string;
+  itemCode: string;
+  description: string | null;
+  qty: number;
+  createdAt: Date;
+  updatedAt: Date;
 }

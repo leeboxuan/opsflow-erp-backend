@@ -116,16 +116,20 @@ export class OpsJobsController {
     @UploadedFile() file: Express.Multer.File,
   ) {
     if (!file) throw new BadRequestException("file is required");
+
     const body = req.body as Record<string, string>;
     const customerCompanyId = body?.customerCompanyId?.trim();
     const pickupDate = body?.pickupDate?.trim();
     const pickupAddress1 = body?.pickupAddress1?.trim();
+
     if (!customerCompanyId || !pickupDate || !pickupAddress1) {
       throw new BadRequestException(
         "customerCompanyId, pickupDate, and pickupAddress1 are required",
       );
     }
+
     const tenantId = req.tenant.tenantId;
+
     return this.jobs.lclImportPreview(tenantId, file.buffer, {
       customerCompanyId,
       pickupDate,
@@ -192,9 +196,7 @@ export class OpsJobsController {
   }
 
   @Delete(":jobId")
-  @ApiOperation({
-    summary: "Delete job (only if Draft or unassigned Assigned)",
-  })
+  @ApiOperation({ summary: "Delete job (only if Draft or unassigned Assigned)" })
   async delete(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const userId = req.user?.userId ?? null;
@@ -232,6 +234,14 @@ export class OpsJobsController {
     return this.jobs.uploadQuotation(tenantId, jobId, file, userId);
   }
 
+  @Post(":jobId/documents/do/generate")
+  @ApiOperation({ summary: "Generate DO PDF for job" })
+  async generateDo(@Req() req: any, @Param("jobId") jobId: string) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user?.userId ?? null;
+    return this.jobs.generateDoDocument(tenantId, jobId, userId);
+  }
+
   @Get(":jobId/documents")
   @ApiOperation({ summary: "List job documents" })
   async listDocuments(@Req() req: any, @Param("jobId") jobId: string) {
@@ -255,20 +265,9 @@ export class OpsJobsController {
   }
 
   @Get(":jobId/tracking")
-  @ApiOperation({
-    summary: "Get job tracking (last location, driver, vehicle)",
-  })
+  @ApiOperation({ summary: "Get job tracking (last location, driver, vehicle)" })
   async getTracking(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     return this.jobs.getTracking(tenantId, jobId);
-  }
-
-  @Post(":jobId/documents/do/generate")
-  @ApiOperation({ summary: "Generate DO PDF for job" })
-  async generateDo(@Req() req: any, @Param("jobId") jobId: string) {
-    const tenantId = req.tenant.tenantId;
-    const userId = req.user?.userId ?? null;
-
-    return this.jobs.generateDoDocument(tenantId, jobId, userId);
   }
 }

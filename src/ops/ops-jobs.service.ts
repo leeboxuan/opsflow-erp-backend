@@ -1,9 +1,14 @@
+import * as fs from "fs";
+import path from "path";
+
 import {
   Injectable,
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
 import { JobStatus, JobType, JobDocumentType, Role } from "@prisma/client";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { SupabaseService } from "../auth/supabase.service";
@@ -15,6 +20,7 @@ import {
 import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
+
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
 import { AssignJobDto } from "./dto/assign-job.dto";
@@ -37,14 +43,15 @@ import type {
   LclImportConfirmRequestDto,
   LclImportConfirmResponseDto,
 } from "./dto/lcl-import.dto";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
+
 const QUOTATION_MIMES = [
   "application/pdf",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.ms-excel",
 ];
+
 const QUOTATION_EXT = /\.(pdf|xlsx|xls)$/i;
 
 function toDocDto(d: any): JobDocumentDto {
@@ -60,10 +67,9 @@ function toDocDto(d: any): JobDocumentDto {
 }
 
 function toJobDto(j: any): JobDto {
-  const assignedDriverName =
-    j.assignedDriver
-      ? (j.assignedDriver.name?.trim() || j.assignedDriver.email || null)
-      : null;
+  const assignedDriverName = j.assignedDriver
+    ? (j.assignedDriver.name?.trim() || j.assignedDriver.email || null)
+    : null;
 
   return {
     id: j.id,
@@ -112,7 +118,15 @@ function toJobDto(j: any): JobDto {
     createdAt: j.createdAt,
     updatedAt: j.updatedAt,
 
-    documents: j.documents?.map((d: any) => toDocDto(d)),
+    items:
+      j.items?.map((item: any) => ({
+        id: item.id,
+        itemCode: item.itemCode,
+        description: item.description ?? null,
+        qty: item.qty,
+      })) ?? [],
+
+    documents: j.documents?.map((d: any) => toDocDto(d)) ?? [],
   };
 }
 
@@ -198,6 +212,7 @@ export class OpsJobsService {
       "deliveryAddress1",
       "receiverName",
       "receiverPhone",
+      "externalRef",
     ]);
 
     applyMappedFilter(where, query.filter, {
@@ -234,6 +249,9 @@ export class OpsJobsService {
           assignedDriver: {
             select: { id: true, name: true, email: true },
           },
+          items: {
+            orderBy: { createdAt: "asc" },
+          },
         },
       }),
     ]);
@@ -252,8 +270,27 @@ export class OpsJobsService {
     const company = await this.prisma.customer_companies.findFirst({
       where: { id: dto.customerCompanyId, tenantId },
     });
+
     if (!company) {
       throw new BadRequestException("Customer company not found");
+    }
+
+    const items = Array.isArray((dto as any).items) ? (dto as any).items : [];
+
+    if (!items.length) {
+      throw new BadRequestException("At least one item is required");
+    }
+
+    const validItems = items
+      .filter((i: any) => i?.itemCode?.trim())
+      .map((i: any) => ({
+        itemCode: i.itemCode.trim(),
+        description: i.description?.trim() || null,
+        qty: Math.max(1, Number(i.qty) || 1),
+      }));
+
+    if (!validItems.length) {
+      throw new BadRequestException("At least one valid item is required");
     }
 
     const internalRef = await this.getNextInternalRef(tenantId);
@@ -265,6 +302,7 @@ export class OpsJobsService {
         internalRef,
         jobType: dto.jobType,
         status: JobStatus.Draft,
+        notes: dto.notes ?? null,
         pickupDate: dto.pickupDate ? new Date(dto.pickupDate) : null,
         pickupAddress1: dto.pickupAddress1,
         pickupAddress2: dto.pickupAddress2 ?? null,
@@ -276,6 +314,25 @@ export class OpsJobsService {
         deliveryPostal: dto.deliveryPostal ?? null,
         receiverName: dto.receiverName,
         receiverPhone: dto.receiverPhone,
+        items: {
+          create: validItems.map((item: any) => ({
+            tenantId,
+            itemCode: item.itemCode,
+            description: item.description,
+            qty: item.qty,
+          })),
+        },
+      },
+      include: {
+        customerCompany: {
+          select: { id: true, name: true },
+        },
+        assignedDriver: {
+          select: { id: true, name: true, email: true },
+        },
+        items: {
+          orderBy: { createdAt: "asc" },
+        },
       },
     });
 
@@ -301,6 +358,9 @@ export class OpsJobsService {
         assignedDriver: {
           select: { id: true, name: true, email: true },
         },
+        items: {
+          orderBy: { createdAt: "asc" },
+        },
         documents: {
           orderBy: { createdAt: "desc" },
         },
@@ -312,6 +372,7 @@ export class OpsJobsService {
     }
 
     const dto = toJobDto(job);
+
     if (!job.documents?.length) return dto;
 
     dto.documents = await Promise.all(
@@ -330,6 +391,7 @@ export class OpsJobsService {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
+
     if (!job) throw new NotFoundException("Job not found");
 
     if (
@@ -351,40 +413,84 @@ export class OpsJobsService {
     }
 
     const data: any = {};
+
     if (dto.jobType !== undefined) data.jobType = dto.jobType;
-    if (dto.customerCompanyId !== undefined)
+    if (dto.customerCompanyId !== undefined) {
       data.customerCompanyId = dto.customerCompanyId;
-    if (dto.pickupDate !== undefined)
+    }
+    if (dto.notes !== undefined) data.notes = dto.notes;
+    if (dto.pickupDate !== undefined) {
       data.pickupDate = dto.pickupDate ? new Date(dto.pickupDate) : null;
-    if (dto.pickupAddress1 !== undefined)
-      data.pickupAddress1 = dto.pickupAddress1;
-    if (dto.pickupAddress2 !== undefined)
-      data.pickupAddress2 = dto.pickupAddress2;
+    }
+    if (dto.pickupAddress1 !== undefined) data.pickupAddress1 = dto.pickupAddress1;
+    if (dto.pickupAddress2 !== undefined) data.pickupAddress2 = dto.pickupAddress2;
     if (dto.pickupPostal !== undefined) data.pickupPostal = dto.pickupPostal;
-    if (dto.pickupContactName !== undefined)
+    if (dto.pickupContactName !== undefined) {
       data.pickupContactName = dto.pickupContactName;
-    if (dto.pickupContactPhone !== undefined)
+    }
+    if (dto.pickupContactPhone !== undefined) {
       data.pickupContactPhone = dto.pickupContactPhone;
-    if (dto.deliveryAddress1 !== undefined)
+    }
+    if (dto.deliveryAddress1 !== undefined) {
       data.deliveryAddress1 = dto.deliveryAddress1;
-    if (dto.deliveryAddress2 !== undefined)
+    }
+    if (dto.deliveryAddress2 !== undefined) {
       data.deliveryAddress2 = dto.deliveryAddress2;
-    if (dto.deliveryPostal !== undefined)
-      data.deliveryPostal = dto.deliveryPostal;
+    }
+    if (dto.deliveryPostal !== undefined) data.deliveryPostal = dto.deliveryPostal;
     if (dto.receiverName !== undefined) data.receiverName = dto.receiverName;
     if (dto.receiverPhone !== undefined) data.receiverPhone = dto.receiverPhone;
 
-    const updated = await this.prisma.job.update({
-      where: { id: jobId },
-      data,
-      include: {
-        customerCompany: {
-          select: { id: true, name: true },
+    const inputItems = Array.isArray((dto as any).items) ? (dto as any).items : null;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const updatedJob = await tx.job.update({
+        where: { id: jobId },
+        data,
+      });
+
+      if (inputItems !== null) {
+        const validItems = inputItems
+          .filter((i: any) => i?.itemCode?.trim())
+          .map((i: any) => ({
+            itemCode: i.itemCode.trim(),
+            description: i.description?.trim() || null,
+            qty: Math.max(1, Number(i.qty) || 1),
+          }));
+
+        if (!validItems.length) {
+          throw new BadRequestException("At least one valid item is required");
+        }
+
+        await tx.jobItem.deleteMany({
+          where: { tenantId, jobId },
+        });
+
+        await tx.jobItem.createMany({
+          data: validItems.map((item: any) => ({
+            tenantId,
+            jobId,
+            itemCode: item.itemCode,
+            description: item.description,
+            qty: item.qty,
+          })),
+        });
+      }
+
+      return tx.job.findFirst({
+        where: { id: updatedJob.id, tenantId },
+        include: {
+          customerCompany: {
+            select: { id: true, name: true },
+          },
+          assignedDriver: {
+            select: { id: true, name: true, email: true },
+          },
+          items: {
+            orderBy: { createdAt: "asc" },
+          },
         },
-        assignedDriver: {
-          select: { id: true, name: true, email: true },
-        },
-      },
+      });
     });
 
     await this.audit.log(
@@ -392,9 +498,13 @@ export class OpsJobsService {
       "UPDATE",
       "JOB",
       jobId,
-      { changedFields: Object.keys(data) },
+      { changedFields: [...Object.keys(data), ...(inputItems ? ["items"] : [])] },
       actorUserId,
     );
+
+    if (!updated) {
+      throw new NotFoundException("Job not found after update");
+    }
 
     return toJobDto(updated);
   }
@@ -408,6 +518,7 @@ export class OpsJobsService {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
+
     if (!job) throw new NotFoundException("Job not found");
 
     if (job.status !== JobStatus.Draft && job.status !== JobStatus.Assigned) {
@@ -425,6 +536,7 @@ export class OpsJobsService {
         role: Role.DRIVER,
       },
     });
+
     if (!membership) {
       throw new BadRequestException(
         "Driver not found or not a DRIVER in this tenant",
@@ -450,6 +562,7 @@ export class OpsJobsService {
       const vehicle = await this.prisma.vehicle.findFirst({
         where: { id: vehicleId, tenantId },
       });
+
       if (!vehicle) {
         throw new BadRequestException("Vehicle not found");
       }
@@ -469,6 +582,9 @@ export class OpsJobsService {
         },
         assignedDriver: {
           select: { id: true, name: true, email: true },
+        },
+        items: {
+          orderBy: { createdAt: "asc" },
         },
       },
     });
@@ -494,6 +610,7 @@ export class OpsJobsService {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
+
     if (!job) throw new NotFoundException("Job not found");
 
     if (job.status === JobStatus.Completed) {
@@ -514,6 +631,9 @@ export class OpsJobsService {
         },
         assignedDriver: {
           select: { id: true, name: true, email: true },
+        },
+        items: {
+          orderBy: { createdAt: "asc" },
         },
       },
     });
@@ -538,6 +658,7 @@ export class OpsJobsService {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
+
     if (!job) throw new NotFoundException("Job not found");
 
     const canDelete =
@@ -567,6 +688,7 @@ export class OpsJobsService {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
+
     if (!job) throw new NotFoundException("Job not found");
 
     if (job.jobType === JobType.LCL) {
@@ -592,6 +714,9 @@ export class OpsJobsService {
         assignedDriver: {
           select: { id: true, name: true, email: true },
         },
+        items: {
+          orderBy: { createdAt: "asc" },
+        },
       },
     });
 
@@ -616,6 +741,7 @@ export class OpsJobsService {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
+
     if (!job) throw new NotFoundException("Job not found");
 
     const mime = String(file.mimetype ?? "").toLowerCase();
@@ -670,6 +796,83 @@ export class OpsJobsService {
     return this.attachSignedUrl(doc);
   }
 
+  async generateDoDocument(
+    tenantId: string,
+    jobId: string,
+    userId?: string | null,
+  ) {
+    const job = await this.prisma.job.findFirst({
+      where: {
+        id: jobId,
+        tenantId,
+      },
+      include: {
+        customerCompany: true,
+        assignedDriver: true,
+        items: {
+          orderBy: { createdAt: "asc" },
+        },
+        documents: true,
+      },
+    });
+
+    if (!job) {
+      throw new NotFoundException("Job not found");
+    }
+
+    if (!job.items?.length) {
+      throw new BadRequestException("Add at least one item before generating DO");
+    }
+
+    const pdfBuffer = await this.buildDoPdfBuffer(job);
+
+    const safeJobNo = this.safeFileName(job.internalRef ?? job.id);
+    const storageKey = `${tenantId}/jobs/${jobId}/do/${Date.now()}-${safeJobNo}.pdf`;
+
+    const { error: uploadError } = await this.supabaseService
+      .getClient()
+      .storage.from(JOB_DOCUMENTS_BUCKET)
+      .upload(storageKey, pdfBuffer, {
+        contentType: "application/pdf",
+        upsert: false,
+      });
+
+    if (uploadError) {
+      throw new BadRequestException(
+        `Failed to upload DO PDF: ${uploadError.message}`,
+      );
+    }
+
+    const doc = await this.prisma.jobDocument.create({
+      data: {
+        tenantId,
+        jobId,
+        type: JobDocumentType.DO,
+        storageKey,
+        originalName: `DO-${safeJobNo}.pdf`,
+        mimeType: "application/pdf",
+        sizeBytes: pdfBuffer.length,
+        uploadedByUserId: userId ?? null,
+      },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "GENERATE_DOC",
+      "JOB",
+      jobId,
+      {
+        documentId: doc.id,
+        type: "DO",
+        storageKey,
+        originalName: doc.originalName,
+      },
+      userId ?? null,
+    );
+
+    return this.attachSignedUrl(doc);
+  }
+
   async listDocuments(
     tenantId: string,
     jobId: string,
@@ -677,6 +880,7 @@ export class OpsJobsService {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
+
     if (!job) throw new NotFoundException("Job not found");
 
     const docs = await this.prisma.jobDocument.findMany({
@@ -695,6 +899,7 @@ export class OpsJobsService {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
+
     if (!job) throw new NotFoundException("Job not found");
 
     const entries = await this.audit.findByEntity(
@@ -999,6 +1204,16 @@ export class OpsJobsService {
               assignedAt: new Date(),
               assignedVehicleId,
             }),
+            items: {
+              create: [
+                {
+                  tenantId,
+                  itemCode: "UNSPECIFIED",
+                  description: "Imported job item",
+                  qty: 1,
+                },
+              ],
+            },
           },
         });
 
@@ -1026,8 +1241,6 @@ export class OpsJobsService {
 
     return { createdCount, failedRows };
   }
-
-  // --- LCL Order In template import (preview → confirm) ---
 
   private static LCL_HEADERS = [
     "Order Ref",
@@ -1149,9 +1362,7 @@ export class OpsJobsService {
           ? OpsJobsService.cell(row, idx.deliveryAddress2)
           : "";
       const deliveryCity =
-        idx.deliveryCity >= 0
-          ? OpsJobsService.cell(row, idx.deliveryCity)
-          : "";
+        idx.deliveryCity >= 0 ? OpsJobsService.cell(row, idx.deliveryCity) : "";
       const deliveryPostalCode =
         idx.deliveryPostalCode >= 0
           ? OpsJobsService.cell(row, idx.deliveryPostalCode)
@@ -1214,19 +1425,17 @@ export class OpsJobsService {
         g.specialRequests.add(specialRequest);
       }
 
-      if (deliveryAddress1 && !g.deliveryAddress1)
-        g.deliveryAddress1 = deliveryAddress1;
-      if (deliveryAddress2 && !g.deliveryAddress2)
-        g.deliveryAddress2 = deliveryAddress2;
+      if (deliveryAddress1 && !g.deliveryAddress1) g.deliveryAddress1 = deliveryAddress1;
+      if (deliveryAddress2 && !g.deliveryAddress2) g.deliveryAddress2 = deliveryAddress2;
       if (deliveryCity && !g.deliveryCity) g.deliveryCity = deliveryCity;
-      if (deliveryPostalCode && !g.deliveryPostalCode)
+      if (deliveryPostalCode && !g.deliveryPostalCode) {
         g.deliveryPostalCode = deliveryPostalCode;
-      if (deliveryCountry && !g.deliveryCountry)
-        g.deliveryCountry = deliveryCountry;
-      if (deliveryFirstName && !g.deliveryFirstName)
+      }
+      if (deliveryCountry && !g.deliveryCountry) g.deliveryCountry = deliveryCountry;
+      if (deliveryFirstName && !g.deliveryFirstName) {
         g.deliveryFirstName = deliveryFirstName;
-      if (deliveryLastName && !g.deliveryLastName)
-        g.deliveryLastName = deliveryLastName;
+      }
+      if (deliveryLastName && !g.deliveryLastName) g.deliveryLastName = deliveryLastName;
       if (firstName && !g.firstName) g.firstName = firstName;
       if (lastName && !g.lastName) g.lastName = lastName;
       if (phone && !g.phone) g.phone = phone;
@@ -1296,7 +1505,9 @@ export class OpsJobsService {
       (pickup.pickupContactPhone || "").trim();
 
     if (!receiverPhone) {
-      errors.push("receiverPhone is required (or set pickupContactPhone as default)");
+      errors.push(
+        "receiverPhone is required (or set pickupContactPhone as default)",
+      );
     }
 
     return errors;
@@ -1318,6 +1529,7 @@ export class OpsJobsService {
     const company = await this.prisma.customer_companies.findFirst({
       where: { id: params.customerCompanyId, tenantId },
     });
+
     if (!company) {
       throw new BadRequestException(
         "Customer company not found or does not belong to tenant",
@@ -1371,6 +1583,7 @@ export class OpsJobsService {
     const company = await this.prisma.customer_companies.findFirst({
       where: { id: dto.customerCompanyId, tenantId },
     });
+
     if (!company) {
       throw new BadRequestException(
         "Customer company not found or does not belong to tenant",
@@ -1378,8 +1591,7 @@ export class OpsJobsService {
     }
 
     const failedRows: { rowKey: string; reason: string }[] = [];
-    const created: { id: string; internalRef: string; externalRef: string | null }[] =
-      [];
+    const created: { id: string; internalRef: string; externalRef: string | null }[] = [];
     let createdCount = 0;
 
     const pickupDate = dto.pickupDate ? new Date(dto.pickupDate) : null;
@@ -1417,7 +1629,6 @@ export class OpsJobsService {
       }
 
       const notesParts: string[] = [];
-      if (row.itemsSummary) notesParts.push(row.itemsSummary);
       if (row.specialRequest) notesParts.push(row.specialRequest);
       if (row.deliveryCity || row.deliveryCountry) {
         notesParts.push(
@@ -1426,6 +1637,25 @@ export class OpsJobsService {
       }
 
       const notes = notesParts.length > 0 ? notesParts.join(" | ") : null;
+
+      const parsedItems =
+        row.itemsSummary
+          ?.split(";")
+          .map((part) => part.trim())
+          .filter(Boolean)
+          .map((part) => {
+            const match = part.match(/^(.*?)\s*x(\d+)$/i);
+            if (!match) {
+              return {
+                itemCode: part,
+                qty: 1,
+              };
+            }
+            return {
+              itemCode: match[1].trim(),
+              qty: Math.max(1, Number(match[2]) || 1),
+            };
+          }) ?? [];
 
       try {
         const internalRef = await this.getNextInternalRef(tenantId);
@@ -1450,6 +1680,24 @@ export class OpsJobsService {
             deliveryPostal: row.deliveryPostal ?? null,
             receiverName: row.receiverName,
             receiverPhone: row.receiverPhone,
+            items: {
+              create:
+                parsedItems.length > 0
+                  ? parsedItems.map((item) => ({
+                      tenantId,
+                      itemCode: item.itemCode,
+                      description: null,
+                      qty: item.qty,
+                    }))
+                  : [
+                      {
+                        tenantId,
+                        itemCode: "UNSPECIFIED",
+                        description: "Imported job item",
+                        qty: 1,
+                      },
+                    ],
+            },
           },
         });
 
@@ -1483,76 +1731,34 @@ export class OpsJobsService {
     return { createdCount, failedRows, created };
   }
 
-  async generateDoDocument(tenantId: string, jobId: string, userId?: string | null) {
-    const job = await this.prisma.job.findFirst({
-      where: {
-        id: jobId,
-        tenantId,
-      },
-      include: {
-        customerCompany: true,
-        driver: true,
-        vehicle: true,
-      },
-    });
-  
-    if (!job) {
-      throw new NotFoundException("Job not found");
-    }
-  
-    const pdfBuffer = await this.buildDoPdfBuffer(job);
-  
-    const safeJobNo = this.safeFileName(job.jobNo ?? job.id);
-    const storageKey = `${tenantId}/jobs/${jobId}/do/${Date.now()}-${safeJobNo}.pdf`;
-  
-    const { error: uploadError } = await this.supabaseService.getClient().storage
-      .from(JOB_DOCUMENTS_BUCKET)
-      .upload(storageKey, pdfBuffer, {
-        contentType: "application/pdf",
-        upsert: false,
-      });
-  
-    if (uploadError) {
-      throw new BadRequestException(`Failed to upload DO PDF: ${uploadError.message}`);
-    }
-  
-    const doc = await this.prisma.jobDocument.create({
-      data: {
-        tenantId,
-        jobId,
-        type: JobDocumentType.DO,
-        storageKey,
-        originalName: `DO-${safeJobNo}.pdf`,
-        mimeType: "application/pdf",
-        sizeBytes: pdfBuffer.length,
-        uploadedByUserId: userId ?? null,
-      },
-    });
-  
-    await this.audit.log(tenantId, "GENERATE_DOC", "JOB", jobId, {
-      tenantId,
-      actorUserId: userId ?? undefined,
-      action: "job.document.do.generated",
-      entityType: "Job",
-      entityId: jobId,
-      meta: {
-        documentId: doc.id,
-        storageKey,
-        originalName: doc.originalName,
-      },
-    });
-  
-    return this.attachSignedUrl(doc);
-  }
-  
-  private async buildDoPdfBuffer(job: any): Promise<Buffer> {
+  private async buildDoPdfBuffer(job: {
+    id: string;
+    internalRef: string;
+    pickupDate: Date | null;
+    deliveryAddress1: string;
+    deliveryAddress2: string | null;
+    deliveryPostal: string | null;
+    receiverName: string;
+    receiverPhone: string;
+    notes: string | null;
+    customerCompany?: { name: string } | null;
+    assignedDriver?: { name: string | null } | null;
+    items: Array<{
+      itemCode: string;
+      description: string | null;
+      qty: number;
+    }>;
+  }): Promise<Buffer> {
     const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([842, 595]); // A4 landscape
-    const { height } = page.getSize();
-  
+    const page = pdfDoc.addPage([842, 595]);
+    const { width, height } = page.getSize();
+
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  
+
+    const black = rgb(0, 0, 0);
+    const lightGray = rgb(0.92, 0.92, 0.92);
+
     const drawText = (
       text: string,
       x: number,
@@ -1565,124 +1771,173 @@ export class OpsJobsService {
         y,
         size,
         font: useBold ? bold : font,
-        color: rgb(0, 0, 0),
+        color: black,
       });
     };
-  
-    const drawLine = (x1: number, y1: number, x2: number, y2: number) => {
-      page.drawLine({
-        start: { x: x1, y: y1 },
-        end: { x: x2, y: y2 },
-        thickness: 1,
-        color: rgb(0, 0, 0),
+
+    const drawCell = (
+      label: string,
+      value: string,
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+    ) => {
+      page.drawRectangle({
+        x,
+        y: y - h,
+        width: w,
+        height: h,
+        borderWidth: 0.8,
+        borderColor: black,
       });
+
+      page.drawRectangle({
+        x,
+        y: y - 20,
+        width: w,
+        height: 20,
+        color: lightGray,
+      });
+
+      drawText(label, x + 8, y - 14, 10, true);
+
+      const lines = this.wrapPdfText(value || "-", 36);
+      let lineY = y - 36;
+      for (const line of lines.slice(0, 3)) {
+        drawText(line, x + 8, lineY, 11, false);
+        lineY -= 14;
+      }
     };
-  
+
     const formatAddress = (...parts: Array<string | null | undefined>) =>
       parts.map((v) => (v ?? "").trim()).filter(Boolean).join(", ");
-  
-    const valueOrDash = (value?: string | number | null) =>
-      value === null || value === undefined || String(value).trim() === "" ? "-" : String(value);
-  
-    // Adjust these field names if your schema differs
-    const orderRef =
-      job.jobNo ??
-      job.internalRef ??
-      job.referenceNo ??
-      job.id;
-  
-    const recipientName =
-      job.deliveryContactName ??
-      job.contactName ??
-      job.consigneeName ??
-      "-";
-  
-    const phone =
-      job.deliveryContactPhone ??
-      job.contactPhone ??
-      job.phone ??
-      "-";
-  
-    const deliveryAddress = formatAddress(
-      job.deliveryAddress1,
-      job.deliveryAddress2,
-      job.deliveryPostalCode,
-    ) || valueOrDash(job.deliveryAddress);
-  
-    const itemCode =
-      job.itemCode ??
-      job.cargoDescription ??
-      job.description ??
-      "-";
-  
-    const itemQty =
-      job.quantity ??
-      job.qty ??
-      1;
-  
-    const specialRequest =
-      job.specialInstructions ??
-      job.notes ??
-      job.remark ??
-      "-";
-  
-    const companyName = job.customerCompany?.name ?? "OpsFlow";
-    const generatedAt = new Date();
-    const generatedDate = generatedAt.toLocaleDateString("en-SG");
-    const generatedTime = generatedAt.toLocaleTimeString("en-SG", {
-      hour: "numeric",
-      minute: "2-digit",
+
+    const formatDateValue = (value?: Date | string | null) => {
+      if (!value) return "-";
+      const d = value instanceof Date ? value : new Date(value);
+      if (Number.isNaN(d.getTime())) return "-";
+      return d.toLocaleDateString("en-SG");
+    };
+
+    const companyName = job.customerCompany?.name?.trim() || "Customer";
+    const orderRef = job.internalRef || job.id;
+    const receiverName = job.receiverName?.trim() || "-";
+    const receiverPhone = job.receiverPhone?.trim() || "-";
+    const deliveryAddress =
+      formatAddress(job.deliveryAddress1, job.deliveryAddress2, job.deliveryPostal) || "-";
+    const pickupDate = formatDateValue(job.pickupDate);
+    const specialRequest = job.notes?.trim() || "-";
+    const assignedDriver = job.assignedDriver?.name?.trim() || "-";
+
+    try {
+      const possiblePaths = [
+        path.join(process.cwd(), "dist", "assets", "db-logo.png"),
+        path.join(process.cwd(), "src", "assets", "db-logo.png"),
+      ];
+
+      let logoBytes: Buffer | null = null;
+      for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+          logoBytes = fs.readFileSync(p);
+          break;
+        }
+      }
+
+      if (logoBytes) {
+        const logoImage = await pdfDoc.embedPng(logoBytes);
+        const pngDims = logoImage.scale(0.22);
+
+        page.drawImage(logoImage, {
+          x: 40,
+          y: height - 90,
+          width: pngDims.width,
+          height: pngDims.height,
+        });
+      } else {
+        drawText("DB WISDOM SERVICES PTE LTD", 40, height - 50, 18, true);
+      }
+    } catch {
+      drawText("DB WISDOM SERVICES PTE LTD", 40, height - 50, 18, true);
+    }
+
+    drawText("DELIVERY ORDER", width - 220, height - 50, 20, true);
+
+    let y = height - 140;
+
+    drawCell("Order Ref", orderRef, 40, y, 160, 56);
+    drawCell("Customer", companyName, 205, y, 220, 56);
+    drawCell("Pickup Date", pickupDate, 430, y, 120, 56);
+    drawCell("Driver", assignedDriver, 555, y, 247, 56);
+
+    y -= 76;
+
+    drawCell("Receiver Name", receiverName, 40, y, 200, 72);
+    drawCell("Phone", receiverPhone, 245, y, 120, 72);
+    drawCell("Delivery Address", deliveryAddress, 370, y, 432, 72);
+
+    y -= 92;
+
+    const tableX = 40;
+    const tableWidth = 762;
+    const col1 = 220;
+    const col2 = 422;
+    const col3 = 120;
+    const rowH = 24;
+
+    page.drawRectangle({
+      x: tableX,
+      y: y - rowH,
+      width: tableWidth,
+      height: rowH,
+      borderWidth: 0.8,
+      borderColor: black,
+      color: lightGray,
     });
-  
-    let y = height - 40;
-  
-    // Title
-    drawText("DELIVERY ORDER", 40, y, 20, true);
-    y -= 26;
-    drawText(companyName, 40, y, 11, true);
-    y -= 20;
-  
-    drawText(`Generated: ${generatedDate} ${generatedTime}`, 40, y, 10);
-    y -= 28;
-  
-    // Main info block
-    drawLine(40, y, 800, y);
+
+    drawText("Item Code", tableX + 8, y - 16, 10, true);
+    drawText("Description", tableX + col1 + 8, y - 16, 10, true);
+    drawText("Qty", tableX + col1 + col2 + 8, y - 16, 10, true);
+
+    y -= rowH;
+
+    for (const item of job.items) {
+      page.drawRectangle({
+        x: tableX,
+        y: y - rowH,
+        width: tableWidth,
+        height: rowH,
+        borderWidth: 0.8,
+        borderColor: black,
+      });
+
+      page.drawLine({
+        start: { x: tableX + col1, y },
+        end: { x: tableX + col1, y: y - rowH },
+        thickness: 0.8,
+        color: black,
+      });
+
+      page.drawLine({
+        start: { x: tableX + col1 + col2, y },
+        end: { x: tableX + col1 + col2, y: y - rowH },
+        thickness: 0.8,
+        color: black,
+      });
+
+      drawText(item.itemCode || "-", tableX + 8, y - 16, 10);
+      drawText(item.description?.trim() || "-", tableX + col1 + 8, y - 16, 10);
+      drawText(String(item.qty ?? 1), tableX + col1 + col2 + 8, y - 16, 10);
+
+      y -= rowH;
+    }
+
     y -= 18;
-  
-    drawText("Order Ref", 40, y, 11, true);
-    drawText("First / Last Name", 180, y, 11, true);
-    drawText("Phone", 340, y, 11, true);
-    drawText("Delivery Address", 450, y, 11, true);
-    y -= 18;
-  
-    drawText(valueOrDash(orderRef), 40, y, 11);
-    drawText(valueOrDash(recipientName), 180, y, 11);
-    drawText(valueOrDash(phone), 340, y, 11);
-  
-    const addressLines = this.wrapText(valueOrDash(deliveryAddress), 40, font, 11);
-    drawText(addressLines[0] ?? "-", 450, y, 11);
-    if (addressLines[1]) drawText(addressLines[1], 450, y - 14, 11);
-  
-    y -= 40;
-  
-    drawText("Item Code", 40, y, 11, true);
-    drawText("Item Qty", 220, y, 11, true);
-    drawText("Special Request", 320, y, 11, true);
-    y -= 18;
-  
-    drawText(valueOrDash(itemCode), 40, y, 11);
-    drawText(valueOrDash(itemQty), 220, y, 11);
-  
-    const requestLines = this.wrapText(valueOrDash(specialRequest), 58, font, 11);
-    drawText(requestLines[0] ?? "-", 320, y, 11);
-    if (requestLines[1]) drawText(requestLines[1], 320, y - 14, 11);
-    if (requestLines[2]) drawText(requestLines[2], 320, y - 28, 11);
-  
-    y -= 70;
-  
-    drawLine(40, y, 800, y);
-    y -= 32;
-  
+
+    drawCell("Special Request / Notes", specialRequest, 40, y, 762, 60);
+
+    y -= 95;
+
     drawText(
       "Received the above stated goods in good order and condition:",
       40,
@@ -1690,31 +1945,41 @@ export class OpsJobsService {
       11,
       true,
     );
-  
-    y -= 90;
-  
-    drawLine(40, y, 260, y);
+
+    y -= 55;
+
+    page.drawLine({
+      start: { x: 40, y },
+      end: { x: 300, y },
+      thickness: 1,
+      color: black,
+    });
     drawText("Signature / Name / NRIC No.", 40, y - 16, 10);
-  
-    drawLine(320, y, 540, y);
-    drawText("Date / Time", 320, y - 16, 10);
-  
-    y -= 70;
-  
-    drawText("System-generated by OpsFlow", 40, y, 9);
-    drawText(`Job ID: ${job.id}`, 200, y, 9);
-  
-    const pdfBytes = await pdfDoc.save();
-    return Buffer.from(pdfBytes);
+
+    page.drawLine({
+      start: { x: 360, y },
+      end: { x: 620, y },
+      thickness: 1,
+      color: black,
+    });
+    drawText("Date / Time", 360, y - 16, 10);
+
+    y -= 60;
+
+    drawText("Generated from OpsFlow", 40, y, 9);
+    drawText(`Job ID: ${job.id}`, 180, y, 9);
+
+    const bytes = await pdfDoc.save();
+    return Buffer.from(bytes);
   }
-  
-  private wrapText(text: string, maxCharsPerLine: number, font: any, size: number): string[] {
+
+  private wrapPdfText(text: string, maxCharsPerLine: number): string[] {
     if (!text) return ["-"];
-  
+
     const words = text.split(/\s+/);
     const lines: string[] = [];
     let current = "";
-  
+
     for (const word of words) {
       const next = current ? `${current} ${word}` : word;
       if (next.length <= maxCharsPerLine) {
@@ -1724,13 +1989,16 @@ export class OpsJobsService {
         current = word;
       }
     }
-  
+
     if (current) lines.push(current);
-    return lines.slice(0, 3);
+
+    return lines;
   }
-  
+
   private safeFileName(value: string): string {
-    return value.replace(/[^a-zA-Z0-9-_]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+    return value
+      .replace(/[^a-zA-Z0-9-_]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
   }
 }
-
