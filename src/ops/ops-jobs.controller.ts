@@ -13,7 +13,13 @@ import {
   UploadedFile,
   BadRequestException,
 } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from "@nestjs/swagger";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiConsumes,
+  ApiBody,
+} from "@nestjs/swagger";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
@@ -53,9 +59,16 @@ export class OpsJobsController {
   }
 
   @Post("import/preview")
-  @ApiOperation({ summary: "Preview Excel import: parse and validate rows, no DB writes" })
+  @ApiOperation({
+    summary: "Preview Excel import: parse and validate rows, no DB writes",
+  })
   @ApiConsumes("multipart/form-data")
-  @ApiBody({ schema: { type: "object", properties: { file: { type: "string", format: "binary" } } } })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: { file: { type: "string", format: "binary" } },
+    },
+  })
   @UseInterceptors(FileInterceptor("file"))
   async importPreview(
     @Req() req: any,
@@ -67,18 +80,19 @@ export class OpsJobsController {
   }
 
   @Post("import/confirm")
-  @ApiOperation({ summary: "Confirm import: create Draft jobs from validated rows" })
-  async importConfirm(
-    @Req() req: any,
-    @Body() dto: ImportConfirmRequestDto,
-  ) {
+  @ApiOperation({
+    summary: "Confirm import: create Draft jobs from validated rows",
+  })
+  async importConfirm(@Req() req: any, @Body() dto: ImportConfirmRequestDto) {
     const tenantId = req.tenant.tenantId;
     const userId = req.user?.userId ?? null;
     return this.jobs.importConfirm(tenantId, dto.rows, userId);
   }
 
   @Post("import/lcl/preview")
-  @ApiOperation({ summary: "LCL Order In: preview Excel (group by Order Ref), no DB writes" })
+  @ApiOperation({
+    summary: "LCL Order In: preview Excel (group by Order Ref), no DB writes",
+  })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
     schema: {
@@ -97,7 +111,10 @@ export class OpsJobsController {
     },
   })
   @UseInterceptors(FileInterceptor("file"))
-  async lclImportPreview(@Req() req: any, @UploadedFile() file: Express.Multer.File) {
+  async lclImportPreview(
+    @Req() req: any,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
     if (!file) throw new BadRequestException("file is required");
     const body = req.body as Record<string, string>;
     const customerCompanyId = body?.customerCompanyId?.trim();
@@ -175,7 +192,9 @@ export class OpsJobsController {
   }
 
   @Delete(":jobId")
-  @ApiOperation({ summary: "Delete job (only if Draft or unassigned Assigned)" })
+  @ApiOperation({
+    summary: "Delete job (only if Draft or unassigned Assigned)",
+  })
   async delete(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const userId = req.user?.userId ?? null;
@@ -183,7 +202,9 @@ export class OpsJobsController {
   }
 
   @Post(":jobId/verify-depot")
-  @ApiOperation({ summary: "Verify depot for IMPORT/EXPORT PendingDepot -> Completed" })
+  @ApiOperation({
+    summary: "Verify depot for IMPORT/EXPORT PendingDepot -> Completed",
+  })
   async verifyDepot(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const userId = req.user?.userId ?? null;
@@ -193,7 +214,12 @@ export class OpsJobsController {
   @Post(":jobId/documents/quotation")
   @ApiOperation({ summary: "Upload quotation document (PDF/XLSX/XLS)" })
   @ApiConsumes("multipart/form-data")
-  @ApiBody({ schema: { type: "object", properties: { file: { type: "string", format: "binary" } } } })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: { file: { type: "string", format: "binary" } },
+    },
+  })
   @UseInterceptors(FileInterceptor("file"))
   async uploadQuotation(
     @Req() req: any,
@@ -221,13 +247,28 @@ export class OpsJobsController {
     @Query("limit") limit?: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    return this.jobs.getAudit(tenantId, jobId, limit ? parseInt(limit, 10) : undefined);
+    return this.jobs.getAudit(
+      tenantId,
+      jobId,
+      limit ? parseInt(limit, 10) : undefined,
+    );
   }
 
   @Get(":jobId/tracking")
-  @ApiOperation({ summary: "Get job tracking (last location, driver, vehicle)" })
+  @ApiOperation({
+    summary: "Get job tracking (last location, driver, vehicle)",
+  })
   async getTracking(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     return this.jobs.getTracking(tenantId, jobId);
+  }
+
+  @Post(":jobId/documents/do/generate")
+  @ApiOperation({ summary: "Generate DO PDF for job" })
+  async generateDo(@Req() req: any, @Param("jobId") jobId: string) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user?.userId ?? null;
+
+    return this.jobs.generateDoDocument(tenantId, jobId, userId);
   }
 }
