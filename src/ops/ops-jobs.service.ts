@@ -37,6 +37,7 @@ import type {
   LclImportConfirmRequestDto,
   LclImportConfirmResponseDto,
 } from "./dto/lcl-import.dto";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
 const QUOTATION_MIMES = [
@@ -1481,4 +1482,255 @@ export class OpsJobsService {
 
     return { createdCount, failedRows, created };
   }
+
+  async generateDoDocument(tenantId: string, jobId: string, userId?: string | null) {
+    const job = await this.prisma.job.findFirst({
+      where: {
+        id: jobId,
+        tenantId,
+      },
+      include: {
+        customerCompany: true,
+        driver: true,
+        vehicle: true,
+      },
+    });
+  
+    if (!job) {
+      throw new NotFoundException("Job not found");
+    }
+  
+    const pdfBuffer = await this.buildDoPdfBuffer(job);
+  
+    const safeJobNo = this.safeFileName(job.jobNo ?? job.id);
+    const storageKey = `${tenantId}/jobs/${jobId}/do/${Date.now()}-${safeJobNo}.pdf`;
+  
+    const { error: uploadError } = await this.supabaseService.getClient().storage
+      .from(JOB_DOCUMENTS_BUCKET)
+      .upload(storageKey, pdfBuffer, {
+        contentType: "application/pdf",
+        upsert: false,
+      });
+  
+    if (uploadError) {
+      throw new BadRequestException(`Failed to upload DO PDF: ${uploadError.message}`);
+    }
+  
+    const doc = await this.prisma.jobDocument.create({
+      data: {
+        tenantId,
+        jobId,
+        type: JobDocumentType.DO,
+        storageKey,
+        originalName: `DO-${safeJobNo}.pdf`,
+        mimeType: "application/pdf",
+        sizeBytes: pdfBuffer.length,
+        uploadedByUserId: userId ?? null,
+      },
+    });
+  
+    await this.audit.log(tenantId, "GENERATE_DOC", "JOB", jobId, {
+      tenantId,
+      actorUserId: userId ?? undefined,
+      action: "job.document.do.generated",
+      entityType: "Job",
+      entityId: jobId,
+      meta: {
+        documentId: doc.id,
+        storageKey,
+        originalName: doc.originalName,
+      },
+    });
+  
+    return this.attachSignedUrl(doc);
+  }
+  
+  private async buildDoPdfBuffer(job: any): Promise<Buffer> {
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([842, 595]); // A4 landscape
+    const { height } = page.getSize();
+  
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  
+    const drawText = (
+      text: string,
+      x: number,
+      y: number,
+      size = 11,
+      useBold = false,
+    ) => {
+      page.drawText(text ?? "", {
+        x,
+        y,
+        size,
+        font: useBold ? bold : font,
+        color: rgb(0, 0, 0),
+      });
+    };
+  
+    const drawLine = (x1: number, y1: number, x2: number, y2: number) => {
+      page.drawLine({
+        start: { x: x1, y: y1 },
+        end: { x: x2, y: y2 },
+        thickness: 1,
+        color: rgb(0, 0, 0),
+      });
+    };
+  
+    const formatAddress = (...parts: Array<string | null | undefined>) =>
+      parts.map((v) => (v ?? "").trim()).filter(Boolean).join(", ");
+  
+    const valueOrDash = (value?: string | number | null) =>
+      value === null || value === undefined || String(value).trim() === "" ? "-" : String(value);
+  
+    // Adjust these field names if your schema differs
+    const orderRef =
+      job.jobNo ??
+      job.internalRef ??
+      job.referenceNo ??
+      job.id;
+  
+    const recipientName =
+      job.deliveryContactName ??
+      job.contactName ??
+      job.consigneeName ??
+      "-";
+  
+    const phone =
+      job.deliveryContactPhone ??
+      job.contactPhone ??
+      job.phone ??
+      "-";
+  
+    const deliveryAddress = formatAddress(
+      job.deliveryAddress1,
+      job.deliveryAddress2,
+      job.deliveryPostalCode,
+    ) || valueOrDash(job.deliveryAddress);
+  
+    const itemCode =
+      job.itemCode ??
+      job.cargoDescription ??
+      job.description ??
+      "-";
+  
+    const itemQty =
+      job.quantity ??
+      job.qty ??
+      1;
+  
+    const specialRequest =
+      job.specialInstructions ??
+      job.notes ??
+      job.remark ??
+      "-";
+  
+    const companyName = job.customerCompany?.name ?? "OpsFlow";
+    const generatedAt = new Date();
+    const generatedDate = generatedAt.toLocaleDateString("en-SG");
+    const generatedTime = generatedAt.toLocaleTimeString("en-SG", {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  
+    let y = height - 40;
+  
+    // Title
+    drawText("DELIVERY ORDER", 40, y, 20, true);
+    y -= 26;
+    drawText(companyName, 40, y, 11, true);
+    y -= 20;
+  
+    drawText(`Generated: ${generatedDate} ${generatedTime}`, 40, y, 10);
+    y -= 28;
+  
+    // Main info block
+    drawLine(40, y, 800, y);
+    y -= 18;
+  
+    drawText("Order Ref", 40, y, 11, true);
+    drawText("First / Last Name", 180, y, 11, true);
+    drawText("Phone", 340, y, 11, true);
+    drawText("Delivery Address", 450, y, 11, true);
+    y -= 18;
+  
+    drawText(valueOrDash(orderRef), 40, y, 11);
+    drawText(valueOrDash(recipientName), 180, y, 11);
+    drawText(valueOrDash(phone), 340, y, 11);
+  
+    const addressLines = this.wrapText(valueOrDash(deliveryAddress), 40, font, 11);
+    drawText(addressLines[0] ?? "-", 450, y, 11);
+    if (addressLines[1]) drawText(addressLines[1], 450, y - 14, 11);
+  
+    y -= 40;
+  
+    drawText("Item Code", 40, y, 11, true);
+    drawText("Item Qty", 220, y, 11, true);
+    drawText("Special Request", 320, y, 11, true);
+    y -= 18;
+  
+    drawText(valueOrDash(itemCode), 40, y, 11);
+    drawText(valueOrDash(itemQty), 220, y, 11);
+  
+    const requestLines = this.wrapText(valueOrDash(specialRequest), 58, font, 11);
+    drawText(requestLines[0] ?? "-", 320, y, 11);
+    if (requestLines[1]) drawText(requestLines[1], 320, y - 14, 11);
+    if (requestLines[2]) drawText(requestLines[2], 320, y - 28, 11);
+  
+    y -= 70;
+  
+    drawLine(40, y, 800, y);
+    y -= 32;
+  
+    drawText(
+      "Received the above stated goods in good order and condition:",
+      40,
+      y,
+      11,
+      true,
+    );
+  
+    y -= 90;
+  
+    drawLine(40, y, 260, y);
+    drawText("Signature / Name / NRIC No.", 40, y - 16, 10);
+  
+    drawLine(320, y, 540, y);
+    drawText("Date / Time", 320, y - 16, 10);
+  
+    y -= 70;
+  
+    drawText("System-generated by OpsFlow", 40, y, 9);
+    drawText(`Job ID: ${job.id}`, 200, y, 9);
+  
+    const pdfBytes = await pdfDoc.save();
+    return Buffer.from(pdfBytes);
+  }
+  
+  private wrapText(text: string, maxCharsPerLine: number, font: any, size: number): string[] {
+    if (!text) return ["-"];
+  
+    const words = text.split(/\s+/);
+    const lines: string[] = [];
+    let current = "";
+  
+    for (const word of words) {
+      const next = current ? `${current} ${word}` : word;
+      if (next.length <= maxCharsPerLine) {
+        current = next;
+      } else {
+        if (current) lines.push(current);
+        current = word;
+      }
+    }
+  
+    if (current) lines.push(current);
+    return lines.slice(0, 3);
+  }
+  
+  private safeFileName(value: string): string {
+    return value.replace(/[^a-zA-Z0-9-_]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  }
 }
+

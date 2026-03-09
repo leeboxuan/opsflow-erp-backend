@@ -41,11 +41,12 @@
     "jose": "^5.10.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
-    "xlsx": "^0.18.5",
+    "pdf-lib": "^1.17.1",
     "react-native-maps": "^1.27.1",
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.1",
-    "swagger-ui-express": "^5.0.1"
+    "swagger-ui-express": "^5.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.2.1",
