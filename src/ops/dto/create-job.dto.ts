@@ -86,6 +86,15 @@ export class CreateJobDto {
   @MinLength(1)
   receiverPhone: string;
 
+  @ApiPropertyOptional({
+    description:
+      "Client order reference (external ref). Omit or set to null if not provided.",
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  externalRef?: string | null;
+
   @ApiPropertyOptional({ type: [CreateJobItemDto] })
   @IsOptional()
   @IsArray()

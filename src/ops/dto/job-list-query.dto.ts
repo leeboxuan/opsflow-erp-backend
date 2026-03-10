@@ -3,7 +3,9 @@ import { IsOptional, IsString } from "class-validator";
 import { ListQueryBaseDto } from "../../common/dto";
 
 export class JobListQueryDto extends ListQueryBaseDto {
-  @ApiPropertyOptional({ description: "Search internalRef, addresses, receiver" })
+  @ApiPropertyOptional({
+    description: "Search internalRef, externalRef, addresses, receiver, phone",
+  })
   @IsOptional()
   @IsString()
   search?: string;

@@ -8,7 +8,7 @@
 
 - **AuditLog** model: id, tenantId, actorUserId, entityType, entityId, action, metadata (Json), createdAt. Indexes on tenantId+entityType+entityId, tenantId+createdAt.
 
-- **job_internal_ref_counters** model: tenantId, yyyymm, nextSeq (compound PK tenantId+yyyymm). Used to generate JOB-YYYYMM-0001 style refs.
+- **job_internal_ref_counters** model: tenantId, yyyymm, nextSeq (compound PK tenantId+yyyymm). Used to generate WF-YYYY-MM-0001-<TYPE> style refs (shared monthly sequence per tenant; TYPE based on JobType).
 
 - **drivers** table: added **defaultVehicleId** (optional FK to Vehicle). Index on tenantId+defaultVehicleId.
 

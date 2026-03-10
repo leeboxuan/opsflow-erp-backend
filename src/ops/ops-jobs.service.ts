@@ -66,6 +66,12 @@ function toDocDto(d: any): JobDocumentDto {
   };
 }
 
+function normalizeExternalRef(value: unknown): string | null {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function toJobDto(j: any): JobDto {
   const assignedDriverName = j.assignedDriver
     ? (j.assignedDriver.name?.trim() || j.assignedDriver.email || null)
@@ -138,7 +144,23 @@ export class OpsJobsService {
     private readonly supabaseService: SupabaseService,
   ) {}
 
-  private async getNextInternalRef(tenantId: string): Promise<string> {
+  private getJobTypeCode(jobType: JobType): string {
+    switch (jobType) {
+      case JobType.LCL:
+        return "LCL";
+      case JobType.IMPORT:
+        return "IMP";
+      case JobType.EXPORT:
+        return "EXP";
+      default:
+        return "GEN";
+    }
+  }
+
+  private async getNextInternalRef(
+    tenantId: string,
+    jobType: JobType,
+  ): Promise<string> {
     const now = new Date();
     const yyyy = now.getUTCFullYear();
     const mm = now.getUTCMonth() + 1;
@@ -155,7 +177,8 @@ export class OpsJobsService {
     });
 
     const seq = String(row.nextSeq).padStart(4, "0");
-    return `JOB-${yyyy}${MM}-${seq}`;
+    const typeCode = this.getJobTypeCode(jobType);
+    return `WF-${yyyy}-${MM}-${seq}-${typeCode}`;
   }
 
   private async attachSignedUrl(doc: any): Promise<JobDocumentDto> {
@@ -231,7 +254,14 @@ export class OpsJobsService {
     const orderBy = buildOrderBy(
       query.sortBy,
       query.sortDir,
-      ["createdAt", "updatedAt", "pickupDate", "internalRef", "status"],
+      [
+        "createdAt",
+        "updatedAt",
+        "pickupDate",
+        "internalRef",
+        "externalRef",
+        "status",
+      ],
       { createdAt: "desc" },
     );
 
@@ -293,13 +323,14 @@ export class OpsJobsService {
       throw new BadRequestException("At least one valid item is required");
     }
 
-    const internalRef = await this.getNextInternalRef(tenantId);
+    const internalRef = await this.getNextInternalRef(tenantId, dto.jobType);
 
     const job = await this.prisma.job.create({
       data: {
         tenantId,
         customerCompanyId: dto.customerCompanyId,
         internalRef,
+        externalRef: normalizeExternalRef(dto.externalRef),
         jobType: dto.jobType,
         status: JobStatus.Draft,
         notes: dto.notes ?? null,
@@ -341,7 +372,7 @@ export class OpsJobsService {
       "CREATE",
       "JOB",
       job.id,
-      { internalRef: job.internalRef },
+      { internalRef: job.internalRef, externalRef: job.externalRef },
       actorUserId,
     );
 
@@ -440,6 +471,9 @@ export class OpsJobsService {
     if (dto.deliveryPostal !== undefined) data.deliveryPostal = dto.deliveryPostal;
     if (dto.receiverName !== undefined) data.receiverName = dto.receiverName;
     if (dto.receiverPhone !== undefined) data.receiverPhone = dto.receiverPhone;
+    if (dto.externalRef !== undefined) {
+      data.externalRef = normalizeExternalRef(dto.externalRef);
+    }
 
     const inputItems = Array.isArray((dto as any).items) ? (dto as any).items : null;
 
@@ -826,8 +860,9 @@ export class OpsJobsService {
 
     const pdfBuffer = await this.buildDoPdfBuffer(job);
 
-    const safeJobNo = this.safeFileName(job.internalRef ?? job.id);
-    const storageKey = `${tenantId}/jobs/${jobId}/do/${Date.now()}-${safeJobNo}.pdf`;
+    const reference = job.internalRef || job.externalRef || job.id;
+    const safeRef = this.safeFileName(reference);
+    const storageKey = `${tenantId}/jobs/${jobId}/do/${Date.now()}-${safeRef}.pdf`;
 
     const { error: uploadError } = await this.supabaseService
       .getClient()
@@ -849,7 +884,7 @@ export class OpsJobsService {
         jobId,
         type: JobDocumentType.DO,
         storageKey,
-        originalName: `DO-${safeJobNo}.pdf`,
+        originalName: `${safeRef}_DO.pdf`,
         mimeType: "application/pdf",
         sizeBytes: pdfBuffer.length,
         uploadedByUserId: userId ?? null,
@@ -866,6 +901,8 @@ export class OpsJobsService {
         type: "DO",
         storageKey,
         originalName: doc.originalName,
+        internalRef: job.internalRef,
+        externalRef: job.externalRef,
       },
       userId ?? null,
     );
@@ -1181,7 +1218,7 @@ export class OpsJobsService {
           assignedVehicleId = driver?.defaultVehicleId ?? null;
         }
 
-        const internalRef = await this.getNextInternalRef(tenantId);
+        const internalRef = await this.getNextInternalRef(tenantId, jobType);
 
         const job = await this.prisma.job.create({
           data: {
@@ -1226,6 +1263,7 @@ export class OpsJobsService {
           job.id,
           {
             internalRef: job.internalRef,
+            externalRef: job.externalRef,
             source: "import_confirm",
             row: rowNum,
           },
@@ -1591,7 +1629,11 @@ export class OpsJobsService {
     }
 
     const failedRows: { rowKey: string; reason: string }[] = [];
-    const created: { id: string; internalRef: string; externalRef: string | null }[] = [];
+    const created: {
+      id: string;
+      internalRef: string;
+      externalRef: string | null;
+    }[] = [];
     let createdCount = 0;
 
     const pickupDate = dto.pickupDate ? new Date(dto.pickupDate) : null;
@@ -1658,7 +1700,7 @@ export class OpsJobsService {
           }) ?? [];
 
       try {
-        const internalRef = await this.getNextInternalRef(tenantId);
+        const internalRef = await this.getNextInternalRef(tenantId, JobType.LCL);
 
         const job = await this.prisma.job.create({
           data: {
@@ -1734,6 +1776,7 @@ export class OpsJobsService {
   private async buildDoPdfBuffer(job: {
     id: string;
     internalRef: string;
+    externalRef: string | null;
     pickupDate: Date | null;
     deliveryAddress1: string;
     deliveryAddress2: string | null;
@@ -1821,7 +1864,8 @@ export class OpsJobsService {
     };
 
     const companyName = job.customerCompany?.name?.trim() || "Customer";
-    const orderRef = job.internalRef || job.id;
+    const opsRef = job.internalRef || job.id;
+    const clientRef = job.externalRef?.trim() || "-";
     const receiverName = job.receiverName?.trim() || "-";
     const receiverPhone = job.receiverPhone?.trim() || "-";
     const deliveryAddress =
@@ -1863,9 +1907,13 @@ export class OpsJobsService {
 
     drawText("DELIVERY ORDER", width - 220, height - 50, 20, true);
 
+    if (clientRef && clientRef !== "-") {
+      drawText(`Client Ref: ${clientRef}`, width - 220, height - 70, 10, false);
+    }
+
     let y = height - 140;
 
-    drawCell("Order Ref", orderRef, 40, y, 160, 56);
+    drawCell("OpsFlow Ref", opsRef, 40, y, 160, 56);
     drawCell("Customer", companyName, 205, y, 220, 56);
     drawCell("Pickup Date", pickupDate, 430, y, 120, 56);
     drawCell("Driver", assignedDriver, 555, y, 247, 56);

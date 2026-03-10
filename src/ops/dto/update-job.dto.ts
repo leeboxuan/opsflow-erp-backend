@@ -91,6 +91,15 @@ export class UpdateJobDto {
   @MinLength(1)
   receiverPhone?: string;
 
+  @ApiPropertyOptional({
+    description:
+      "Client order reference (external ref). Omit to leave unchanged, set to null to clear.",
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  externalRef?: string | null;
+
   @ApiPropertyOptional({ type: [UpdateJobItemDto] })
   @IsOptional()
   @IsArray()
