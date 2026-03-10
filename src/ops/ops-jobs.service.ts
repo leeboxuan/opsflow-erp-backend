@@ -1803,6 +1803,7 @@ export class OpsJobsService {
   
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    
   
     const black = rgb(0, 0, 0);
     const grayFill = rgb(0.84, 0.84, 0.84);
@@ -1870,7 +1871,7 @@ export class OpsJobsService {
       companyBlockX,
       companyBlockTop,
       15,
-      true,
+      bold,
       black,
     );
   
@@ -1880,7 +1881,7 @@ export class OpsJobsService {
       companyBlockX - 22,
       companyBlockTop - 4,
       8.5,
-      false,
+      font,
       black,
     );
   
@@ -1890,7 +1891,7 @@ export class OpsJobsService {
       companyBlockX - 36,
       companyBlockTop - 4,
       7.5,
-      false,
+      font,
       black,
     );
   
@@ -2129,22 +2130,18 @@ export class OpsJobsService {
     x: number,
     y: number,
     size: number,
-    useBold: boolean,
+    font: PDFFont,
     color: ReturnType<typeof rgb>,
   ) {
     page.drawText(text, {
       x,
       y,
       size,
-      font: useBold ? this._pdfBoldFontCache! : this._pdfFontCache!,
+      font,
       color,
       rotate: degrees(-90),
     });
   }
-  
-  // font cache for helper use
-  private _pdfFontCache: PDFFont | null = null;
-  private _pdfBoldFontCache: PDFFont | null = null;
   
   private drawCellLabel(
     page: PDFPage,
