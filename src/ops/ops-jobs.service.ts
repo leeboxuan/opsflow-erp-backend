@@ -7,7 +7,7 @@ import {
   BadRequestException,
 } from "@nestjs/common";
 import { JobStatus, JobType, JobDocumentType, Role } from "@prisma/client";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument, PDFFont, PDFPage, StandardFonts, degrees, rgb } from "pdf-lib";
 
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
@@ -71,6 +71,7 @@ function normalizeExternalRef(value: unknown): string | null {
   const trimmed = String(value).trim();
   return trimmed.length > 0 ? trimmed : null;
 }
+
 
 function toJobDto(j: any): JobDto {
   const assignedDriverName = j.assignedDriver
@@ -849,21 +850,24 @@ export class OpsJobsService {
         documents: true,
       },
     });
-
+  
     if (!job) {
       throw new NotFoundException("Job not found");
     }
-
+  
     if (!job.items?.length) {
       throw new BadRequestException("Add at least one item before generating DO");
     }
-
+  
     const pdfBuffer = await this.buildDoPdfBuffer(job);
-
-    const reference = job.internalRef || job.externalRef || job.id;
-    const safeRef = this.safeFileName(reference);
-    const storageKey = `${tenantId}/jobs/${jobId}/do/${Date.now()}-${safeRef}.pdf`;
-
+  
+    const refForFile =
+      job.externalRef?.trim() || job.internalRef?.trim() || job.id;
+  
+    const safeRef = this.safeFileName(refForFile);
+    const fileName = `${safeRef}_DO.pdf`;
+    const storageKey = `${tenantId}/jobs/${jobId}/do/${Date.now()}-${fileName}`;
+  
     const { error: uploadError } = await this.supabaseService
       .getClient()
       .storage.from(JOB_DOCUMENTS_BUCKET)
@@ -871,26 +875,26 @@ export class OpsJobsService {
         contentType: "application/pdf",
         upsert: false,
       });
-
+  
     if (uploadError) {
       throw new BadRequestException(
         `Failed to upload DO PDF: ${uploadError.message}`,
       );
     }
-
+  
     const doc = await this.prisma.jobDocument.create({
       data: {
         tenantId,
         jobId,
         type: JobDocumentType.DO,
         storageKey,
-        originalName: `${safeRef}_DO.pdf`,
+        originalName: fileName,
         mimeType: "application/pdf",
         sizeBytes: pdfBuffer.length,
         uploadedByUserId: userId ?? null,
       },
     });
-
+  
     await this.audit.log(
       tenantId,
       "GENERATE_DOC",
@@ -906,7 +910,7 @@ export class OpsJobsService {
       },
       userId ?? null,
     );
-
+  
     return this.attachSignedUrl(doc);
   }
 
@@ -1776,7 +1780,7 @@ export class OpsJobsService {
   private async buildDoPdfBuffer(job: {
     id: string;
     internalRef: string;
-    externalRef: string | null;
+    externalRef?: string | null;
     pickupDate: Date | null;
     deliveryAddress1: string;
     deliveryAddress2: string | null;
@@ -1785,7 +1789,6 @@ export class OpsJobsService {
     receiverPhone: string;
     notes: string | null;
     customerCompany?: { name: string } | null;
-    assignedDriver?: { name: string | null } | null;
     items: Array<{
       itemCode: string;
       description: string | null;
@@ -1793,93 +1796,51 @@ export class OpsJobsService {
     }>;
   }): Promise<Buffer> {
     const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([842, 595]);
+  
+    // A4 landscape
+    const page = pdfDoc.addPage([841.89, 595.28]);
     const { width, height } = page.getSize();
-
+  
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
+  
     const black = rgb(0, 0, 0);
-    const lightGray = rgb(0.92, 0.92, 0.92);
-
-    const drawText = (
-      text: string,
-      x: number,
-      y: number,
-      size = 11,
-      useBold = false,
-    ) => {
-      page.drawText(text ?? "", {
-        x,
-        y,
-        size,
-        font: useBold ? bold : font,
-        color: black,
-      });
-    };
-
-    const drawCell = (
-      label: string,
-      value: string,
-      x: number,
-      y: number,
-      w: number,
-      h: number,
-    ) => {
-      page.drawRectangle({
-        x,
-        y: y - h,
-        width: w,
-        height: h,
-        borderWidth: 0.8,
-        borderColor: black,
-      });
-
-      page.drawRectangle({
-        x,
-        y: y - 20,
-        width: w,
-        height: 20,
-        color: lightGray,
-      });
-
-      drawText(label, x + 8, y - 14, 10, true);
-
-      const lines = this.wrapPdfText(value || "-", 36);
-      let lineY = y - 36;
-      for (const line of lines.slice(0, 3)) {
-        drawText(line, x + 8, lineY, 11, false);
-        lineY -= 14;
-      }
-    };
-
-    const formatAddress = (...parts: Array<string | null | undefined>) =>
-      parts.map((v) => (v ?? "").trim()).filter(Boolean).join(", ");
-
-    const formatDateValue = (value?: Date | string | null) => {
-      if (!value) return "-";
-      const d = value instanceof Date ? value : new Date(value);
-      if (Number.isNaN(d.getTime())) return "-";
-      return d.toLocaleDateString("en-SG");
-    };
-
-    const companyName = job.customerCompany?.name?.trim() || "Customer";
-    const opsRef = job.internalRef || job.id;
-    const clientRef = job.externalRef?.trim() || "-";
+    const grayFill = rgb(0.84, 0.84, 0.84);
+  
+    const internalRef = job.internalRef?.trim() || "-";
+    const externalRef = job.externalRef?.trim() || "-";
     const receiverName = job.receiverName?.trim() || "-";
     const receiverPhone = job.receiverPhone?.trim() || "-";
-    const deliveryAddress =
-      formatAddress(job.deliveryAddress1, job.deliveryAddress2, job.deliveryPostal) || "-";
-    const pickupDate = formatDateValue(job.pickupDate);
     const specialRequest = job.notes?.trim() || "-";
-    const assignedDriver = job.assignedDriver?.name?.trim() || "-";
-
+  
+    const deliveryAddress = [
+      job.deliveryAddress1,
+      job.deliveryAddress2,
+      job.deliveryPostal,
+    ]
+      .map((v) => (v ?? "").trim())
+      .filter(Boolean)
+      .join(" ");
+  
+    const pickupDate = this.formatDoDate(job.pickupDate);
+  
+    const items = job.items?.length
+      ? job.items
+      : [{ itemCode: "-", description: null, qty: 1 }];
+  
+    const itemCodeText = items.map((it) => it.itemCode || "-").join("\n");
+    const itemQtyText = items.map((it) => String(it.qty ?? 1)).join("\n");
+  
+    // ===== RIGHT VERTICAL COMPANY BLOCK =====
+    const companyBlockX = width - 90;
+    const companyBlockTop = height - 40;
+  
     try {
       const possiblePaths = [
         path.join(process.cwd(), "dist", "assets", "db-logo.png"),
         path.join(process.cwd(), "src", "assets", "db-logo.png"),
       ];
-
+  
       let logoBytes: Buffer | null = null;
       for (const p of possiblePaths) {
         if (fs.existsSync(p)) {
@@ -1887,136 +1848,241 @@ export class OpsJobsService {
           break;
         }
       }
-
+  
       if (logoBytes) {
         const logoImage = await pdfDoc.embedPng(logoBytes);
-        const pngDims = logoImage.scale(0.22);
-
+        const dims = logoImage.scale(0.17);
+  
         page.drawImage(logoImage, {
-          x: 40,
-          y: height - 90,
-          width: pngDims.width,
-          height: pngDims.height,
+          x: width - 86,
+          y: height - 120,
+          width: dims.width,
+          height: dims.height,
         });
-      } else {
-        drawText("DB WISDOM SERVICES PTE LTD", 40, height - 50, 18, true);
       }
     } catch {
-      drawText("DB WISDOM SERVICES PTE LTD", 40, height - 50, 18, true);
+      // ignore logo load failure
     }
-
-    drawText("DELIVERY ORDER", width - 220, height - 50, 20, true);
-
-    if (clientRef && clientRef !== "-") {
-      drawText(`Client Ref: ${clientRef}`, width - 220, height - 70, 10, false);
-    }
-
-    let y = height - 140;
-
-    drawCell("OpsFlow Ref", opsRef, 40, y, 160, 56);
-    drawCell("Customer", companyName, 205, y, 220, 56);
-    drawCell("Pickup Date", pickupDate, 430, y, 120, 56);
-    drawCell("Driver", assignedDriver, 555, y, 247, 56);
-
-    y -= 76;
-
-    drawCell("Receiver Name", receiverName, 40, y, 200, 72);
-    drawCell("Phone", receiverPhone, 245, y, 120, 72);
-    drawCell("Delivery Address", deliveryAddress, 370, y, 432, 72);
-
-    y -= 92;
-
-    const tableX = 40;
-    const tableWidth = 762;
-    const col1 = 220;
-    const col2 = 422;
-    const col3 = 120;
-    const rowH = 24;
-
-    page.drawRectangle({
-      x: tableX,
-      y: y - rowH,
-      width: tableWidth,
-      height: rowH,
-      borderWidth: 0.8,
-      borderColor: black,
-      color: lightGray,
-    });
-
-    drawText("Item Code", tableX + 8, y - 16, 10, true);
-    drawText("Description", tableX + col1 + 8, y - 16, 10, true);
-    drawText("Qty", tableX + col1 + col2 + 8, y - 16, 10, true);
-
-    y -= rowH;
-
-    for (const item of job.items) {
+  
+    this.drawRotatedText(
+      page,
+      "DB WISDOM SERVICES PTE LTD",
+      companyBlockX,
+      companyBlockTop,
+      15,
+      true,
+      black,
+    );
+  
+    this.drawRotatedText(
+      page,
+      "Office and Warehouse: 71 Gul Circle, Singapore 629585",
+      companyBlockX - 22,
+      companyBlockTop - 4,
+      8.5,
+      false,
+      black,
+    );
+  
+    this.drawRotatedText(
+      page,
+      "ROC201243452N / UEN NO 201243452N",
+      companyBlockX - 36,
+      companyBlockTop - 4,
+      7.5,
+      false,
+      black,
+    );
+  
+    // ===== MAIN BAND TABLE =====
+    const leftX = 48;
+    const topY = height - 135;
+    const tableW = 650;
+    const labelH = 26;
+  
+    const cols = [
+      { label: "Internal Ref", width: 92 },
+      { label: "External Ref", width: 92 },
+      { label: "First / Last Name", width: 110 },
+      { label: "Phone", width: 76 },
+      { label: "Delivery Address", width: 175 },
+      { label: "Item Code", width: 70 },
+      { label: "Item Qty", width: 50 },
+      { label: "Special Request", width: 85 },
+    ] as const;
+  
+    let cx = leftX;
+    for (const col of cols) {
       page.drawRectangle({
-        x: tableX,
-        y: y - rowH,
-        width: tableWidth,
-        height: rowH,
+        x: cx,
+        y: topY - labelH,
+        width: col.width,
+        height: labelH,
+        color: grayFill,
+      });
+      page.drawRectangle({
+        x: cx,
+        y: topY - labelH,
+        width: col.width,
+        height: labelH,
         borderWidth: 0.8,
         borderColor: black,
       });
-
-      page.drawLine({
-        start: { x: tableX + col1, y },
-        end: { x: tableX + col1, y: y - rowH },
-        thickness: 0.8,
-        color: black,
-      });
-
-      page.drawLine({
-        start: { x: tableX + col1 + col2, y },
-        end: { x: tableX + col1 + col2, y: y - rowH },
-        thickness: 0.8,
-        color: black,
-      });
-
-      drawText(item.itemCode || "-", tableX + 8, y - 16, 10);
-      drawText(item.description?.trim() || "-", tableX + col1 + 8, y - 16, 10);
-      drawText(String(item.qty ?? 1), tableX + col1 + col2 + 8, y - 16, 10);
-
-      y -= rowH;
+      this.drawCellLabel(page, col.label, cx + 5, topY - 17, bold, black, 9);
+      cx += col.width;
     }
-
-    y -= 18;
-
-    drawCell("Special Request / Notes", specialRequest, 40, y, 762, 60);
-
-    y -= 95;
-
-    drawText(
-      "Received the above stated goods in good order and condition:",
-      40,
-      y,
-      11,
-      true,
+  
+    const rowHeight = this.estimateRowHeight(
+      [
+        internalRef,
+        externalRef,
+        receiverName,
+        receiverPhone,
+        deliveryAddress || "-",
+        itemCodeText,
+        itemQtyText,
+        specialRequest,
+      ],
+      cols.map((c) => c.width - 10),
+      font,
+      10,
+      12,
+      58,
     );
-
-    y -= 55;
-
+  
+    const rowTopY = topY - labelH;
+  
+    cx = leftX;
+    for (const col of cols) {
+      page.drawRectangle({
+        x: cx,
+        y: rowTopY - rowHeight,
+        width: col.width,
+        height: rowHeight,
+        borderWidth: 0.8,
+        borderColor: black,
+      });
+      cx += col.width;
+    }
+  
+    cx = leftX;
+    this.drawBlockText(page, internalRef, cx + 5, rowTopY - 14, cols[0].width - 10, rowHeight - 8, font, bold, 10, black, 4);
+    cx += cols[0].width;
+  
+    this.drawBlockText(page, externalRef, cx + 5, rowTopY - 14, cols[1].width - 10, rowHeight - 8, font, bold, 10, black, 4);
+    cx += cols[1].width;
+  
+    this.drawBlockText(page, receiverName, cx + 5, rowTopY - 14, cols[2].width - 10, rowHeight - 8, font, bold, 10, black, 4);
+    cx += cols[2].width;
+  
+    this.drawBlockText(page, receiverPhone, cx + 5, rowTopY - 14, cols[3].width - 10, rowHeight - 8, font, bold, 10, black, 4);
+    cx += cols[3].width;
+  
+    this.drawBlockText(page, deliveryAddress || "-", cx + 5, rowTopY - 14, cols[4].width - 10, rowHeight - 8, font, bold, 10, black, 6);
+    cx += cols[4].width;
+  
+    this.drawMultilineText(page, itemCodeText, cx + 5, rowTopY - 14, cols[5].width - 10, font, 10, 12, black, 6);
+    cx += cols[5].width;
+  
+    this.drawMultilineText(page, itemQtyText, cx + 5, rowTopY - 14, cols[6].width - 10, font, 10, 12, black, 6);
+    cx += cols[6].width;
+  
+    this.drawBlockText(page, specialRequest, cx + 5, rowTopY - 14, cols[7].width - 10, rowHeight - 8, font, bold, 10, black, 6);
+  
+    // ===== PICKUP DATE SMALL STRIP =====
+    const pickupY = rowTopY - rowHeight - 22;
+    const pickupLabelW = 90;
+    const pickupValueW = 110;
+  
+    page.drawRectangle({
+      x: leftX,
+      y: pickupY - 24,
+      width: pickupLabelW,
+      height: 24,
+      color: grayFill,
+    });
+    page.drawRectangle({
+      x: leftX,
+      y: pickupY - 24,
+      width: pickupLabelW,
+      height: 24,
+      borderWidth: 0.8,
+      borderColor: black,
+    });
+    this.drawCellLabel(page, "Pickup Date", leftX + 6, pickupY - 16, bold, black, 9);
+  
+    page.drawRectangle({
+      x: leftX + pickupLabelW,
+      y: pickupY - 24,
+      width: pickupValueW,
+      height: 24,
+      borderWidth: 0.8,
+      borderColor: black,
+    });
+    this.drawCellValue(page, pickupDate, leftX + pickupLabelW + 6, pickupY - 16, font, black, 10);
+  
+    // ===== DECLARATION =====
+    const declarationX = 48;
+    const declarationY = pickupY - 82;
+  
+    page.drawText("Received the above stated goods in good order and condition:", {
+      x: declarationX,
+      y: declarationY,
+      size: 11,
+      font: bold,
+      color: black,
+    });
+  
+    // ===== SIGNATURE / DATE AREA =====
+    const signLineY = declarationY - 74;
+  
     page.drawLine({
-      start: { x: 40, y },
-      end: { x: 300, y },
+      start: { x: declarationX, y: signLineY },
+      end: { x: declarationX + 250, y: signLineY },
       thickness: 1,
       color: black,
     });
-    drawText("Signature / Name / NRIC No.", 40, y - 16, 10);
-
+  
     page.drawLine({
-      start: { x: 360, y },
-      end: { x: 620, y },
+      start: { x: declarationX + 330, y: signLineY },
+      end: { x: declarationX + 580, y: signLineY },
       thickness: 1,
       color: black,
     });
-    drawText("Date / Time", 360, y - 16, 10);
-
-    y -= 60;
-
-    drawText("Generated from OpsFlow", 40, y, 9);
-    drawText(`Job ID: ${job.id}`, 180, y, 9);
-
+  
+    page.drawText("Signature / Name / NRIC No.", {
+      x: declarationX,
+      y: signLineY - 18,
+      size: 9,
+      font,
+      color: black,
+    });
+  
+    page.drawText("Date / Time", {
+      x: declarationX + 330,
+      y: signLineY - 18,
+      size: 9,
+      font,
+      color: black,
+    });
+  
+    // ===== BOTTOM META =====
+    page.drawText("Generated from OpsFlow", {
+      x: 48,
+      y: 18,
+      size: 8,
+      font,
+      color: black,
+    });
+  
+    page.drawText(`Job ID: ${job.id}`, {
+      x: 170,
+      y: 18,
+      size: 8,
+      font,
+      color: black,
+    });
+  
     const bytes = await pdfDoc.save();
     return Buffer.from(bytes);
   }
@@ -2048,5 +2114,197 @@ export class OpsJobsService {
       .replace(/[^a-zA-Z0-9-_]+/g, "-")
       .replace(/-+/g, "-")
       .replace(/^-|-$/g, "");
+  }
+
+  private formatDoDate(value?: Date | string | null): string {
+    if (!value) return "-";
+    const d = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(d.getTime())) return "-";
+    return d.toLocaleDateString("en-SG");
+  }
+  
+  private drawRotatedText(
+    page: PDFPage,
+    text: string,
+    x: number,
+    y: number,
+    size: number,
+    useBold: boolean,
+    color: ReturnType<typeof rgb>,
+  ) {
+    page.drawText(text, {
+      x,
+      y,
+      size,
+      font: useBold ? this._pdfBoldFontCache! : this._pdfFontCache!,
+      color,
+      rotate: degrees(-90),
+    });
+  }
+  
+  // font cache for helper use
+  private _pdfFontCache: PDFFont | null = null;
+  private _pdfBoldFontCache: PDFFont | null = null;
+  
+  private drawCellLabel(
+    page: PDFPage,
+    text: string,
+    x: number,
+    y: number,
+    font: PDFFont,
+    color: ReturnType<typeof rgb>,
+    size = 9,
+  ) {
+    page.drawText(text, {
+      x,
+      y,
+      size,
+      font,
+      color,
+    });
+  }
+  
+  private drawCellValue(
+    page: PDFPage,
+    text: string,
+    x: number,
+    y: number,
+    font: PDFFont,
+    color: ReturnType<typeof rgb>,
+    size = 10,
+  ) {
+    page.drawText(text, {
+      x,
+      y,
+      size,
+      font,
+      color,
+    });
+  }
+  
+  private drawBlockText(
+    page: PDFPage,
+    text: string,
+    x: number,
+    y: number,
+    maxWidth: number,
+    maxHeight: number,
+    normalFont: PDFFont,
+    boldFont: PDFFont,
+    fontSize: number,
+    color: ReturnType<typeof rgb>,
+    maxLines = 4,
+  ) {
+    const lines = this.wrapPdfTextByWidth(text || "-", maxWidth, fontSize, normalFont);
+    let yy = y;
+    let count = 0;
+  
+    for (const line of lines) {
+      if (count >= maxLines) break;
+      if (yy < y - maxHeight) break;
+  
+      page.drawText(line, {
+        x,
+        y: yy,
+        size: fontSize,
+        font: normalFont,
+        color,
+      });
+  
+      yy -= 12;
+      count++;
+    }
+  }
+  
+  private drawMultilineText(
+    page: PDFPage,
+    text: string,
+    x: number,
+    y: number,
+    maxWidth: number,
+    font: PDFFont,
+    fontSize: number,
+    lineHeight: number,
+    color: ReturnType<typeof rgb>,
+    maxLines = 6,
+  ) {
+    const rawLines = String(text || "-")
+      .split("\n")
+      .flatMap((line) =>
+        this.wrapPdfTextByWidth(line || "-", maxWidth, fontSize, font),
+      );
+  
+    let yy = y;
+    for (const line of rawLines.slice(0, maxLines)) {
+      page.drawText(line, {
+        x,
+        y: yy,
+        size: fontSize,
+        font,
+        color,
+      });
+      yy -= lineHeight;
+    }
+  }
+  
+  private wrapPdfTextByWidth(
+    text: string,
+    maxWidth: number,
+    fontSize: number,
+    font: PDFFont,
+  ): string[] {
+    if (!text?.trim()) return ["-"];
+  
+    const paragraphs = text.split("\n");
+    const output: string[] = [];
+  
+    for (const paragraph of paragraphs) {
+      const words = paragraph.trim().split(/\s+/).filter(Boolean);
+  
+      if (!words.length) {
+        output.push("-");
+        continue;
+      }
+  
+      let current = "";
+      for (const word of words) {
+        const candidate = current ? `${current} ${word}` : word;
+        const width = font.widthOfTextAtSize(candidate, fontSize);
+  
+        if (width <= maxWidth) {
+          current = candidate;
+        } else {
+          if (current) output.push(current);
+          current = word;
+        }
+      }
+  
+      if (current) output.push(current);
+    }
+  
+    return output.length ? output : ["-"];
+  }
+  
+  private estimateRowHeight(
+    values: string[],
+    widths: number[],
+    font: PDFFont,
+    fontSize: number,
+    lineHeight: number,
+    minHeight = 42,
+  ): number {
+    let maxLines = 1;
+  
+    for (let i = 0; i < values.length; i++) {
+      const lineCount = this.wrapPdfTextByWidth(
+        values[i] || "-",
+        widths[i],
+        fontSize,
+        font,
+      ).length;
+      maxLines = Math.max(maxLines, lineCount);
+    }
+  
+    return Math.max(minHeight, maxLines * lineHeight + 10);
   }
 }
