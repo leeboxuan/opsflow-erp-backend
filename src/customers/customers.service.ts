@@ -61,7 +61,15 @@ export class CustomersService {
     tenantId: string,
     query: ListCompaniesQueryDto,
   ): Promise<{
-    data: Array<{ id: string; name: string; isActive: boolean; contactCount: number; userCount: number }>;
+    data: Array<{
+      id: string;
+      name: string;
+      isActive: boolean;
+      picMobile: string | null;
+      createdAt: Date;
+      contactCount: number;
+      userCount: number;
+    }>;
     meta: { page: number; pageSize: number; total: number };
   }> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
@@ -81,6 +89,8 @@ export class CustomersService {
       id: true,
       name: true,
       isActive: true,
+      picMobile: true,
+      createdAt: true,
       _count: { select: { contacts: true, users: true } },
     };
 
@@ -99,6 +109,8 @@ export class CustomersService {
       id: c.id,
       name: c.name,
       isActive: c.isActive,
+      picMobile: c.picMobile,
+      createdAt: c.createdAt,
       contactCount: c._count.contacts,
       userCount: c._count.users,
     }));
