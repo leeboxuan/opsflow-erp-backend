@@ -199,6 +199,72 @@ export class OpsJobsService {
     };
   }
 
+  private async getLatestJobDocumentByType(
+    tenantId: string,
+    jobId: string,
+    type: JobDocumentType,
+  ) {
+    return this.prisma.jobDocument.findFirst({
+      where: {
+        tenantId,
+        jobId,
+        type,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+  }
+
+  private async deleteStorageObjectIfExists(storageKey: string | null | undefined) {
+    if (!storageKey) return;
+
+    const supabase = this.supabaseService.getClient();
+    const { error } = await supabase.storage
+      .from(JOB_DOCUMENTS_BUCKET)
+      .remove([storageKey]);
+
+    // Don't hard-fail if storage object is already gone.
+    if (error) {
+      console.warn(
+        `[OpsJobsService] Failed to remove storage object ${storageKey}: ${error.message}`,
+      );
+    }
+  }
+
+  private async replaceJobDocumentByType(
+    tenantId: string,
+    jobId: string,
+    type: JobDocumentType,
+  ) {
+    const existingDocs = await this.prisma.jobDocument.findMany({
+      where: {
+        tenantId,
+        jobId,
+        type,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    if (!existingDocs.length) return null;
+
+    await Promise.all(
+      existingDocs.map((doc) => this.deleteStorageObjectIfExists(doc.storageKey)),
+    );
+
+    await this.prisma.jobDocument.deleteMany({
+      where: {
+        tenantId,
+        jobId,
+        type,
+      },
+    });
+
+    return existingDocs[0] ?? null;
+  }
+
   async list(
     tenantId: string,
     query: JobListQueryDto,
@@ -377,7 +443,49 @@ export class OpsJobsService {
       actorUserId,
     );
 
-    return toJobDto(job);
+    // Best-effort auto-generate DO after job creation.
+    // We do not fail the whole job creation if document generation/storage fails.
+    try {
+      await this.generateDoDocument(tenantId, job.id, actorUserId);
+    } catch (error: any) {
+      console.error(
+        `[OpsJobsService] Auto-generate DO failed for job ${job.id}:`,
+        error?.message ?? error,
+      );
+    }
+
+    const freshJob = await this.prisma.job.findFirst({
+      where: { id: job.id, tenantId },
+      include: {
+        customerCompany: {
+          select: { id: true, name: true },
+        },
+        assignedDriver: {
+          select: { id: true, name: true, email: true },
+        },
+        items: {
+          orderBy: { createdAt: "asc" },
+        },
+        documents: {
+          orderBy: { createdAt: "desc" },
+        },
+      },
+    });
+
+    if (!freshJob) {
+      throw new NotFoundException("Job not found after creation");
+    }
+
+    const jobDto = toJobDto(freshJob);
+
+    if (freshJob.documents?.length) {
+      jobDto.documents = await Promise.all(
+        freshJob.documents.map((doc: any) => this.attachSignedUrl(doc)),
+      );
+    }
+    
+    return jobDto;
+
   }
 
   async getOne(tenantId: string, jobId: string): Promise<JobDto> {
@@ -791,6 +899,12 @@ export class OpsJobsService {
       );
     }
 
+    const previousQuotation = await this.replaceJobDocumentByType(
+      tenantId,
+      jobId,
+      JobDocumentType.QUOTATION,
+    );
+
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".pdf";
     const key = `${tenantId}/jobs/${jobId}/quotation/${Date.now()}${ext}`;
 
@@ -799,7 +913,7 @@ export class OpsJobsService {
       .from(JOB_DOCUMENTS_BUCKET)
       .upload(key, file.buffer, {
         contentType: file.mimetype ?? "application/octet-stream",
-        upsert: true,
+        upsert: false,
       });
 
     if (error) {
@@ -821,10 +935,14 @@ export class OpsJobsService {
 
     await this.audit.log(
       tenantId,
-      "UPLOAD_DOC",
+      previousQuotation ? "REPLACE_DOC" : "UPLOAD_DOC",
       "JOB",
       jobId,
-      { documentId: doc.id, type: "QUOTATION" },
+      {
+        documentId: doc.id,
+        previousDocumentId: previousQuotation?.id ?? null,
+        type: "QUOTATION",
+      },
       actorUserId,
     );
 
@@ -850,24 +968,30 @@ export class OpsJobsService {
         documents: true,
       },
     });
-  
+
     if (!job) {
       throw new NotFoundException("Job not found");
     }
-  
+
     if (!job.items?.length) {
       throw new BadRequestException("Add at least one item before generating DO");
     }
-  
+
+    const previousDo = await this.replaceJobDocumentByType(
+      tenantId,
+      jobId,
+      JobDocumentType.DO,
+    );
+
     const pdfBuffer = await this.buildDoPdfBuffer(job);
-  
+
     const refForFile =
       job.externalRef?.trim() || job.internalRef?.trim() || job.id;
-  
+
     const safeRef = this.safeFileName(refForFile);
     const fileName = `${safeRef}_DO.pdf`;
     const storageKey = `${tenantId}/jobs/${jobId}/do/${Date.now()}-${fileName}`;
-  
+
     const { error: uploadError } = await this.supabaseService
       .getClient()
       .storage.from(JOB_DOCUMENTS_BUCKET)
@@ -875,13 +999,13 @@ export class OpsJobsService {
         contentType: "application/pdf",
         upsert: false,
       });
-  
+
     if (uploadError) {
       throw new BadRequestException(
         `Failed to upload DO PDF: ${uploadError.message}`,
       );
     }
-  
+
     const doc = await this.prisma.jobDocument.create({
       data: {
         tenantId,
@@ -894,14 +1018,15 @@ export class OpsJobsService {
         uploadedByUserId: userId ?? null,
       },
     });
-  
+
     await this.audit.log(
       tenantId,
-      "GENERATE_DOC",
+      previousDo ? "REPLACE_DOC" : "GENERATE_DOC",
       "JOB",
       jobId,
       {
         documentId: doc.id,
+        previousDocumentId: previousDo?.id ?? null,
         type: "DO",
         storageKey,
         originalName: doc.originalName,
@@ -910,10 +1035,10 @@ export class OpsJobsService {
       },
       userId ?? null,
     );
-  
+
     return this.attachSignedUrl(doc);
   }
-
+  
   async listDocuments(
     tenantId: string,
     jobId: string,
