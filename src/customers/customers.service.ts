@@ -350,7 +350,7 @@ export class CustomersService {
         name: name ?? undefined,
         tenantId,
         companyId,
-        role: "USER",
+        userRole: "USER",
       },
     });
 
