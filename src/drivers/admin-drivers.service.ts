@@ -3,8 +3,9 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { MembershipStatus, Role } from "@prisma/client";
+import { MembershipStatus, Role, UserRole } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { SupabaseService } from "../auth/supabase.service";
 import {
   parsePaginationFromQuery,
   buildPaginationMeta,
@@ -21,7 +22,10 @@ import type {
 
 @Injectable()
 export class AdminDriversService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly supabaseService: SupabaseService,
+  ) {}
 
   async listDrivers(
     tenantId: string,
@@ -144,17 +148,48 @@ export class AdminDriversService {
     tenantId: string,
     dto: AdminCreateDriverDto,
   ): Promise<AdminDriverDto> {
+    const email = dto.email.trim().toLowerCase();
+    const password = dto.password;
+
+    if (!password || password.length < 8) {
+      throw new BadRequestException("Password must be at least 8 characters");
+    }
+
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        name: dto.name ?? undefined,
+        tenantId,
+        role: "DRIVER",
+      },
+    });
+
+    if (error) {
+      throw new BadRequestException(error.message);
+    }
+
+    const authUserId = data.user?.id;
+    if (!authUserId) {
+      throw new BadRequestException("Failed to create auth user");
+    }
+
     const result = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.upsert({
-        where: { email: dto.email },
+        where: { email },
         update: {
+          authUserId,
           ...(dto.name !== undefined && { name: dto.name }),
           ...(dto.phone !== undefined && { phone: dto.phone }),
         },
         create: {
-          email: dto.email,
+          authUserId,
+          email,
           name: dto.name ?? null,
           phone: dto.phone ?? null,
+          role: UserRole.USER,
         },
       });
 

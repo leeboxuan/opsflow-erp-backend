@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsEmail, IsOptional, IsString } from "class-validator";
+import { IsEmail, IsOptional, IsString, MinLength } from "class-validator";
 
 export class AdminCreateDriverDto {
   @ApiProperty({ example: "driver@example.com" })
@@ -15,4 +15,12 @@ export class AdminCreateDriverDto {
   @IsOptional()
   @IsString()
   phone?: string;
+
+  @ApiProperty({
+    description: "Initial password for driver login",
+    example: "StrongPass123",
+  })
+  @IsString()
+  @MinLength(8)
+  password!: string;
 }
