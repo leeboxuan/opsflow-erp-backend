@@ -65,6 +65,7 @@ export class CustomersService {
       id: string;
       name: string;
       isActive: boolean;
+        picName: string | null;
       picMobile: string | null;
       createdAt: Date;
       contactCount: number;
@@ -89,6 +90,7 @@ export class CustomersService {
       id: true,
       name: true,
       isActive: true,
+      picName: true,
       picMobile: true,
       createdAt: true,
       _count: { select: { contacts: true, users: true } },
@@ -109,6 +111,7 @@ export class CustomersService {
       id: c.id,
       name: c.name,
       isActive: c.isActive,
+      picName: c.picName,
       picMobile: c.picMobile,
       createdAt: c.createdAt,
       contactCount: c._count.contacts,
