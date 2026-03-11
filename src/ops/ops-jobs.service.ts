@@ -1342,9 +1342,9 @@ export class OpsJobsService {
         if (driverId) {
           const driver = await this.prisma.drivers.findFirst({
             where: { tenantId, userId: driverId },
-            select: { defaultVehicleId: true },
+            select: { assignedVehicleId: true },
           });
-          assignedVehicleId = driver?.defaultVehicleId ?? null;
+          assignedVehicleId = driver?.assignedVehicleId ?? null;
         }
 
         const internalRef = await this.getNextInternalRef(tenantId, jobType);

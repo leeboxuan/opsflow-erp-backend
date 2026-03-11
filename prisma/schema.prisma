@@ -411,7 +411,7 @@ model drivers {
   email                      String
   name                       String
   phone                      String
-  defaultVehicleId           String?
+  assignedVehicleId           String?
   createdAt                  DateTime                  @default(now())
   updatedAt                  DateTime
   userId                     String?
@@ -420,12 +420,12 @@ model drivers {
   tenants                    Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   users                      User?                     @relation(fields: [userId], references: [id])
   trips                      Trip[]
-  defaultVehicle             Vehicle?                  @relation(fields: [defaultVehicleId], references: [id], onDelete: SetNull)
+  assignedVehicle             Vehicle?                  @relation(fields: [assignedVehicleId], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, email])
   @@unique([tenantId, userId])
   @@index([tenantId])
-  @@index([tenantId, defaultVehicleId])
+  @@index([tenantId, assignedVehicleId])
 }
 
 model Job {

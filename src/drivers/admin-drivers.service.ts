@@ -235,11 +235,11 @@ export class AdminDriversService {
     const phone =
       ((dto.phone ?? (user as any).phone ?? "") as string).trim() || "-";
 
-    if (dto.defaultVehicleId !== undefined) {
+    if (dto.assignedVehicleId !== undefined) {
       const vehicle = await this.prisma.vehicle.findFirst({
-        where: { id: dto.defaultVehicleId, tenantId },
+        where: { id: dto.assignedVehicleId, tenantId },
       });
-      if (dto.defaultVehicleId && !vehicle) {
+      if (dto.assignedVehicleId && !vehicle) {
         throw new BadRequestException("Vehicle not found");
       }
     }
@@ -250,8 +250,8 @@ export class AdminDriversService {
         name,
         phone,
         userId: user.id,
-        ...(dto.defaultVehicleId !== undefined && {
-          defaultVehicleId: dto.defaultVehicleId || null,
+        ...(dto.assignedVehicleId !== undefined && {
+          assignedVehicleId: dto.assignedVehicleId || null,
         }),
         updatedAt: new Date(),
       },

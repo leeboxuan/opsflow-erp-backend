@@ -10,9 +10,9 @@
 
 - **job_internal_ref_counters** model: tenantId, yyyymm, nextSeq (compound PK tenantId+yyyymm). Used to generate WF-YYYY-MM-0001-<TYPE> style refs (shared monthly sequence per tenant; TYPE based on JobType).
 
-- **drivers** table: added **defaultVehicleId** (optional FK to Vehicle). Index on tenantId+defaultVehicleId.
+- **drivers** table: added **assignedVehicleId** (optional FK to Vehicle). Index on tenantId+assignedVehicleId.
 
-- **Vehicle** model: added relation `driversDefault drivers[]` for drivers with this as default vehicle.
+- **Vehicle** model: added relation `driversAssigned drivers[]` for drivers with this as assigned vehicle.
 
 - **Tenant**: added relations jobs, jobDocuments, jobInternalRefCounters, auditLogs.
 
