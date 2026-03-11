@@ -691,24 +691,24 @@ export class OpsJobsService {
     if (!vehicleId) {
       const driver = await this.prisma.drivers.findFirst({
         where: { tenantId, userId: dto.driverId },
-        select: { defaultVehicleId: true },
+        select: { assignedVehicleId: true },
       });
-
-      if (!driver?.defaultVehicleId) {
+    
+      if (!driver?.assignedVehicleId) {
         throw new BadRequestException(
-          "Driver has no default vehicle; provide vehicleId",
+          "Driver has no assigned vehicle; provide vehicleId",
         );
       }
-
-      vehicleId = driver.defaultVehicleId;
-    } else {
-      const vehicle = await this.prisma.vehicle.findFirst({
-        where: { id: vehicleId, tenantId },
-      });
-
-      if (!vehicle) {
-        throw new BadRequestException("Vehicle not found");
-      }
+    
+      vehicleId = driver.assignedVehicleId;
+    }
+    
+    const vehicle = await this.prisma.vehicle.findFirst({
+      where: { id: vehicleId, tenantId },
+    });
+    
+    if (!vehicle) {
+      throw new BadRequestException("Vehicle not found");
     }
 
     const updated = await this.prisma.job.update({
@@ -1038,7 +1038,7 @@ export class OpsJobsService {
 
     return this.attachSignedUrl(doc);
   }
-  
+
   async listDocuments(
     tenantId: string,
     jobId: string,
