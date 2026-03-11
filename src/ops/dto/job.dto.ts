@@ -52,7 +52,7 @@ export class JobDto {
   assignedDriverId: string | null;
   assignedDriverName?: string | null;
   assignedVehicleId: string | null;
-  assignedVehicleName?: string | null;
+  assignedVehiclePlateNo?: string | null;
 
   assignedAt: Date | null;
   startedAt: Date | null;

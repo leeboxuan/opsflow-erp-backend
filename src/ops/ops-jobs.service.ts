@@ -106,7 +106,7 @@ function toJobDto(j: any): JobDto {
     assignedDriverId: j.assignedDriverId,
     assignedDriverName,
     assignedVehicleId: j.assignedVehicleId,
-    assignedVehicleName: null,
+    assignedVehiclePlateNo: (j as any).assignedVehiclePlateNo ?? null,
 
     assignedAt: j.assignedAt,
     startedAt: j.startedAt,
@@ -512,6 +512,15 @@ export class OpsJobsService {
     }
 
     const dto = toJobDto(job);
+
+    // Best-effort: attach assigned vehicle plate number if there is an assignedVehicleId
+    if (job.assignedVehicleId) {
+      const vehicle = await this.prisma.vehicle.findFirst({
+        where: { id: job.assignedVehicleId, tenantId },
+        select: { plateNo: true },
+      });
+      dto.assignedVehiclePlateNo = vehicle?.plateNo ?? null;
+    }
 
     if (!job.documents?.length) return dto;
 
