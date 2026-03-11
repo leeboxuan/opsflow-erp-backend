@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { MembershipStatus, Role } from "@prisma/client";
+import { MembershipStatus, Role, UserRole } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
 import {
@@ -365,14 +365,15 @@ export class CustomersService {
         update: {
           authUserId,
           name: name ?? undefined,
-          role: Role.CUSTOMER,
+          // Application-level role: keep as USER; customer access is scoped via TenantMembership.role
+          role: UserRole.USER,
           customerCompanyId: companyId,
         },
         create: {
           authUserId,
           email,
           name: name ?? email,
-          role: Role.CUSTOMER,
+          role: UserRole.USER,
           customerCompanyId: companyId,
         },
       });
