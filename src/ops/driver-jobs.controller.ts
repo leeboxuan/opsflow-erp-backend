@@ -2,7 +2,6 @@ import {
   Controller,
   Get,
   Post,
-  Body,
   Param,
   Query,
   UseGuards,
@@ -11,6 +10,7 @@ import {
   UploadedFile,
   UploadedFiles,
   BadRequestException,
+  Body,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -51,7 +51,7 @@ export class DriverJobsController {
   }
 
   @Get(":jobId")
-  @ApiOperation({ summary: "Get job (only if assigned to driver)" })
+  @ApiOperation({ summary: "Get full job detail (only if assigned to driver)" })
   async getOne(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
@@ -90,7 +90,12 @@ export class DriverJobsController {
       },
     },
   })
-  @UseInterceptors(FileFieldsInterceptor([{ name: "files", maxCount: 10 }, { name: "file", maxCount: 1 }]))
+  @UseInterceptors(
+    FileFieldsInterceptor([
+      { name: "files", maxCount: 10 },
+      { name: "file", maxCount: 1 },
+    ]),
+  )
   async uploadPodPhotos(
     @Req() req: any,
     @Param("jobId") jobId: string,
@@ -108,7 +113,14 @@ export class DriverJobsController {
   @Post(":jobId/pod/signature")
   @ApiOperation({ summary: "Upload POD signature image" })
   @ApiConsumes("multipart/form-data")
-  @ApiBody({ schema: { type: "object", properties: { file: { type: "string", format: "binary" } } } })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        file: { type: "string", format: "binary" },
+      },
+    },
+  })
   @UseInterceptors(FileInterceptor("file"))
   async uploadPodSignature(
     @Req() req: any,
@@ -126,10 +138,10 @@ export class DriverJobsController {
   async complete(
     @Req() req: any,
     @Param("jobId") jobId: string,
-    @Body() dto: DriverCompleteJobDto,
+    @Body() _dto: DriverCompleteJobDto,
   ) {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
-    return this.driverJobs.complete(tenantId, jobId, userId, dto);
+    return this.driverJobs.complete(tenantId, jobId, userId);
   }
 }

@@ -2,7 +2,6 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  ForbiddenException,
 } from "@nestjs/common";
 import { JobStatus, JobType, JobDocumentType } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -10,47 +9,14 @@ import { parsePaginationFromQuery, buildPaginationMeta } from "../common/paginat
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { AuditService } from "../audit/audit.service";
 import { SupabaseService } from "../auth/supabase.service";
-import { DriverCompleteJobDto } from "./dto/complete-job.dto";
 import { JobLocationDto } from "./dto/location.dto";
 import { JobDto, JobDocumentDto } from "./dto/job.dto";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
 
-function toJobDto(j: any): JobDto {
-  return {
-    id: j.id,
-    tenantId: j.tenantId,
-    customerCompanyId: j.customerCompanyId,
-    internalRef: j.internalRef,
-    jobType: j.jobType,
-    status: j.status,
-    pickupDate: j.pickupDate,
-    pickupAddress1: j.pickupAddress1,
-    pickupAddress2: j.pickupAddress2,
-    pickupPostal: j.pickupPostal,
-    pickupContactName: j.pickupContactName,
-    pickupContactPhone: j.pickupContactPhone,
-    deliveryAddress1: j.deliveryAddress1,
-    deliveryAddress2: j.deliveryAddress2,
-    deliveryPostal: j.deliveryPostal,
-    receiverName: j.receiverName,
-    receiverPhone: j.receiverPhone,
-    assignedDriverId: j.assignedDriverId,
-    assignedVehicleId: j.assignedVehicleId,
-    assignedAt: j.assignedAt,
-    startedAt: j.startedAt,
-    completedAt: j.completedAt,
-    deliveredAt: j.deliveredAt,
-    podRecipientName: j.podRecipientName,
-    cancelledReason: j.cancelledReason,
-    cancelledAt: j.cancelledAt,
-    cancelledByUserId: j.cancelledByUserId,
-    lastLat: j.lastLat,
-    lastLng: j.lastLng,
-    lastLocationAt: j.lastLocationAt,
-    createdAt: j.createdAt,
-    updatedAt: j.updatedAt,
-  };
+function normalizeText(value?: string | null): string | null {
+  if (!value) return null;
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function toDocDto(d: any): JobDocumentDto {
@@ -59,7 +25,75 @@ function toDocDto(d: any): JobDocumentDto {
     type: d.type,
     originalName: d.originalName,
     mimeType: d.mimeType,
+    sizeBytes: d.sizeBytes ?? null,
     createdAt: d.createdAt,
+    url: d.url ?? null,
+  };
+}
+
+function toJobDto(j: any): JobDto {
+  const documents = Array.isArray(j.documents) ? j.documents : [];
+  const items = Array.isArray(j.items) ? j.items : [];
+
+  return {
+    id: j.id,
+    tenantId: j.tenantId,
+    customerCompanyId: j.customerCompanyId,
+    companyName: j.customerCompany?.name ?? null,
+
+    internalRef: j.internalRef,
+    externalRef: j.externalRef ?? null,
+    jobType: j.jobType,
+    status: j.status,
+    notes: j.notes ?? null,
+
+    pickupDate: j.pickupDate ?? null,
+    pickupAddress1: j.pickupAddress1,
+    pickupAddress2: j.pickupAddress2 ?? null,
+    pickupPostal: j.pickupPostal ?? null,
+    pickupContactName: normalizeText(j.pickupContactName),
+    pickupContactPhone: j.pickupContactPhone ?? null,
+
+    deliveryAddress1: j.deliveryAddress1,
+    deliveryAddress2: j.deliveryAddress2 ?? null,
+    deliveryPostal: j.deliveryPostal ?? null,
+    receiverName: normalizeText(j.receiverName) ?? "",
+    receiverPhone: j.receiverPhone,
+
+    assignedDriverId: j.assignedDriverId ?? null,
+    assignedDriverName: j.assignedDriver?.name ?? null,
+    assignedVehicleId: j.assignedVehicleId ?? null,
+    assignedVehiclePlateNo: (j as any).assignedVehiclePlateNo ?? null,
+
+    assignedAt: j.assignedAt ?? null,
+    startedAt: j.startedAt ?? null,
+    completedAt: j.completedAt ?? null,
+    deliveredAt: j.deliveredAt ?? null,
+    podRecipientName: normalizeText(j.podRecipientName),
+
+    cancelledReason: j.cancelledReason ?? null,
+    cancelledAt: j.cancelledAt ?? null,
+    cancelledByUserId: j.cancelledByUserId ?? null,
+
+    lastLat: j.lastLat ?? null,
+    lastLng: j.lastLng ?? null,
+    lastLocationAt: j.lastLocationAt ?? null,
+
+    createdAt: j.createdAt,
+    updatedAt: j.updatedAt,
+
+    items: items.map((item: any) => ({
+      id: item.id,
+      tenantId: item.tenantId,
+      jobId: item.jobId,
+      itemCode: item.itemCode,
+      description: item.description ?? null,
+      qty: item.qty,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+    })),
+
+    documents: documents.map((d: any) => toDocDto(d)),
   };
 }
 
@@ -70,6 +104,42 @@ export class DriverJobsService {
     private readonly audit: AuditService,
     private readonly supabaseService: SupabaseService,
   ) {}
+
+  private async attachSignedUrl(doc: any): Promise<JobDocumentDto> {
+    const base = toDocDto(doc);
+
+    const supabase = this.supabaseService.getClient();
+    const { data } = await supabase.storage
+      .from(JOB_DOCUMENTS_BUCKET)
+      .createSignedUrl(doc.storageKey, 60 * 60);
+
+    return {
+      ...base,
+      url: data?.signedUrl ?? null,
+    };
+  }
+
+  private async findAssignedJobOrThrow(
+    tenantId: string,
+    jobId: string,
+    driverUserId: string,
+    include?: Record<string, any>,
+  ) {
+    const job = await this.prisma.job.findFirst({
+      where: {
+        id: jobId,
+        tenantId,
+        assignedDriverId: driverUserId,
+      },
+      include,
+    });
+
+    if (!job) {
+      throw new NotFoundException("Job not found or not assigned to you");
+    }
+
+    return job;
+  }
 
   async listByDriver(
     tenantId: string,
@@ -101,8 +171,15 @@ export class DriverJobsService {
       ["pickupDate", "createdAt", "internalRef", "status"],
       { pickupDate: "asc" },
     );
-    const orderByArr = Array.isArray(orderBy) ? orderBy : [orderBy, { createdAt: "asc" as const }];
-    const orderByFinal = orderByArr.length === 1 ? [orderBy, { createdAt: "asc" as const }] : orderByArr;
+
+    const orderByArr = Array.isArray(orderBy)
+      ? orderBy
+      : [orderBy, { createdAt: "asc" as const }];
+
+    const orderByFinal =
+      orderByArr.length === 1
+        ? [orderBy, { createdAt: "asc" as const }]
+        : orderByArr;
 
     const [total, jobs] = await this.prisma.$transaction([
       this.prisma.job.count({ where }),
@@ -111,11 +188,61 @@ export class DriverJobsService {
         orderBy: orderByFinal as any,
         skip,
         take,
+        include: {
+          customerCompany: {
+            select: { id: true, name: true },
+          },
+          assignedDriver: {
+            select: { id: true, name: true },
+          },
+          items: {
+            orderBy: { createdAt: "asc" },
+          },
+          documents: {
+            where: {
+              type: {
+                in: [JobDocumentType.POD_PHOTO, JobDocumentType.SIGNATURE],
+              },
+            },
+            orderBy: { createdAt: "desc" },
+          },
+        },
       }),
     ]);
 
+    const vehicleIds = [...new Set(jobs.map((j) => j.assignedVehicleId).filter(Boolean))] as string[];
+
+    const vehicles = vehicleIds.length
+      ? await this.prisma.vehicle.findMany({
+          where: {
+            tenantId,
+            id: { in: vehicleIds },
+          },
+          select: {
+            id: true,
+            plateNo: true,
+          },
+        })
+      : [];
+
+    const vehicleMap = new Map(vehicles.map((v) => [v.id, v.plateNo]));
+
+    const data = jobs.map((job: any) => {
+      const dto = toJobDto({
+        ...job,
+        assignedVehiclePlateNo: job.assignedVehicleId
+          ? vehicleMap.get(job.assignedVehicleId) ?? null
+          : null,
+      });
+
+      return {
+        ...dto,
+        documents: dto.documents ?? [],
+      };
+    });
+
     return {
-      data: jobs.map(toJobDto),
+      data,
       meta: buildPaginationMeta(page, pageSize, total),
     };
   }
@@ -125,11 +252,57 @@ export class DriverJobsService {
     jobId: string,
     driverUserId: string,
   ): Promise<JobDto> {
-    const job = await this.prisma.job.findFirst({
-      where: { id: jobId, tenantId, assignedDriverId: driverUserId },
+    const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId, {
+      customerCompany: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      assignedDriver: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      items: {
+        orderBy: {
+          createdAt: "asc",
+        },
+      },
+      documents: {
+        orderBy: {
+          createdAt: "desc",
+        },
+      },
     });
-    if (!job) throw new NotFoundException("Job not found or not assigned to you");
-    return toJobDto(job);
+
+    let assignedVehiclePlateNo: string | null = null;
+
+    if (job.assignedVehicleId) {
+      const vehicle = await this.prisma.vehicle.findFirst({
+        where: {
+          id: job.assignedVehicleId,
+          tenantId,
+        },
+        select: {
+          plateNo: true,
+        },
+      });
+
+      assignedVehiclePlateNo = vehicle?.plateNo ?? null;
+    }
+
+    const dto = toJobDto({
+      ...job,
+      assignedVehiclePlateNo,
+    });
+
+    dto.documents = await Promise.all(
+      (job.documents ?? []).map((doc: any) => this.attachSignedUrl(doc)),
+    );
+
+    return dto;
   }
 
   async start(
@@ -137,17 +310,18 @@ export class DriverJobsService {
     jobId: string,
     driverUserId: string,
   ): Promise<JobDto> {
-    const job = await this.prisma.job.findFirst({
-      where: { id: jobId, tenantId, assignedDriverId: driverUserId },
-    });
-    if (!job) throw new NotFoundException("Job not found or not assigned to you");
+    const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
+
     if (job.status !== JobStatus.Assigned) {
       throw new BadRequestException("Job must be Assigned to start");
     }
 
     const updated = await this.prisma.job.update({
       where: { id: jobId },
-      data: { status: JobStatus.InProgress, startedAt: new Date() },
+      data: {
+        status: JobStatus.InProgress,
+        startedAt: new Date(),
+      },
     });
 
     await this.audit.log(
@@ -168,10 +342,7 @@ export class DriverJobsService {
     driverUserId: string,
     dto: JobLocationDto,
   ): Promise<void> {
-    const job = await this.prisma.job.findFirst({
-      where: { id: jobId, tenantId, assignedDriverId: driverUserId },
-    });
-    if (!job) throw new NotFoundException("Job not found or not assigned to you");
+    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
 
     await this.prisma.job.update({
       where: { id: jobId },
@@ -191,10 +362,7 @@ export class DriverJobsService {
     type: JobDocumentType,
     allowedMimes: string[],
   ): Promise<JobDocumentDto> {
-    const job = await this.prisma.job.findFirst({
-      where: { id: jobId, tenantId, assignedDriverId: driverUserId },
-    });
-    if (!job) throw new NotFoundException("Job not found or not assigned to you");
+    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
 
     const mime = String(file.mimetype ?? "").toLowerCase();
     if (!allowedMimes.some((m) => mime.startsWith(m))) {
@@ -215,6 +383,43 @@ export class DriverJobsService {
 
     if (error) {
       throw new BadRequestException(`Storage upload failed: ${error.message}`);
+    }
+
+    if (type === JobDocumentType.SIGNATURE) {
+      const existingSignature = await this.prisma.jobDocument.findFirst({
+        where: {
+          tenantId,
+          jobId,
+          type: JobDocumentType.SIGNATURE,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+      });
+
+      if (existingSignature) {
+        const updated = await this.prisma.jobDocument.update({
+          where: { id: existingSignature.id },
+          data: {
+            storageKey: key,
+            originalName: file.originalname ?? "upload",
+            mimeType: file.mimetype ?? "image/jpeg",
+            sizeBytes: file.size ?? null,
+            uploadedByUserId: driverUserId,
+          },
+        });
+
+        await this.audit.log(
+          tenantId,
+          "UPLOAD_DOC",
+          "JOB",
+          jobId,
+          { documentId: updated.id, type },
+          driverUserId,
+        );
+
+        return this.attachSignedUrl(updated);
+      }
     }
 
     const doc = await this.prisma.jobDocument.create({
@@ -239,7 +444,7 @@ export class DriverJobsService {
       driverUserId,
     );
 
-    return toDocDto(doc);
+    return this.attachSignedUrl(doc);
   }
 
   async uploadPodPhotos(
@@ -248,8 +453,12 @@ export class DriverJobsService {
     driverUserId: string,
     files: Express.Multer.File[],
   ): Promise<JobDocumentDto[]> {
-    if (!files?.length) throw new BadRequestException("At least one file required");
+    if (!files?.length) {
+      throw new BadRequestException("At least one file required");
+    }
+
     const results: JobDocumentDto[] = [];
+
     for (const file of files) {
       const doc = await this.uploadDocument(
         tenantId,
@@ -261,6 +470,7 @@ export class DriverJobsService {
       );
       results.push(doc);
     }
+
     return results;
   }
 
@@ -284,24 +494,24 @@ export class DriverJobsService {
     tenantId: string,
     jobId: string,
     driverUserId: string,
-    dto: DriverCompleteJobDto,
   ): Promise<JobDto> {
-    const job = await this.prisma.job.findFirst({
-      where: { id: jobId, tenantId, assignedDriverId: driverUserId },
-      include: { documents: true },
+    const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId, {
+      documents: true,
     });
-    if (!job) throw new NotFoundException("Job not found or not assigned to you");
+
     if (job.status !== JobStatus.InProgress) {
       throw new BadRequestException("Job must be InProgress to complete");
     }
 
-    const hasPodPhoto = job.documents.some((d) => d.type === JobDocumentType.POD_PHOTO);
-    const hasSignature = job.documents.some((d) => d.type === JobDocumentType.SIGNATURE);
+    const hasPodPhoto = job.documents.some((d: any) => d.type === JobDocumentType.POD_PHOTO);
+    const hasSignature = job.documents.some((d: any) => d.type === JobDocumentType.SIGNATURE);
+
     if (!hasSignature) {
-      throw new BadRequestException("At least one SIGNATURE document is required to complete");
+      throw new BadRequestException("A signature is required to complete this job");
     }
+
     if (!hasPodPhoto) {
-      throw new BadRequestException("At least one POD_PHOTO is required to complete");
+      throw new BadRequestException("At least one POD photo is required to complete this job");
     }
 
     const now = new Date();
@@ -319,9 +529,8 @@ export class DriverJobsService {
       where: { id: jobId },
       data: {
         status: newStatus,
-        deliveredAt: now,
-        podRecipientName: dto.recipientName,
-        ...(completedAt && { completedAt }),
+        deliveredAt: job.deliveredAt ?? now,
+        completedAt,
       },
     });
 
@@ -330,7 +539,10 @@ export class DriverJobsService {
       "DRIVER_COMPLETE",
       "JOB",
       jobId,
-      { status: newStatus, recipientName: dto.recipientName },
+      {
+        previousStatus: job.status,
+        nextStatus: newStatus,
+      },
       driverUserId,
     );
 
