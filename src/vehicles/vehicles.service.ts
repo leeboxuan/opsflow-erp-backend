@@ -255,10 +255,22 @@ export class VehiclesService {
   
     // Unassign
     if (!driverId) {
-      const updated = await this.prisma.vehicle.update({
-        where: { id: vehicleId },
-        data: { driverId: null },
+      const updated = await this.prisma.$transaction(async (tx) => {
+        // Clear vehicle->driver link
+        const v = await tx.vehicle.update({
+          where: { id: vehicleId },
+          data: { driverId: null },
+        });
+
+        // Clear any drivers that were pointing at this vehicle
+        await tx.drivers.updateMany({
+          where: { tenantId, assignedVehicleId: vehicleId },
+          data: { assignedVehicleId: null },
+        });
+
+        return v;
       });
+
       return toVehicleDto(updated);
     }
   
@@ -283,21 +295,36 @@ export class VehiclesService {
       throw new BadRequestException("Driver not found in this tenant");
     }
   
-    // 3) enforce 1 driver -> 1 vehicle (optional but usually desired)
-    // If you want to allow one driver to have multiple vehicles, delete this block.
-    return await this.prisma.$transaction(async (tx) => {
-      // unassign this driver from any other vehicle in this tenant
+    // 3) enforce 1 driver -> 1 vehicle and keep drivers.assignedVehicleId in sync
+    // If you want to allow one driver to have multiple vehicles, adjust this block.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // Unassign this driver from any other vehicle in this tenant
       await tx.vehicle.updateMany({
         where: { tenantId, driverId },
         data: { driverId: null },
       });
-  
-      const updated = await tx.vehicle.update({
+
+      // Clear any drivers that currently point at this vehicle
+      await tx.drivers.updateMany({
+        where: { tenantId, assignedVehicleId: vehicleId },
+        data: { assignedVehicleId: null },
+      });
+
+      // Set this vehicle's driver
+      const v = await tx.vehicle.update({
         where: { id: vehicleId },
         data: { driverId },
       });
-  
-      return toVehicleDto(updated);
+
+      // Point the driver's row at this vehicle
+      await tx.drivers.updateMany({
+        where: { tenantId, userId: driverId },
+        data: { assignedVehicleId: vehicleId },
+      });
+
+      return v;
     });
+
+    return toVehicleDto(updated);
   }
 }

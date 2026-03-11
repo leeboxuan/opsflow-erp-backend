@@ -688,21 +688,43 @@ export class OpsJobsService {
 
     let vehicleId: string | null = dto.vehicleId ?? null;
 
+    // If no vehicleId is provided, try to infer from driver
     if (!vehicleId) {
       const driver = await this.prisma.drivers.findFirst({
         where: { tenantId, userId: dto.driverId },
-        select: { assignedVehicleId: true },
+        select: { id: true, assignedVehicleId: true },
       });
-    
-      if (!driver?.assignedVehicleId) {
+
+      // Prefer the explicit driver.assignedVehicleId field
+      if (driver?.assignedVehicleId) {
+        vehicleId = driver.assignedVehicleId;
+      } else {
+        // Fallback: use Vehicle relation where this user is the assigned driver
+        const vehicleFromRelation = await this.prisma.vehicle.findFirst({
+          where: { tenantId, driverId: dto.driverId },
+          select: { id: true },
+        });
+
+        if (vehicleFromRelation) {
+          vehicleId = vehicleFromRelation.id;
+
+          // Best-effort sync back to drivers table so future lookups are consistent
+          if (driver) {
+            await this.prisma.drivers.update({
+              where: { id: driver.id },
+              data: { assignedVehicleId: vehicleId },
+            });
+          }
+        }
+      }
+
+      if (!vehicleId) {
         throw new BadRequestException(
           "Driver has no assigned vehicle; provide vehicleId",
         );
       }
-    
-      vehicleId = driver.assignedVehicleId;
     }
-    
+
     const vehicle = await this.prisma.vehicle.findFirst({
       where: { id: vehicleId, tenantId },
     });
