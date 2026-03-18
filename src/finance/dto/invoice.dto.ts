@@ -67,10 +67,10 @@ export class CreateInvoiceDto {
     description: 'Orders to tag to this invoice',
     type: [String],
   })
+  @IsOptional()
   @IsArray()
-  @ArrayMinSize(1)
   @IsString({ each: true })
-  orderIds: string[];
+  orderIds?: string[];
 
   @ApiProperty({ type: [CreateInvoiceLineItemDto] })
   @IsArray()

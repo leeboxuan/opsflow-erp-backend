@@ -134,16 +134,22 @@ export class InvoicesService {
     user: any,
   ): Promise<InvoiceDto> {
     this.assertCustomerCanOnlyRead(user);
+    const orderIds = dto.orderIds ?? [];
+    if (!orderIds.length) {
+      throw new BadRequestException(
+        "orderIds is required to create a non-draft invoice",
+      );
+    }
     // Validate orders: belong to tenant, completed-ish, and not already invoiced
     const orders = await this.prisma.transportOrder.findMany({
       where: {
         tenantId,
-        id: { in: dto.orderIds },
+        id: { in: orderIds },
       },
       select: { id: true, status: true, invoiceId: true, customerName: true },
     });
 
-    if (orders.length !== dto.orderIds.length) {
+    if (orders.length !== orderIds.length) {
       throw new BadRequestException("Some orders not found under this tenant");
     }
 
@@ -217,7 +223,7 @@ export class InvoicesService {
 
       // Tag orders
       await tx.transportOrder.updateMany({
-        where: { tenantId, id: { in: dto.orderIds }, invoiceId: null },
+        where: { tenantId, id: { in: orderIds }, invoiceId: null },
         data: { invoiceId: inv.id, status: OrderStatus.Closed },
       });
 
@@ -317,20 +323,37 @@ export class InvoicesService {
   ): Promise<InvoiceDto> {
     this.assertCustomerCanOnlyRead(user);
     const confirmedByUserId: string | null = user?.userId ?? null;
-    const orders = await this.prisma.transportOrder.findMany({
-      where: { tenantId, id: { in: dto.orderIds } },
-      select: { id: true, status: true, invoiceId: true, customerName: true },
-    });
-  
-    if (orders.length !== dto.orderIds.length) {
+    const orderIds = dto.orderIds ?? [];
+
+    // Draft invoices may be created without any orders/jobs.
+    const orders =
+      orderIds.length > 0
+        ? await this.prisma.transportOrder.findMany({
+            where: { tenantId, id: { in: orderIds } },
+            select: {
+              id: true,
+              status: true,
+              invoiceId: true,
+              customerName: true,
+            },
+          })
+        : [];
+
+    if (orderIds.length > 0 && orders.length !== orderIds.length) {
       throw new BadRequestException("Some orders not found under this tenant");
     }
-  
-    const bad = orders.find(
-      (o) => o.invoiceId || ![OrderStatus.Delivered, OrderStatus.Closed].includes(o.status),
-    );
-    if (bad) {
-      throw new BadRequestException("Orders must be Delivered/Closed and not already invoiced");
+
+    if (orders.length > 0) {
+      const bad = orders.find(
+        (o) =>
+          o.invoiceId ||
+          ![OrderStatus.Delivered, OrderStatus.Closed].includes(o.status),
+      );
+      if (bad) {
+        throw new BadRequestException(
+          "Orders must be Delivered/Closed and not already invoiced",
+        );
+      }
     }
   
     const normalized = dto.lineItems.map((l) => {
@@ -375,7 +398,7 @@ export class InvoicesService {
         },
         snapshot: {
           stage: "Draft",
-          orderIds: dto.orderIds,
+          orderIds,
           confirmedAt: new Date().toISOString(),
           confirmedByUserId: confirmedByUserId ?? null,
         },
@@ -387,7 +410,7 @@ export class InvoicesService {
     });
   
     // Return orderIds from dto since orders aren't linked yet
-    return await this.toDtoWithNames(created, dto.orderIds);
+    return await this.toDtoWithNames(created, orderIds);
   }
   
   
@@ -528,8 +551,8 @@ export class InvoicesService {
   
     // invoice has no linked orders now; return with snapshot orderIds for UI continuity
     const snap = updated.snapshot as any;
-    const orderIds = Array.isArray(snap?.orderIds) ? snap.orderIds : [];
-    return await this.toDtoWithNames(updated, orderIds);
+    const snapshotOrderIds = Array.isArray(snap?.orderIds) ? snap.orderIds : [];
+    return await this.toDtoWithNames(updated, snapshotOrderIds);
   }
   
     // Update an existing Draft invoice: replaces line items and snapshot orderIds.
@@ -542,6 +565,7 @@ export class InvoicesService {
   ): Promise<InvoiceDto> {
     this.assertCustomerCanOnlyRead(user);
     const updatedByUserId: string | null = user?.userId ?? null;
+    const orderIds = dto.orderIds ?? [];
     const updated = await this.prisma.$transaction(async (tx) => {
       const inv = await tx.invoice.findFirst({
         where: { tenantId, id: invoiceId },
@@ -553,25 +577,32 @@ export class InvoicesService {
         throw new BadRequestException("Only Draft invoices can be updated");
       }
 
-      // Validate orders (Draft invoices are NOT linked to orders; we keep them in snapshot.orderIds)
-      const orders = await tx.transportOrder.findMany({
-        where: { tenantId, id: { in: dto.orderIds } },
-        select: { id: true, status: true, invoiceId: true },
-      });
+      // Validate orders only when orderIds are provided.
+      const orders =
+        orderIds.length > 0
+          ? await tx.transportOrder.findMany({
+              where: { tenantId, id: { in: orderIds } },
+              select: { id: true, status: true, invoiceId: true },
+            })
+          : [];
 
-      if (orders.length !== dto.orderIds.length) {
+      if (orderIds.length > 0 && orders.length !== orderIds.length) {
         throw new BadRequestException("Some orders not found under this tenant");
       }
 
-      const bad = orders.find(
-        (o) =>
-          o.invoiceId ||
-          ![OrderStatus.Delivered, OrderStatus.Closed].includes(o.status as any),
-      );
-      if (bad) {
-        throw new BadRequestException(
-          "Orders must be Delivered/Closed and not already invoiced",
+      if (orders.length > 0) {
+        const bad = orders.find(
+          (o) =>
+            o.invoiceId ||
+            ![OrderStatus.Delivered, OrderStatus.Closed].includes(
+              o.status as any,
+            ),
         );
+        if (bad) {
+          throw new BadRequestException(
+            "Orders must be Delivered/Closed and not already invoiced",
+          );
+        }
       }
 
       // Compute totals from manual line items
@@ -600,7 +631,7 @@ export class InvoicesService {
       const nextSnapshot = {
         ...(prevSnap ?? {}),
         stage: "Draft",
-        orderIds: dto.orderIds,
+        orderIds,
         confirmedAt:
           draftMeta.confirmedAt?.toISOString() ?? prevSnap?.confirmedAt ?? null,
         confirmedByUserId:
@@ -647,8 +678,8 @@ export class InvoicesService {
 
     // Draft has no linked orders; return with snapshot orderIds
     const snap = updated.snapshot as any;
-    const orderIds = Array.isArray(snap?.orderIds) ? snap.orderIds : [];
-    return await this.toDtoWithNames(updated, orderIds);
+    const snapshotOrderIds = Array.isArray(snap?.orderIds) ? snap.orderIds : [];
+    return await this.toDtoWithNames(updated, snapshotOrderIds);
   }
 
 }

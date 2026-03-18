@@ -2036,134 +2036,177 @@ export class OpsJobsService {
     return { createdCount, failedRows, created };
   }
 
-  private async buildDoPdfBuffer(job: {
-    id: string;
-    internalRef: string;
-    externalRef?: string | null;
-    pickupDate: Date | null;
-    deliveryAddress1: string;
-    deliveryAddress2: string | null;
-    deliveryPostal: string | null;
-    receiverName: string;
-    receiverPhone: string;
-    notes: string | null;
-    customerCompany?: { name: string } | null;
-    items: Array<{
-      itemCode: string;
-      description: string | null;
-      qty: number;
-    }>;
-  }): Promise<Buffer> {
+  private async buildDoPdfBuffer(
+    job: {
+      id: string;
+      internalRef: string;
+      externalRef?: string | null;
+      pickupDate: Date | null;
+      deliveryAddress1: string;
+      deliveryAddress2: string | null;
+      deliveryPostal: string | null;
+      receiverName: string;
+      receiverPhone: string;
+      notes: string | null;
+      podRecipientName?: string | null;
+      deliveredAt?: Date | null;
+      customerCompany?: { name: string } | null;
+      items: Array<{
+        itemCode: string;
+        description: string | null;
+        qty: number;
+      }>;
+    },
+    options?: {
+      signatureImageBytes?: Buffer | null;
+      recipientName?: string | null;
+      recipientNric?: string | null;
+      signedAt?: Date | null;
+    },
+  ): Promise<Buffer> {
     const pdfDoc = await PDFDocument.create();
-
+  
     // A4 landscape
     const page = pdfDoc.addPage([841.89, 595.28]);
-    const { height } = page.getSize();
-
+    const { width, height } = page.getSize();
+  
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
+  
     const black = rgb(0, 0, 0);
-    const grayFill = rgb(0.84, 0.84, 0.84);
-
-    // const orderRef = job.internalRef?.trim() || "-";
+    const headerFill = rgb(0.86, 0.86, 0.86);
+  
+    const marginX = 42;
+    const topY = height - 36;
+  
     const orderRef = job.externalRef?.trim() || job.internalRef?.trim() || "-";
     const headerRef =
       [job.externalRef?.trim(), job.internalRef?.trim()]
         .filter(Boolean)
         .join(" / ") || orderRef;
-
-    const receiverName = job.receiverName?.trim() || "-";
-    const receiverPhone = job.receiverPhone?.trim() || "-";
-    const specialRequest = job.notes?.trim() || "-";
-
-    const deliveryAddress =
-      [
-        job.deliveryAddress1,
-        job.deliveryAddress2,
-        job.deliveryPostal ? `Singapore ${job.deliveryPostal}` : null,
-      ]
-        .map((v) => (v ?? "").trim())
-        .filter(Boolean)
-        .join("\n") || "-";
-
+  
+    const receiverName = (options?.recipientName || job.receiverName || "-").trim();
+    const receiverPhone = (job.receiverPhone || "-").trim();
+    const specialRequest = (job.notes || "-").trim();
+  
+    const deliveryAddress = [
+      job.deliveryAddress1,
+      job.deliveryAddress2,
+      job.deliveryPostal ? `Singapore ${job.deliveryPostal}` : null,
+    ]
+      .map((v) => (v ?? "").trim())
+      .filter(Boolean)
+      .join("\n") || "-";
+  
     const items = job.items?.length
       ? job.items
       : [{ itemCode: "-", description: null, qty: 1 }];
-
-    const itemCodeText = items
-      .map((it) => (it.itemCode || "-").trim())
-      .join("\n");
+  
+    const itemCodeText = items.map((it) => (it.itemCode || "-").trim()).join("\n");
     const itemQtyText = items.map((it) => String(it.qty ?? 1)).join("\n");
-
-    // ===== HEADER =====
-    const leftX = 42;
-    let currentY = height - 42;
-
+  
+    // ===== LOGO =====
+    const logoPathCandidates = [
+      path.resolve(process.cwd(), "src/assets/db-logo.png"),
+      path.resolve(process.cwd(), "assets/db-logo.png"),
+      path.resolve(process.cwd(), "db-logo.png"),
+      "/mnt/data/db-logo.png",
+    ];
+  
+    let logoBytes: Buffer | null = null;
+    for (const p of logoPathCandidates) {
+      if (fs.existsSync(p)) {
+        logoBytes = fs.readFileSync(p);
+        break;
+      }
+    }
+  
+    let currentY = topY;
+  
+    if (logoBytes) {
+      try {
+        const logoImage = await pdfDoc.embedPng(logoBytes);
+        const maxLogoWidth = 260;
+        const scale = maxLogoWidth / logoImage.width;
+        const logoWidth = maxLogoWidth;
+        const logoHeight = logoImage.height * scale;
+  
+        page.drawImage(logoImage, {
+          x: marginX,
+          y: currentY - logoHeight,
+          width: logoWidth,
+          height: logoHeight,
+        });
+  
+        currentY -= logoHeight + 14;
+      } catch {
+        // no-op, fallback to text-only header
+      }
+    }
+  
+    // ===== COMPANY ADDRESS =====
     page.drawText("Office and Warehouse : 7 Gul Circle, Singapore 629563", {
-      x: leftX,
+      x: marginX,
       y: currentY,
       size: 11,
       font,
       color: black,
     });
-
-    currentY -= 22;
-
+  
+    currentY -= 26;
+  
+    // ===== REF LINE =====
     page.drawText(headerRef, {
-      x: leftX,
+      x: marginX,
       y: currentY,
-      size: 14,
+      size: 17,
       font: bold,
       color: black,
     });
-
-    // ===== MAIN TABLE =====
-    const tableX = 42;
-    const tableTopY = currentY - 22;
-    const headerH = 24;
-
+  
+    currentY -= 28;
+  
+    // ===== TABLE =====
+    const tableX = marginX;
+    const tableTopY = currentY;
+    const headerHeight = 24;
+    const cellPaddingX = 6;
+    const cellPaddingTop = 14;
+  
     const cols = [
       { label: "Order Ref", width: 95 },
       { label: "First / Last Name", width: 120 },
-      { label: "Phone", width: 80 },
-      { label: "Delivery Adress", width: 235 }, // keep typo if matching legacy form
+      { label: "Phone", width: 85 },
+      { label: "Delivery Adress", width: 235 },
       { label: "Item Code", width: 120 },
       { label: "Item Qty", width: 55 },
-      { label: "Special Request", width: 95 },
+      { label: "Special Request", width: 107.89 },
     ] as const;
-
+  
     let cx = tableX;
+  
     for (const col of cols) {
       page.drawRectangle({
         x: cx,
-        y: tableTopY - headerH,
+        y: tableTopY - headerHeight,
         width: col.width,
-        height: headerH,
-        color: grayFill,
-      });
-
-      page.drawRectangle({
-        x: cx,
-        y: tableTopY - headerH,
-        width: col.width,
-        height: headerH,
+        height: headerHeight,
+        color: headerFill,
         borderWidth: 0.8,
         borderColor: black,
       });
-
-      this.drawCellLabel(
-        page,
-        col.label,
-        cx + 4,
-        tableTopY - 16,
-        bold,
-        black,
-        8.5,
-      );
+  
+      page.drawText(col.label, {
+        x: cx + 5,
+        y: tableTopY - 16,
+        size: 8.5,
+        font: bold,
+        color: black,
+      });
+  
       cx += col.width;
     }
-
+  
     const rowHeight = this.estimateRowHeight(
       [
         orderRef,
@@ -2174,16 +2217,16 @@ export class OpsJobsService {
         itemQtyText,
         specialRequest,
       ],
-      cols.map((c) => c.width - 8),
+      cols.map((c) => c.width - cellPaddingX * 2),
       font,
       10,
       12,
-      72,
+      95,
     );
-
-    const rowTopY = tableTopY - headerH;
-
+  
+    const rowTopY = tableTopY - headerHeight;
     cx = tableX;
+  
     for (const col of cols) {
       page.drawRectangle({
         x: cx,
@@ -2195,122 +2238,119 @@ export class OpsJobsService {
       });
       cx += col.width;
     }
-
+  
     cx = tableX;
-
-    this.drawBlockText(
+  
+    this.drawMultilineText(
       page,
       orderRef,
-      cx + 4,
-      rowTopY - 14,
-      cols[0].width - 8,
-      rowHeight - 8,
+      cx + cellPaddingX,
+      rowTopY - cellPaddingTop,
+      cols[0].width - cellPaddingX * 2,
       font,
       10,
+      12,
       black,
-      6,
+      8,
     );
     cx += cols[0].width;
-
-    this.drawBlockText(
+  
+    this.drawMultilineText(
       page,
       receiverName,
-      cx + 4,
-      rowTopY - 14,
-      cols[1].width - 8,
-      rowHeight - 8,
+      cx + cellPaddingX,
+      rowTopY - cellPaddingTop,
+      cols[1].width - cellPaddingX * 2,
       font,
       10,
+      12,
       black,
-      6,
+      8,
     );
     cx += cols[1].width;
-
-    this.drawBlockText(
+  
+    this.drawMultilineText(
       page,
       receiverPhone,
-      cx + 4,
-      rowTopY - 14,
-      cols[2].width - 8,
-      rowHeight - 8,
+      cx + cellPaddingX,
+      rowTopY - cellPaddingTop,
+      cols[2].width - cellPaddingX * 2,
       font,
       10,
+      12,
       black,
-      4,
+      8,
     );
     cx += cols[2].width;
-
+  
     this.drawMultilineText(
       page,
       deliveryAddress,
-      cx + 4,
-      rowTopY - 14,
-      cols[3].width - 8,
+      cx + cellPaddingX,
+      rowTopY - cellPaddingTop,
+      cols[3].width - cellPaddingX * 2,
       font,
       10,
       12,
       black,
-      8,
+      10,
     );
     cx += cols[3].width;
-
+  
     this.drawMultilineText(
       page,
       itemCodeText,
-      cx + 4,
-      rowTopY - 14,
-      cols[4].width - 8,
+      cx + cellPaddingX,
+      rowTopY - cellPaddingTop,
+      cols[4].width - cellPaddingX * 2,
       font,
       10,
       12,
       black,
-      8,
+      10,
     );
     cx += cols[4].width;
-
+  
     this.drawMultilineText(
       page,
       itemQtyText,
-      cx + 4,
-      rowTopY - 14,
-      cols[5].width - 8,
+      cx + cellPaddingX,
+      rowTopY - cellPaddingTop,
+      cols[5].width - cellPaddingX * 2,
       font,
       10,
       12,
       black,
-      8,
+      10,
     );
     cx += cols[5].width;
-
-    this.drawBlockText(
+  
+    this.drawMultilineText(
       page,
       specialRequest,
-      cx + 4,
-      rowTopY - 14,
-      cols[6].width - 8,
-      rowHeight - 8,
+      cx + cellPaddingX,
+      rowTopY - cellPaddingTop,
+      cols[6].width - cellPaddingX * 2,
       font,
       10,
+      12,
       black,
-      8,
+      10,
     );
-
+  
     // ===== DECLARATION =====
-    const declarationY = rowTopY - rowHeight - 42;
-
+    const declarationY = rowTopY - rowHeight - 52;
+  
+    page.drawText("Received the above stated goods in good order and condition:", {
+      x: tableX,
+      y: declarationY,
+      size: 11,
+      font,
+      color: black,
+    });
+  
     page.drawText(
-      "Received the above stated goods in good order and condition:",
-      {
-        x: tableX,
-        y: declarationY,
-        size: 11,
-        font,
-        color: black,
-      },
-    );
-
-    page.drawText(
-      "................................................................................",
+      ".................................................................................",
       {
         x: tableX + 350,
         y: declarationY,
@@ -2319,25 +2359,74 @@ export class OpsJobsService {
         color: black,
       },
     );
-
+  
     // ===== SIGNATURE AREA =====
-    const signLineY = declarationY - 44;
-
+    const signLineY = declarationY - 56;
+    const signLineWidth = 290;
+  
     page.drawLine({
       start: { x: tableX, y: signLineY },
-      end: { x: tableX + 290, y: signLineY },
+      end: { x: tableX + signLineWidth, y: signLineY },
       thickness: 1,
       color: black,
     });
-
+  
     page.drawText("Signature/Name/NRIC No.", {
       x: tableX,
-      y: signLineY - 16,
+      y: signLineY - 18,
       size: 10,
       font,
       color: black,
     });
-
+  
+    // ===== EMBED SIGNATURE IMAGE =====
+    if (options?.signatureImageBytes) {
+      try {
+        let signatureImage;
+        try {
+          signatureImage = await pdfDoc.embedPng(options.signatureImageBytes);
+        } catch {
+          signatureImage = await pdfDoc.embedJpg(options.signatureImageBytes);
+        }
+  
+        const maxSigWidth = 180;
+        const maxSigHeight = 46;
+  
+        const widthRatio = maxSigWidth / signatureImage.width;
+        const heightRatio = maxSigHeight / signatureImage.height;
+        const scale = Math.min(widthRatio, heightRatio);
+  
+        const sigWidth = signatureImage.width * scale;
+        const sigHeight = signatureImage.height * scale;
+  
+        page.drawImage(signatureImage, {
+          x: tableX + 8,
+          y: signLineY + 6,
+          width: sigWidth,
+          height: sigHeight,
+        });
+      } catch {
+        // signature image invalid, skip embedding
+      }
+    }
+  
+    // ===== OPTIONAL SIGNED META =====
+    const signedMetaParts = [
+      receiverName || null,
+      options?.recipientNric?.trim() || null,
+      options?.signedAt ? this.formatDoDate(options.signedAt) : null,
+    ].filter(Boolean);
+  
+    if (signedMetaParts.length) {
+      page.drawText(signedMetaParts.join(" / "), {
+        x: tableX + 6,
+        y: signLineY - 34,
+        size: 9,
+        font,
+        color: black,
+      });
+    }
+  
     const bytes = await pdfDoc.save();
     return Buffer.from(bytes);
   }
@@ -2450,37 +2539,56 @@ export class OpsJobsService {
     font: PDFFont,
   ): string[] {
     if (!text?.trim()) return ["-"];
-
-    const paragraphs = text.split("\n");
+  
+    const paragraphs = String(text).split("\n");
     const output: string[] = [];
-
+  
     for (const paragraph of paragraphs) {
       const words = paragraph.trim().split(/\s+/).filter(Boolean);
-
+  
       if (!words.length) {
         output.push("-");
         continue;
       }
-
+  
       let current = "";
+  
       for (const word of words) {
         const candidate = current ? `${current} ${word}` : word;
-        const width = font.widthOfTextAtSize(candidate, fontSize);
-
-        if (width <= maxWidth) {
+        const candidateWidth = font.widthOfTextAtSize(candidate, fontSize);
+  
+        if (candidateWidth <= maxWidth) {
           current = candidate;
-        } else {
-          if (current) output.push(current);
+          continue;
+        }
+  
+        if (current) {
+          output.push(current);
+        }
+  
+        if (font.widthOfTextAtSize(word, fontSize) <= maxWidth) {
           current = word;
+        } else {
+          // hard break long token
+          let chunk = "";
+          for (const ch of word) {
+            const next = chunk + ch;
+            if (font.widthOfTextAtSize(next, fontSize) <= maxWidth) {
+              chunk = next;
+            } else {
+              if (chunk) output.push(chunk);
+              chunk = ch;
+            }
+          }
+          current = chunk;
         }
       }
-
+  
       if (current) output.push(current);
     }
-
+  
     return output.length ? output : ["-"];
   }
-
   private estimateRowHeight(
     values: string[],
     widths: number[],
