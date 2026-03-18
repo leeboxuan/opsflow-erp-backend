@@ -109,7 +109,9 @@ export class InvoicesService {
       }),
     ]);
 
-    const data = invoices.map((inv) => this.toDtoWithNames(inv));
+    const data = await Promise.all(
+      invoices.map((inv) => this.toDtoWithNames(inv)),
+    );
     return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 

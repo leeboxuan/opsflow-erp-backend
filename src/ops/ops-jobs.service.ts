@@ -2068,16 +2068,17 @@ export class OpsJobsService {
   
     // A4 landscape
     const page = pdfDoc.addPage([841.89, 595.28]);
-    const { width, height } = page.getSize();
+    const { height, width } = page.getSize();
   
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   
     const black = rgb(0, 0, 0);
-    const headerFill = rgb(0.86, 0.86, 0.86);
+    const headerFill = rgb(0.84, 0.84, 0.84);
   
-    const marginX = 42;
-    const topY = height - 36;
+    const marginLeft = 42;
+    const marginRight = 2; // almost no right padding, to match your sample
+    const topY = height - 34;
   
     const orderRef = job.externalRef?.trim() || job.internalRef?.trim() || "-";
     const headerRef =
@@ -2085,24 +2086,33 @@ export class OpsJobsService {
         .filter(Boolean)
         .join(" / ") || orderRef;
   
-    const receiverName = (options?.recipientName || job.receiverName || "-").trim();
-    const receiverPhone = (job.receiverPhone || "-").trim();
-    const specialRequest = (job.notes || "-").trim();
+    const receiverName =
+      options?.recipientName?.trim() ||
+      job.podRecipientName?.trim() ||
+      job.receiverName?.trim() ||
+      "-";
   
-    const deliveryAddress = [
-      job.deliveryAddress1,
-      job.deliveryAddress2,
-      job.deliveryPostal ? `Singapore ${job.deliveryPostal}` : null,
-    ]
-      .map((v) => (v ?? "").trim())
-      .filter(Boolean)
-      .join("\n") || "-";
+    const receiverPhone = job.receiverPhone?.trim() || "-";
+    const specialRequest = job.notes?.trim() || "-";
+  
+    const deliveryAddress =
+      [
+        job.deliveryAddress1,
+        job.deliveryAddress2,
+        job.deliveryPostal ? `Singapore ${job.deliveryPostal}` : null,
+      ]
+        .map((v) => (v ?? "").trim())
+        .filter(Boolean)
+        .join("\n") || "-";
   
     const items = job.items?.length
       ? job.items
       : [{ itemCode: "-", description: null, qty: 1 }];
   
-    const itemCodeText = items.map((it) => (it.itemCode || "-").trim()).join("\n");
+    const itemCodeText = items
+      .map((it) => (it.itemCode || "-").trim())
+      .join("\n");
+  
     const itemQtyText = items.map((it) => String(it.qty ?? 1)).join("\n");
   
     // ===== LOGO =====
@@ -2126,52 +2136,56 @@ export class OpsJobsService {
     if (logoBytes) {
       try {
         const logoImage = await pdfDoc.embedPng(logoBytes);
-        const maxLogoWidth = 260;
+        const maxLogoWidth = 220;
         const scale = maxLogoWidth / logoImage.width;
         const logoWidth = maxLogoWidth;
         const logoHeight = logoImage.height * scale;
   
         page.drawImage(logoImage, {
-          x: marginX,
+          x: marginLeft,
           y: currentY - logoHeight,
           width: logoWidth,
           height: logoHeight,
         });
   
-        currentY -= logoHeight + 14;
+        currentY -= logoHeight + 26;
       } catch {
-        // no-op, fallback to text-only header
+        // ignore logo issues
       }
     }
   
-    // ===== COMPANY ADDRESS =====
+    // ===== ADDRESS =====
     page.drawText("Office and Warehouse : 7 Gul Circle, Singapore 629563", {
-      x: marginX,
+      x: marginLeft,
       y: currentY,
       size: 11,
       font,
       color: black,
     });
   
-    currentY -= 26;
+    currentY -= 28;
   
     // ===== REF LINE =====
     page.drawText(headerRef, {
-      x: marginX,
+      x: marginLeft,
       y: currentY,
       size: 17,
       font: bold,
       color: black,
     });
   
-    currentY -= 28;
+    currentY -= 30;
   
     // ===== TABLE =====
-    const tableX = marginX;
+    const tableX = marginLeft;
     const tableTopY = currentY;
     const headerHeight = 24;
     const cellPaddingX = 6;
-    const cellPaddingTop = 14;
+    const cellPaddingTop = 16;
+    const bodyFontSize = 10;
+    const bodyLineHeight = 13;
+  
+    const totalTableWidth = width - marginLeft - marginRight;
   
     const cols = [
       { label: "Order Ref", width: 95 },
@@ -2180,11 +2194,13 @@ export class OpsJobsService {
       { label: "Delivery Adress", width: 235 },
       { label: "Item Code", width: 120 },
       { label: "Item Qty", width: 55 },
-      { label: "Special Request", width: 107.89 },
+      {
+        label: "Special Request",
+        width: totalTableWidth - (95 + 120 + 85 + 235 + 120 + 55),
+      },
     ] as const;
   
     let cx = tableX;
-  
     for (const col of cols) {
       page.drawRectangle({
         x: cx,
@@ -2219,14 +2235,14 @@ export class OpsJobsService {
       ],
       cols.map((c) => c.width - cellPaddingX * 2),
       font,
-      10,
-      12,
-      95,
+      bodyFontSize,
+      bodyLineHeight,
+      110,
     );
   
     const rowTopY = tableTopY - headerHeight;
-    cx = tableX;
   
+    cx = tableX;
     for (const col of cols) {
       page.drawRectangle({
         x: cx,
@@ -2248,10 +2264,10 @@ export class OpsJobsService {
       rowTopY - cellPaddingTop,
       cols[0].width - cellPaddingX * 2,
       font,
-      10,
-      12,
+      bodyFontSize,
+      bodyLineHeight,
       black,
-      8,
+      10,
     );
     cx += cols[0].width;
   
@@ -2262,10 +2278,10 @@ export class OpsJobsService {
       rowTopY - cellPaddingTop,
       cols[1].width - cellPaddingX * 2,
       font,
-      10,
-      12,
+      bodyFontSize,
+      bodyLineHeight,
       black,
-      8,
+      10,
     );
     cx += cols[1].width;
   
@@ -2276,10 +2292,10 @@ export class OpsJobsService {
       rowTopY - cellPaddingTop,
       cols[2].width - cellPaddingX * 2,
       font,
-      10,
-      12,
+      bodyFontSize,
+      bodyLineHeight,
       black,
-      8,
+      10,
     );
     cx += cols[2].width;
   
@@ -2290,8 +2306,8 @@ export class OpsJobsService {
       rowTopY - cellPaddingTop,
       cols[3].width - cellPaddingX * 2,
       font,
-      10,
-      12,
+      bodyFontSize,
+      bodyLineHeight,
       black,
       10,
     );
@@ -2304,8 +2320,8 @@ export class OpsJobsService {
       rowTopY - cellPaddingTop,
       cols[4].width - cellPaddingX * 2,
       font,
-      10,
-      12,
+      bodyFontSize,
+      bodyLineHeight,
       black,
       10,
     );
@@ -2318,8 +2334,8 @@ export class OpsJobsService {
       rowTopY - cellPaddingTop,
       cols[5].width - cellPaddingX * 2,
       font,
-      10,
-      12,
+      bodyFontSize,
+      bodyLineHeight,
       black,
       10,
     );
@@ -2332,8 +2348,8 @@ export class OpsJobsService {
       rowTopY - cellPaddingTop,
       cols[6].width - cellPaddingX * 2,
       font,
-      10,
-      12,
+      bodyFontSize,
+      bodyLineHeight,
       black,
       10,
     );
@@ -2341,18 +2357,10 @@ export class OpsJobsService {
     // ===== DECLARATION =====
     const declarationY = rowTopY - rowHeight - 52;
   
-    page.drawText("Received the above stated goods in good order and condition:", {
-      x: tableX,
-      y: declarationY,
-      size: 11,
-      font,
-      color: black,
-    });
-  
     page.drawText(
-      ".................................................................................",
+      "Received the above stated goods in good order and condition:",
       {
-        x: tableX + 350,
+        x: tableX,
         y: declarationY,
         size: 11,
         font,
@@ -2379,7 +2387,7 @@ export class OpsJobsService {
       color: black,
     });
   
-    // ===== EMBED SIGNATURE IMAGE =====
+    // ===== SIGNATURE IMAGE =====
     if (options?.signatureImageBytes) {
       try {
         let signatureImage;
@@ -2389,8 +2397,8 @@ export class OpsJobsService {
           signatureImage = await pdfDoc.embedJpg(options.signatureImageBytes);
         }
   
-        const maxSigWidth = 180;
-        const maxSigHeight = 46;
+        const maxSigWidth = 170;
+        const maxSigHeight = 42;
   
         const widthRatio = maxSigWidth / signatureImage.width;
         const heightRatio = maxSigHeight / signatureImage.height;
@@ -2401,30 +2409,46 @@ export class OpsJobsService {
   
         page.drawImage(signatureImage, {
           x: tableX + 8,
-          y: signLineY + 6,
+          y: signLineY + 2,
           width: sigWidth,
           height: sigHeight,
         });
       } catch {
-        // signature image invalid, skip embedding
+        // ignore bad signature image
       }
     }
   
-    // ===== OPTIONAL SIGNED META =====
-    const signedMetaParts = [
-      receiverName || null,
-      options?.recipientNric?.trim() || null,
-      options?.signedAt ? this.formatDoDate(options.signedAt) : null,
-    ].filter(Boolean);
-  
-    if (signedMetaParts.length) {
-      page.drawText(signedMetaParts.join(" / "), {
+    if (options?.recipientName?.trim()) {
+      page.drawText(options.recipientName.trim(), {
         x: tableX + 6,
-        y: signLineY - 34,
+        y: signLineY - 38,
+        size: 10,
+        font,
+        color: black,
+      });
+    }
+  
+    if (options?.signedAt) {
+      page.drawText(`Signed on: ${this.formatDoDate(options.signedAt)}`, {
+        x: tableX + 190,
+        y: signLineY - 38,
         size: 9,
         font,
         color: black,
       });
+    }
+  
+    if (job.deliveredAt || options?.signedAt) {
+      page.drawText(
+        `DO Date: ${this.formatDoDate(options?.signedAt ?? job.deliveredAt)}`,
+        {
+          x: width - 170,
+          y: height - 28,
+          size: 9,
+          font,
+          color: black,
+        },
+      );
     }
   
     const bytes = await pdfDoc.save();
