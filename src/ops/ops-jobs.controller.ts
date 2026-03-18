@@ -38,24 +38,34 @@ import { LclImportConfirmRequestDto } from "./dto/lcl-import.dto";
 @ApiTags("ops-jobs")
 @Controller("jobs")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.ADMIN, Role.OPS)
+@Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
 @ApiBearerAuth("JWT-auth")
 export class OpsJobsController {
   constructor(private readonly jobs: OpsJobsService) {}
 
   @Get()
   @ApiOperation({ summary: "List jobs with filters" })
+  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
   async list(@Req() req: any, @Query() query: JobListQueryDto) {
     const tenantId = req.tenant.tenantId;
-    return this.jobs.list(tenantId, query);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.list(tenantId, query, accessUser);
   }
 
   @Post()
   @ApiOperation({ summary: "Create Draft job" })
   async create(@Req() req: any, @Body() dto: CreateJobDto) {
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.userId ?? null;
-    return this.jobs.create(tenantId, dto, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.create(tenantId, dto, accessUser);
   }
 
   @Post("import/preview")
@@ -85,8 +95,12 @@ export class OpsJobsController {
   })
   async importConfirm(@Req() req: any, @Body() dto: ImportConfirmRequestDto) {
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.userId ?? null;
-    return this.jobs.importConfirm(tenantId, dto.rows, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.importConfirm(tenantId, dto.rows, accessUser);
   }
 
   @Post("import/lcl/preview")
@@ -148,15 +162,25 @@ export class OpsJobsController {
     @Body() dto: LclImportConfirmRequestDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.userId ?? null;
-    return this.jobs.lclImportConfirm(tenantId, dto, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.lclImportConfirm(tenantId, dto, accessUser);
   }
 
   @Get(":jobId")
   @ApiOperation({ summary: "Get job by id" })
+  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
   async getOne(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    return this.jobs.getOne(tenantId, jobId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.getOne(tenantId, jobId, accessUser);
   }
 
   @Patch(":jobId")
@@ -167,8 +191,12 @@ export class OpsJobsController {
     @Body() dto: UpdateJobDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.userId ?? null;
-    return this.jobs.update(tenantId, jobId, dto, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.update(tenantId, jobId, dto, accessUser);
   }
 
   @Post(":jobId/assign")
@@ -179,8 +207,12 @@ export class OpsJobsController {
     @Body() dto: AssignJobDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.userId ?? null;
-    return this.jobs.assign(tenantId, jobId, dto, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.assign(tenantId, jobId, dto, accessUser);
   }
 
   @Post(":jobId/cancel")
@@ -191,16 +223,24 @@ export class OpsJobsController {
     @Body() dto: CancelJobDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.userId ?? null;
-    return this.jobs.cancel(tenantId, jobId, dto, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.cancel(tenantId, jobId, dto, accessUser);
   }
 
   @Delete(":jobId")
   @ApiOperation({ summary: "Delete job (only if Draft or unassigned Assigned)" })
   async delete(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.userId ?? null;
-    await this.jobs.delete(tenantId, jobId, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    await this.jobs.delete(tenantId, jobId, accessUser);
   }
 
   @Post(":jobId/verify-depot")
@@ -209,8 +249,12 @@ export class OpsJobsController {
   })
   async verifyDepot(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.userId ?? null;
-    return this.jobs.verifyDepot(tenantId, jobId, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.verifyDepot(tenantId, jobId, accessUser);
   }
 
   @Post(":jobId/documents/quotation")
@@ -230,44 +274,71 @@ export class OpsJobsController {
   ) {
     if (!file) throw new BadRequestException("file is required");
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.userId ?? null;
-    return this.jobs.uploadQuotation(tenantId, jobId, file, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.uploadQuotation(tenantId, jobId, file, accessUser);
   }
 
   @Post(":jobId/documents/do/generate")
   @ApiOperation({ summary: "Generate DO PDF for job" })
   async generateDo(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.userId ?? null;
-    return this.jobs.generateDoDocument(tenantId, jobId, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.generateDoDocument(tenantId, jobId, accessUser);
   }
 
   @Get(":jobId/documents")
   @ApiOperation({ summary: "List job documents" })
+  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
   async listDocuments(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    return this.jobs.listDocuments(tenantId, jobId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.listDocuments(tenantId, jobId, accessUser);
   }
 
   @Get(":jobId/audit")
   @ApiOperation({ summary: "Get audit log for job" })
+  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
   async getAudit(
     @Req() req: any,
     @Param("jobId") jobId: string,
     @Query("limit") limit?: string,
   ) {
     const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
     return this.jobs.getAudit(
       tenantId,
       jobId,
       limit ? parseInt(limit, 10) : undefined,
+      accessUser,
     );
   }
 
   @Get(":jobId/tracking")
   @ApiOperation({ summary: "Get job tracking (last location, driver, vehicle)" })
+  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
   async getTracking(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    return this.jobs.getTracking(tenantId, jobId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.getTracking(tenantId, jobId, accessUser);
   }
 }

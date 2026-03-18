@@ -1,11 +1,15 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+} from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
 import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
 import { CreateInvoiceDto, InvoiceDto } from "./dto/invoice.dto";
-import { OrderStatus } from "@prisma/client";
+import { OrderStatus, Role } from "@prisma/client";
 
 function toBasisPoints(rate: number) {
   return Math.round(rate);
@@ -25,9 +29,43 @@ function extractDraftMeta(snapshot: any) {
 export class InvoicesService {
   constructor(private prisma: PrismaService) {}
 
+  private getCustomerCompanyIdOrThrow(user: any): string {
+    if (user?.role !== Role.CUSTOMER) {
+      throw new ForbiddenException("Access denied");
+    }
+    const customerCompanyId = user?.customerCompanyId;
+    if (!customerCompanyId) {
+      throw new ForbiddenException(
+        "CUSTOMER user is missing customerCompanyId",
+      );
+    }
+    return customerCompanyId;
+  }
+
+  private assertCustomerCanOnlyRead(user: any) {
+    if (user?.role !== Role.CUSTOMER) return;
+    // Ensure we throw ForbiddenException when customerCompanyId is missing too.
+    this.getCustomerCompanyIdOrThrow(user);
+    throw new ForbiddenException(
+      "CUSTOMER users are only allowed to read invoices",
+    );
+  }
+
+  private assertCanAccessInvoice(inv: any, user: any) {
+    if (user?.role !== Role.CUSTOMER) return;
+    const customerCompanyId = this.getCustomerCompanyIdOrThrow(user);
+    const orderMatches =
+      inv?.orders?.some((o: any) => o?.customerCompanyId === customerCompanyId) ??
+      false;
+    if (!orderMatches) {
+      throw new ForbiddenException("Not allowed to access this invoice");
+    }
+  }
+
   async listInvoices(
     tenantId: string,
     query?: { q?: string; filter?: string; sortBy?: string; sortDir?: string; page?: unknown; pageSize?: unknown },
+    user?: any,
   ): Promise<{
     data: any[];
     meta: { page: number; pageSize: number; total: number };
@@ -35,6 +73,11 @@ export class InvoicesService {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
 
     const where: any = { tenantId };
+    if (user?.role === Role.CUSTOMER) {
+      where.orders = {
+        some: { customerCompanyId: this.getCustomerCompanyIdOrThrow(user) },
+      };
+    }
     applyQSearch(where, query?.q?.trim(), ["invoiceNo", "customerName"]);
     applyMappedFilter(where, query?.filter, {
       Draft: { status: "Draft" },
@@ -70,23 +113,27 @@ export class InvoicesService {
     return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
-  async getInvoice(tenantId: string, id: string) {
+  async getInvoice(tenantId: string, id: string, user: any) {
     const inv = await this.prisma.invoice.findFirst({
       where: { tenantId, id },
       include: {
         lineItems: true,
-        orders: { select: { id: true } },
+        orders: { select: { id: true, customerCompanyId: true } },
       },
     });
 
     if (!inv) throw new BadRequestException("Invoice not found");
+
+    this.assertCanAccessInvoice(inv, user);
     return this.toDtoWithNames(inv);
   }
 
   async createInvoice(
     tenantId: string,
     dto: CreateInvoiceDto,
+    user: any,
   ): Promise<InvoiceDto> {
+    this.assertCustomerCanOnlyRead(user);
     // Validate orders: belong to tenant, completed-ish, and not already invoiced
     const orders = await this.prisma.transportOrder.findMany({
       where: {
@@ -266,8 +313,10 @@ export class InvoicesService {
   async createDraftInvoice(
     tenantId: string,
     dto: CreateInvoiceDto,
-    confirmedByUserId?: string,
+    user: any,
   ): Promise<InvoiceDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const confirmedByUserId: string | null = user?.userId ?? null;
     const orders = await this.prisma.transportOrder.findMany({
       where: { tenantId, id: { in: dto.orderIds } },
       select: { id: true, status: true, invoiceId: true, customerName: true },
@@ -342,7 +391,9 @@ export class InvoicesService {
   }
   
   
-  async issueInvoice(tenantId: string, invoiceId: string, issuedByUserId?: string) {
+  async issueInvoice(tenantId: string, invoiceId: string, user: any) {
+    this.assertCustomerCanOnlyRead(user);
+    const issuedByUserId: string | null = user?.userId ?? null;
     const issuedAt = new Date();
   
     const result = await this.prisma.$transaction(async (tx) => {
@@ -423,7 +474,9 @@ export class InvoicesService {
     return this.toDtoWithNames(result);
   }
 
-  async revertInvoiceToDraft(tenantId: string, invoiceId: string, userId?: string) {
+  async revertInvoiceToDraft(tenantId: string, invoiceId: string, user: any) {
+    this.assertCustomerCanOnlyRead(user);
+    const userId: string | null = user?.userId ?? null;
     const now = new Date();
   
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -485,8 +538,10 @@ export class InvoicesService {
     tenantId: string,
     invoiceId: string,
     dto: CreateInvoiceDto,
-    updatedByUserId?: string,
+    user: any,
   ): Promise<InvoiceDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const updatedByUserId: string | null = user?.userId ?? null;
     const updated = await this.prisma.$transaction(async (tx) => {
       const inv = await tx.invoice.findFirst({
         where: { tenantId, id: invoiceId },

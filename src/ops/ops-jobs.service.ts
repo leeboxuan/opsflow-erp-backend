@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from "@nestjs/common";
 import { JobStatus, JobType, JobDocumentType, Role } from "@prisma/client";
 import { PDFDocument, PDFFont, PDFPage, StandardFonts, degrees, rgb } from "pdf-lib";
@@ -145,6 +146,44 @@ export class OpsJobsService {
     private readonly supabaseService: SupabaseService,
   ) {}
 
+  private getCustomerCompanyIdOrThrow(user: any): string {
+    if (user?.role !== Role.CUSTOMER) {
+      throw new ForbiddenException("Access denied");
+    }
+    const customerCompanyId = user?.customerCompanyId;
+    if (!customerCompanyId) {
+      throw new ForbiddenException(
+        "CUSTOMER user is missing customerCompanyId",
+      );
+    }
+    return customerCompanyId;
+  }
+
+  applyJobAccessFilter(tenantId: string, user: any): any {
+    const where: any = { tenantId };
+    if (user?.role === Role.CUSTOMER) {
+      where.customerCompanyId = this.getCustomerCompanyIdOrThrow(user);
+    }
+    return where;
+  }
+
+  assertCanAccessJob(job: any, user: any) {
+    if (user?.role !== Role.CUSTOMER) return;
+    const customerCompanyId = this.getCustomerCompanyIdOrThrow(user);
+    if (job?.customerCompanyId !== customerCompanyId) {
+      throw new ForbiddenException("Not allowed to access this job");
+    }
+  }
+
+  private assertCustomerCanOnlyRead(user: any) {
+    if (user?.role !== Role.CUSTOMER) return;
+    // Ensure we throw ForbiddenException when customerCompanyId is missing too.
+    this.getCustomerCompanyIdOrThrow(user);
+    throw new ForbiddenException(
+      "CUSTOMER users are only allowed to read jobs and invoices",
+    );
+  }
+
   private getJobTypeCode(jobType: JobType): string {
     switch (jobType) {
       case JobType.LCL:
@@ -268,16 +307,18 @@ export class OpsJobsService {
   async list(
     tenantId: string,
     query: JobListQueryDto,
+    user: any,
   ): Promise<PaginatedResponse<JobDto>> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
-    const where: any = { tenantId };
+    const where: any = this.applyJobAccessFilter(tenantId, user);
 
     if (query.status) {
       where.status = query.status as JobStatus;
     }
 
-    if (query.companyId) {
+    // CUSTOMER users can't choose other customerCompanyIds.
+    if (query.companyId && user?.role !== Role.CUSTOMER) {
       where.customerCompanyId = query.companyId;
     }
 
@@ -362,8 +403,10 @@ export class OpsJobsService {
   async create(
     tenantId: string,
     dto: CreateJobDto,
-    actorUserId: string | null,
+    user: any,
   ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
     const company = await this.prisma.customer_companies.findFirst({
       where: { id: dto.customerCompanyId, tenantId },
     });
@@ -446,7 +489,7 @@ export class OpsJobsService {
     // Best-effort auto-generate DO after job creation.
     // We do not fail the whole job creation if document generation/storage fails.
     try {
-      await this.generateDoDocument(tenantId, job.id, actorUserId);
+      await this.generateDoDocument(tenantId, job.id, user);
     } catch (error: any) {
       console.error(
         `[OpsJobsService] Auto-generate DO failed for job ${job.id}:`,
@@ -488,7 +531,11 @@ export class OpsJobsService {
 
   }
 
-  async getOne(tenantId: string, jobId: string): Promise<JobDto> {
+  async getOne(
+    tenantId: string,
+    jobId: string,
+    user: any,
+  ): Promise<JobDto> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
       include: {
@@ -510,6 +557,8 @@ export class OpsJobsService {
     if (!job) {
       throw new NotFoundException("Job not found");
     }
+
+    this.assertCanAccessJob(job, user);
 
     const dto = toJobDto(job);
 
@@ -535,8 +584,10 @@ export class OpsJobsService {
     tenantId: string,
     jobId: string,
     dto: UpdateJobDto,
-    actorUserId: string | null,
+    user: any,
   ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
@@ -665,8 +716,10 @@ export class OpsJobsService {
     tenantId: string,
     jobId: string,
     dto: AssignJobDto,
-    actorUserId: string | null,
+    user: any,
   ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
@@ -779,8 +832,10 @@ export class OpsJobsService {
     tenantId: string,
     jobId: string,
     dto: CancelJobDto,
-    actorUserId: string | null,
+    user: any,
   ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
@@ -827,8 +882,10 @@ export class OpsJobsService {
   async delete(
     tenantId: string,
     jobId: string,
-    actorUserId: string | null,
+    user: any,
   ): Promise<void> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
@@ -857,8 +914,10 @@ export class OpsJobsService {
   async verifyDepot(
     tenantId: string,
     jobId: string,
-    actorUserId: string | null,
+    user: any,
   ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
@@ -910,8 +969,10 @@ export class OpsJobsService {
     tenantId: string,
     jobId: string,
     file: Express.Multer.File,
-    actorUserId: string | null,
+    user: any,
   ): Promise<JobDocumentDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
@@ -983,8 +1044,10 @@ export class OpsJobsService {
   async generateDoDocument(
     tenantId: string,
     jobId: string,
-    userId?: string | null,
+    user: any,
   ) {
+    this.assertCustomerCanOnlyRead(user);
+    const userId: string | null = user?.userId ?? null;
     const job = await this.prisma.job.findFirst({
       where: {
         id: jobId,
@@ -1073,12 +1136,15 @@ export class OpsJobsService {
   async listDocuments(
     tenantId: string,
     jobId: string,
+    user: any,
   ): Promise<JobDocumentDto[]> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
 
     if (!job) throw new NotFoundException("Job not found");
+
+    this.assertCanAccessJob(job, user);
 
     const docs = await this.prisma.jobDocument.findMany({
       where: { tenantId, jobId },
@@ -1092,12 +1158,15 @@ export class OpsJobsService {
     tenantId: string,
     jobId: string,
     limit?: number,
+    user?: any,
   ): Promise<AuditLogEntryDto[]> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
     });
 
     if (!job) throw new NotFoundException("Job not found");
+
+    this.assertCanAccessJob(job, user);
 
     const entries = await this.audit.findByEntity(
       tenantId,
@@ -1117,10 +1186,15 @@ export class OpsJobsService {
     }));
   }
 
-  async getTracking(tenantId: string, jobId: string): Promise<JobTrackingDto> {
+  async getTracking(
+    tenantId: string,
+    jobId: string,
+    user: any,
+  ): Promise<JobTrackingDto> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
       select: {
+        customerCompanyId: true,
         lastLat: true,
         lastLng: true,
         lastLocationAt: true,
@@ -1131,6 +1205,8 @@ export class OpsJobsService {
     });
 
     if (!job) throw new NotFoundException("Job not found");
+
+    this.assertCanAccessJob(job, user);
 
     return {
       lastLat: job.lastLat,
@@ -1332,11 +1408,13 @@ export class OpsJobsService {
   async importConfirm(
     tenantId: string,
     requestRows: ImportConfirmRowDto[],
-    actorUserId: string | null,
+    user: any,
   ): Promise<{
     createdCount: number;
     failedRows: { rowNumber: number; reason: string }[];
   }> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
     const failedRows: { rowNumber: number; reason: string }[] = [];
     let createdCount = 0;
 
@@ -1776,8 +1854,10 @@ export class OpsJobsService {
   async lclImportConfirm(
     tenantId: string,
     dto: LclImportConfirmRequestDto,
-    actorUserId: string | null,
+    user: any,
   ): Promise<LclImportConfirmResponseDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
     const company = await this.prisma.customer_companies.findFirst({
       where: { id: dto.customerCompanyId, tenantId },
     });

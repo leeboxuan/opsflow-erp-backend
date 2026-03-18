@@ -20,21 +20,33 @@ import { ListInvoicesQueryDto } from "./dto/list-invoices-query.dto";
 @ApiTags("Finance")
 @Controller("finance/invoices")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.ADMIN, Role.OPS) // add Role.FINANCE later if you have it
+@Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER) // add Role.FINANCE later if you have it
 @ApiBearerAuth("JWT-auth")
 export class InvoicesController {
   constructor(private readonly invoices: InvoicesService) {}
 
   @Get()
+  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
   async list(@Request() req: any, @Query() query: ListInvoicesQueryDto) {
     const tenantId = req.tenant.tenantId;
-    return this.invoices.listInvoices(tenantId, query);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.listInvoices(tenantId, query, accessUser);
   }
 
   @Get(":id")
+  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
   async get(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
-    return this.invoices.getInvoice(tenantId, id);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.getInvoice(tenantId, id, accessUser);
   }
   // Update an existing Draft invoice (used by web: /invoices/[id]/edit)
   @Post(":id/draft")
@@ -44,35 +56,56 @@ export class InvoicesController {
     @Body() dto: CreateInvoiceDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.id;
-    return this.invoices.updateDraftInvoice(tenantId, id, dto, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.updateDraftInvoice(tenantId, id, dto, accessUser);
   }
 
   @Post()
   async create(@Request() req: any, @Body() dto: CreateInvoiceDto) {
     const tenantId = req.tenant.tenantId;
-    return this.invoices.createInvoice(tenantId, dto);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.createInvoice(tenantId, dto, accessUser);
   }
 
   @Post("draft")
   async createDraft(@Request() req: any, @Body() dto: CreateInvoiceDto) {
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.id;
-    return this.invoices.createDraftInvoice(tenantId, dto, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.createDraftInvoice(tenantId, dto, accessUser);
   }
 
   @Post(":id/issue")
   async issue(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
-    const issuedByUserId = req.user?.id; // adapt to your auth context
-    return this.invoices.issueInvoice(tenantId, id, issuedByUserId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.issueInvoice(tenantId, id, accessUser);
   }
 
   @Post(":id/revert")
   async revertToDraft(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
-    const userId = req.user?.id;
-    return this.invoices.revertInvoiceToDraft(tenantId, id, userId);
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.revertInvoiceToDraft(tenantId, id, accessUser);
   }
 
   
