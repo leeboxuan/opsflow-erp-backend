@@ -105,6 +105,38 @@ export class DriverJobsService {
     private readonly supabaseService: SupabaseService,
   ) {}
 
+  private parseMonthToRange(month: string): { gte: Date; lt: Date } {
+    const m = month.trim().match(/^(\d{4})-(\d{2})$/);
+    if (!m) throw new BadRequestException("month must be YYYY-MM");
+
+    const year = Number(m[1]);
+    const monthNum = Number(m[2]);
+    if (!monthNum || monthNum < 1 || monthNum > 12) {
+      throw new BadRequestException("month must be YYYY-MM");
+    }
+
+    const start = new Date(Date.UTC(year, monthNum - 1, 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(year, monthNum, 1, 0, 0, 0, 0));
+    return { gte: start, lt: end };
+  }
+
+  private parseDateToRange(dateStr: string): { gte: Date; lt: Date } {
+    const date = new Date(dateStr.trim() + "T00:00:00.000Z");
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException("date must be YYYY-MM-DD");
+    }
+
+    const nextDay = new Date(date);
+    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+    return { gte: date, lt: nextDay };
+  }
+
+  private parseYearToRange(year: number): { gte: Date; lt: Date } {
+    const start = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(year + 1, 0, 1, 0, 0, 0, 0));
+    return { gte: start, lt: end };
+  }
+
   private async attachSignedUrl(doc: any): Promise<JobDocumentDto> {
     const base = toDocDto(doc);
 
@@ -141,29 +173,49 @@ export class DriverJobsService {
     return job;
   }
 
-  async listByDriver(
+  async listActiveByDriver(
     tenantId: string,
     driverUserId: string,
-    dateStr: string,
-    query?: { sortBy?: string; sortDir?: string; page?: unknown; pageSize?: unknown },
+    query?: {
+      month?: string;
+      date?: string;
+      sortBy?: string;
+      sortDir?: string;
+      page?: unknown;
+      pageSize?: unknown;
+    },
   ): Promise<{ data: JobDto[]; meta: { page: number; pageSize: number; total: number } }> {
-    const date = new Date(dateStr + "T00:00:00.000Z");
-    const nextDay = new Date(date);
-    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
-
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
+
+    const statusFilter = {
+      in: [
+        JobStatus.Assigned,
+        JobStatus.InProgress,
+        JobStatus.PendingDepot,
+      ],
+    };
 
     const where: any = {
       tenantId,
       assignedDriverId: driverUserId,
-      status: {
-        in: [JobStatus.Assigned, JobStatus.InProgress, JobStatus.PendingDepot, JobStatus.Completed],
-      },
-      pickupDate: {
-        gte: date,
-        lt: nextDay,
-      },
+      status: statusFilter,
     };
+
+    // Filtering rules:
+    // - month: pickupDate within that month
+    // - date: pickupDate within that day
+    // - none: all jobs for the driver
+    const month = query?.month?.trim();
+    const dateStr = query?.date?.trim();
+
+    if (month) {
+      where.pickupDate = this.parseMonthToRange(month);
+    } else if (dateStr) {
+      where.pickupDate = this.parseDateToRange(dateStr);
+    } else {
+      // Keep sorting stable (avoid NULL pickupDate entries)
+      where.pickupDate = { not: null };
+    }
 
     const orderBy = buildOrderBy(
       query?.sortBy,
@@ -172,14 +224,12 @@ export class DriverJobsService {
       { pickupDate: "asc" },
     );
 
-    const orderByArr = Array.isArray(orderBy)
-      ? orderBy
-      : [orderBy, { createdAt: "asc" as const }];
+    const tieBreaker =
+      query?.sortBy === "createdAt"
+        ? { pickupDate: "asc" as const }
+        : { createdAt: "asc" as const };
 
-    const orderByFinal =
-      orderByArr.length === 1
-        ? [orderBy, { createdAt: "asc" as const }]
-        : orderByArr;
+    const orderByFinal = [orderBy as any, tieBreaker];
 
     const [total, jobs] = await this.prisma.$transaction([
       this.prisma.job.count({ where }),
@@ -245,6 +295,212 @@ export class DriverJobsService {
       data,
       meta: buildPaginationMeta(page, pageSize, total),
     };
+  }
+
+  async listHistoryByDriver(
+    tenantId: string,
+    driverUserId: string,
+    query?: {
+      year?: string;
+      month?: string;
+      sortBy?: string;
+      sortDir?: string;
+      page?: unknown;
+      pageSize?: unknown;
+    },
+  ): Promise<{
+    data: JobDto[];
+    meta: { page: number; pageSize: number; total: number };
+  }> {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
+
+    const month = query?.month?.trim();
+    const yearStr = query?.year?.trim();
+
+    const now = new Date();
+    const defaultYear = now.getUTCFullYear();
+
+    let range: { gte: Date; lt: Date };
+    if (month) {
+      range = this.parseMonthToRange(month);
+    } else {
+      const year = yearStr ? Number(yearStr) : defaultYear;
+      if (!year || Number.isNaN(year)) {
+        throw new BadRequestException("year must be YYYY");
+      }
+      range = this.parseYearToRange(year);
+    }
+
+    const where: any = {
+      tenantId,
+      assignedDriverId: driverUserId,
+      status: { in: [JobStatus.Completed, JobStatus.Cancelled] },
+      // Practical stable rule: filter history by pickupDate range.
+      pickupDate: range,
+    };
+
+    const defaultOrder = [
+      { completedAt: "desc" as const },
+      { updatedAt: "desc" as const },
+      { createdAt: "desc" as const },
+    ];
+
+    const sortBy = query?.sortBy;
+    const sortDir = query?.sortDir ?? "desc";
+
+    const orderByFinal = sortBy
+      ? [
+          buildOrderBy(
+            sortBy,
+            sortDir,
+            [
+              "pickupDate",
+              "completedAt",
+              "cancelledAt",
+              "updatedAt",
+              "createdAt",
+              "internalRef",
+              "status",
+            ],
+            { completedAt: "desc" },
+          ) as any,
+          ...defaultOrder,
+        ]
+      : defaultOrder;
+
+    const [total, jobs] = await this.prisma.$transaction([
+      this.prisma.job.count({ where }),
+      this.prisma.job.findMany({
+        where,
+        orderBy: orderByFinal as any,
+        skip,
+        take,
+        include: {
+          customerCompany: { select: { id: true, name: true } },
+          assignedDriver: { select: { id: true, name: true } },
+          items: { orderBy: { createdAt: "asc" } },
+          documents: {
+            where: {
+              type: { in: [JobDocumentType.POD_PHOTO, JobDocumentType.SIGNATURE] },
+            },
+            orderBy: { createdAt: "desc" },
+          },
+        },
+      }),
+    ]);
+
+    const vehicleIds = [
+      ...new Set(jobs.map((j) => j.assignedVehicleId).filter(Boolean)),
+    ] as string[];
+
+    const vehicles = vehicleIds.length
+      ? await this.prisma.vehicle.findMany({
+          where: { tenantId, id: { in: vehicleIds } },
+          select: { id: true, plateNo: true },
+        })
+      : [];
+
+    const vehicleMap = new Map(vehicles.map((v) => [v.id, v.plateNo]));
+
+    const data = jobs.map((job: any) => {
+      const dto = toJobDto({
+        ...job,
+        assignedVehiclePlateNo: job.assignedVehicleId
+          ? vehicleMap.get(job.assignedVehicleId) ?? null
+          : null,
+      });
+
+      return { ...dto, documents: dto.documents ?? [] };
+    });
+
+    return {
+      data,
+      meta: buildPaginationMeta(page, pageSize, total),
+    };
+  }
+
+  async getHistorySummaryByDriver(
+    tenantId: string,
+    driverUserId: string,
+  ): Promise<{
+    years: {
+      year: number;
+      total: number;
+      months: { month: string; label: string; total: number }[];
+    }[];
+  }> {
+    const rows = await this.prisma.$queryRaw<
+      Array<{ year: number; month: string; monthNum: number; total: number }>
+    >`
+      SELECT
+        date_part('year', "pickupDate")::int AS "year",
+        to_char("pickupDate", 'YYYY-MM') AS "month",
+        date_part('month', "pickupDate")::int AS "monthNum",
+        COUNT(*)::int AS "total"
+      FROM jobs
+      WHERE
+        "tenantId" = ${tenantId}
+        AND "assignedDriverId" = ${driverUserId}
+        AND "status" IN ('Completed', 'Cancelled')
+        AND "pickupDate" IS NOT NULL
+      GROUP BY 1, 2, 3
+      ORDER BY 1 DESC, 3 DESC
+    `;
+
+    const monthNames = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+    ];
+
+    const byYear = new Map<
+      number,
+      {
+        year: number;
+        total: number;
+        months: { month: string; label: string; total: number; monthNum: number }[];
+      }
+    >();
+
+    for (const r of rows ?? []) {
+      const entry =
+        byYear.get(r.year) ??
+        ({
+          year: r.year,
+          total: 0,
+          months: [],
+        } as any);
+
+      entry.total += r.total;
+      entry.months.push({
+        month: r.month,
+        label: monthNames[r.monthNum - 1] ?? r.month,
+        total: r.total,
+        monthNum: r.monthNum,
+      });
+      byYear.set(r.year, entry);
+    }
+
+    const years = Array.from(byYear.values()).map((y) => {
+      y.months.sort((a, b) => b.monthNum - a.monthNum);
+      return {
+        year: y.year,
+        total: y.total,
+        months: y.months.map((m) => ({ month: m.month, label: m.label, total: m.total })),
+      };
+    });
+
+    years.sort((a, b) => b.year - a.year);
+    return { years };
   }
 
   async getOneForDriver(

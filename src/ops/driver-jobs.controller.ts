@@ -27,6 +27,7 @@ import { Roles } from "../auth/guards/role.guard";
 import { Role } from "@prisma/client";
 import { DriverJobsService } from "./driver-jobs.service";
 import { DriverJobsListQueryDto } from "./dto/driver-jobs-list-query.dto";
+import { DriverJobsHistoryListQueryDto } from "./dto/driver-jobs-history-list-query.dto";
 import { DriverCompleteJobDto } from "./dto/complete-job.dto";
 import { JobLocationDto } from "./dto/location.dto";
 
@@ -39,15 +40,44 @@ export class DriverJobsController {
   constructor(private readonly driverJobs: DriverJobsService) {}
 
   @Get()
-  @ApiOperation({ summary: "List jobs assigned to driver for date (default today)" })
+  @ApiOperation({ summary: "Alias for active jobs" })
   async list(
     @Req() req: any,
     @Query() query: DriverJobsListQueryDto,
   ): Promise<{ data: any[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
-    const dateStr = query.date ?? new Date().toISOString().slice(0, 10);
-    return this.driverJobs.listByDriver(tenantId, userId, dateStr, query);
+    return this.driverJobs.listActiveByDriver(tenantId, userId, query);
+  }
+
+  @Get("active")
+  @ApiOperation({ summary: "Active jobs assigned to driver" })
+  async listActive(
+    @Req() req: any,
+    @Query() query: DriverJobsListQueryDto,
+  ): Promise<{ data: any[]; meta: { page: number; pageSize: number; total: number } }> {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.listActiveByDriver(tenantId, userId, query);
+  }
+
+  @Get("history")
+  @ApiOperation({ summary: "Driver job history (completed/cancelled) with year/month filters" })
+  async listHistory(
+    @Req() req: any,
+    @Query() query: DriverJobsHistoryListQueryDto,
+  ): Promise<{ data: any[]; meta: { page: number; pageSize: number; total: number } }> {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.listHistoryByDriver(tenantId, userId, query);
+  }
+
+  @Get("history/summary")
+  @ApiOperation({ summary: "History year/month bucket summary for accordion UI" })
+  async historySummary(@Req() req: any): Promise<any> {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.getHistorySummaryByDriver(tenantId, userId);
   }
 
   @Get(":jobId")
