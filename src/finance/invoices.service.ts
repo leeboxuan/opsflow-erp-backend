@@ -537,49 +537,62 @@ export class InvoicesService {
       if (inv.status !== "Draft")
         throw new BadRequestException("Invoice is not Draft");
 
-      const orderIds: string[] = (inv.snapshot as any)?.orderIds ?? [];
-      if (!orderIds.length)
-        throw new BadRequestException("No orders on draft invoice");
+      const rawOrderIds = (inv.snapshot as any)?.orderIds;
+      const orderIds: string[] = Array.isArray(rawOrderIds)
+        ? rawOrderIds
+        : [];
 
-      // re-validate eligibility
-      const orders = await tx.transportOrder.findMany({
-        where: { tenantId, id: { in: orderIds } },
-        select: {
-          id: true,
-          status: true,
-          invoiceId: true,
-          orderRef: true,
-          internalRef: true,
-          priceCents: true,
-        },
-      });
+      let orders: Array<{
+        id: string;
+        orderRef: string;
+        internalRef: string | null;
+        priceCents: number | null;
+      }> = [];
 
-      if (orders.length !== orderIds.length) {
-        throw new BadRequestException("Some orders no longer exist");
-      }
+      if (orderIds.length > 0) {
+        // Re-validate eligibility and link transport orders to this invoice.
+        const found = await tx.transportOrder.findMany({
+          where: { tenantId, id: { in: orderIds } },
+          select: {
+            id: true,
+            status: true,
+            invoiceId: true,
+            orderRef: true,
+            internalRef: true,
+            priceCents: true,
+          },
+        });
 
-      const bad = orders.find(
-        (o) => o.invoiceId || o.status !== OrderStatus.Delivered,
-      );
-      if (bad)
-        throw new BadRequestException(
-          "Some orders are no longer eligible to invoice",
+        if (found.length !== orderIds.length) {
+          throw new BadRequestException("Some orders no longer exist");
+        }
+
+        const bad = found.find(
+          (o) => o.invoiceId || o.status !== OrderStatus.Delivered,
         );
+        if (bad) {
+          throw new BadRequestException(
+            "Some orders are no longer eligible to invoice",
+          );
+        }
 
-      // concurrency-safe link: only link those that are still invoiceId=null
-      const updated = await tx.transportOrder.updateMany({
-        where: { tenantId, id: { in: orderIds }, invoiceId: null },
-        data: { invoiceId: inv.id, status: OrderStatus.Closed },
-      });
+        const updated = await tx.transportOrder.updateMany({
+          where: { tenantId, id: { in: orderIds }, invoiceId: null },
+          data: { invoiceId: inv.id, status: OrderStatus.Closed },
+        });
 
-      if (updated.count !== orderIds.length) {
-        throw new BadRequestException(
-          "Some orders were invoiced by someone else",
-        );
+        if (updated.count !== orderIds.length) {
+          throw new BadRequestException(
+            "Some orders were invoiced by someone else",
+          );
+        }
+
+        orders = found;
       }
 
       const finalSnapshot = {
         stage: "Sent",
+        orderIds,
         invoice: {
           id: inv.id,
           invoiceNo: inv.invoiceNo,
@@ -684,7 +697,8 @@ export class InvoicesService {
     return await this.toDtoWithNames(updated, snapshotOrderIds);
   }
 
-  // Update an existing Draft invoice: replaces line items and snapshot orderIds.
+  // Update an existing Draft invoice: replaces line items; snapshot orderIds are
+  // optional (omit dto.orderIds to keep existing; send [] to clear).
   // NOTE: Sent invoices must be reverted first.
   async updateDraftInvoice(
     tenantId: string,
@@ -694,7 +708,6 @@ export class InvoicesService {
   ): Promise<InvoiceDto> {
     this.assertCustomerCanOnlyRead(user);
     const updatedByUserId: string | null = user?.userId ?? null;
-    const orderIds = dto.orderIds ?? [];
     const updated = await this.prisma.$transaction(async (tx) => {
       const inv = await tx.invoice.findFirst({
         where: { tenantId, id: invoiceId },
@@ -705,6 +718,14 @@ export class InvoicesService {
       if (inv.status !== "Draft") {
         throw new BadRequestException("Only Draft invoices can be updated");
       }
+
+      const prevSnapEarly = inv.snapshot as any;
+      const existingOrderIds = Array.isArray(prevSnapEarly?.orderIds)
+        ? (prevSnapEarly.orderIds as string[])
+        : [];
+      // Optional: omit orderIds on PATCH to keep current snapshot; send [] to clear.
+      const orderIds =
+        dto.orderIds !== undefined ? (dto.orderIds ?? []) : existingOrderIds;
 
       // Validate orders only when orderIds are provided.
       const orders =

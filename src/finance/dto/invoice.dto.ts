@@ -63,8 +63,9 @@ export class CreateInvoiceDto {
   @IsString()
   notes?: string;
 
-  @ApiProperty({
-    description: 'Orders to tag to this invoice',
+  @ApiPropertyOptional({
+    description:
+      'Optional transport order ids to associate with this draft. Omit entirely if the invoice has no jobs/orders. When updating a draft, omit to keep existing snapshot orderIds; send [] to clear.',
     type: [String],
   })
   @IsOptional()
@@ -110,8 +111,12 @@ export class InvoiceDto {
   @ApiProperty({ type: [InvoiceLineItemDto] })
   lineItems: InvoiceLineItemDto[];
 
-  @ApiProperty({ type: [String] })
-  orderIds: string[];
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Associated transport order ids from snapshot or linked orders; empty array when none.',
+  })
+  orderIds?: string[];
 
   // --- tracking / side panel fields ---
   @ApiPropertyOptional() confirmedAt?: Date | null;
