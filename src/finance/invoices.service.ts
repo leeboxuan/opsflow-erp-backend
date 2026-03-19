@@ -14,7 +14,6 @@ import { applyQSearch } from "../common/listing/listing.search";
 import { CreateInvoiceDto, InvoiceDto } from "./dto/invoice.dto";
 import { OrderStatus, Role } from "@prisma/client";
 import { SupabaseService } from "../auth/supabase.service";
-import { PDFDocument, StandardFonts } from "pdf-lib";
 
 function toBasisPoints(rate: number) {
   return Math.round(rate);
@@ -44,140 +43,6 @@ export class InvoicesService {
       .replace(/[\\/:*?"<>|]+/g, "-")
       .replace(/\s+/g, " ")
       .trim();
-  }
-
-  private async buildInvoicePdfBuffer(inv: {
-    invoiceNo: string;
-    customerName: string;
-    currency: string;
-    issueDate: Date;
-    dueDate: Date | null;
-    notes: string | null;
-    subtotalCents: number;
-    taxCents: number;
-    totalCents: number;
-    lineItems: Array<{
-      description: string;
-      qty: number;
-      unitPriceCents: number;
-      amountCents: number;
-      taxCode: string;
-      taxRate: number;
-      taxCents: number;
-    }>;
-  }): Promise<Buffer> {
-    const pdf = await PDFDocument.create();
-    const page = pdf.addPage([595.28, 841.89]); // A4 portrait
-    const font = await pdf.embedFont(StandardFonts.Helvetica);
-    const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-
-    const draw = (
-      text: string,
-      x: number,
-      y: number,
-      size = 10,
-      useBold = false,
-    ) => {
-      page.drawText(String(text ?? ""), {
-        x,
-        y,
-        size,
-        font: useBold ? bold : font,
-      });
-    };
-
-    const fmtDate = (d: Date | null | undefined) =>
-      d ? new Date(d).toISOString().slice(0, 10) : "-";
-    const fmtMoney = (cents: number) =>
-      `${inv.currency} ${(Number(cents || 0) / 100).toFixed(2)}`;
-
-    let y = 800;
-    draw("INVOICE", 40, y, 20, true);
-    y -= 30;
-
-    draw(`Invoice No: ${inv.invoiceNo}`, 40, y, 11, true);
-    draw(`Issue Date: ${fmtDate(inv.issueDate)}`, 320, y, 10);
-    y -= 18;
-    draw(`Customer: ${inv.customerName}`, 40, y, 10);
-    draw(`Due Date: ${fmtDate(inv.dueDate)}`, 320, y, 10);
-    y -= 30;
-
-    draw("Description", 40, y, 10, true);
-    draw("Qty", 300, y, 10, true);
-    draw("Unit", 350, y, 10, true);
-    draw("Amount", 470, y, 10, true);
-    y -= 12;
-
-    page.drawLine({
-      start: { x: 40, y },
-      end: { x: 555, y },
-      thickness: 1,
-    });
-    y -= 14;
-
-    const rows = inv.lineItems ?? [];
-    for (const l of rows) {
-      if (y < 120) break; // simple single-page safeguard
-      draw(l.description ?? "-", 40, y, 10);
-      draw(String(l.qty ?? 0), 300, y, 10);
-      draw(fmtMoney(l.unitPriceCents ?? 0), 350, y, 10);
-      draw(fmtMoney(l.amountCents ?? 0), 470, y, 10);
-      y -= 16;
-    }
-
-    y -= 20;
-    draw(`Subtotal: ${fmtMoney(inv.subtotalCents ?? 0)}`, 380, y, 10, true);
-    y -= 16;
-    draw(`Tax: ${fmtMoney(inv.taxCents ?? 0)}`, 380, y, 10, true);
-    y -= 16;
-    draw(`Total: ${fmtMoney(inv.totalCents ?? 0)}`, 380, y, 11, true);
-
-    if (inv.notes) {
-      y -= 28;
-      draw("Notes:", 40, y, 10, true);
-      y -= 14;
-      draw(inv.notes, 40, y, 10);
-    }
-
-    const bytes = await pdf.save();
-    return Buffer.from(bytes);
-  }
-
-  private async regenerateAndStoreInvoicePdf(params: {
-    tenantId: string;
-    invoiceId: string;
-    invoiceNo: string;
-    previousPdfKey?: string | null;
-    pdfBuffer: Buffer;
-  }): Promise<{ pdfKey: string; pdfGeneratedAt: Date }> {
-    const { tenantId, invoiceId, invoiceNo, previousPdfKey, pdfBuffer } = params;
-    const safeInvoiceNo = this.safeFileName(invoiceNo || `invoice-${invoiceId}`);
-    const fileName = `${safeInvoiceNo}.pdf`;
-    const storageKey = `${tenantId}/invoices/${invoiceId}/${Date.now()}-${fileName}`;
-
-    const supabase = this.supabaseService.getClient();
-
-    if (previousPdfKey) {
-      await supabase.storage
-        .from(this.INVOICE_PDFS_BUCKET)
-        .remove([previousPdfKey]);
-    }
-
-    const { error: uploadError } = await supabase.storage
-      .from(this.INVOICE_PDFS_BUCKET)
-      .upload(storageKey, pdfBuffer, {
-        contentType: "application/pdf",
-        upsert: false,
-      });
-
-    if (uploadError) {
-      throw new BadRequestException(
-        `Failed to upload generated invoice PDF: ${uploadError.message}`,
-      );
-    }
-
-    const pdfGeneratedAt = new Date();
-    return { pdfKey: storageKey, pdfGeneratedAt };
   }
 
   private getCustomerCompanyIdOrThrow(user: any): string {
@@ -652,41 +517,9 @@ export class InvoicesService {
       },
     });
 
-    // Auto-generate and store initial draft PDF.
-    const pdfBuffer = await this.buildInvoicePdfBuffer({
-      invoiceNo: created.invoiceNo,
-      customerName: created.customerName,
-      currency: created.currency,
-      issueDate: created.issueDate,
-      dueDate: created.dueDate,
-      notes: created.notes ?? null,
-      subtotalCents: created.subtotalCents,
-      taxCents: created.taxCents,
-      totalCents: created.totalCents,
-      lineItems: created.lineItems,
-    });
-    const storedPdf = await this.regenerateAndStoreInvoicePdf({
-      tenantId,
-      invoiceId: created.id,
-      invoiceNo: created.invoiceNo,
-      previousPdfKey: created.pdfKey ?? null,
-      pdfBuffer,
-    });
-
-    const createdWithPdf = await this.prisma.invoice.update({
-      where: { id: created.id },
-      data: {
-        pdfKey: storedPdf.pdfKey,
-        pdfGeneratedAt: storedPdf.pdfGeneratedAt,
-      },
-      include: {
-        lineItems: true,
-        orders: { select: { id: true } },
-      },
-    });
-
-    // Return orderIds from dto since orders aren't linked yet
-    return await this.toDtoWithNames(createdWithPdf, orderIds);
+    // Return orderIds from dto since orders aren't linked yet.
+    // PDF: generated on the client and uploaded via POST .../pdf.
+    return this.toDtoWithNames(created, orderIds);
   }
 
   async issueInvoice(tenantId: string, invoiceId: string, user: any) {
@@ -785,8 +618,7 @@ export class InvoicesService {
       return locked;
     });
 
-    // PDF generation + storage upload happens AFTER commit (safer)
-    // If it fails, invoice is still Issued; you can retry via "regenerate pdf" endpoint.
+    // Invoice PDF is generated on the frontend and uploaded via POST .../pdf.
     return this.toDtoWithNames(result);
   }
 
@@ -980,43 +812,11 @@ export class InvoicesService {
       return inv2;
     });
 
-    // Auto-regenerate PDF and replace previous stored invoice PDF.
-    const pdfBuffer = await this.buildInvoicePdfBuffer({
-      invoiceNo: updated.invoiceNo,
-      customerName: updated.customerName,
-      currency: updated.currency,
-      issueDate: updated.issueDate,
-      dueDate: updated.dueDate,
-      notes: updated.notes ?? null,
-      subtotalCents: updated.subtotalCents,
-      taxCents: updated.taxCents,
-      totalCents: updated.totalCents,
-      lineItems: updated.lineItems,
-    });
-    const storedPdf = await this.regenerateAndStoreInvoicePdf({
-      tenantId,
-      invoiceId: updated.id,
-      invoiceNo: updated.invoiceNo,
-      previousPdfKey: updated.pdfKey ?? null,
-      pdfBuffer,
-    });
-
-    const updatedWithPdf = await this.prisma.invoice.update({
-      where: { id: updated.id },
-      data: {
-        pdfKey: storedPdf.pdfKey,
-        pdfGeneratedAt: storedPdf.pdfGeneratedAt,
-      },
-      include: {
-        lineItems: true,
-        orders: { select: { id: true } },
-      },
-    });
-
-    // Draft has no linked orders; return with snapshot orderIds
-    const snap = updatedWithPdf.snapshot as any;
+    // Draft has no linked orders; return with snapshot orderIds.
+    // PDF: regenerated on the client after edits; upload via POST .../pdf.
+    const snap = updated.snapshot as any;
     const snapshotOrderIds = Array.isArray(snap?.orderIds) ? snap.orderIds : [];
-    return await this.toDtoWithNames(updatedWithPdf, snapshotOrderIds);
+    return this.toDtoWithNames(updated, snapshotOrderIds);
   }
 
   async uploadInvoicePdf(
