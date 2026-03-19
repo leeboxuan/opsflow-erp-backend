@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -6,9 +7,11 @@ import {
   Post,
   Query,
   Request,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
-import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from "@nestjs/swagger";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
 import { RoleGuard, Roles } from "@/auth/guards/role.guard";
@@ -16,6 +19,7 @@ import { Role } from "@prisma/client";
 import { InvoicesService } from "./invoices.service";
 import { CreateInvoiceDto } from "./dto/invoice.dto";
 import { ListInvoicesQueryDto } from "./dto/list-invoices-query.dto";
+import { FileInterceptor } from "@nestjs/platform-express";
 
 @ApiTags("Finance")
 @Controller("finance/invoices")
@@ -108,5 +112,46 @@ export class InvoicesController {
     return this.invoices.revertInvoiceToDraft(tenantId, id, accessUser);
   }
 
-  
+  @Post(":id/pdf")
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  async uploadPdf(
+    @Request() req: any,
+    @Param("id") id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) {
+      throw new BadRequestException("file is required");
+    }
+
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+
+    return this.invoices.uploadInvoicePdf(tenantId, id, file, accessUser);
+  }
+
+  @Get(":id/pdf/download")
+  async getDownloadUrl(@Request() req: any, @Param("id") id: string) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+
+    return this.invoices.getInvoicePdfDownloadUrl(tenantId, id, accessUser);
+  }
 }

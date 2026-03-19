@@ -4,12 +4,16 @@ import {
   Injectable,
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
-import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
+import {
+  parsePaginationFromQuery,
+  buildPaginationMeta,
+} from "../common/pagination";
 import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
 import { CreateInvoiceDto, InvoiceDto } from "./dto/invoice.dto";
 import { OrderStatus, Role } from "@prisma/client";
+import { SupabaseService } from "../auth/supabase.service";
 
 function toBasisPoints(rate: number) {
   return Math.round(rate);
@@ -24,10 +28,22 @@ function extractDraftMeta(snapshot: any) {
   };
 }
 
-
 @Injectable()
 export class InvoicesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private supabaseService: SupabaseService,
+  ) {}
+
+  private readonly INVOICE_PDFS_BUCKET = "invoice-documents";
+  private readonly PDF_SIGNED_URL_TTL_SECONDS = 60 * 10;
+
+  private safeFileName(value: string) {
+    return value
+      .replace(/[\\/:*?"<>|]+/g, "-")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
 
   private getCustomerCompanyIdOrThrow(user: any): string {
     if (user?.role !== Role.CUSTOMER) {
@@ -55,8 +71,9 @@ export class InvoicesService {
     if (user?.role !== Role.CUSTOMER) return;
     const customerCompanyId = this.getCustomerCompanyIdOrThrow(user);
     const orderMatches =
-      inv?.orders?.some((o: any) => o?.customerCompanyId === customerCompanyId) ??
-      false;
+      inv?.orders?.some(
+        (o: any) => o?.customerCompanyId === customerCompanyId,
+      ) ?? false;
     if (!orderMatches) {
       throw new ForbiddenException("Not allowed to access this invoice");
     }
@@ -64,13 +81,22 @@ export class InvoicesService {
 
   async listInvoices(
     tenantId: string,
-    query?: { q?: string; filter?: string; sortBy?: string; sortDir?: string; page?: unknown; pageSize?: unknown },
+    query?: {
+      q?: string;
+      filter?: string;
+      sortBy?: string;
+      sortDir?: string;
+      page?: unknown;
+      pageSize?: unknown;
+    },
     user?: any,
   ): Promise<{
     data: any[];
     meta: { page: number; pageSize: number; total: number };
   }> {
-    const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(
+      query ?? {},
+    );
 
     const where: any = { tenantId };
     if (user?.role === Role.CUSTOMER) {
@@ -81,7 +107,7 @@ export class InvoicesService {
     applyQSearch(where, query?.q?.trim(), ["invoiceNo", "customerName"]);
     applyMappedFilter(where, query?.filter, {
       Draft: { status: "Draft" },
-      Issued: { status: "Issued" },
+      Sent: { status: "Sent" },
       Paid: { status: "Paid" },
       Void: { status: "Void" },
     });
@@ -89,7 +115,14 @@ export class InvoicesService {
     const orderBy = buildOrderBy(
       query?.sortBy,
       query?.sortDir,
-      ["createdAt", "updatedAt", "invoiceNo", "status", "issueDate", "issuedAt"],
+      [
+        "createdAt",
+        "updatedAt",
+        "invoiceNo",
+        "status",
+        "issueDate",
+        "issuedAt",
+      ],
       { createdAt: "desc" },
     );
 
@@ -261,25 +294,34 @@ export class InvoicesService {
     return `${prefix}${seqStr}`;
   }
 
-  private async toDtoWithNames(inv: any, fallbackOrderIds?: string[]): Promise<InvoiceDto> {
+  private async toDtoWithNames(
+    inv: any,
+    fallbackOrderIds?: string[],
+  ): Promise<InvoiceDto> {
     const snap = inv.snapshot as any;
     const meta = extractDraftMeta(snap);
-  
+
     const confirmedByUserId = meta.confirmedByUserId;
     const markedAsSentByUserId = inv.issuedByUserId ?? null;
-  
-    const userIds = [confirmedByUserId, markedAsSentByUserId].filter(Boolean) as string[];
+
+    const userIds = [confirmedByUserId, markedAsSentByUserId].filter(
+      Boolean,
+    ) as string[];
     const users = userIds.length
       ? await this.prisma.user.findMany({
           where: { id: { in: userIds } },
           select: { id: true, name: true, email: true },
         })
       : [];
-  
-    const nameById = new Map<string, string>(users.map((u) => [u.id, u.name ?? u.email ?? u.id]));
-  
-    const orderIds = inv.orders?.length ? inv.orders.map((o: any) => o.id) : (fallbackOrderIds ?? meta.orderIds);
-  
+
+    const nameById = new Map<string, string>(
+      users.map((u) => [u.id, u.name ?? u.email ?? u.id]),
+    );
+
+    const orderIds = inv.orders?.length
+      ? inv.orders.map((o: any) => o.id)
+      : (fallbackOrderIds ?? meta.orderIds);
+
     return {
       id: inv.id,
       invoiceNo: inv.invoiceNo,
@@ -303,20 +345,23 @@ export class InvoicesService {
         taxCents: l.taxCents,
       })),
       orderIds,
-  
+
       confirmedAt: meta.confirmedAt,
       confirmedByUserId: confirmedByUserId,
-      confirmedByName: confirmedByUserId ? (nameById.get(confirmedByUserId) ?? null) : null,
-  
+      confirmedByName: confirmedByUserId
+        ? (nameById.get(confirmedByUserId) ?? null)
+        : null,
+
       markedAsSentAt: inv.issuedAt ?? null,
       markedAsSentByUserId: markedAsSentByUserId,
-      markedAsSentByName: markedAsSentByUserId ? (nameById.get(markedAsSentByUserId) ?? null) : null,
-  
+      markedAsSentByName: markedAsSentByUserId
+        ? (nameById.get(markedAsSentByUserId) ?? null)
+        : null,
+
       pdfKey: inv.pdfKey ?? null,
       pdfGeneratedAt: inv.pdfGeneratedAt ?? null,
     };
   }
-  
 
   async createDraftInvoice(
     tenantId: string,
@@ -357,22 +402,27 @@ export class InvoicesService {
         );
       }
     }
-  
+
     const normalized = dto.lineItems.map((l) => {
       const amountCents = l.qty * l.unitPriceCents;
-      const taxCents = l.taxRate > 0 ? Math.round((amountCents * l.taxRate) / 10000) : 0;
+      const taxCents =
+        l.taxRate > 0 ? Math.round((amountCents * l.taxRate) / 10000) : 0;
       return { ...l, amountCents, taxCents, taxRate: toBasisPoints(l.taxRate) };
     });
-  
+
     const subtotalCents = normalized.reduce((s, l) => s + l.amountCents, 0);
     const taxCents = normalized.reduce((s, l) => s + l.taxCents, 0);
     const totalCents = subtotalCents + taxCents;
-  
-    const issueDate = dto.issueDateISO ? new Date(dto.issueDateISO + "T00:00:00") : new Date();
-    const dueDate = dto.dueDateISO ? new Date(dto.dueDateISO + "T00:00:00") : null;
-  
+
+    const issueDate = dto.issueDateISO
+      ? new Date(dto.issueDateISO + "T00:00:00")
+      : new Date();
+    const dueDate = dto.dueDateISO
+      ? new Date(dto.dueDateISO + "T00:00:00")
+      : null;
+
     const invoiceNo = await this.nextInvoiceNo(tenantId, issueDate);
-  
+
     const created = await this.prisma.invoice.create({
       data: {
         tenantId,
@@ -410,52 +460,67 @@ export class InvoicesService {
         orders: { select: { id: true } }, // empty until "Sent"
       },
     });
-  
+
     // Return orderIds from dto since orders aren't linked yet
     return await this.toDtoWithNames(created, orderIds);
   }
-  
-  
+
   async issueInvoice(tenantId: string, invoiceId: string, user: any) {
     this.assertCustomerCanOnlyRead(user);
     const issuedByUserId: string | null = user?.userId ?? null;
     const issuedAt = new Date();
-  
+
     const result = await this.prisma.$transaction(async (tx) => {
       const inv = await tx.invoice.findFirst({
         where: { tenantId, id: invoiceId },
         include: { lineItems: true },
       });
-  
+
       if (!inv) throw new BadRequestException("Invoice not found");
-      if (inv.status !== "Draft") throw new BadRequestException("Invoice is not Draft");
-  
+      if (inv.status !== "Draft")
+        throw new BadRequestException("Invoice is not Draft");
+
       const orderIds: string[] = (inv.snapshot as any)?.orderIds ?? [];
-      if (!orderIds.length) throw new BadRequestException("No orders on draft invoice");
-  
+      if (!orderIds.length)
+        throw new BadRequestException("No orders on draft invoice");
+
       // re-validate eligibility
       const orders = await tx.transportOrder.findMany({
         where: { tenantId, id: { in: orderIds } },
-        select: { id: true, status: true, invoiceId: true, orderRef: true, internalRef: true, priceCents: true },
+        select: {
+          id: true,
+          status: true,
+          invoiceId: true,
+          orderRef: true,
+          internalRef: true,
+          priceCents: true,
+        },
       });
-  
+
       if (orders.length !== orderIds.length) {
         throw new BadRequestException("Some orders no longer exist");
       }
-  
-      const bad = orders.find((o) => o.invoiceId || o.status !== OrderStatus.Delivered);
-      if (bad) throw new BadRequestException("Some orders are no longer eligible to invoice");
-  
+
+      const bad = orders.find(
+        (o) => o.invoiceId || o.status !== OrderStatus.Delivered,
+      );
+      if (bad)
+        throw new BadRequestException(
+          "Some orders are no longer eligible to invoice",
+        );
+
       // concurrency-safe link: only link those that are still invoiceId=null
       const updated = await tx.transportOrder.updateMany({
         where: { tenantId, id: { in: orderIds }, invoiceId: null },
         data: { invoiceId: inv.id, status: OrderStatus.Closed },
       });
-  
+
       if (updated.count !== orderIds.length) {
-        throw new BadRequestException("Some orders were invoiced by someone else");
+        throw new BadRequestException(
+          "Some orders were invoiced by someone else",
+        );
       }
-  
+
       const finalSnapshot = {
         stage: "Sent",
         invoice: {
@@ -478,7 +543,7 @@ export class InvoicesService {
         })),
         lineItems: inv.lineItems,
       };
-  
+
       const locked = await tx.invoice.update({
         where: { id: inv.id },
         data: {
@@ -487,13 +552,15 @@ export class InvoicesService {
           issuedByUserId: issuedByUserId ?? null,
           lockedAt: issuedAt,
           snapshot: finalSnapshot,
+          sentAt: new Date(),
+          sentByUserId: issuedByUserId ?? null,
         },
         include: { lineItems: true, orders: { select: { id: true } } },
       });
-  
+
       return locked;
     });
-  
+
     // PDF generation + storage upload happens AFTER commit (safer)
     // If it fails, invoice is still Issued; you can retry via "regenerate pdf" endpoint.
     return this.toDtoWithNames(result);
@@ -503,39 +570,43 @@ export class InvoicesService {
     this.assertCustomerCanOnlyRead(user);
     const userId: string | null = user?.userId ?? null;
     const now = new Date();
-  
+
     const updated = await this.prisma.$transaction(async (tx) => {
       const inv = await tx.invoice.findFirst({
         where: { tenantId, id: invoiceId },
         include: { orders: { select: { id: true } }, lineItems: true },
       });
-  
+
       if (!inv) throw new BadRequestException("Invoice not found");
-      if (inv.status !== "Sent") throw new BadRequestException("Only Sent invoices can be reverted");
-  
+      if (inv.status !== "Sent")
+        throw new BadRequestException("Only Sent invoices can be reverted");
+
       const linkedOrderIds = inv.orders.map((o) => o.id);
-  
+
       // unlink orders (make them "awaiting invoice" again)
       await tx.transportOrder.updateMany({
         where: { tenantId, id: { in: linkedOrderIds }, invoiceId: inv.id },
         data: { invoiceId: null },
       });
-  
+
       const prevSnap = inv.snapshot as any;
       const draftMeta = extractDraftMeta(prevSnap);
-  
+
       const nextSnapshot = {
         ...(prevSnap ?? {}),
         stage: "Draft",
         orderIds: linkedOrderIds,
         // keep original confirm info if it existed
-        confirmedAt: draftMeta.confirmedAt ? draftMeta.confirmedAt.toISOString() : prevSnap?.confirmedAt ?? null,
-        confirmedByUserId: draftMeta.confirmedByUserId ?? prevSnap?.confirmedByUserId ?? null,
+        confirmedAt: draftMeta.confirmedAt
+          ? draftMeta.confirmedAt.toISOString()
+          : (prevSnap?.confirmedAt ?? null),
+        confirmedByUserId:
+          draftMeta.confirmedByUserId ?? prevSnap?.confirmedByUserId ?? null,
         // optional audit
         revertedAt: now.toISOString(),
         revertedByUserId: userId ?? null,
       };
-  
+
       const inv2 = await tx.invoice.update({
         where: { id: inv.id },
         data: {
@@ -547,17 +618,17 @@ export class InvoicesService {
         },
         include: { lineItems: true, orders: { select: { id: true } } }, // now empty
       });
-  
+
       return inv2;
     });
-  
+
     // invoice has no linked orders now; return with snapshot orderIds for UI continuity
     const snap = updated.snapshot as any;
     const snapshotOrderIds = Array.isArray(snap?.orderIds) ? snap.orderIds : [];
     return await this.toDtoWithNames(updated, snapshotOrderIds);
   }
-  
-    // Update an existing Draft invoice: replaces line items and snapshot orderIds.
+
+  // Update an existing Draft invoice: replaces line items and snapshot orderIds.
   // NOTE: Sent invoices must be reverted first.
   async updateDraftInvoice(
     tenantId: string,
@@ -589,7 +660,9 @@ export class InvoicesService {
           : [];
 
       if (orderIds.length > 0 && orders.length !== orderIds.length) {
-        throw new BadRequestException("Some orders not found under this tenant");
+        throw new BadRequestException(
+          "Some orders not found under this tenant",
+        );
       }
 
       if (orders.length > 0) {
@@ -612,7 +685,12 @@ export class InvoicesService {
         const amountCents = l.qty * l.unitPriceCents;
         const taxCents =
           l.taxRate > 0 ? Math.round((amountCents * l.taxRate) / 10000) : 0;
-        return { ...l, amountCents, taxCents, taxRate: toBasisPoints(l.taxRate) };
+        return {
+          ...l,
+          amountCents,
+          taxCents,
+          taxRate: toBasisPoints(l.taxRate),
+        };
       });
 
       const subtotalCents = normalized.reduce((s, l) => s + l.amountCents, 0);
@@ -684,4 +762,110 @@ export class InvoicesService {
     return await this.toDtoWithNames(updated, snapshotOrderIds);
   }
 
+  async uploadInvoicePdf(
+    tenantId: string,
+    invoiceId: string,
+    file: Express.Multer.File,
+    user: any,
+  ) {
+    this.assertCustomerCanOnlyRead(user);
+
+    if (file.mimetype !== "application/pdf") {
+      throw new BadRequestException("Only PDF files are allowed");
+    }
+
+    const inv = await this.prisma.invoice.findFirst({
+      where: { tenantId, id: invoiceId },
+      include: {
+        orders: { select: { id: true, customerCompanyId: true } },
+      },
+    });
+
+    if (!inv) {
+      throw new BadRequestException("Invoice not found");
+    }
+
+    this.assertCanAccessInvoice(inv, user);
+
+    const safeInvoiceNo = this.safeFileName(
+      inv.invoiceNo || `invoice-${inv.id}`,
+    );
+    const fileName = `${safeInvoiceNo}.pdf`;
+    const storageKey = `${tenantId}/invoices/${invoiceId}/${Date.now()}-${fileName}`;
+
+    const supabase = this.supabaseService.getClient();
+
+    if (inv.pdfKey) {
+      await supabase.storage
+        .from(this.INVOICE_PDFS_BUCKET)
+        .remove([inv.pdfKey]);
+    }
+
+    const { error: uploadError } = await supabase.storage
+      .from(this.INVOICE_PDFS_BUCKET)
+      .upload(storageKey, file.buffer, {
+        contentType: "application/pdf",
+        upsert: false,
+      });
+
+    if (uploadError) {
+      throw new BadRequestException(
+        `Failed to upload invoice PDF: ${uploadError.message}`,
+      );
+    }
+
+    const updated = await this.prisma.invoice.update({
+      where: { id: inv.id },
+      data: {
+        pdfKey: storageKey,
+        pdfGeneratedAt: new Date(),
+      },
+      include: {
+        lineItems: true,
+        orders: { select: { id: true, customerCompanyId: true } },
+      },
+    });
+
+    return this.toDtoWithNames(updated);
+  }
+
+  async getInvoicePdfDownloadUrl(
+    tenantId: string,
+    invoiceId: string,
+    user: any,
+  ) {
+    const inv = await this.prisma.invoice.findFirst({
+      where: { tenantId, id: invoiceId },
+      include: {
+        orders: { select: { id: true, customerCompanyId: true } },
+      },
+    });
+
+    if (!inv) {
+      throw new BadRequestException("Invoice not found");
+    }
+
+    this.assertCanAccessInvoice(inv, user);
+
+    if (!inv.pdfKey) {
+      throw new BadRequestException("Invoice PDF has not been uploaded yet");
+    }
+
+    const { data, error } = await this.supabaseService
+      .getClient()
+      .storage.from(this.INVOICE_PDFS_BUCKET)
+      .createSignedUrl(inv.pdfKey, this.PDF_SIGNED_URL_TTL_SECONDS);
+
+    if (error || !data?.signedUrl) {
+      throw new BadRequestException(
+        `Failed to create invoice download URL: ${error?.message ?? "unknown error"}`,
+      );
+    }
+
+    return {
+      url: data.signedUrl,
+      fileName: `${this.safeFileName(inv.invoiceNo || "invoice")}.pdf`,
+      expiresInSeconds: this.PDF_SIGNED_URL_TTL_SECONDS,
+    };
+  }
 }

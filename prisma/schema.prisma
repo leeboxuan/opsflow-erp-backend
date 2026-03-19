@@ -850,6 +850,8 @@ model Invoice {
   orders    TransportOrder[]
   lineItems InvoiceLineItem[]
   tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sentAt         DateTime?
+  sentByUserId   String?
 
   @@unique([tenantId, invoiceNo])
   @@index([tenantId, createdAt])
