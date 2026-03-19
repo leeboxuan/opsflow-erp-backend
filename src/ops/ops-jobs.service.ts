@@ -50,6 +50,18 @@ import type {
   LclImportConfirmRequestDto,
   LclImportConfirmResponseDto,
 } from "./dto/lcl-import.dto";
+import type {
+  JobBatchImportPreviewResponseDto,
+  JobBatchImportConfirmRequestDto,
+  JobBatchImportConfirmResponseDto,
+} from "./dto/job-batch-import.dto";
+import {
+  buildBatchImportJobCreateData,
+  buildJobBatchImportRowDto,
+  normalizeJobBatchImportRowFromBody,
+  parseJobBatchImportSheet,
+  validateJobBatchImportRowFields,
+} from "./job-batch-import.helpers";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
 
@@ -60,6 +72,25 @@ const QUOTATION_MIMES = [
 ];
 
 const QUOTATION_EXT = /\.(pdf|xlsx|xls)$/i;
+
+const OTHER_JOB_DOC_EXT =
+  /\.(pdf|xlsx|xls|csv|doc|docx|jpg|jpeg|png|webp|txt|zip)$/i;
+
+const OTHER_JOB_DOC_MIMES = new Set<string>([
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel",
+  "text/csv",
+  "application/csv",
+  "text/plain",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/zip",
+  "application/x-zip-compressed",
+]);
 
 function toDocDto(d: any): JobDocumentDto {
   return {
@@ -241,6 +272,25 @@ export class OpsJobsService {
       createdAt: doc.createdAt,
       url: error ? null : (data?.signedUrl ?? null),
     };
+  }
+
+  /** Upload bytes to the job-documents bucket (shared by quotation / OTHER / etc.). */
+  private async putJobDocumentObject(
+    storageKey: string,
+    buffer: Buffer,
+    contentType: string,
+  ): Promise<void> {
+    const supabase = this.supabaseService.getClient();
+    const { error } = await supabase.storage
+      .from(JOB_DOCUMENTS_BUCKET)
+      .upload(storageKey, buffer, {
+        contentType,
+        upsert: false,
+      });
+
+    if (error) {
+      throw new BadRequestException(`Storage upload failed: ${error.message}`);
+    }
   }
 
   private async getLatestJobDocumentByType(
@@ -1007,17 +1057,11 @@ export class OpsJobsService {
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".pdf";
     const key = `${tenantId}/jobs/${jobId}/quotation/${Date.now()}${ext}`;
 
-    const supabase = this.supabaseService.getClient();
-    const { error } = await supabase.storage
-      .from(JOB_DOCUMENTS_BUCKET)
-      .upload(key, file.buffer, {
-        contentType: file.mimetype ?? "application/octet-stream",
-        upsert: false,
-      });
-
-    if (error) {
-      throw new BadRequestException(`Storage upload failed: ${error.message}`);
-    }
+    await this.putJobDocumentObject(
+      key,
+      file.buffer,
+      file.mimetype ?? "application/octet-stream",
+    );
 
     const doc = await this.prisma.jobDocument.create({
       data: {
@@ -1042,6 +1086,68 @@ export class OpsJobsService {
         previousDocumentId: previousQuotation?.id ?? null,
         type: "QUOTATION",
       },
+      actorUserId,
+    );
+
+    return this.attachSignedUrl(doc);
+  }
+
+  private isAllowedOtherJobDocument(file: Express.Multer.File): boolean {
+    const mime = String(file.mimetype ?? "").toLowerCase();
+    const name = (file.originalname ?? "").toLowerCase();
+    return OTHER_JOB_DOC_MIMES.has(mime) || OTHER_JOB_DOC_EXT.test(name);
+  }
+
+  async uploadOtherDocument(
+    tenantId: string,
+    jobId: string,
+    file: Express.Multer.File,
+    user: any,
+  ): Promise<JobDocumentDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+    });
+
+    if (!job) throw new NotFoundException("Job not found");
+
+    if (!this.isAllowedOtherJobDocument(file)) {
+      throw new BadRequestException(
+        "Unsupported file type for generic job document",
+      );
+    }
+
+    const rawName = file.originalname ?? "document";
+    const ext = rawName.match(/\.[a-z0-9]+$/i)?.[0] ?? "";
+    const base = this.safeFileName(rawName.replace(/\.[a-z0-9]+$/i, "")) || "file";
+    const key = `${tenantId}/jobs/${jobId}/other/${Date.now()}-${base}${ext}`;
+
+    await this.putJobDocumentObject(
+      key,
+      file.buffer,
+      file.mimetype ?? "application/octet-stream",
+    );
+
+    const doc = await this.prisma.jobDocument.create({
+      data: {
+        tenantId,
+        jobId,
+        type: JobDocumentType.OTHER,
+        storageKey: key,
+        originalName: file.originalname ?? "document",
+        mimeType: file.mimetype ?? "application/octet-stream",
+        sizeBytes: file.size ?? null,
+        uploadedByUserId: actorUserId ?? null,
+      },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "UPLOAD_OTHER_DOC",
+      "JOB",
+      jobId,
+      { documentId: doc.id, type: "OTHER" },
       actorUserId,
     );
 
@@ -1525,6 +1631,127 @@ export class OpsJobsService {
     }
 
     return { createdCount, failedRows };
+  }
+
+  async batchImportPreview(
+    tenantId: string,
+    buffer: Buffer,
+    params: { customerCompanyId: string; jobType: JobType },
+  ): Promise<JobBatchImportPreviewResponseDto> {
+    const company = await this.prisma.customer_companies.findFirst({
+      where: { id: params.customerCompanyId, tenantId },
+    });
+
+    if (!company) {
+      throw new BadRequestException(
+        "Customer company not found or does not belong to tenant",
+      );
+    }
+
+    const parsed = parseJobBatchImportSheet(buffer);
+    const rows = parsed.map((p) => {
+      const data = buildJobBatchImportRowDto(p);
+      const errors = validateJobBatchImportRowFields(data);
+      return { rowNumber: p.rowNumber, data, errors };
+    });
+
+    return {
+      customerCompanyId: params.customerCompanyId,
+      jobType: params.jobType,
+      rows,
+    };
+  }
+
+  async batchImportConfirm(
+    tenantId: string,
+    dto: JobBatchImportConfirmRequestDto,
+    user: any,
+  ): Promise<JobBatchImportConfirmResponseDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const company = await this.prisma.customer_companies.findFirst({
+      where: { id: dto.customerCompanyId, tenantId },
+    });
+
+    if (!company) {
+      throw new BadRequestException(
+        "Customer company not found or does not belong to tenant",
+      );
+    }
+
+    const failedRows: { rowNumber: number; reason: string }[] = [];
+    const createdIds: string[] = [];
+    let createdCount = 0;
+
+    const normalizedRows = dto.rows.map((r) => ({
+      rowNumber: r.rowNumber,
+      data: normalizeJobBatchImportRowFromBody(r),
+    }));
+
+    for (const { rowNumber, data: row } of normalizedRows) {
+      const fieldErrors = validateJobBatchImportRowFields(row);
+      if (fieldErrors.length > 0) {
+        failedRows.push({
+          rowNumber,
+          reason: fieldErrors.join("; "),
+        });
+        continue;
+      }
+
+      try {
+        const internalRef = await this.getNextInternalRef(tenantId, dto.jobType);
+
+        const job = await this.prisma.job.create({
+          data: buildBatchImportJobCreateData({
+            tenantId,
+            customerCompanyId: dto.customerCompanyId,
+            jobType: dto.jobType,
+            internalRef,
+            status: JobStatus.Draft,
+            row,
+          }),
+        });
+
+        createdCount++;
+        createdIds.push(job.id);
+
+        await this.audit.log(
+          tenantId,
+          "CREATE",
+          "JOB",
+          job.id,
+          {
+            internalRef: job.internalRef,
+            externalRef: job.externalRef,
+            source: "job_batch_import_confirm",
+            batchRowNumber: rowNumber,
+          },
+          actorUserId,
+        );
+      } catch (e: any) {
+        failedRows.push({
+          rowNumber,
+          reason: e?.message ?? "Create failed",
+        });
+      }
+    }
+
+    await this.audit.log(
+      tenantId,
+      "BATCH_IMPORT_CONFIRM",
+      "TENANT",
+      tenantId,
+      {
+        customerCompanyId: dto.customerCompanyId,
+        jobType: dto.jobType,
+        createdCount,
+        createdIds,
+        failedCount: failedRows.length,
+      },
+      actorUserId,
+    );
+
+    return { createdCount, createdIds, failedRows };
   }
 
   private static LCL_HEADERS = [

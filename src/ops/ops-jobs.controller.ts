@@ -25,7 +25,7 @@ import { AuthGuard } from "../auth/guards/auth.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
 import { RoleGuard } from "../auth/guards/role.guard";
 import { Roles } from "../auth/guards/role.guard";
-import { Role } from "@prisma/client";
+import { Role, JobType } from "@prisma/client";
 import { OpsJobsService } from "./ops-jobs.service";
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
@@ -34,6 +34,7 @@ import { CancelJobDto } from "./dto/cancel-job.dto";
 import { JobListQueryDto } from "./dto/job-list-query.dto";
 import { ImportConfirmRequestDto } from "./dto/import-job-row.dto";
 import { LclImportConfirmRequestDto } from "./dto/lcl-import.dto";
+import { JobBatchImportConfirmRequestDto } from "./dto/job-batch-import.dto";
 
 @ApiTags("ops-jobs")
 @Controller("jobs")
@@ -101,6 +102,77 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.importConfirm(tenantId, dto.rows, accessUser);
+  }
+
+  @Post("import/batch/preview")
+  @ApiOperation({
+    summary:
+      "Batch import preview: Excel row data only; customerCompanyId and jobType in form fields",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file", "customerCompanyId", "jobType"],
+      properties: {
+        file: { type: "string", format: "binary" },
+        customerCompanyId: { type: "string" },
+        jobType: { type: "string", example: "LCL" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  async batchImportPreview(
+    @Req() req: any,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+
+    const body = req.body as Record<string, string>;
+    const customerCompanyId = body?.customerCompanyId?.trim();
+    const jobTypeRaw = body?.jobType?.trim();
+
+    if (!customerCompanyId || !jobTypeRaw) {
+      throw new BadRequestException(
+        "customerCompanyId and jobType are required",
+      );
+    }
+
+    const jobTypeUpper = jobTypeRaw.toUpperCase();
+    let jobType: JobType;
+    if (jobTypeUpper === "LCL") jobType = JobType.LCL;
+    else if (jobTypeUpper === "IMPORT") jobType = JobType.IMPORT;
+    else if (jobTypeUpper === "EXPORT") jobType = JobType.EXPORT;
+    else {
+      throw new BadRequestException(
+        "jobType must be one of: LCL, IMPORT, EXPORT",
+      );
+    }
+
+    const tenantId = req.tenant.tenantId;
+
+    return this.jobs.batchImportPreview(tenantId, file.buffer, {
+      customerCompanyId,
+      jobType,
+    });
+  }
+
+  @Post("import/batch/confirm")
+  @ApiOperation({
+    summary:
+      "Batch import confirm: create Draft jobs using shared metadata and validated rows",
+  })
+  async batchImportConfirm(
+    @Req() req: any,
+    @Body() dto: JobBatchImportConfirmRequestDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.batchImportConfirm(tenantId, dto, accessUser);
   }
 
   @Post("import/lcl/preview")
@@ -280,6 +352,34 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.uploadQuotation(tenantId, jobId, file, accessUser);
+  }
+
+  @Post(":jobId/documents/other")
+  @ApiOperation({
+    summary:
+      "Upload generic job document (appends; PDF, Office, images, csv, txt, zip)",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: { file: { type: "string", format: "binary" } },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  async uploadOtherDocument(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.uploadOtherDocument(tenantId, jobId, file, accessUser);
   }
 
   @Post(":jobId/documents/do/generate")
