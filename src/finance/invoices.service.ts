@@ -14,6 +14,7 @@ import { applyQSearch } from "../common/listing/listing.search";
 import { CreateInvoiceDto, InvoiceDto } from "./dto/invoice.dto";
 import { OrderStatus, Role } from "@prisma/client";
 import { SupabaseService } from "../auth/supabase.service";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 
 function toBasisPoints(rate: number) {
   return Math.round(rate);
@@ -45,6 +46,140 @@ export class InvoicesService {
       .trim();
   }
 
+  private async buildInvoicePdfBuffer(inv: {
+    invoiceNo: string;
+    customerName: string;
+    currency: string;
+    issueDate: Date;
+    dueDate: Date | null;
+    notes: string | null;
+    subtotalCents: number;
+    taxCents: number;
+    totalCents: number;
+    lineItems: Array<{
+      description: string;
+      qty: number;
+      unitPriceCents: number;
+      amountCents: number;
+      taxCode: string;
+      taxRate: number;
+      taxCents: number;
+    }>;
+  }): Promise<Buffer> {
+    const pdf = await PDFDocument.create();
+    const page = pdf.addPage([595.28, 841.89]); // A4 portrait
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+
+    const draw = (
+      text: string,
+      x: number,
+      y: number,
+      size = 10,
+      useBold = false,
+    ) => {
+      page.drawText(String(text ?? ""), {
+        x,
+        y,
+        size,
+        font: useBold ? bold : font,
+      });
+    };
+
+    const fmtDate = (d: Date | null | undefined) =>
+      d ? new Date(d).toISOString().slice(0, 10) : "-";
+    const fmtMoney = (cents: number) =>
+      `${inv.currency} ${(Number(cents || 0) / 100).toFixed(2)}`;
+
+    let y = 800;
+    draw("INVOICE", 40, y, 20, true);
+    y -= 30;
+
+    draw(`Invoice No: ${inv.invoiceNo}`, 40, y, 11, true);
+    draw(`Issue Date: ${fmtDate(inv.issueDate)}`, 320, y, 10);
+    y -= 18;
+    draw(`Customer: ${inv.customerName}`, 40, y, 10);
+    draw(`Due Date: ${fmtDate(inv.dueDate)}`, 320, y, 10);
+    y -= 30;
+
+    draw("Description", 40, y, 10, true);
+    draw("Qty", 300, y, 10, true);
+    draw("Unit", 350, y, 10, true);
+    draw("Amount", 470, y, 10, true);
+    y -= 12;
+
+    page.drawLine({
+      start: { x: 40, y },
+      end: { x: 555, y },
+      thickness: 1,
+    });
+    y -= 14;
+
+    const rows = inv.lineItems ?? [];
+    for (const l of rows) {
+      if (y < 120) break; // simple single-page safeguard
+      draw(l.description ?? "-", 40, y, 10);
+      draw(String(l.qty ?? 0), 300, y, 10);
+      draw(fmtMoney(l.unitPriceCents ?? 0), 350, y, 10);
+      draw(fmtMoney(l.amountCents ?? 0), 470, y, 10);
+      y -= 16;
+    }
+
+    y -= 20;
+    draw(`Subtotal: ${fmtMoney(inv.subtotalCents ?? 0)}`, 380, y, 10, true);
+    y -= 16;
+    draw(`Tax: ${fmtMoney(inv.taxCents ?? 0)}`, 380, y, 10, true);
+    y -= 16;
+    draw(`Total: ${fmtMoney(inv.totalCents ?? 0)}`, 380, y, 11, true);
+
+    if (inv.notes) {
+      y -= 28;
+      draw("Notes:", 40, y, 10, true);
+      y -= 14;
+      draw(inv.notes, 40, y, 10);
+    }
+
+    const bytes = await pdf.save();
+    return Buffer.from(bytes);
+  }
+
+  private async regenerateAndStoreInvoicePdf(params: {
+    tenantId: string;
+    invoiceId: string;
+    invoiceNo: string;
+    previousPdfKey?: string | null;
+    pdfBuffer: Buffer;
+  }): Promise<{ pdfKey: string; pdfGeneratedAt: Date }> {
+    const { tenantId, invoiceId, invoiceNo, previousPdfKey, pdfBuffer } = params;
+    const safeInvoiceNo = this.safeFileName(invoiceNo || `invoice-${invoiceId}`);
+    const fileName = `${safeInvoiceNo}.pdf`;
+    const storageKey = `${tenantId}/invoices/${invoiceId}/${Date.now()}-${fileName}`;
+
+    const supabase = this.supabaseService.getClient();
+
+    if (previousPdfKey) {
+      await supabase.storage
+        .from(this.INVOICE_PDFS_BUCKET)
+        .remove([previousPdfKey]);
+    }
+
+    const { error: uploadError } = await supabase.storage
+      .from(this.INVOICE_PDFS_BUCKET)
+      .upload(storageKey, pdfBuffer, {
+        contentType: "application/pdf",
+        upsert: false,
+      });
+
+    if (uploadError) {
+      throw new BadRequestException(
+        `Failed to upload generated invoice PDF: ${uploadError.message}`,
+      );
+    }
+
+    const pdfGeneratedAt = new Date();
+    return { pdfKey: storageKey, pdfGeneratedAt };
+  }
+
   private getCustomerCompanyIdOrThrow(user: any): string {
     if (user?.role !== Role.CUSTOMER) {
       throw new ForbiddenException("Access denied");
@@ -67,14 +202,43 @@ export class InvoicesService {
     );
   }
 
-  private assertCanAccessInvoice(inv: any, user: any) {
-    if (user?.role !== Role.CUSTOMER) return;
-    const customerCompanyId = this.getCustomerCompanyIdOrThrow(user);
-    const orderMatches =
+  private async invoiceBelongsToCustomerCompany(
+    tenantId: string,
+    inv: any,
+    customerCompanyId: string,
+  ): Promise<boolean> {
+    const linkedMatches =
       inv?.orders?.some(
         (o: any) => o?.customerCompanyId === customerCompanyId,
       ) ?? false;
-    if (!orderMatches) {
+    if (linkedMatches) return true;
+
+    const snap = inv?.snapshot as any;
+    const snapshotOrderIds = Array.isArray(snap?.orderIds)
+      ? (snap.orderIds as string[])
+      : [];
+    if (!snapshotOrderIds.length) return false;
+
+    const order = await this.prisma.transportOrder.findFirst({
+      where: {
+        tenantId,
+        id: { in: snapshotOrderIds },
+        customerCompanyId,
+      },
+      select: { id: true },
+    });
+    return Boolean(order);
+  }
+
+  private async assertCanAccessInvoice(tenantId: string, inv: any, user: any) {
+    if (user?.role !== Role.CUSTOMER) return;
+    const customerCompanyId = this.getCustomerCompanyIdOrThrow(user);
+    const allowed = await this.invoiceBelongsToCustomerCompany(
+      tenantId,
+      inv,
+      customerCompanyId,
+    );
+    if (!allowed) {
       throw new ForbiddenException("Not allowed to access this invoice");
     }
   }
@@ -99,11 +263,10 @@ export class InvoicesService {
     );
 
     const where: any = { tenantId };
-    if (user?.role === Role.CUSTOMER) {
-      where.orders = {
-        some: { customerCompanyId: this.getCustomerCompanyIdOrThrow(user) },
-      };
-    }
+    const isCustomer = user?.role === Role.CUSTOMER;
+    const customerCompanyId = isCustomer
+      ? this.getCustomerCompanyIdOrThrow(user)
+      : null;
     applyQSearch(where, query?.q?.trim(), ["invoiceNo", "customerName"]);
     applyMappedFilter(where, query?.filter, {
       Draft: { status: "Draft" },
@@ -131,20 +294,48 @@ export class InvoicesService {
       orders: { select: { id: true } },
     };
 
-    const [total, invoices] = await this.prisma.$transaction([
-      this.prisma.invoice.count({ where }),
-      this.prisma.invoice.findMany({
-        where,
-        orderBy,
-        skip,
-        take,
-        include,
-      }),
-    ]);
+    if (!isCustomer) {
+      const [total, invoices] = await this.prisma.$transaction([
+        this.prisma.invoice.count({ where }),
+        this.prisma.invoice.findMany({
+          where,
+          orderBy,
+          skip,
+          take,
+          include,
+        }),
+      ]);
 
-    const data = await Promise.all(
-      invoices.map((inv) => this.toDtoWithNames(inv)),
-    );
+      const data = await Promise.all(
+        invoices.map((inv) => this.toDtoWithNames(inv)),
+      );
+      return { data, meta: buildPaginationMeta(page, pageSize, total) };
+    }
+
+    // CUSTOMER visibility is company-scoped and derived from invoice orders
+    // and/or draft snapshot.orderIds (for unlinked draft scenarios).
+    const customerCandidates = await this.prisma.invoice.findMany({
+      where,
+      orderBy,
+      include: {
+        lineItems: true,
+        orders: { select: { id: true, customerCompanyId: true } },
+      },
+    });
+
+    const visible: any[] = [];
+    for (const inv of customerCandidates) {
+      const allowed = await this.invoiceBelongsToCustomerCompany(
+        tenantId,
+        inv,
+        customerCompanyId as string,
+      );
+      if (allowed) visible.push(inv);
+    }
+
+    const total = visible.length;
+    const pageItems = visible.slice(skip, skip + take);
+    const data = await Promise.all(pageItems.map((inv) => this.toDtoWithNames(inv)));
     return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
@@ -159,7 +350,7 @@ export class InvoicesService {
 
     if (!inv) throw new BadRequestException("Invoice not found");
 
-    this.assertCanAccessInvoice(inv, user);
+    await this.assertCanAccessInvoice(tenantId, inv, user);
     return this.toDtoWithNames(inv);
   }
 
@@ -461,8 +652,41 @@ export class InvoicesService {
       },
     });
 
+    // Auto-generate and store initial draft PDF.
+    const pdfBuffer = await this.buildInvoicePdfBuffer({
+      invoiceNo: created.invoiceNo,
+      customerName: created.customerName,
+      currency: created.currency,
+      issueDate: created.issueDate,
+      dueDate: created.dueDate,
+      notes: created.notes ?? null,
+      subtotalCents: created.subtotalCents,
+      taxCents: created.taxCents,
+      totalCents: created.totalCents,
+      lineItems: created.lineItems,
+    });
+    const storedPdf = await this.regenerateAndStoreInvoicePdf({
+      tenantId,
+      invoiceId: created.id,
+      invoiceNo: created.invoiceNo,
+      previousPdfKey: created.pdfKey ?? null,
+      pdfBuffer,
+    });
+
+    const createdWithPdf = await this.prisma.invoice.update({
+      where: { id: created.id },
+      data: {
+        pdfKey: storedPdf.pdfKey,
+        pdfGeneratedAt: storedPdf.pdfGeneratedAt,
+      },
+      include: {
+        lineItems: true,
+        orders: { select: { id: true } },
+      },
+    });
+
     // Return orderIds from dto since orders aren't linked yet
-    return await this.toDtoWithNames(created, orderIds);
+    return await this.toDtoWithNames(createdWithPdf, orderIds);
   }
 
   async issueInvoice(tenantId: string, invoiceId: string, user: any) {
@@ -756,10 +980,43 @@ export class InvoicesService {
       return inv2;
     });
 
+    // Auto-regenerate PDF and replace previous stored invoice PDF.
+    const pdfBuffer = await this.buildInvoicePdfBuffer({
+      invoiceNo: updated.invoiceNo,
+      customerName: updated.customerName,
+      currency: updated.currency,
+      issueDate: updated.issueDate,
+      dueDate: updated.dueDate,
+      notes: updated.notes ?? null,
+      subtotalCents: updated.subtotalCents,
+      taxCents: updated.taxCents,
+      totalCents: updated.totalCents,
+      lineItems: updated.lineItems,
+    });
+    const storedPdf = await this.regenerateAndStoreInvoicePdf({
+      tenantId,
+      invoiceId: updated.id,
+      invoiceNo: updated.invoiceNo,
+      previousPdfKey: updated.pdfKey ?? null,
+      pdfBuffer,
+    });
+
+    const updatedWithPdf = await this.prisma.invoice.update({
+      where: { id: updated.id },
+      data: {
+        pdfKey: storedPdf.pdfKey,
+        pdfGeneratedAt: storedPdf.pdfGeneratedAt,
+      },
+      include: {
+        lineItems: true,
+        orders: { select: { id: true } },
+      },
+    });
+
     // Draft has no linked orders; return with snapshot orderIds
-    const snap = updated.snapshot as any;
+    const snap = updatedWithPdf.snapshot as any;
     const snapshotOrderIds = Array.isArray(snap?.orderIds) ? snap.orderIds : [];
-    return await this.toDtoWithNames(updated, snapshotOrderIds);
+    return await this.toDtoWithNames(updatedWithPdf, snapshotOrderIds);
   }
 
   async uploadInvoicePdf(
@@ -785,7 +1042,7 @@ export class InvoicesService {
       throw new BadRequestException("Invoice not found");
     }
 
-    this.assertCanAccessInvoice(inv, user);
+    await this.assertCanAccessInvoice(tenantId, inv, user);
 
     const safeInvoiceNo = this.safeFileName(
       inv.invoiceNo || `invoice-${inv.id}`,
@@ -845,7 +1102,7 @@ export class InvoicesService {
       throw new BadRequestException("Invoice not found");
     }
 
-    this.assertCanAccessInvoice(inv, user);
+    await this.assertCanAccessInvoice(tenantId, inv, user);
 
     if (!inv.pdfKey) {
       throw new BadRequestException("Invoice PDF has not been uploaded yet");
