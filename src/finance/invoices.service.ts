@@ -30,6 +30,12 @@ function extractDraftMeta(snapshot: any) {
   };
 }
 
+function normalizeCustomerCompanyName(name: string): string {
+  return String(name ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
 @Injectable()
 export class InvoicesService {
   constructor(
@@ -67,34 +73,6 @@ export class InvoicesService {
     throw new ForbiddenException(
       "CUSTOMER users are only allowed to read invoices",
     );
-  }
-
-  private async invoiceBelongsToCustomerCompany(
-    tenantId: string,
-    inv: any,
-    customerCompanyId: string,
-  ): Promise<boolean> {
-    const linkedMatches =
-      inv?.orders?.some(
-        (o: any) => o?.customerCompanyId === customerCompanyId,
-      ) ?? false;
-    if (linkedMatches) return true;
-
-    const snap = inv?.snapshot as any;
-    const snapshotOrderIds = Array.isArray(snap?.orderIds)
-      ? (snap.orderIds as string[])
-      : [];
-    if (!snapshotOrderIds.length) return false;
-
-    const order = await this.prisma.transportOrder.findFirst({
-      where: {
-        tenantId,
-        id: { in: snapshotOrderIds },
-        customerCompanyId,
-      },
-      select: { id: true },
-    });
-    return Boolean(order);
   }
 
   private async assertCanAccessInvoice(tenantId: string, inv: any, user: any) {
@@ -922,15 +900,54 @@ export class InvoicesService {
       ...(params.requireGeneratedAt ? { pdfGeneratedAt: { not: null } } : {}),
     };
 
-    // CUSTOMER tenants must not leak invoices across customer companies.
-    if (params.customerCompanyId) {
-      where.orders = {
-        some: { customerCompanyId: params.customerCompanyId },
-        every: { customerCompanyId: params.customerCompanyId },
-      };
+    return where;
+  }
+
+  private async invoiceBelongsToCustomerCompany(
+    tenantId: string,
+    inv: any,
+    customerCompanyId: string,
+  ): Promise<boolean> {
+    const linkedMatches =
+      inv?.orders?.some(
+        (o: any) => o?.customerCompanyId === customerCompanyId,
+      ) ?? false;
+    if (linkedMatches) return true;
+
+    const snap = inv?.snapshot as any;
+    const snapshotOrderIds = Array.isArray(snap?.orderIds)
+      ? (snap.orderIds as string[])
+      : [];
+
+    if (snapshotOrderIds.length) {
+      const order = await this.prisma.transportOrder.findFirst({
+        where: {
+          tenantId,
+          id: { in: snapshotOrderIds },
+          customerCompanyId,
+        },
+        select: { id: true },
+      });
+      if (order) return true;
     }
 
-    return where;
+    // Fallback: match by invoice.customerName against the tenant-scoped
+    // customer company. This is important for invoices that have PDFs but
+    // may be missing linked orders/snapshot.orderIds.
+    const normalizedInvoiceCustomerName = normalizeCustomerCompanyName(
+      inv?.customerName,
+    );
+    if (!normalizedInvoiceCustomerName) return false;
+
+    const company = await this.prisma.customer_companies.findFirst({
+      where: {
+        tenantId,
+        normalizedName: normalizedInvoiceCustomerName,
+      },
+      select: { id: true },
+    });
+
+    return company?.id === customerCompanyId;
   }
 
   private async invoicePdfExists(pdfKey: string): Promise<boolean> {
@@ -939,21 +956,14 @@ export class InvoicesService {
     const key = String(pdfKey ?? "").trim();
     if (!key) return false;
 
-    const parts = key.split("/");
-    const filename = parts.pop();
-    const dir = parts.join("/");
-
+    // Most reliable existence check: try to create a signed URL for the exact key.
+    // If the object does not exist, Supabase returns an error.
     try {
       const { data, error } = await supabase.storage
         .from(this.INVOICE_PDFS_BUCKET)
-        .list(dir);
+        .createSignedUrl(key, 60);
 
-      if (error) return false;
-      if (!filename) return false;
-
-      return Array.isArray(data)
-        ? data.some((f: any) => f?.name === filename)
-        : false;
+      return !error && !!data?.signedUrl;
     } catch {
       return false;
     }
@@ -963,6 +973,15 @@ export class InvoicesService {
     tenantId: string,
     customerCompanyId?: string,
   ): Promise<PortalInvoiceDto[]> {
+    const customerCompanyName = customerCompanyId
+      ? (
+          await this.prisma.customer_companies.findFirst({
+            where: { id: customerCompanyId, tenantId },
+            select: { name: true },
+          })
+        )?.name ?? ""
+      : "";
+
     const invoices = await this.prisma.invoice.findMany({
       where: this.buildPortalInvoiceWhere({
         tenantId,
@@ -975,6 +994,7 @@ export class InvoicesService {
       include: {
         orders: {
           select: {
+            customerCompanyId: true,
             customerCompany: {
               select: {
                 name: true,
@@ -987,11 +1007,20 @@ export class InvoicesService {
 
     const results: PortalInvoiceDto[] = [];
     for (const inv of invoices as any[]) {
+      if (customerCompanyId) {
+        const allowed = await this.invoiceBelongsToCustomerCompany(
+          tenantId,
+          inv,
+          customerCompanyId,
+        );
+        if (!allowed) continue;
+      }
+
       const hasPdf = await this.invoicePdfExists(inv.pdfKey);
       if (!hasPdf) continue;
 
-      const customerCompanyName =
-        inv.orders?.[0]?.customerCompany?.name ?? "";
+      const resolvedCustomerCompanyName =
+        customerCompanyName || inv.orders?.[0]?.customerCompany?.name || "";
 
       results.push({
         id: inv.id,
@@ -1003,7 +1032,7 @@ export class InvoicesService {
         subtotalCents: inv.subtotalCents,
         taxCents: inv.taxCents,
         totalCents: inv.totalCents,
-        customerCompany: { name: customerCompanyName },
+        customerCompany: { name: resolvedCustomerCompanyName },
         hasPdf: true,
         createdAt: inv.createdAt,
       });
@@ -1026,13 +1055,28 @@ export class InvoicesService {
       }),
       select: {
         id: true,
+        customerName: true,
         invoiceNo: true,
         pdfKey: true,
+        snapshot: true,
+        orders: { select: { customerCompanyId: true } },
       },
     });
 
     if (!inv?.pdfKey) {
       throw new NotFoundException("Invoice PDF not found");
+    }
+
+    if (customerCompanyId) {
+      const allowed = await this.invoiceBelongsToCustomerCompany(
+        tenantId,
+        inv,
+        customerCompanyId,
+      );
+      if (!allowed) {
+        // Hide existence for other companies.
+        throw new NotFoundException("Invoice PDF not found");
+      }
     }
 
     const supabase = this.supabaseService.getClient();
