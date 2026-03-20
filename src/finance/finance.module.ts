@@ -8,10 +8,11 @@ import { FinanceService } from "./finance.service";
 
 import { InvoicesController } from "./invoices.controller";
 import { InvoicesService } from "./invoices.service";
+import { PortalInvoicesController } from "./portal-invoices.controller";
 
 @Module({
   imports: [AuthModule],
-  controllers: [FinanceController, InvoicesController],
+  controllers: [FinanceController, InvoicesController, PortalInvoicesController],
   providers: [FinanceService, InvoicesService, PrismaService],
 })
 export class FinanceModule {}
