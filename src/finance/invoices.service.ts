@@ -967,7 +967,9 @@ export class InvoicesService {
       where: this.buildPortalInvoiceWhere({
         tenantId,
         customerCompanyId,
-        requireGeneratedAt: true,
+        // "PDF exists" is enforced by invoicePdfExists() below.
+        // Do not rely on pdfGeneratedAt (older data might have null metadata).
+        requireGeneratedAt: false,
       }),
       orderBy: { createdAt: "desc" },
       include: {
