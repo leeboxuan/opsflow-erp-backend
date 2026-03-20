@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  NotFoundException,
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -12,6 +13,7 @@ import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
 import { CreateInvoiceDto, InvoiceDto } from "./dto/invoice.dto";
+import { PortalInvoiceDto } from "./dto/portal-invoice.dto";
 import { OrderStatus, Role } from "@prisma/client";
 import { SupabaseService } from "../auth/supabase.service";
 
@@ -905,6 +907,153 @@ export class InvoicesService {
     });
 
     return this.toDtoWithNames(updated);
+  }
+
+  private buildPortalInvoiceWhere(params: {
+    tenantId: string;
+    invoiceId?: string;
+    customerCompanyId?: string;
+    requireGeneratedAt?: boolean;
+  }) {
+    const where: any = {
+      tenantId: params.tenantId,
+      ...(params.invoiceId ? { id: params.invoiceId } : {}),
+      pdfKey: { not: null },
+      ...(params.requireGeneratedAt ? { pdfGeneratedAt: { not: null } } : {}),
+    };
+
+    // CUSTOMER tenants must not leak invoices across customer companies.
+    if (params.customerCompanyId) {
+      where.orders = {
+        some: { customerCompanyId: params.customerCompanyId },
+        every: { customerCompanyId: params.customerCompanyId },
+      };
+    }
+
+    return where;
+  }
+
+  private async invoicePdfExists(pdfKey: string): Promise<boolean> {
+    const supabase = this.supabaseService.getClient();
+
+    const key = String(pdfKey ?? "").trim();
+    if (!key) return false;
+
+    const parts = key.split("/");
+    const filename = parts.pop();
+    const dir = parts.join("/");
+
+    try {
+      const { data, error } = await supabase.storage
+        .from(this.INVOICE_PDFS_BUCKET)
+        .list(dir);
+
+      if (error) return false;
+      if (!filename) return false;
+
+      return Array.isArray(data)
+        ? data.some((f: any) => f?.name === filename)
+        : false;
+    } catch {
+      return false;
+    }
+  }
+
+  async listPortalInvoices(
+    tenantId: string,
+    customerCompanyId?: string,
+  ): Promise<PortalInvoiceDto[]> {
+    const invoices = await this.prisma.invoice.findMany({
+      where: this.buildPortalInvoiceWhere({
+        tenantId,
+        customerCompanyId,
+        requireGeneratedAt: true,
+      }),
+      orderBy: { createdAt: "desc" },
+      include: {
+        orders: {
+          select: {
+            customerCompany: {
+              select: {
+                name: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const results: PortalInvoiceDto[] = [];
+    for (const inv of invoices as any[]) {
+      const hasPdf = await this.invoicePdfExists(inv.pdfKey);
+      if (!hasPdf) continue;
+
+      const customerCompanyName =
+        inv.orders?.[0]?.customerCompany?.name ?? "";
+
+      results.push({
+        id: inv.id,
+        invoiceNumber: inv.invoiceNo,
+        invoiceDate: inv.issueDate,
+        dueDate: inv.dueDate ?? null,
+        status: inv.status,
+        currency: inv.currency,
+        subtotalCents: inv.subtotalCents,
+        taxCents: inv.taxCents,
+        totalCents: inv.totalCents,
+        customerCompany: { name: customerCompanyName },
+        hasPdf: true,
+        createdAt: inv.createdAt,
+      });
+    }
+
+    return results;
+  }
+
+  async downloadPortalInvoicePdf(
+    tenantId: string,
+    invoiceId: string,
+    customerCompanyId?: string,
+  ): Promise<{ pdfBuffer: Buffer; filename: string }> {
+    const inv = await this.prisma.invoice.findFirst({
+      where: this.buildPortalInvoiceWhere({
+        tenantId,
+        invoiceId,
+        customerCompanyId,
+        requireGeneratedAt: false,
+      }),
+      select: {
+        id: true,
+        invoiceNo: true,
+        pdfKey: true,
+      },
+    });
+
+    if (!inv?.pdfKey) {
+      throw new NotFoundException("Invoice PDF not found");
+    }
+
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase.storage
+      .from(this.INVOICE_PDFS_BUCKET)
+      .download(inv.pdfKey);
+
+    if (error || !data) {
+      throw new NotFoundException("Invoice PDF not found");
+    }
+
+    const raw: any = data;
+    let pdfBuffer: Buffer;
+    if (Buffer.isBuffer(raw)) pdfBuffer = raw;
+    else if (typeof raw === "string") pdfBuffer = Buffer.from(raw);
+    else if (typeof raw?.arrayBuffer === "function") {
+      pdfBuffer = Buffer.from(await raw.arrayBuffer());
+    } else {
+      pdfBuffer = Buffer.from(raw);
+    }
+
+    const filename = `${this.safeFileName(inv.invoiceNo ?? invoiceId)}.pdf`;
+    return { pdfBuffer, filename };
   }
 
   async getInvoicePdfDownloadUrl(
