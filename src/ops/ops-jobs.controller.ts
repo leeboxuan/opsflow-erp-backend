@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Patch,
   Delete,
   Body,
@@ -35,6 +36,12 @@ import { JobListQueryDto } from "./dto/job-list-query.dto";
 import { ImportConfirmRequestDto } from "./dto/import-job-row.dto";
 import { LclImportConfirmRequestDto } from "./dto/lcl-import.dto";
 import { JobBatchImportConfirmRequestDto } from "./dto/job-batch-import.dto";
+import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
+import {
+  AppendJobTripDto,
+  PatchJobTripDto,
+  ReorderJobTripsDto,
+} from "./dto/job-trip.dto";
 
 @ApiTags("ops-jobs")
 @Controller("jobs")
@@ -55,6 +62,18 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.list(tenantId, query, accessUser);
+  }
+
+  @Get("meta/driver-trip-rates")
+  @ApiOperation({ summary: "List active driver trip rate master rows (tenant)" })
+  async listDriverTripRates(@Req() req: any) {
+    return this.jobs.listDriverTripRateMasters(req.tenant.tenantId);
+  }
+
+  @Get("meta/dhc-references")
+  @ApiOperation({ summary: "List depot / DHC reference rows for charge picker" })
+  async listDhc(@Req() req: any) {
+    return this.jobs.listDepotHandlingReferences(req.tenant.tenantId);
   }
 
   @Post()
@@ -107,7 +126,8 @@ export class OpsJobsController {
   @Post("import/batch/preview")
   @ApiOperation({
     summary:
-      "Batch import preview: Excel row data only; customerCompanyId and jobType in form fields",
+      "[Deprecated] Batch import preview: prefer single-job create with trips. Excel row data only; customerCompanyId and jobType in form fields",
+    deprecated: true,
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
@@ -160,7 +180,8 @@ export class OpsJobsController {
   @Post("import/batch/confirm")
   @ApiOperation({
     summary:
-      "Batch import confirm: create Draft jobs using shared metadata and validated rows",
+      "[Deprecated] Batch import confirm: prefer single-job create with trips. Creates Draft jobs using shared metadata and validated rows",
+    deprecated: true,
   })
   async batchImportConfirm(
     @Req() req: any,
@@ -440,5 +461,113 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.getTracking(tenantId, jobId, accessUser);
+  }
+
+  @Get(":jobId/charges/available")
+  @ApiOperation({
+    summary:
+      "Available quotation lines, DHC refs, driver rate master + current job charge snapshot",
+  })
+  async getAvailableCharges(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.getAvailableChargesForJob(tenantId, jobId, accessUser);
+  }
+
+  @Put(":jobId/charges")
+  @ApiOperation({ summary: "Replace frozen JobCharge snapshot for a job" })
+  async saveCharges(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Body() dto: SaveJobChargesDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.saveJobCharges(tenantId, jobId, dto, accessUser);
+  }
+
+  @Post(":jobId/trips")
+  @ApiOperation({ summary: "Append a trip to an existing job" })
+  async appendTrip(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Body() dto: AppendJobTripDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.appendTrip(tenantId, jobId, dto, accessUser);
+  }
+
+  @Patch(":jobId/trips/reorder")
+  @ApiOperation({ summary: "Resequence trips on a job" })
+  async reorderTrips(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Body() dto: ReorderJobTripsDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.reorderTrips(tenantId, jobId, dto, accessUser);
+  }
+
+  @Patch(":jobId/trips/:tripId")
+  @ApiOperation({ summary: "Update trip metadata or assign driver earning rate" })
+  async patchTrip(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Body() dto: PatchJobTripDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.patchTrip(tenantId, jobId, tripId, dto, accessUser);
+  }
+
+  @Post(":jobId/documents/pickup-do")
+  @ApiOperation({ summary: "Upload pickup DO (admin/ops)" })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: { file: { type: "string", format: "binary" } },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  async uploadPickupDo(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.uploadPickupDo(tenantId, jobId, file, accessUser);
   }
 }

@@ -32,6 +32,9 @@ function toVehicleDto(v: any): VehicleDto {
     driver: v.driver
       ? { id: v.driver.id, name: v.driver.name ?? null, email: v.driver.email ?? null }
       : null,
+    roadTaxExpiryDate: v.roadTaxExpiryDate ?? null,
+    lastServicingDate: v.lastServicingDate ?? null,
+    coeExpiryDate: v.coeExpiryDate ?? null,
     createdAt: v.createdAt,
     updatedAt: v.updatedAt,
   };
@@ -76,6 +79,13 @@ export class VehiclesService {
         status: dto.status ?? VehicleStatus.ACTIVE,
         vehicleDescription: dto.vehicleDescription?.trim() || null,
         driverId: dto.driverId || null,
+        roadTaxExpiryDate: dto.roadTaxExpiryDate
+          ? new Date(dto.roadTaxExpiryDate)
+          : null,
+        lastServicingDate: dto.lastServicingDate
+          ? new Date(dto.lastServicingDate)
+          : null,
+        coeExpiryDate: dto.coeExpiryDate ? new Date(dto.coeExpiryDate) : null,
       },
     });
     return toVehicleDto(vehicle);
@@ -206,6 +216,21 @@ export class VehiclesService {
           vehicleDescription: dto.vehicleDescription?.trim() || null,
         }),
         ...(dto.driverId !== undefined && { driverId: dto.driverId || null }),
+        ...(dto.roadTaxExpiryDate !== undefined && {
+          roadTaxExpiryDate: dto.roadTaxExpiryDate
+            ? new Date(dto.roadTaxExpiryDate)
+            : null,
+        }),
+        ...(dto.lastServicingDate !== undefined && {
+          lastServicingDate: dto.lastServicingDate
+            ? new Date(dto.lastServicingDate)
+            : null,
+        }),
+        ...(dto.coeExpiryDate !== undefined && {
+          coeExpiryDate: dto.coeExpiryDate
+            ? new Date(dto.coeExpiryDate)
+            : null,
+        }),
       },
     });
     return toVehicleDto(updated);

@@ -8,8 +8,19 @@ import {
   Request,
   UseGuards,
   Patch,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from "@nestjs/common";
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from "@nestjs/swagger";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { MembershipStatus, Role } from "@prisma/client";
 
 import { AuthGuard } from "../auth/guards/auth.guard";
@@ -82,6 +93,76 @@ export class CustomersController {
   ): Promise<CustomerContactDto> {
     const tenantId = req.tenant.tenantId;
     return this.customersService.createContact(tenantId, companyId, dto);
+  }
+
+  @Post("companies/:companyId/quotation")
+  @UseGuards(RoleGuard)
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Upload company quotation (Supabase); supersedes prior ACTIVE" })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+        effectiveDate: { type: "string", example: "2026-03-01" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  async uploadCompanyQuotation(
+    @Request() req: any,
+    @Param("companyId") companyId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { effectiveDate?: string },
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    const tenantId = req.tenant.tenantId;
+    const actorUserId = req.user?.userId ?? null;
+    return this.customersService.uploadCompanyQuotation(
+      tenantId,
+      companyId,
+      file,
+      actorUserId,
+      body?.effectiveDate,
+    );
+  }
+
+  @Get("companies/:companyId/quotations")
+  @UseGuards(RoleGuard)
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "List quotation versions for a company" })
+  async listCompanyQuotations(
+    @Request() req: any,
+    @Param("companyId") companyId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    return this.customersService.listCompanyQuotations(tenantId, companyId);
+  }
+
+  @Get("companies/:companyId/quotation/active")
+  @UseGuards(RoleGuard)
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Get ACTIVE quotation with signed URL" })
+  async getActiveQuotation(
+    @Request() req: any,
+    @Param("companyId") companyId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    return this.customersService.getActiveCompanyQuotation(tenantId, companyId);
+  }
+
+  @Get("companies/:companyId/quotation/lines")
+  @UseGuards(RoleGuard)
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Structured rate lines for the ACTIVE quotation" })
+  async getActiveQuotationLines(
+    @Request() req: any,
+    @Param("companyId") companyId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    return this.customersService.listActiveQuotationRateLines(tenantId, companyId);
   }
 
   @Get("companies/:companyId/users")

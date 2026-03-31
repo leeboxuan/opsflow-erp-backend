@@ -1,5 +1,10 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { JobType, JobStatus } from "@prisma/client";
+import {
+  JobType,
+  JobStatus,
+  JobTripTemplate,
+  JobChargeSourceType,
+} from "@prisma/client";
 
 export class JobDocumentDto {
   @ApiPropertyOptional()
@@ -24,6 +29,42 @@ export class JobDocumentDto {
   url?: string | null;
 }
 
+export class JobTripResponseDto {
+  id!: string;
+  jobSequence!: number | null;
+  jobTripTemplate!: JobTripTemplate | null;
+  title!: string | null;
+  status!: string;
+  plannedStartAt!: Date | null;
+  startedAt!: Date | null;
+  closedAt!: Date | null;
+  trailerNumber!: string | null;
+  trailerLastLocationCode!: string | null;
+  driverEarningCents!: number | null;
+  earningLabelSnapshot!: string | null;
+  earningRateMasterId!: string | null;
+  /** Populated on driver detail when trip documents are loaded */
+  documents?: JobDocumentDto[];
+  completionRuleJson?: Record<string, unknown> | null;
+}
+
+export class JobChargeResponseDto {
+  id!: string;
+  sourceType!: JobChargeSourceType;
+  sourceRefId!: string | null;
+  code!: string;
+  label!: string;
+  description!: string | null;
+  qty!: number;
+  unitPriceCents!: number;
+  amountCents!: number;
+  currency!: string;
+  taxable!: boolean;
+  taxCode!: string | null;
+  taxRateBasisPoints!: number | null;
+  sortOrder!: number;
+}
+
 export class JobDto {
   id: string;
   tenantId: string;
@@ -35,6 +76,23 @@ export class JobDto {
   jobType: JobType;
   status: JobStatus;
   notes?: string | null;
+
+  createdByUserId?: string | null;
+  createdByName?: string | null;
+  createdByEmail?: string | null;
+
+  pickupPortCode?: string | null;
+  portTerminalCode?: string | null;
+  portName?: string | null;
+  psaStorageRentLastDay?: Date | null;
+  vesselName?: string | null;
+  vesselEta?: Date | null;
+  portnetReady?: boolean;
+  permitReady?: boolean;
+  returningDepotCode?: string | null;
+  returnLastDay?: Date | null;
+  exportOriginDepotCode?: string | null;
+  exportPortCode?: string | null;
 
   pickupDate: Date | null;
   pickupAddress1: string;
@@ -73,6 +131,8 @@ export class JobDto {
 
   documents?: JobDocumentDto[];
   items?: JobItemDto[];
+  trips?: JobTripResponseDto[];
+  charges?: JobChargeResponseDto[];
 }
 
 export class JobTrackingDto {

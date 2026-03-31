@@ -41,6 +41,12 @@ model Tenant {
   jobInternalRefCounters       job_internal_ref_counters[]
   auditLogs                    AuditLog[]
   JobItem                      JobItem[]
+  customerCompanyQuotations    CustomerCompanyQuotation[]
+  customerQuotationRateLines   CustomerQuotationRateLine[]
+  jobCharges                   JobCharge[]
+  depotHandlingReferences      DepotHandlingReference[]
+  driverTripRateMasters        DriverTripRateMaster[]
+  tripDocuments                TripDocument[]
 
   @@map("tenants")
 }
@@ -68,6 +74,9 @@ model User {
   customerContact  customer_contacts?  @relation("UserCustomerContact", fields: [customerContactId], references: [id], onDelete: SetNull)
   jobsAssigned     Job[]               @relation("JobAssignedDriver")
   vehiclesAssigned Vehicle[]           @relation("VehicleDriver")
+  jobsCreated      Job[]               @relation("JobCreatedBy")
+  quotationsUploaded CustomerCompanyQuotation[] @relation("QuotationUploadedBy")
+  jobChargesSelected JobCharge[]       @relation("JobChargeSelectedBy")
 
   @@index([customerCompanyId])
   @@index([customerContactId])
@@ -120,6 +129,7 @@ model customer_companies {
   users           User[]              @relation("UserCustomerCompany")
   transportOrders TransportOrder[]    @relation("TransportOrderCustomerCompany")
   jobs            Job[]               @relation("JobCustomerCompany")
+  quotations      CustomerCompanyQuotation[]
 
   @@unique([tenantId, normalizedName])
   @@index([tenantId])
@@ -227,18 +237,39 @@ model Trip {
   driverId             String?
   routeVersion         Int                       @default(1)
   vehicleId            String?
+  /// When set, this trip belongs to an OpsFlow job (multi-leg). Transport-order trips keep jobId null.
+  jobId                String?
+  /// Sequence within the job (1-based). Null for legacy transport-only trips.
+  jobSequence          Int?
+  jobTripTemplate      JobTripTemplate?
+  title                String?
+  startedByDriverUserId   String?
+  completedByDriverUserId String?
+  /// Snapshot: driver earning for this leg once assigned (frozen).
+  driverEarningCents      Int?
+  earningRateMasterId     String?
+  earningLabelSnapshot    String?
+  trailerNumber           String?
+  trailerLastLocationCode String?
+  /// e.g. { "requireJobDoSigned": true, "requiredTripUploadTypes": ["OFFLOADING"] }
+  completionRuleJson      Json?
   walletTransactions   DriverWalletTransaction[]
   stops                Stop[]
   inventory_units      inventory_units[]
   drivers              drivers?                  @relation(fields: [driverId], references: [id])
   tenant               Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   vehicles             Vehicle?                  @relation(fields: [vehicleId], references: [id])
+  job                  Job?                      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  earningRateMaster    DriverTripRateMaster?     @relation(fields: [earningRateMasterId], references: [id], onDelete: SetNull)
+  documents            TripDocument[]
 
   @@index([tenantId, status])
   @@index([tenantId, plannedStartAt])
   @@index([tenantId, assignedDriverUserId])
   @@index([tenantId, driverId])
   @@index([tenantId, vehicleId])
+  @@index([tenantId, jobId])
+  @@index([tenantId, jobId, jobSequence])
   @@map("trips")
 }
 
@@ -250,6 +281,9 @@ model Vehicle {
   status             VehicleStatus @default(ACTIVE)
   vehicleDescription String?
   driverId           String?
+  roadTaxExpiryDate  DateTime?
+  lastServicingDate  DateTime?
+  coeExpiryDate      DateTime?
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
   trips              Trip[]
@@ -464,17 +498,37 @@ model Job {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
+  createdByUserId String?
+  /// IMPORT: Singapore port master code (master_singapore_ports.code)
+  pickupPortCode  String?
+  portTerminalCode String?
+  portName         String?
+  psaStorageRentLastDay DateTime?
+  vesselName       String?
+  vesselEta        DateTime?
+  portnetReady     Boolean  @default(false)
+  permitReady      Boolean  @default(false)
+  returningDepotCode   String?
+  returnLastDay        DateTime?
+  /// EXPORT: origin depot and destination port codes (master data)
+  exportOriginDepotCode String?
+  exportPortCode        String?
+
   tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customerCompany customer_companies @relation("JobCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: Restrict)
   assignedDriver  User?              @relation("JobAssignedDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
+  createdBy       User?              @relation("JobCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   documents       JobDocument[]
   items           JobItem[]
+  trips           Trip[]
+  charges         JobCharge[]
 
   @@unique([tenantId, internalRef])
   @@index([tenantId, customerCompanyId])
   @@index([tenantId, status])
   @@index([tenantId, pickupDate])
   @@index([tenantId, assignedDriverId])
+  @@index([tenantId, createdByUserId])
   @@map("jobs")
 }
 
@@ -516,6 +570,176 @@ model JobDocument {
   @@index([tenantId, jobId])
   @@index([tenantId, type])
   @@map("job_documents")
+}
+
+/// Company-level quotation file versions (Supabase storage). One ACTIVE per company at a time.
+model CustomerCompanyQuotation {
+  id                String                 @id @default(cuid())
+  tenantId          String
+  customerCompanyId String
+  storageKey        String
+  originalName      String
+  mimeType          String
+  sizeBytes         Int?
+  uploadedByUserId  String?
+  effectiveDate     DateTime?
+  status            QuotationVersionStatus @default(ACTIVE)
+  parsedSummaryJson Json?
+  createdAt         DateTime               @default(now())
+
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerCompany customer_companies @relation(fields: [customerCompanyId], references: [id], onDelete: Cascade)
+  uploadedBy      User?              @relation("QuotationUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  rateLines       CustomerQuotationRateLine[]
+
+  @@index([tenantId, customerCompanyId])
+  @@index([tenantId, customerCompanyId, status])
+  @@map("customer_company_quotations")
+}
+
+model CustomerQuotationRateLine {
+  id           String   @id @default(cuid())
+  tenantId     String
+  quotationId  String
+  section      String?
+  code         String
+  label        String
+  description  String?
+  unit         String?
+  rateCents    Int
+  containerSize String?
+  tripMode     String?
+  areaScope    String?
+  sortOrder    Int      @default(0)
+  /// PARSER_ANNEX | MANUAL | SEED
+  sourceType   String   @default("PARSER_ANNEX")
+  createdAt    DateTime @default(now())
+
+  tenant    Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  quotation CustomerCompanyQuotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, quotationId])
+  @@index([tenantId, code])
+  @@map("customer_quotation_rate_lines")
+}
+
+/// Frozen billable lines selected for a job (never updated from live quotation/master).
+model JobCharge {
+  id                String             @id @default(cuid())
+  tenantId          String
+  jobId             String
+  sourceType        JobChargeSourceType
+  sourceRefId       String?
+  code              String
+  label             String
+  description       String?
+  qty               Int                @default(1)
+  unitPriceCents    Int
+  amountCents       Int
+  currency          String             @default("SGD")
+  taxable           Boolean            @default(true)
+  taxCode           String?
+  taxRateBasisPoints Int?
+  sortOrder         Int                @default(0)
+  selectedByUserId  String?
+  overrideReason    String?
+  metadataJson      Json?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job          Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  selectedBy   User?  @relation("JobChargeSelectedBy", fields: [selectedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, jobId])
+  @@map("job_charges")
+}
+
+/// Tenant-scoped DHC / depot handling lookup rows for charge selection (snapshots go to JobCharge).
+model DepotHandlingReference {
+  id           String   @id @default(cuid())
+  tenantId     String
+  code         String
+  label        String
+  amountCents  Int?
+  currency     String   @default("SGD")
+  active       Boolean  @default(true)
+  metadataJson Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, code])
+  @@index([tenantId, active])
+  @@map("depot_handling_references")
+}
+
+/// Trucking rate master copy (per tenant). Trip stores snapshot on assignment.
+model DriverTripRateMaster {
+  id           String   @id @default(cuid())
+  tenantId     String
+  code         String
+  label        String
+  amountCents  Int
+  currency     String   @default("SGD")
+  active       Boolean  @default(true)
+  metadataJson Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trips  Trip[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, active])
+  @@map("driver_trip_rate_masters")
+}
+
+model TripDocument {
+  id               String           @id @default(cuid())
+  tenantId         String
+  tripId           String
+  type             TripDocumentType
+  storageKey       String
+  originalName     String
+  mimeType         String
+  sizeBytes        Int?
+  uploadedByUserId String?
+  createdAt        DateTime         @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, tripId])
+  @@index([tenantId, type])
+  @@map("trip_documents")
+}
+
+/// Global Singapore ports list (not tenant-scoped; extend via migrations or admin later).
+model MasterSingaporePort {
+  id   String @id @default(cuid())
+  code String @unique
+  name String
+
+  @@map("master_singapore_ports")
+}
+
+model MasterSingaporeDepot {
+  id   String @id @default(cuid())
+  code String @unique
+  name String
+
+  @@map("master_singapore_depots")
+}
+
+/// Controlled list: 7 Gul Circle trailer last-known locations (extend later).
+model MasterTrailerLocation {
+  id   String @id @default(cuid())
+  code String @unique
+  name String
+
+  @@map("master_trailer_locations")
 }
 
 model AuditLog {
@@ -656,9 +880,42 @@ enum JobStatus {
 
 enum JobDocumentType {
   QUOTATION
+  /// Generated receiver delivery order PDF (admin/driver UI may label this "Receiver DO").
   DO
+  PICKUP_DO
   POD_PHOTO
   SIGNATURE
+  OFFLOADING
+  TRAILER_PARKING_PHOTO
+  OTHER
+}
+
+enum JobTripTemplate {
+  PICKUP_TO_DELIVERY
+  DELIVERY_TO_DEPOT
+  DEPOT_TO_DELIVERY
+  DELIVERY_TO_PORT
+  CUSTOM
+}
+
+enum QuotationVersionStatus {
+  ACTIVE
+  SUPERSEDED
+}
+
+enum JobChargeSourceType {
+  CUSTOMER_QUOTATION
+  DRIVER_RATE_MASTER
+  DHC_REFERENCE
+  MANUAL
+}
+
+enum TripDocumentType {
+  POD_PHOTO
+  SIGNATURE
+  OFFLOADING
+  TRAILER_PARKING_PHOTO
+  PICKUP_DO
   OTHER
 }
 

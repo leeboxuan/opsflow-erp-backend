@@ -29,4 +29,22 @@ export class JobListQueryDto extends ListQueryBaseDto {
   @IsOptional()
   @IsString()
   pickupDateTo?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Filter jobs whose pickupDate OR any trip plannedStartAt falls on this day (YYYY-MM-DD)",
+  })
+  @IsOptional()
+  @IsString()
+  date?: string;
+
+  @ApiPropertyOptional({ description: "Same as pickup range but also matches trip planned dates" })
+  @IsOptional()
+  @IsString()
+  dateFrom?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  dateTo?: string;
 }

@@ -1,5 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsString, IsOptional, IsEnum, MinLength } from "class-validator";
+import {
+  IsString,
+  IsOptional,
+  IsEnum,
+  MinLength,
+  IsDateString,
+} from "class-validator";
 import { VehicleType, VehicleStatus } from "@prisma/client";
 
 export class CreateVehicleDto {
@@ -26,4 +32,19 @@ export class CreateVehicleDto {
   @IsOptional()
   @IsString()
   driverId?: string;
+
+  @ApiPropertyOptional({ example: "2026-12-31" })
+  @IsOptional()
+  @IsDateString()
+  roadTaxExpiryDate?: string;
+
+  @ApiPropertyOptional({ example: "2026-06-01" })
+  @IsOptional()
+  @IsDateString()
+  lastServicingDate?: string;
+
+  @ApiPropertyOptional({ example: "2028-04-15" })
+  @IsOptional()
+  @IsDateString()
+  coeExpiryDate?: string;
 }

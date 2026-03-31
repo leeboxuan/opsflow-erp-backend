@@ -18,6 +18,7 @@ import { RoleGuard, Roles } from "@/auth/guards/role.guard";
 import { Role } from "@prisma/client";
 import { InvoicesService } from "./invoices.service";
 import { CreateInvoiceDto } from "./dto/invoice.dto";
+import { DraftFromJobsDto } from "./dto/draft-from-jobs.dto";
 import { ListInvoicesQueryDto } from "./dto/list-invoices-query.dto";
 import { FileInterceptor } from "@nestjs/platform-express";
 
@@ -88,6 +89,21 @@ export class InvoicesController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.invoices.createDraftInvoice(tenantId, dto, accessUser);
+  }
+
+  @Post("draft/from-jobs")
+  async draftFromJobs(@Request() req: any, @Body() dto: DraftFromJobsDto) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.getInvoiceDraftFromJobs(
+      tenantId,
+      dto.jobIds,
+      accessUser,
+    );
   }
 
   @Post(":id/issue")

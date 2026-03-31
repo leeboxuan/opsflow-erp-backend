@@ -4,9 +4,19 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { MembershipStatus, Role, UserRole } from "@prisma/client";
+import {
+  MembershipStatus,
+  QuotationVersionStatus,
+  Role,
+  UserRole,
+} from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
+import { AuditService } from "../audit/audit.service";
+import {
+  buildPlaceholderRateLinesFromPdf,
+  parseQuotationRateLinesFromXlsxBuffer,
+} from "./quotation-parse.helpers";
 import {
   CreateCustomerCompanyUserDto,
   ListCompaniesQueryDto,
@@ -20,6 +30,16 @@ import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
 
+const COMPANY_DOCS_BUCKET = "job-documents";
+
+const QUOTATION_MIMES = [
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel",
+];
+
+const QUOTATION_EXT = /\.(pdf|xlsx|xls)$/i;
+
 @Injectable()
 export class CustomersService {
   private supabaseAdmin;
@@ -28,6 +48,7 @@ export class CustomersService {
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
     private readonly configService: ConfigService,
+    private readonly audit: AuditService,
   ) {
     const supabaseUrl =
       this.configService.get<string>("SUPABASE_PROJECT_URL") ||
@@ -326,10 +347,11 @@ export class CustomersService {
     dto: CreateCustomerCompanyUserDto,
   ) {
     const email = dto.email?.trim().toLowerCase();
-    const name = dto.name?.trim() || null;
+    const name = String(dto.name ?? "").trim();
     const password = dto.password;
 
     if (!email) throw new BadRequestException("Email is required");
+    if (!name) throw new BadRequestException("name is required");
     if (!password || password.length < 8)
       throw new BadRequestException("Password must be at least 8 characters");
 
@@ -347,7 +369,7 @@ export class CustomersService {
       password,
       email_confirm: true,
       user_metadata: {
-        name: name ?? undefined,
+        name,
         tenantId,
         companyId,
         userRole: "USER",
@@ -364,7 +386,7 @@ export class CustomersService {
         where: { email },
         update: {
           authUserId,
-          name: name ?? undefined,
+          name,
           // Application-level role: keep as USER; customer access is scoped via TenantMembership.role
           role: UserRole.USER,
           customerCompanyId: companyId,
@@ -372,7 +394,7 @@ export class CustomersService {
         create: {
           authUserId,
           email,
-          name: name ?? email,
+          name,
           role: UserRole.USER,
           customerCompanyId: companyId,
         },
@@ -627,5 +649,226 @@ export class CustomersService {
       userId: updated.userId,
       status: updated.status,
     };
+  }
+
+  private async putCompanyQuotationObject(
+    storageKey: string,
+    buffer: Buffer,
+    contentType: string,
+  ): Promise<void> {
+    const supabase = this.supabaseService.getClient();
+    const { error } = await supabase.storage
+      .from(COMPANY_DOCS_BUCKET)
+      .upload(storageKey, buffer, {
+        contentType,
+        upsert: false,
+      });
+    if (error) {
+      throw new BadRequestException(`Storage upload failed: ${error.message}`);
+    }
+  }
+
+  private async attachQuotationSignedUrl(q: {
+    id: string;
+    storageKey: string;
+    originalName: string;
+    mimeType: string;
+    sizeBytes: number | null;
+    effectiveDate: Date | null;
+    status: QuotationVersionStatus;
+    createdAt: Date;
+    parsedSummaryJson: unknown;
+  }) {
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase.storage
+      .from(COMPANY_DOCS_BUCKET)
+      .createSignedUrl(q.storageKey, 60 * 60);
+    return {
+      id: q.id,
+      originalName: q.originalName,
+      mimeType: q.mimeType,
+      sizeBytes: q.sizeBytes ?? null,
+      effectiveDate: q.effectiveDate,
+      status: q.status,
+      createdAt: q.createdAt,
+      parsedSummaryJson: q.parsedSummaryJson ?? null,
+      url: error ? null : (data?.signedUrl ?? null),
+    };
+  }
+
+  async uploadCompanyQuotation(
+    tenantId: string,
+    companyId: string,
+    file: Express.Multer.File,
+    actorUserId: string | null,
+    effectiveDateIso?: string | null,
+  ) {
+    const company = await this.prisma.customer_companies.findFirst({
+      where: { id: companyId, tenantId },
+      select: { id: true },
+    });
+    if (!company) throw new NotFoundException("Customer company not found");
+
+    const mime = String(file.mimetype ?? "").toLowerCase();
+    const name = (file.originalname ?? "").toLowerCase();
+    const allowedMime =
+      QUOTATION_MIMES.some((m) => mime === m) || QUOTATION_EXT.test(name);
+    if (!allowedMime) {
+      throw new BadRequestException(
+        "Quotation must be PDF, XLSX, or XLS. Got: " +
+          (mime || file.originalname || "unknown"),
+      );
+    }
+
+    const effectiveDate =
+      effectiveDateIso && String(effectiveDateIso).trim()
+        ? new Date(String(effectiveDateIso).trim() + "T00:00:00.000Z")
+        : null;
+    if (effectiveDateIso && effectiveDate && Number.isNaN(effectiveDate.getTime())) {
+      throw new BadRequestException("effectiveDate must be YYYY-MM-DD");
+    }
+
+    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".pdf";
+    const key = `${tenantId}/companies/${companyId}/quotations/${Date.now()}${ext}`;
+
+    await this.putCompanyQuotationObject(
+      key,
+      file.buffer,
+      file.mimetype ?? "application/octet-stream",
+    );
+
+    let parsedLines =
+      mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      mime === "application/vnd.ms-excel" ||
+      /\.xlsx?$/i.test(name)
+        ? parseQuotationRateLinesFromXlsxBuffer(file.buffer)
+        : buildPlaceholderRateLinesFromPdf();
+
+    const parsedSummaryJson =
+      parsedLines.length === 0
+        ? {
+            note:
+              mime === "application/pdf"
+                ? "PDF uploaded; structured lines not auto-extracted. Re-upload XLSX or map lines manually."
+                : "No Annex-style rows detected in spreadsheet.",
+          }
+        : { lineCount: parsedLines.length };
+
+    const quotation = await this.prisma.$transaction(async (tx) => {
+      await tx.customerCompanyQuotation.updateMany({
+        where: {
+          tenantId,
+          customerCompanyId: companyId,
+          status: QuotationVersionStatus.ACTIVE,
+        },
+        data: { status: QuotationVersionStatus.SUPERSEDED },
+      });
+
+      const q = await tx.customerCompanyQuotation.create({
+        data: {
+          tenantId,
+          customerCompanyId: companyId,
+          storageKey: key,
+          originalName: file.originalname ?? "quotation",
+          mimeType: file.mimetype ?? "application/octet-stream",
+          sizeBytes: file.size ?? null,
+          uploadedByUserId: actorUserId ?? null,
+          effectiveDate,
+          status: QuotationVersionStatus.ACTIVE,
+          parsedSummaryJson,
+        },
+      });
+
+      if (parsedLines.length > 0) {
+        await tx.customerQuotationRateLine.createMany({
+          data: parsedLines.map((line) => ({
+            tenantId,
+            quotationId: q.id,
+            section: line.section ?? null,
+            code: line.code,
+            label: line.label,
+            description: line.description ?? null,
+            unit: line.unit ?? null,
+            rateCents: line.rateCents,
+            containerSize: line.containerSize ?? null,
+            tripMode: line.tripMode ?? null,
+            areaScope: line.areaScope ?? null,
+            sortOrder: line.sortOrder,
+            sourceType: line.sourceType,
+          })),
+        });
+      }
+
+      return q;
+    });
+
+    await this.audit.log(
+      tenantId,
+      "COMPANY_QUOTATION_UPLOAD",
+      "CUSTOMER_COMPANY",
+      companyId,
+      {
+        quotationId: quotation.id,
+        storageKey: key,
+        lineCount: parsedLines.length,
+      },
+      actorUserId,
+    );
+
+    return this.attachQuotationSignedUrl(quotation);
+  }
+
+  async listCompanyQuotations(tenantId: string, companyId: string) {
+    const company = await this.prisma.customer_companies.findFirst({
+      where: { id: companyId, tenantId },
+      select: { id: true },
+    });
+    if (!company) throw new NotFoundException("Customer company not found");
+
+    const rows = await this.prisma.customerCompanyQuotation.findMany({
+      where: { tenantId, customerCompanyId: companyId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return Promise.all(rows.map((r) => this.attachQuotationSignedUrl(r)));
+  }
+
+  async getActiveCompanyQuotation(tenantId: string, companyId: string) {
+    const company = await this.prisma.customer_companies.findFirst({
+      where: { id: companyId, tenantId },
+      select: { id: true },
+    });
+    if (!company) throw new NotFoundException("Customer company not found");
+
+    const q = await this.prisma.customerCompanyQuotation.findFirst({
+      where: {
+        tenantId,
+        customerCompanyId: companyId,
+        status: QuotationVersionStatus.ACTIVE,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!q) return null;
+    return this.attachQuotationSignedUrl(q);
+  }
+
+  async listActiveQuotationRateLines(tenantId: string, companyId: string) {
+    const q = await this.prisma.customerCompanyQuotation.findFirst({
+      where: {
+        tenantId,
+        customerCompanyId: companyId,
+        status: QuotationVersionStatus.ACTIVE,
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+
+    if (!q) return [];
+
+    return this.prisma.customerQuotationRateLine.findMany({
+      where: { tenantId, quotationId: q.id },
+      orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
+    });
   }
 }

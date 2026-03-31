@@ -19,7 +19,11 @@ import {
   ApiConsumes,
   ApiBody,
 } from "@nestjs/swagger";
-import { FileInterceptor, FileFieldsInterceptor } from "@nestjs/platform-express";
+import {
+  FileInterceptor,
+  FileFieldsInterceptor,
+} from "@nestjs/platform-express";
+import { TripDocumentType } from "@prisma/client";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
 import { RoleGuard } from "../auth/guards/role.guard";
@@ -89,11 +93,144 @@ export class DriverJobsController {
   }
 
   @Post(":jobId/start")
-  @ApiOperation({ summary: "Start job (Assigned -> InProgress)" })
+  @ApiOperation({
+    summary:
+      "Start job without trips (Assigned -> InProgress). Multi-trip jobs must use trips/:tripId/start.",
+  })
   async start(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
     return this.driverJobs.start(tenantId, jobId, userId);
+  }
+
+  @Post(":jobId/trips/:tripId/start")
+  @ApiOperation({
+    summary:
+      "Start a trip leg: trailer number, Gul Circle location code, parking photo (multipart)",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["parkingPhoto", "trailerNumber", "trailerLastLocationCode"],
+      properties: {
+        trailerNumber: { type: "string" },
+        trailerLastLocationCode: { type: "string" },
+        parkingPhoto: { type: "string", format: "binary" },
+      },
+    },
+  })
+  @UseInterceptors(
+    FileFieldsInterceptor([{ name: "parkingPhoto", maxCount: 1 }]),
+  )
+  async startTrip(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @UploadedFiles()
+    files: { parkingPhoto?: Express.Multer.File[] },
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    const body = req.body as Record<string, string>;
+    const trailerNumber = body?.trailerNumber?.trim() ?? "";
+    const trailerLastLocationCode = body?.trailerLastLocationCode?.trim() ?? "";
+    const parkingPhoto = files?.parkingPhoto?.[0];
+    if (!parkingPhoto) {
+      throw new BadRequestException("parkingPhoto is required");
+    }
+    return this.driverJobs.startTripWithTrailer(
+      tenantId,
+      jobId,
+      tripId,
+      userId,
+      { trailerNumber, trailerLastLocationCode, parkingPhoto },
+    );
+  }
+
+  @Post(":jobId/trips/:tripId/complete")
+  @ApiOperation({ summary: "Complete trip leg (checks DO signature + required uploads)" })
+  async completeTrip(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.completeTrip(tenantId, jobId, tripId, userId);
+  }
+
+  @Get(":jobId/documents")
+  @ApiOperation({ summary: "List all job documents with signed URLs" })
+  async listJobDocuments(@Req() req: any, @Param("jobId") jobId: string) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.listJobDocumentsForDriver(tenantId, jobId, userId);
+  }
+
+  @Get(":jobId/documents/generated-do")
+  @ApiOperation({ summary: "List generated receiver DO PDFs (JobDocumentType.DO)" })
+  async listGeneratedDos(@Req() req: any, @Param("jobId") jobId: string) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.listGeneratedDosForDriver(tenantId, jobId, userId);
+  }
+
+  @Get(":jobId/trips/:tripId/documents")
+  @ApiOperation({ summary: "List trip-level documents with signed URLs" })
+  async listTripDocuments(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.listTripDocumentsForDriver(
+      tenantId,
+      jobId,
+      tripId,
+      userId,
+    );
+  }
+
+  @Post(":jobId/trips/:tripId/documents")
+  @ApiOperation({ summary: "Upload trip document (form field type + file)" })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file", "type"],
+      properties: {
+        type: { type: "string", example: "OFFLOADING" },
+        file: { type: "string", format: "binary" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  async uploadTripDocument(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    const body = req.body as Record<string, string>;
+    const typeRaw = (body?.type ?? "").trim().toUpperCase();
+    const allowed = Object.values(TripDocumentType) as string[];
+    if (!typeRaw || !allowed.includes(typeRaw)) {
+      throw new BadRequestException("type must be a valid TripDocumentType");
+    }
+    const type = typeRaw as TripDocumentType;
+    return this.driverJobs.uploadTripDocumentForDriver(
+      tenantId,
+      jobId,
+      tripId,
+      userId,
+      type,
+      file,
+    );
   }
 
   @Post(":jobId/location")

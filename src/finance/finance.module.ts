@@ -9,9 +9,10 @@ import { FinanceService } from "./finance.service";
 import { InvoicesController } from "./invoices.controller";
 import { InvoicesService } from "./invoices.service";
 import { PortalInvoicesController } from "./portal-invoices.controller";
+import { AuditModule } from "../audit/audit.module";
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, AuditModule],
   controllers: [FinanceController, InvoicesController, PortalInvoicesController],
   providers: [FinanceService, InvoicesService, PrismaService],
 })

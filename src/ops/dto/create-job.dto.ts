@@ -1,7 +1,19 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsEnum, IsOptional, IsString, IsDateString, MinLength, IsArray, ValidateNested, IsNumber, Min } from "class-validator";
+import {
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsDateString,
+  MinLength,
+  IsArray,
+  ValidateNested,
+  IsNumber,
+  Min,
+  IsBoolean,
+} from "class-validator";
 import { JobType } from "@prisma/client";
 import { Type } from "class-transformer";
+import { SaveJobChargesDto } from "./save-job-charges.dto";
 
 
 export class CreateJobItemDto {
@@ -107,6 +119,75 @@ export class CreateJobDto {
   @IsString()
   @MinLength(1)
   notes?: string;
+
+  @ApiPropertyOptional({ description: "Required for IMPORT; must match master_singapore_ports.code" })
+  @IsOptional()
+  @IsString()
+  pickupPortCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  portTerminalCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  portName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  psaStorageRentLastDay?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  vesselName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  vesselEta?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  portnetReady?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  permitReady?: boolean;
+
+  @ApiPropertyOptional({ description: "master_singapore_depots.code" })
+  @IsOptional()
+  @IsString()
+  returningDepotCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  returnLastDay?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  exportOriginDepotCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  exportPortCode?: string;
+
+  @ApiPropertyOptional({
+    type: SaveJobChargesDto,
+    description: "Optional frozen charge snapshot at creation",
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaveJobChargesDto)
+  chargeSnapshot?: SaveJobChargesDto;
 }
 
 

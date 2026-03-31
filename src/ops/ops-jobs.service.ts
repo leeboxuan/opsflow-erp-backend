@@ -7,7 +7,14 @@ import {
   BadRequestException,
   ForbiddenException,
 } from "@nestjs/common";
-import { JobStatus, JobType, JobDocumentType, Role } from "@prisma/client";
+import {
+  JobStatus,
+  JobType,
+  JobDocumentType,
+  Role,
+  QuotationVersionStatus,
+  TripStatus,
+} from "@prisma/client";
 import {
   PDFDocument,
   PDFFont,
@@ -39,6 +46,16 @@ import {
   JobTrackingDto,
   AuditLogEntryDto,
 } from "./dto/job.dto";
+import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
+import {
+  AppendJobTripDto,
+  PatchJobTripDto,
+  ReorderJobTripsDto,
+} from "./dto/job-trip.dto";
+import {
+  tripCreateManyForJob,
+  completionRuleForTemplate,
+} from "./job-workflow.helpers";
 import type {
   ImportJobRowDto,
   ImportPreviewRowDto,
@@ -115,6 +132,10 @@ function toJobDto(j: any): JobDto {
     ? j.assignedDriver.name?.trim() || j.assignedDriver.email || null
     : null;
 
+  const createdByName = j.createdBy
+    ? j.createdBy.name?.trim() || j.createdBy.email || null
+    : null;
+
   return {
     id: j.id,
     tenantId: j.tenantId,
@@ -126,6 +147,23 @@ function toJobDto(j: any): JobDto {
     jobType: j.jobType,
     status: j.status,
     notes: j.notes ?? null,
+
+    createdByUserId: j.createdByUserId ?? null,
+    createdByName,
+    createdByEmail: j.createdBy?.email ?? null,
+
+    pickupPortCode: j.pickupPortCode ?? null,
+    portTerminalCode: j.portTerminalCode ?? null,
+    portName: j.portName ?? null,
+    psaStorageRentLastDay: j.psaStorageRentLastDay ?? null,
+    vesselName: j.vesselName ?? null,
+    vesselEta: j.vesselEta ?? null,
+    portnetReady: j.portnetReady ?? false,
+    permitReady: j.permitReady ?? false,
+    returningDepotCode: j.returningDepotCode ?? null,
+    returnLastDay: j.returnLastDay ?? null,
+    exportOriginDepotCode: j.exportOriginDepotCode ?? null,
+    exportPortCode: j.exportPortCode ?? null,
 
     pickupDate: j.pickupDate,
     pickupAddress1: j.pickupAddress1,
@@ -171,6 +209,42 @@ function toJobDto(j: any): JobDto {
       })) ?? [],
 
     documents: j.documents?.map((d: any) => toDocDto(d)) ?? [],
+
+    trips:
+      j.trips?.map((t: any) => ({
+        id: t.id,
+        jobSequence: t.jobSequence ?? null,
+        jobTripTemplate: t.jobTripTemplate ?? null,
+        title: t.title ?? null,
+        status: t.status,
+        plannedStartAt: t.plannedStartAt ?? null,
+        startedAt: t.startedAt ?? null,
+        closedAt: t.closedAt ?? null,
+        trailerNumber: t.trailerNumber ?? null,
+        trailerLastLocationCode: t.trailerLastLocationCode ?? null,
+        driverEarningCents: t.driverEarningCents ?? null,
+        earningLabelSnapshot: t.earningLabelSnapshot ?? null,
+        earningRateMasterId: t.earningRateMasterId ?? null,
+        completionRuleJson: t.completionRuleJson ?? null,
+      })) ?? [],
+
+    charges:
+      j.charges?.map((c: any) => ({
+        id: c.id,
+        sourceType: c.sourceType,
+        sourceRefId: c.sourceRefId ?? null,
+        code: c.code,
+        label: c.label,
+        description: c.description ?? null,
+        qty: c.qty,
+        unitPriceCents: c.unitPriceCents,
+        amountCents: c.amountCents,
+        currency: c.currency,
+        taxable: c.taxable,
+        taxCode: c.taxCode ?? null,
+        taxRateBasisPoints: c.taxRateBasisPoints ?? null,
+        sortOrder: c.sortOrder,
+      })) ?? [],
   };
 }
 
@@ -209,6 +283,50 @@ export class OpsJobsService {
     if (job?.customerCompanyId !== customerCompanyId) {
       throw new ForbiddenException("Not allowed to access this job");
     }
+  }
+
+  private async persistJobCharges(
+    tenantId: string,
+    jobId: string,
+    dto: SaveJobChargesDto,
+    selectedByUserId: string | null,
+  ): Promise<void> {
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.jobCharge.deleteMany({ where: { tenantId, jobId } });
+      if (!dto.charges.length) return;
+      await tx.jobCharge.createMany({
+        data: dto.charges.map((c, i) => ({
+          tenantId,
+          jobId,
+          sourceType: c.sourceType,
+          sourceRefId: c.sourceRefId ?? null,
+          code: c.code,
+          label: c.label,
+          description: c.description ?? null,
+          qty: c.qty,
+          unitPriceCents: c.unitPriceCents,
+          amountCents: c.qty * c.unitPriceCents,
+          currency: c.currency ?? "SGD",
+          taxable: c.taxable ?? true,
+          taxCode: c.taxCode ?? null,
+          taxRateBasisPoints: c.taxRateBasisPoints ?? null,
+          sortOrder: c.sortOrder ?? i,
+          selectedByUserId: selectedByUserId ?? null,
+          overrideReason: c.overrideReason ?? null,
+          updatedAt: now,
+        })),
+      });
+    });
+
+    await this.audit.log(
+      tenantId,
+      "JOB_CHARGE_UPDATE",
+      "JOB",
+      jobId,
+      { lineCount: dto.charges.length },
+      selectedByUserId,
+    );
   }
 
   private assertCustomerCanOnlyRead(user: any) {
@@ -381,16 +499,40 @@ export class OpsJobsService {
       where.customerCompanyId = query.companyId;
     }
 
-    if (query.pickupDateFrom || query.pickupDateTo) {
-      where.pickupDate = {};
-      if (query.pickupDateFrom) {
-        where.pickupDate.gte = new Date(
-          query.pickupDateFrom + "T00:00:00.000Z",
-        );
+    const day = query.date?.trim();
+    const from = query.dateFrom?.trim() || query.pickupDateFrom?.trim();
+    const to = query.dateTo?.trim() || query.pickupDateTo?.trim();
+
+    if (day) {
+      const dayStart = new Date(day + "T00:00:00.000Z");
+      const dayEnd = new Date(day + "T23:59:59.999Z");
+      where.OR = [
+        { pickupDate: { gte: dayStart, lte: dayEnd } },
+        {
+          trips: {
+            some: {
+              plannedStartAt: { gte: dayStart, lte: dayEnd },
+            },
+          },
+        },
+      ];
+    } else if (from || to) {
+      const pickupRange: any = {};
+      const tripRange: any = {};
+      if (from) {
+        const gte = new Date(from + "T00:00:00.000Z");
+        pickupRange.gte = gte;
+        tripRange.gte = gte;
       }
-      if (query.pickupDateTo) {
-        where.pickupDate.lte = new Date(query.pickupDateTo + "T23:59:59.999Z");
+      if (to) {
+        const lte = new Date(to + "T23:59:59.999Z");
+        pickupRange.lte = lte;
+        tripRange.lte = lte;
       }
+      where.OR = [
+        { pickupDate: pickupRange },
+        { trips: { some: { plannedStartAt: tripRange } } },
+      ];
     }
 
     const q = (query.q ?? query.search)?.trim();
@@ -423,6 +565,7 @@ export class OpsJobsService {
         "createdAt",
         "updatedAt",
         "pickupDate",
+        "startedAt",
         "internalRef",
         "externalRef",
         "status",
@@ -444,8 +587,29 @@ export class OpsJobsService {
           assignedDriver: {
             select: { id: true, name: true, email: true },
           },
+          createdBy: {
+            select: { id: true, name: true, email: true },
+          },
           items: {
             orderBy: { createdAt: "asc" },
+          },
+          trips: {
+            orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }],
+            select: {
+              id: true,
+              jobSequence: true,
+              jobTripTemplate: true,
+              title: true,
+              status: true,
+              plannedStartAt: true,
+              startedAt: true,
+              closedAt: true,
+              trailerNumber: true,
+              trailerLastLocationCode: true,
+              driverEarningCents: true,
+              earningLabelSnapshot: true,
+              earningRateMasterId: true,
+            },
           },
         },
       }),
@@ -490,7 +654,24 @@ export class OpsJobsService {
       throw new BadRequestException("At least one valid item is required");
     }
 
+    if (dto.jobType === JobType.IMPORT) {
+      const portCode = dto.pickupPortCode?.trim();
+      if (!portCode) {
+        throw new BadRequestException(
+          "pickupPortCode is required for IMPORT jobs (Singapore port master code)",
+        );
+      }
+      const port = await this.prisma.masterSingaporePort.findFirst({
+        where: { code: portCode },
+      });
+      if (!port) {
+        throw new BadRequestException(`Unknown pickupPortCode: ${portCode}`);
+      }
+    }
+
     const internalRef = await this.getNextInternalRef(tenantId, dto.jobType);
+
+    const pickupDateParsed = dto.pickupDate ? new Date(dto.pickupDate) : null;
 
     const job = await this.prisma.job.create({
       data: {
@@ -501,7 +682,8 @@ export class OpsJobsService {
         jobType: dto.jobType,
         status: JobStatus.Draft,
         notes: dto.notes ?? null,
-        pickupDate: dto.pickupDate ? new Date(dto.pickupDate) : null,
+        createdByUserId: actorUserId,
+        pickupDate: pickupDateParsed,
         pickupAddress1: dto.pickupAddress1,
         pickupAddress2: dto.pickupAddress2 ?? null,
         pickupPostal: dto.pickupPostal ?? null,
@@ -512,6 +694,20 @@ export class OpsJobsService {
         deliveryPostal: dto.deliveryPostal ?? null,
         receiverName: dto.receiverName,
         receiverPhone: dto.receiverPhone,
+        pickupPortCode: dto.pickupPortCode?.trim() || null,
+        portTerminalCode: dto.portTerminalCode?.trim() || null,
+        portName: dto.portName?.trim() || null,
+        psaStorageRentLastDay: dto.psaStorageRentLastDay
+          ? new Date(dto.psaStorageRentLastDay)
+          : null,
+        vesselName: dto.vesselName?.trim() || null,
+        vesselEta: dto.vesselEta ? new Date(dto.vesselEta) : null,
+        portnetReady: dto.portnetReady ?? false,
+        permitReady: dto.permitReady ?? false,
+        returningDepotCode: dto.returningDepotCode?.trim() || null,
+        returnLastDay: dto.returnLastDay ? new Date(dto.returnLastDay) : null,
+        exportOriginDepotCode: dto.exportOriginDepotCode?.trim() || null,
+        exportPortCode: dto.exportPortCode?.trim() || null,
         items: {
           create: validItems.map((item: any) => ({
             tenantId,
@@ -539,9 +735,31 @@ export class OpsJobsService {
       "CREATE",
       "JOB",
       job.id,
-      { internalRef: job.internalRef, externalRef: job.externalRef },
+      {
+        internalRef: job.internalRef,
+        externalRef: job.externalRef,
+        createdByUserId: actorUserId,
+      },
       actorUserId,
     );
+
+    await this.prisma.trip.createMany({
+      data: tripCreateManyForJob(
+        tenantId,
+        job.id,
+        dto.jobType,
+        pickupDateParsed,
+      ),
+    });
+
+    if (dto.chargeSnapshot?.charges?.length) {
+      await this.persistJobCharges(
+        tenantId,
+        job.id,
+        dto.chargeSnapshot,
+        actorUserId,
+      );
+    }
 
     // Best-effort auto-generate DO after job creation.
     // We do not fail the whole job creation if document generation/storage fails.
@@ -563,8 +781,17 @@ export class OpsJobsService {
         assignedDriver: {
           select: { id: true, name: true, email: true },
         },
+        createdBy: {
+          select: { id: true, name: true, email: true },
+        },
         items: {
           orderBy: { createdAt: "asc" },
+        },
+        trips: {
+          orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }],
+        },
+        charges: {
+          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
         },
         documents: {
           orderBy: { createdAt: "desc" },
@@ -597,8 +824,17 @@ export class OpsJobsService {
         assignedDriver: {
           select: { id: true, name: true, email: true },
         },
+        createdBy: {
+          select: { id: true, name: true, email: true },
+        },
         items: {
           orderBy: { createdAt: "asc" },
+        },
+        trips: {
+          orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }],
+        },
+        charges: {
+          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
         },
         documents: {
           orderBy: { createdAt: "desc" },
@@ -697,6 +933,39 @@ export class OpsJobsService {
     if (dto.receiverPhone !== undefined) data.receiverPhone = dto.receiverPhone;
     if (dto.externalRef !== undefined) {
       data.externalRef = normalizeExternalRef(dto.externalRef);
+    }
+
+    if (dto.pickupPortCode !== undefined) {
+      data.pickupPortCode = dto.pickupPortCode?.trim() || null;
+    }
+    if (dto.portTerminalCode !== undefined) {
+      data.portTerminalCode = dto.portTerminalCode?.trim() || null;
+    }
+    if (dto.portName !== undefined) data.portName = dto.portName?.trim() || null;
+    if (dto.psaStorageRentLastDay !== undefined) {
+      data.psaStorageRentLastDay = dto.psaStorageRentLastDay
+        ? new Date(dto.psaStorageRentLastDay)
+        : null;
+    }
+    if (dto.vesselName !== undefined) {
+      data.vesselName = dto.vesselName?.trim() || null;
+    }
+    if (dto.vesselEta !== undefined) {
+      data.vesselEta = dto.vesselEta ? new Date(dto.vesselEta) : null;
+    }
+    if (dto.portnetReady !== undefined) data.portnetReady = dto.portnetReady;
+    if (dto.permitReady !== undefined) data.permitReady = dto.permitReady;
+    if (dto.returningDepotCode !== undefined) {
+      data.returningDepotCode = dto.returningDepotCode?.trim() || null;
+    }
+    if (dto.returnLastDay !== undefined) {
+      data.returnLastDay = dto.returnLastDay ? new Date(dto.returnLastDay) : null;
+    }
+    if (dto.exportOriginDepotCode !== undefined) {
+      data.exportOriginDepotCode = dto.exportOriginDepotCode?.trim() || null;
+    }
+    if (dto.exportPortCode !== undefined) {
+      data.exportPortCode = dto.exportPortCode?.trim() || null;
     }
 
     const inputItems = Array.isArray((dto as any).items)
@@ -1297,6 +1566,325 @@ export class OpsJobsService {
     }));
   }
 
+  async saveJobCharges(
+    tenantId: string,
+    jobId: string,
+    dto: SaveJobChargesDto,
+    user: any,
+  ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+    });
+    if (!job) throw new NotFoundException("Job not found");
+    if (
+      job.status === JobStatus.Completed ||
+      job.status === JobStatus.Cancelled
+    ) {
+      throw new BadRequestException("Cannot edit charges on Completed/Cancelled job");
+    }
+
+    await this.persistJobCharges(tenantId, jobId, dto, actorUserId);
+    return this.getOne(tenantId, jobId, user);
+  }
+
+  async getAvailableChargesForJob(
+    tenantId: string,
+    jobId: string,
+    user: any,
+  ): Promise<{
+    quotationLines: any[];
+    dhcReferences: any[];
+    driverTripRates: any[];
+    existingSnapshot: any[];
+  }> {
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+      include: {
+        charges: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      },
+    });
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job, user);
+
+    const activeQ = await this.prisma.customerCompanyQuotation.findFirst({
+      where: {
+        tenantId,
+        customerCompanyId: job.customerCompanyId,
+        status: QuotationVersionStatus.ACTIVE,
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+
+    const quotationLines = activeQ
+      ? await this.prisma.customerQuotationRateLine.findMany({
+          where: { tenantId, quotationId: activeQ.id },
+          orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
+        })
+      : [];
+
+    const dhcReferences = await this.prisma.depotHandlingReference.findMany({
+      where: { tenantId, active: true },
+      orderBy: { code: "asc" },
+    });
+
+    const driverTripRates = await this.prisma.driverTripRateMaster.findMany({
+      where: { tenantId, active: true },
+      orderBy: { code: "asc" },
+    });
+
+    return {
+      quotationLines,
+      dhcReferences,
+      driverTripRates,
+      existingSnapshot: job.charges ?? [],
+    };
+  }
+
+  async listDriverTripRateMasters(tenantId: string) {
+    return this.prisma.driverTripRateMaster.findMany({
+      where: { tenantId, active: true },
+      orderBy: { code: "asc" },
+    });
+  }
+
+  async listDepotHandlingReferences(tenantId: string) {
+    return this.prisma.depotHandlingReference.findMany({
+      where: { tenantId, active: true },
+      orderBy: { code: "asc" },
+    });
+  }
+
+  async appendTrip(
+    tenantId: string,
+    jobId: string,
+    dto: AppendJobTripDto,
+    user: any,
+  ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+      include: { trips: { select: { jobSequence: true } } },
+    });
+    if (!job) throw new NotFoundException("Job not found");
+    if (
+      job.status === JobStatus.Completed ||
+      job.status === JobStatus.Cancelled
+    ) {
+      throw new BadRequestException("Cannot add trips to Completed/Cancelled job");
+    }
+
+    const maxSeq = Math.max(
+      0,
+      ...(job.trips ?? []).map((t: { jobSequence: number | null }) =>
+        t.jobSequence ?? 0,
+      ),
+    );
+    const nextSeq = maxSeq + 1;
+    const plannedStartAt = dto.plannedDate
+      ? new Date(dto.plannedDate + "T00:00:00.000Z")
+      : null;
+
+    const trip = await this.prisma.trip.create({
+      data: {
+        tenantId,
+        jobId,
+        jobSequence: nextSeq,
+        jobTripTemplate: dto.jobTripTemplate,
+        title: dto.title?.trim() || dto.jobTripTemplate,
+        plannedStartAt,
+        status: TripStatus.Planned,
+        completionRuleJson: completionRuleForTemplate(dto.jobTripTemplate),
+      },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "TRIP_CREATE",
+      "JOB",
+      jobId,
+      { tripId: trip.id, jobSequence: nextSeq },
+      actorUserId,
+    );
+
+    return this.getOne(tenantId, jobId, user);
+  }
+
+  async reorderTrips(
+    tenantId: string,
+    jobId: string,
+    dto: ReorderJobTripsDto,
+    user: any,
+  ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+      include: { trips: { select: { id: true } } },
+    });
+    if (!job) throw new NotFoundException("Job not found");
+
+    const ids = new Set((job.trips ?? []).map((t: { id: string }) => t.id));
+    if (dto.tripIdsInOrder.length !== ids.size) {
+      throw new BadRequestException("tripIdsInOrder must include every trip exactly once");
+    }
+    for (const id of dto.tripIdsInOrder) {
+      if (!ids.has(id)) throw new BadRequestException(`Unknown trip id: ${id}`);
+    }
+
+    let seq = 1;
+    await this.prisma.$transaction(async (tx) => {
+      for (const tripId of dto.tripIdsInOrder) {
+        await tx.trip.update({
+          where: { id: tripId },
+          data: { jobSequence: seq++ },
+        });
+      }
+    });
+
+    await this.audit.log(
+      tenantId,
+      "TRIP_REORDER",
+      "JOB",
+      jobId,
+      { order: dto.tripIdsInOrder },
+      actorUserId,
+    );
+
+    return this.getOne(tenantId, jobId, user);
+  }
+
+  async patchTrip(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    dto: PatchJobTripDto,
+    user: any,
+  ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    const data: any = {};
+    if (dto.title !== undefined) data.title = dto.title;
+    if (dto.jobSequence !== undefined) data.jobSequence = dto.jobSequence;
+    if (dto.plannedDate !== undefined) {
+      data.plannedStartAt = dto.plannedDate
+        ? new Date(dto.plannedDate + "T00:00:00.000Z")
+        : null;
+    }
+
+    if (dto.earningRateMasterId !== undefined) {
+      if (dto.earningRateMasterId === null) {
+        data.earningRateMasterId = null;
+        data.driverEarningCents = null;
+        data.earningLabelSnapshot = null;
+      } else {
+        const master = await this.prisma.driverTripRateMaster.findFirst({
+          where: {
+            id: dto.earningRateMasterId,
+            tenantId,
+            active: true,
+          },
+        });
+        if (!master) {
+          throw new BadRequestException("Driver trip rate master not found");
+        }
+        data.earningRateMasterId = master.id;
+        data.driverEarningCents = master.amountCents;
+        data.earningLabelSnapshot = master.label;
+      }
+    }
+
+    await this.prisma.trip.update({
+      where: { id: tripId },
+      data,
+    });
+
+    await this.audit.log(
+      tenantId,
+      "TRIP_UPDATE",
+      "JOB",
+      jobId,
+      { tripId, ...data },
+      actorUserId,
+    );
+
+    if (dto.earningRateMasterId !== undefined && dto.earningRateMasterId) {
+      await this.audit.log(
+        tenantId,
+        "RATE_MASTER_ASSIGN",
+        "TRIP",
+        tripId,
+        { earningRateMasterId: dto.earningRateMasterId },
+        actorUserId,
+      );
+    }
+
+    return this.getOne(tenantId, jobId, user);
+  }
+
+  async uploadPickupDo(
+    tenantId: string,
+    jobId: string,
+    file: Express.Multer.File,
+    user: any,
+  ): Promise<JobDocumentDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+    });
+    if (!job) throw new NotFoundException("Job not found");
+
+    if (!this.isAllowedOtherJobDocument(file)) {
+      throw new BadRequestException(
+        "Unsupported file type for pickup DO",
+      );
+    }
+
+    const rawName = file.originalname ?? "pickup-do";
+    const ext = rawName.match(/\.[a-z0-9]+$/i)?.[0] ?? "";
+    const base = this.safeFileName(rawName.replace(/\.[a-z0-9]+$/i, "")) || "pickup-do";
+    const key = `${tenantId}/jobs/${jobId}/pickup-do/${Date.now()}-${base}${ext}`;
+
+    await this.putJobDocumentObject(
+      key,
+      file.buffer,
+      file.mimetype ?? "application/octet-stream",
+    );
+
+    const doc = await this.prisma.jobDocument.create({
+      data: {
+        tenantId,
+        jobId,
+        type: JobDocumentType.PICKUP_DO,
+        storageKey: key,
+        originalName: file.originalname ?? "pickup-do",
+        mimeType: file.mimetype ?? "application/octet-stream",
+        sizeBytes: file.size ?? null,
+        uploadedByUserId: actorUserId ?? null,
+      },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "PICKUP_DO_UPLOAD",
+      "JOB",
+      jobId,
+      { documentId: doc.id },
+      actorUserId,
+    );
+
+    return this.attachSignedUrl(doc);
+  }
+
   async getTracking(
     tenantId: string,
     jobId: string,
@@ -1573,6 +2161,10 @@ export class OpsJobsService {
 
         const internalRef = await this.getNextInternalRef(tenantId, jobType);
 
+        const pickupDateParsed = row.pickupDate
+          ? new Date(row.pickupDate)
+          : null;
+
         const job = await this.prisma.job.create({
           data: {
             tenantId,
@@ -1580,7 +2172,8 @@ export class OpsJobsService {
             internalRef,
             jobType,
             status: driverId ? JobStatus.Assigned : JobStatus.Draft,
-            pickupDate: row.pickupDate ? new Date(row.pickupDate) : null,
+            createdByUserId: actorUserId,
+            pickupDate: pickupDateParsed,
             pickupAddress1: row.pickupAddress,
             pickupAddress2: (row as any).pickupAddress2 ?? null,
             pickupPostal: (row as any).pickupPostal ?? null,
@@ -1605,6 +2198,15 @@ export class OpsJobsService {
               ],
             },
           },
+        });
+
+        await this.prisma.trip.createMany({
+          data: tripCreateManyForJob(
+            tenantId,
+            job.id,
+            jobType,
+            pickupDateParsed,
+          ),
         });
 
         createdCount++;
@@ -1709,7 +2311,17 @@ export class OpsJobsService {
             internalRef,
             status: JobStatus.Draft,
             row,
+            createdByUserId: actorUserId,
           }),
+        });
+
+        await this.prisma.trip.createMany({
+          data: tripCreateManyForJob(
+            tenantId,
+            job.id,
+            dto.jobType,
+            row.pickupDate ? new Date(row.pickupDate) : null,
+          ),
         });
 
         createdCount++;
@@ -2201,6 +2813,7 @@ export class OpsJobsService {
             jobType: JobType.LCL,
             status: JobStatus.Draft,
             notes,
+            createdByUserId: actorUserId,
             pickupDate,
             pickupAddress1: dto.pickupAddress1,
             pickupAddress2: dto.pickupAddress2 ?? null,
@@ -2233,6 +2846,15 @@ export class OpsJobsService {
           },
         });
 
+        await this.prisma.trip.createMany({
+          data: tripCreateManyForJob(
+            tenantId,
+            job.id,
+            JobType.LCL,
+            pickupDate,
+          ),
+        });
+
         createdCount++;
         created.push({
           id: job.id,
@@ -2249,6 +2871,7 @@ export class OpsJobsService {
             internalRef: job.internalRef,
             externalRef: job.externalRef,
             source: "LCL_EXCEL_IMPORT",
+            createdByUserId: actorUserId,
           },
           actorUserId,
         );

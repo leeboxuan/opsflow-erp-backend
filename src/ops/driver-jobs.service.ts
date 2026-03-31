@@ -3,7 +3,13 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
-import { JobStatus, JobType, JobDocumentType } from "@prisma/client";
+import {
+  JobStatus,
+  JobType,
+  JobDocumentType,
+  TripStatus,
+  TripDocumentType,
+} from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
 import { buildOrderBy } from "../common/listing/listing.sort";
@@ -94,6 +100,27 @@ function toJobDto(j: any): JobDto {
     })),
 
     documents: documents.map((d: any) => toDocDto(d)),
+
+    trips:
+      j.trips?.map((t: any) => ({
+        id: t.id,
+        jobSequence: t.jobSequence ?? null,
+        jobTripTemplate: t.jobTripTemplate ?? null,
+        title: t.title ?? null,
+        status: t.status,
+        plannedStartAt: t.plannedStartAt ?? null,
+        startedAt: t.startedAt ?? null,
+        closedAt: t.closedAt ?? null,
+        trailerNumber: t.trailerNumber ?? null,
+        trailerLastLocationCode: t.trailerLastLocationCode ?? null,
+        driverEarningCents: t.driverEarningCents ?? null,
+        earningLabelSnapshot: t.earningLabelSnapshot ?? null,
+        earningRateMasterId: t.earningRateMasterId ?? null,
+        completionRuleJson: t.completionRuleJson ?? null,
+        documents: Array.isArray(t.documentsWithUrls)
+          ? t.documentsWithUrls
+          : [],
+      })) ?? [],
   };
 }
 
@@ -149,6 +176,23 @@ export class DriverJobsService {
       ...base,
       url: data?.signedUrl ?? null,
     };
+  }
+
+  private async attachTripDocumentSignedUrl(doc: any): Promise<JobDocumentDto> {
+    const base = {
+      id: doc.id,
+      type: doc.type,
+      originalName: doc.originalName,
+      mimeType: doc.mimeType,
+      sizeBytes: doc.sizeBytes ?? null,
+      createdAt: doc.createdAt,
+      url: null as string | null,
+    };
+    const supabase = this.supabaseService.getClient();
+    const { data } = await supabase.storage
+      .from(JOB_DOCUMENTS_BUCKET)
+      .createSignedUrl(doc.storageKey, 60 * 60);
+    return { ...base, url: data?.signedUrl ?? null };
   }
 
   private async findAssignedJobOrThrow(
@@ -531,6 +575,14 @@ export class DriverJobsService {
           createdAt: "desc",
         },
       },
+      trips: {
+        orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }],
+        include: {
+          documents: {
+            orderBy: { createdAt: "desc" },
+          },
+        },
+      },
     });
 
     let assignedVehiclePlateNo: string | null = null;
@@ -549,8 +601,23 @@ export class DriverJobsService {
       assignedVehiclePlateNo = vehicle?.plateNo ?? null;
     }
 
+    const tripsWithUrls = await Promise.all(
+      (job.trips ?? []).map(async (t: any) => {
+        const documentsWithUrls = await Promise.all(
+          (t.documents ?? []).map((d: any) =>
+            this.attachTripDocumentSignedUrl(d),
+          ),
+        );
+        return {
+          ...t,
+          documentsWithUrls,
+        };
+      }),
+    );
+
     const dto = toJobDto({
       ...job,
+      trips: tripsWithUrls,
       assignedVehiclePlateNo,
     });
 
@@ -567,6 +634,15 @@ export class DriverJobsService {
     driverUserId: string,
   ): Promise<JobDto> {
     const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
+
+    const tripCount = await this.prisma.trip.count({
+      where: { tenantId, jobId },
+    });
+    if (tripCount > 0) {
+      throw new BadRequestException(
+        "This job uses trips; start the leg with POST /drivers/jobs/:jobId/trips/:tripId/start (trailer number, location, parking photo).",
+      );
+    }
 
     if (job.status !== JobStatus.Assigned) {
       throw new BadRequestException("Job must be Assigned to start");
@@ -590,6 +666,142 @@ export class DriverJobsService {
     );
 
     return toJobDto(updated);
+  }
+
+  async startTripWithTrailer(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    driverUserId: string,
+    payload: {
+      trailerNumber: string;
+      trailerLastLocationCode: string;
+      parkingPhoto: Express.Multer.File;
+    },
+  ): Promise<JobDto> {
+    const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId, {
+      trips: { select: { id: true } },
+    });
+
+    const tripCount = await this.prisma.trip.count({
+      where: { tenantId, jobId },
+    });
+    if (tripCount === 0) {
+      throw new BadRequestException("This job has no trips; use POST .../start");
+    }
+
+    if (job.status !== JobStatus.Assigned && job.status !== JobStatus.InProgress) {
+      throw new BadRequestException("Job must be Assigned or InProgress to start a trip");
+    }
+
+    const trailerNumber = payload.trailerNumber?.trim();
+    const locCode = payload.trailerLastLocationCode?.trim();
+    if (!trailerNumber) {
+      throw new BadRequestException("trailerNumber is required");
+    }
+    if (!locCode) {
+      throw new BadRequestException("trailerLastLocationCode is required");
+    }
+
+    const loc = await this.prisma.masterTrailerLocation.findFirst({
+      where: { code: locCode },
+    });
+    if (!loc) {
+      throw new BadRequestException(`Unknown trailerLastLocationCode: ${locCode}`);
+    }
+
+    const file = payload.parkingPhoto;
+    if (!file?.buffer?.length) {
+      throw new BadRequestException("Trailer parking photo is required");
+    }
+    const mime = String(file.mimetype ?? "").toLowerCase();
+    if (!mime.startsWith("image/")) {
+      throw new BadRequestException("Parking photo must be an image");
+    }
+
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+    });
+    if (!trip) {
+      throw new NotFoundException("Trip not found on this job");
+    }
+    if (trip.startedAt) {
+      throw new BadRequestException("Trip already started");
+    }
+
+    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
+    const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/trailer-parking/${Date.now()}${ext}`;
+
+    const supabase = this.supabaseService.getClient();
+    const { error: upErr } = await supabase.storage
+      .from(JOB_DOCUMENTS_BUCKET)
+      .upload(key, file.buffer, {
+        contentType: file.mimetype ?? "image/jpeg",
+        upsert: false,
+      });
+    if (upErr) {
+      throw new BadRequestException(`Storage upload failed: ${upErr.message}`);
+    }
+
+    const now = new Date();
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.tripDocument.create({
+        data: {
+          tenantId,
+          tripId,
+          type: TripDocumentType.TRAILER_PARKING_PHOTO,
+          storageKey: key,
+          originalName: file.originalname ?? "parking.jpg",
+          mimeType: file.mimetype ?? "image/jpeg",
+          sizeBytes: file.size ?? null,
+          uploadedByUserId: driverUserId,
+        },
+      });
+
+      await tx.trip.update({
+        where: { id: tripId },
+        data: {
+          trailerNumber,
+          trailerLastLocationCode: locCode,
+          startedAt: now,
+          startedByDriverUserId: driverUserId,
+          status: TripStatus.InTransit,
+        },
+      });
+
+      await tx.job.update({
+        where: { id: jobId },
+        data: {
+          status: JobStatus.InProgress,
+          ...(job.startedAt ? {} : { startedAt: now }),
+        },
+      });
+    });
+
+    await this.audit.log(
+      tenantId,
+      "TRIP_START",
+      "TRIP",
+      tripId,
+      {
+        jobId,
+        trailerNumber,
+        trailerLastLocationCode: locCode,
+      },
+      driverUserId,
+    );
+
+    await this.audit.log(
+      tenantId,
+      "TRAILER_DETAILS",
+      "JOB",
+      jobId,
+      { tripId, trailerNumber, trailerLastLocationCode: locCode },
+      driverUserId,
+    );
+
+    return this.getOneForDriver(tenantId, jobId, driverUserId);
   }
 
   async updateLocation(
@@ -755,6 +967,15 @@ export class DriverJobsService {
       documents: true,
     });
 
+    const tripCount = await this.prisma.trip.count({
+      where: { tenantId, jobId },
+    });
+    if (tripCount > 0) {
+      throw new BadRequestException(
+        "This job uses trips; complete each leg with POST /drivers/jobs/:jobId/trips/:tripId/complete",
+      );
+    }
+
     if (job.status !== JobStatus.InProgress) {
       throw new BadRequestException("Job must be InProgress to complete");
     }
@@ -803,5 +1024,205 @@ export class DriverJobsService {
     );
 
     return toJobDto(updated);
+  }
+
+  async completeTrip(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    driverUserId: string,
+  ): Promise<JobDto> {
+    const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId, {
+      documents: true,
+    });
+
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    if (trip.status !== TripStatus.InTransit) {
+      throw new BadRequestException("Trip must be InTransit to complete");
+    }
+
+    const rule = (trip.completionRuleJson as Record<string, unknown>) || {};
+    if (rule.requireJobDoSigned) {
+      const hasSig = job.documents.some(
+        (d: { type: JobDocumentType }) => d.type === JobDocumentType.SIGNATURE,
+      );
+      if (!hasSig) {
+        throw new BadRequestException(
+          "Receiver DO must be signed (upload signature) before completing this trip",
+        );
+      }
+    }
+
+    const required = (rule.requiredTripUploadTypes as string[] | undefined) ?? [];
+    for (const rt of required) {
+      const tEnum = rt as TripDocumentType;
+      const found = await this.prisma.tripDocument.findFirst({
+        where: { tenantId, tripId, type: tEnum },
+      });
+      if (!found) {
+        throw new BadRequestException(`Missing required trip document type: ${rt}`);
+      }
+    }
+
+    const now = new Date();
+
+    await this.prisma.trip.update({
+      where: { id: tripId },
+      data: {
+        status: TripStatus.Delivered,
+        closedAt: now,
+        completedByDriverUserId: driverUserId,
+      },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "TRIP_COMPLETE",
+      "TRIP",
+      tripId,
+      { jobId },
+      driverUserId,
+    );
+
+    const openTrips = await this.prisma.trip.count({
+      where: {
+        tenantId,
+        jobId,
+        status: {
+          notIn: [
+            TripStatus.Delivered,
+            TripStatus.Closed,
+            TripStatus.Cancelled,
+          ],
+        },
+      },
+    });
+
+    if (openTrips === 0) {
+      let newStatus: JobStatus;
+      let completedAt: Date | null = null;
+      if (job.jobType === JobType.LCL) {
+        newStatus = JobStatus.Completed;
+        completedAt = now;
+      } else {
+        newStatus = JobStatus.PendingDepot;
+      }
+      await this.prisma.job.update({
+        where: { id: jobId },
+        data: {
+          status: newStatus,
+          deliveredAt: job.deliveredAt ?? now,
+          completedAt,
+        },
+      });
+    }
+
+    return this.getOneForDriver(tenantId, jobId, driverUserId);
+  }
+
+  async listJobDocumentsForDriver(
+    tenantId: string,
+    jobId: string,
+    driverUserId: string,
+  ): Promise<JobDocumentDto[]> {
+    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
+    const docs = await this.prisma.jobDocument.findMany({
+      where: { tenantId, jobId },
+      orderBy: { createdAt: "desc" },
+    });
+    return Promise.all(docs.map((d) => this.attachSignedUrl(d)));
+  }
+
+  async listTripDocumentsForDriver(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    driverUserId: string,
+  ): Promise<JobDocumentDto[]> {
+    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+    const docs = await this.prisma.tripDocument.findMany({
+      where: { tenantId, tripId },
+      orderBy: { createdAt: "desc" },
+    });
+    return Promise.all(docs.map((d) => this.attachTripDocumentSignedUrl(d)));
+  }
+
+  async listGeneratedDosForDriver(
+    tenantId: string,
+    jobId: string,
+    driverUserId: string,
+  ): Promise<JobDocumentDto[]> {
+    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
+    const docs = await this.prisma.jobDocument.findMany({
+      where: { tenantId, jobId, type: JobDocumentType.DO },
+      orderBy: { createdAt: "desc" },
+    });
+    return Promise.all(docs.map((d) => this.attachSignedUrl(d)));
+  }
+
+  async uploadTripDocumentForDriver(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    driverUserId: string,
+    type: TripDocumentType,
+    file: Express.Multer.File,
+  ): Promise<JobDocumentDto> {
+    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    const mime = String(file.mimetype ?? "").toLowerCase();
+    if (!mime.startsWith("image/") && type !== TripDocumentType.PICKUP_DO) {
+      throw new BadRequestException("Unsupported file type for this trip document");
+    }
+
+    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
+    const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/${type.toLowerCase()}/${Date.now()}${ext}`;
+
+    const supabase = this.supabaseService.getClient();
+    const { error } = await supabase.storage
+      .from(JOB_DOCUMENTS_BUCKET)
+      .upload(key, file.buffer, {
+        contentType: file.mimetype ?? "application/octet-stream",
+        upsert: false,
+      });
+    if (error) {
+      throw new BadRequestException(`Storage upload failed: ${error.message}`);
+    }
+
+    const doc = await this.prisma.tripDocument.create({
+      data: {
+        tenantId,
+        tripId,
+        type,
+        storageKey: key,
+        originalName: file.originalname ?? "upload",
+        mimeType: file.mimetype ?? "application/octet-stream",
+        sizeBytes: file.size ?? null,
+        uploadedByUserId: driverUserId,
+      },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "TRIP_DOC_UPLOAD",
+      "TRIP",
+      tripId,
+      { jobId, documentId: doc.id, type },
+      driverUserId,
+    );
+
+    return this.attachTripDocumentSignedUrl(doc);
   }
 }

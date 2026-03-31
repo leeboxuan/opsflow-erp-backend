@@ -16,6 +16,7 @@ import { CreateInvoiceDto, InvoiceDto } from "./dto/invoice.dto";
 import { PortalInvoiceDto } from "./dto/portal-invoice.dto";
 import { OrderStatus, Role } from "@prisma/client";
 import { SupabaseService } from "../auth/supabase.service";
+import { AuditService } from "../audit/audit.service";
 
 function toBasisPoints(rate: number) {
   return Math.round(rate);
@@ -25,6 +26,9 @@ function extractDraftMeta(snapshot: any) {
   const s = snapshot ?? {};
   return {
     orderIds: Array.isArray(s.orderIds) ? (s.orderIds as string[]) : [],
+    sourceJobIds: Array.isArray(s.sourceJobIds)
+      ? (s.sourceJobIds as string[])
+      : [],
     confirmedAt: s.confirmedAt ? new Date(s.confirmedAt) : null,
     confirmedByUserId: s.confirmedByUserId ?? null,
   };
@@ -41,6 +45,7 @@ export class InvoicesService {
   constructor(
     private prisma: PrismaService,
     private supabaseService: SupabaseService,
+    private readonly audit: AuditService,
   ) {}
 
   private readonly INVOICE_PDFS_BUCKET = "invoice-documents";
@@ -358,6 +363,8 @@ export class InvoicesService {
       ? inv.orders.map((o: any) => o.id)
       : (fallbackOrderIds ?? meta.orderIds);
 
+    const sourceJobIds = meta.sourceJobIds?.length ? meta.sourceJobIds : [];
+
     return {
       id: inv.id,
       invoiceNo: inv.invoiceNo,
@@ -381,6 +388,7 @@ export class InvoicesService {
         taxCents: l.taxCents,
       })),
       orderIds,
+      sourceJobIds,
 
       confirmedAt: meta.confirmedAt,
       confirmedByUserId: confirmedByUserId,
@@ -396,6 +404,92 @@ export class InvoicesService {
 
       pdfKey: inv.pdfKey ?? null,
       pdfGeneratedAt: inv.pdfGeneratedAt ?? null,
+    };
+  }
+
+  async getInvoiceDraftFromJobs(
+    tenantId: string,
+    jobIds: string[],
+    user: any,
+  ): Promise<{
+    customerName: string;
+    currency: string;
+    sourceJobIds: string[];
+    suggestedLineItems: Array<{
+      description: string;
+      qty: number;
+      unitPriceCents: number;
+      taxCode: string;
+      taxRate: number;
+    }>;
+  }> {
+    this.assertCustomerCanOnlyRead(user);
+    if (!jobIds?.length) {
+      throw new BadRequestException("jobIds is required");
+    }
+
+    const jobs = await this.prisma.job.findMany({
+      where: { tenantId, id: { in: jobIds } },
+      include: {
+        customerCompany: { select: { id: true, name: true } },
+        charges: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      },
+    });
+
+    if (jobs.length !== jobIds.length) {
+      throw new BadRequestException("Some jobs not found under this tenant");
+    }
+
+    const companySet = new Set(jobs.map((j) => j.customerCompanyId));
+    if (companySet.size !== 1) {
+      throw new BadRequestException(
+        "All jobs must belong to the same customer company for one invoice draft",
+      );
+    }
+
+    const company = jobs[0].customerCompany;
+    const suggestedLineItems: Array<{
+      description: string;
+      qty: number;
+      unitPriceCents: number;
+      taxCode: string;
+      taxRate: number;
+    }> = [];
+
+    for (const job of jobs) {
+      for (const c of job.charges ?? []) {
+        const taxCode = c.taxable ? c.taxCode || "SR" : "ZR";
+        const taxRate = c.taxRateBasisPoints ?? (c.taxable ? 900 : 0);
+        suggestedLineItems.push({
+          description: `${job.internalRef} — ${c.label}`,
+          qty: c.qty,
+          unitPriceCents: c.unitPriceCents,
+          taxCode,
+          taxRate,
+        });
+      }
+    }
+
+    if (!suggestedLineItems.length) {
+      throw new BadRequestException(
+        "Selected jobs have no JobCharge lines; save charges on jobs first",
+      );
+    }
+
+    await this.audit.log(
+      tenantId,
+      "INVOICE_DRAFT_FROM_JOBS",
+      "TENANT",
+      tenantId,
+      { jobIds, lineCount: suggestedLineItems.length },
+      user?.userId ?? null,
+    );
+
+    return {
+      customerName: company?.name ?? jobs[0].receiverName ?? "Customer",
+      currency: "SGD",
+      sourceJobIds: jobIds,
+      suggestedLineItems,
     };
   }
 
@@ -487,6 +581,7 @@ export class InvoicesService {
         snapshot: {
           stage: "Draft",
           orderIds,
+          sourceJobIds: dto.sourceJobIds ?? [],
           confirmedAt: new Date().toISOString(),
           confirmedByUserId: confirmedByUserId ?? null,
         },
@@ -570,9 +665,14 @@ export class InvoicesService {
         orders = found;
       }
 
+      const sourceJobIds: string[] = Array.isArray((inv.snapshot as any)?.sourceJobIds)
+        ? ((inv.snapshot as any).sourceJobIds as string[])
+        : [];
+
       const finalSnapshot = {
         stage: "Sent",
         orderIds,
+        sourceJobIds,
         invoice: {
           id: inv.id,
           invoiceNo: inv.invoiceNo,
@@ -703,9 +803,16 @@ export class InvoicesService {
       const existingOrderIds = Array.isArray(prevSnapEarly?.orderIds)
         ? (prevSnapEarly.orderIds as string[])
         : [];
+      const existingSourceJobIds = Array.isArray(prevSnapEarly?.sourceJobIds)
+        ? (prevSnapEarly.sourceJobIds as string[])
+        : [];
       // Optional: omit orderIds on PATCH to keep current snapshot; send [] to clear.
       const orderIds =
         dto.orderIds !== undefined ? (dto.orderIds ?? []) : existingOrderIds;
+      const sourceJobIds =
+        dto.sourceJobIds !== undefined
+          ? (dto.sourceJobIds ?? [])
+          : existingSourceJobIds;
 
       // Validate orders only when orderIds are provided.
       const orders =
@@ -769,6 +876,7 @@ export class InvoicesService {
         ...(prevSnap ?? {}),
         stage: "Draft",
         orderIds,
+        sourceJobIds,
         confirmedAt:
           draftMeta.confirmedAt?.toISOString() ?? prevSnap?.confirmedAt ?? null,
         confirmedByUserId:

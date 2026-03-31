@@ -16,6 +16,7 @@ import { FinanceModule } from './finance/finance.module';
 import { AuditModule } from './audit/audit.module';
 import { OpsModule } from './ops/ops.module';
 import { VehiclesModule } from './vehicles/vehicles.module';
+import { MasterModule } from './master/master.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { VehiclesModule } from './vehicles/vehicles.module';
     AuditModule,
     OpsModule,
     VehiclesModule,
+    MasterModule,
   ],
   controllers: [AppController],
 })

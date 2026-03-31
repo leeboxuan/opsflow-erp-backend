@@ -323,10 +323,10 @@ export class CreateCustomerCompanyUserDto {
   @IsEmail()
   email!: string;
 
-  @ApiPropertyOptional()
-  @IsOptional()
+  @ApiProperty({ description: "Portal user display name (required)" })
   @IsString()
-  name?: string;
+  @MinLength(1, { message: "name is required" })
+  name!: string;
 
   @ApiProperty({ description: "Initial password set by admin" })
   @IsString()

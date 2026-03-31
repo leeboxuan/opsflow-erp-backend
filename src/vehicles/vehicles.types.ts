@@ -10,6 +10,9 @@ export interface VehicleDto {
   vehicleDescription: string | null;
   driverId: string | null;
   driver?: { id: string; name: string | null; email: string | null } | null;
+  roadTaxExpiryDate: Date | null;
+  lastServicingDate: Date | null;
+  coeExpiryDate: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

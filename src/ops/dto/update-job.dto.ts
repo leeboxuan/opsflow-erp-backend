@@ -1,5 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsEnum, IsOptional, IsString, IsDateString, MinLength, IsNumber } from "class-validator";
+import {
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsDateString,
+  MinLength,
+  IsNumber,
+  IsBoolean,
+} from "class-validator";
 import { JobType } from "@prisma/client";
 import { Type } from "class-transformer";
 import { IsArray, ValidateNested } from "class-validator";
@@ -112,4 +120,64 @@ export class UpdateJobDto {
   @IsString()
   @MinLength(1)
   notes?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pickupPortCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  portTerminalCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  portName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  psaStorageRentLastDay?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  vesselName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  vesselEta?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  portnetReady?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  permitReady?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  returningDepotCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  returnLastDay?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  exportOriginDepotCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  exportPortCode?: string;
 }

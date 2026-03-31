@@ -73,6 +73,16 @@ export class CreateInvoiceDto {
   @IsString({ each: true })
   orderIds?: string[];
 
+  @ApiPropertyOptional({
+    description:
+      "Optional job ids whose frozen JobCharge rows are the billing source for this draft (snapshot only at issue time).",
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  sourceJobIds?: string[];
+
   @ApiProperty({ type: [CreateInvoiceLineItemDto] })
   @IsArray()
   @ArrayMinSize(1)
@@ -117,6 +127,12 @@ export class InvoiceDto {
       'Associated transport order ids from snapshot or linked orders; empty array when none.',
   })
   orderIds?: string[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: "Job ids stored on draft snapshot when invoice is built from JobCharge rows.",
+  })
+  sourceJobIds?: string[];
 
   // --- tracking / side panel fields ---
   @ApiPropertyOptional() confirmedAt?: Date | null;

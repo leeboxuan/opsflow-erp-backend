@@ -242,9 +242,17 @@ export function buildBatchImportJobCreateData(input: {
   internalRef: string;
   status: import("@prisma/client").JobStatus;
   row: JobBatchImportRowDto;
+  createdByUserId?: string | null;
 }): Prisma.JobUncheckedCreateInput {
-  const { tenantId, customerCompanyId, jobType, internalRef, status, row } =
-    input;
+  const {
+    tenantId,
+    customerCompanyId,
+    jobType,
+    internalRef,
+    status,
+    row,
+    createdByUserId,
+  } = input;
 
   const items = buildBatchImportJobItems(tenantId, row);
 
@@ -255,6 +263,7 @@ export function buildBatchImportJobCreateData(input: {
     externalRef: row.externalRef?.trim() || null,
     jobType,
     status,
+    ...(createdByUserId ? { createdByUserId } : {}),
     notes: row.notes?.trim() || null,
     pickupDate: row.pickupDate ? new Date(row.pickupDate) : null,
     pickupAddress1: row.pickupAddress1.trim(),

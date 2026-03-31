@@ -25,4 +25,13 @@ export class VehicleDto {
 
   @ApiProperty()
   updatedAt: Date;
+
+  @ApiProperty({ nullable: true })
+  roadTaxExpiryDate?: Date | null;
+
+  @ApiProperty({ nullable: true })
+  lastServicingDate?: Date | null;
+
+  @ApiProperty({ nullable: true })
+  coeExpiryDate?: Date | null;
 }
