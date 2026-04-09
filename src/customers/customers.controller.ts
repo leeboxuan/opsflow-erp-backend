@@ -98,14 +98,22 @@ export class CustomersController {
   @Post("companies/:companyId/quotation")
   @UseGuards(RoleGuard)
   @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
-  @ApiOperation({ summary: "Upload company quotation (Supabase); supersedes prior ACTIVE" })
+  @ApiOperation({
+    summary:
+      "Upload company quotation (.xlsx/.xls preferred, .docx fallback); supersedes prior ACTIVE",
+  })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
     schema: {
       type: "object",
       required: ["file"],
       properties: {
-        file: { type: "string", format: "binary" },
+        file: {
+          type: "string",
+          format: "binary",
+          description:
+            "Accepted file types: .xlsx, .xls, .docx. PDF is not supported.",
+        },
         effectiveDate: { type: "string", example: "2026-03-01" },
       },
     },

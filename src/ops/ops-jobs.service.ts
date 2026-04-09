@@ -44,6 +44,7 @@ import {
   JobDto,
   JobDocumentDto,
   JobTrackingDto,
+  JobTripResponseDto,
   AuditLogEntryDto,
 } from "./dto/job.dto";
 import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
@@ -1621,7 +1622,7 @@ export class OpsJobsService {
     const quotationLines = activeQ
       ? await this.prisma.customerQuotationRateLine.findMany({
           where: { tenantId, quotationId: activeQ.id },
-          orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
+          orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
         })
       : [];
 
@@ -1915,6 +1916,58 @@ export class OpsJobsService {
       assignedVehicleId: job.assignedVehicleId,
       status: job.status,
     };
+  }
+
+  async listTrips(
+    tenantId: string,
+    jobId: string,
+    user: any,
+  ): Promise<JobTripResponseDto[]> {
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+      select: { id: true, customerCompanyId: true },
+    });
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job, user);
+
+    const trips = await this.prisma.trip.findMany({
+      where: { tenantId, jobId },
+      orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        jobSequence: true,
+        jobTripTemplate: true,
+        title: true,
+        status: true,
+        plannedStartAt: true,
+        startedAt: true,
+        closedAt: true,
+        trailerNumber: true,
+        trailerLastLocationCode: true,
+        driverEarningCents: true,
+        earningLabelSnapshot: true,
+        earningRateMasterId: true,
+        completionRuleJson: true,
+      },
+    });
+
+    return trips.map((t) => ({
+      id: t.id,
+      jobSequence: t.jobSequence ?? null,
+      jobTripTemplate: t.jobTripTemplate ?? null,
+      title: t.title ?? null,
+      status: t.status,
+      plannedStartAt: t.plannedStartAt ?? null,
+      startedAt: t.startedAt ?? null,
+      closedAt: t.closedAt ?? null,
+      trailerNumber: t.trailerNumber ?? null,
+      trailerLastLocationCode: t.trailerLastLocationCode ?? null,
+      driverEarningCents: t.driverEarningCents ?? null,
+      earningLabelSnapshot: t.earningLabelSnapshot ?? null,
+      earningRateMasterId: t.earningRateMasterId ?? null,
+      completionRuleJson:
+        (t.completionRuleJson as Record<string, unknown> | null) ?? null,
+    }));
   }
 
   /**

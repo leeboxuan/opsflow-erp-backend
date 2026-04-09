@@ -20,6 +20,7 @@ import {
   ApiBearerAuth,
   ApiConsumes,
   ApiBody,
+  ApiOkResponse,
 } from "@nestjs/swagger";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { AuthGuard } from "../auth/guards/auth.guard";
@@ -42,6 +43,7 @@ import {
   PatchJobTripDto,
   ReorderJobTripsDto,
 } from "./dto/job-trip.dto";
+import { JobTripResponseDto } from "./dto/job.dto";
 
 @ApiTags("ops-jobs")
 @Controller("jobs")
@@ -461,6 +463,20 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.getTracking(tenantId, jobId, accessUser);
+  }
+
+  @Get(":jobId/trips")
+  @ApiOperation({ summary: "List all trips for a job ordered by sequence" })
+  @ApiOkResponse({ type: JobTripResponseDto, isArray: true })
+  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  async listTrips(@Req() req: any, @Param("jobId") jobId: string) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.listTrips(tenantId, jobId, accessUser);
   }
 
   @Get(":jobId/charges/available")

@@ -456,6 +456,15 @@ export class InvoicesService {
       taxRate: number;
     }> = [];
 
+    const jobsWithoutCharges = jobs
+      .filter((j) => !j.charges || j.charges.length === 0)
+      .map((j) => j.internalRef || j.id);
+    if (jobsWithoutCharges.length > 0) {
+      throw new BadRequestException(
+        `Selected jobs must have saved JobCharge rows before invoicing. Missing charges for: ${jobsWithoutCharges.join(", ")}`,
+      );
+    }
+
     for (const job of jobs) {
       for (const c of job.charges ?? []) {
         const taxCode = c.taxable ? c.taxCode || "SR" : "ZR";
@@ -468,12 +477,6 @@ export class InvoicesService {
           taxRate,
         });
       }
-    }
-
-    if (!suggestedLineItems.length) {
-      throw new BadRequestException(
-        "Selected jobs have no JobCharge lines; save charges on jobs first",
-      );
     }
 
     await this.audit.log(

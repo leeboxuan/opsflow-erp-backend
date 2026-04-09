@@ -1046,13 +1046,16 @@ export class DriverJobsService {
     }
 
     const rule = (trip.completionRuleJson as Record<string, unknown>) || {};
-    if (rule.requireJobDoSigned) {
+    if (rule.requireGeneratedDoSigned) {
+      const hasGeneratedDo = job.documents.some(
+        (d: { type: JobDocumentType }) => d.type === JobDocumentType.DO,
+      );
       const hasSig = job.documents.some(
         (d: { type: JobDocumentType }) => d.type === JobDocumentType.SIGNATURE,
       );
-      if (!hasSig) {
+      if (!hasGeneratedDo || !hasSig) {
         throw new BadRequestException(
-          "Receiver DO must be signed (upload signature) before completing this trip",
+          "Generated receiver DO must exist and be signed before completing this trip",
         );
       }
     }

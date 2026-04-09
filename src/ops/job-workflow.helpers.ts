@@ -2,40 +2,49 @@ import {
   JobTripTemplate,
   JobType,
   Prisma,
+  TripDocumentType,
   TripStatus,
 } from "@prisma/client";
+
+export type TripCompletionRule = {
+  requireGeneratedDoSigned: boolean;
+  requiredTripUploadTypes: TripDocumentType[];
+};
+
+// Explicit, per-template completion rules.
+// Extend by adding new JobTripTemplate keys here.
+export const TRIP_COMPLETION_RULES: Record<JobTripTemplate, TripCompletionRule> = {
+  [JobTripTemplate.PICKUP_TO_DELIVERY]: {
+    requireGeneratedDoSigned: true,
+    requiredTripUploadTypes: [TripDocumentType.OFFLOADING],
+  },
+  [JobTripTemplate.DELIVERY_TO_DEPOT]: {
+    requireGeneratedDoSigned: true,
+    requiredTripUploadTypes: [TripDocumentType.PICKUP_DO],
+  },
+  [JobTripTemplate.DEPOT_TO_DELIVERY]: {
+    requireGeneratedDoSigned: true,
+    requiredTripUploadTypes: [TripDocumentType.PICKUP_DO],
+  },
+  [JobTripTemplate.DELIVERY_TO_PORT]: {
+    requireGeneratedDoSigned: true,
+    requiredTripUploadTypes: [TripDocumentType.OFFLOADING],
+  },
+  [JobTripTemplate.CUSTOM]: {
+    requireGeneratedDoSigned: true,
+    requiredTripUploadTypes: [TripDocumentType.OFFLOADING],
+  },
+};
 
 /** Default JSON rule checked by driver trip completion (see DriverJobsService). */
 export function completionRuleForTemplate(
   template: JobTripTemplate,
 ): Prisma.InputJsonValue {
-  switch (template) {
-    case JobTripTemplate.PICKUP_TO_DELIVERY:
-      return {
-        requireJobDoSigned: true,
-        requiredTripUploadTypes: ["OFFLOADING"],
-      };
-    case JobTripTemplate.DELIVERY_TO_DEPOT:
-      return {
-        requireJobDoSigned: false,
-        requiredTripUploadTypes: ["OFFLOADING"],
-      };
-    case JobTripTemplate.DEPOT_TO_DELIVERY:
-      return {
-        requireJobDoSigned: false,
-        requiredTripUploadTypes: ["OFFLOADING"],
-      };
-    case JobTripTemplate.DELIVERY_TO_PORT:
-      return {
-        requireJobDoSigned: true,
-        requiredTripUploadTypes: ["OFFLOADING", "POD_PHOTO"],
-      };
-    default:
-      return {
-        requireJobDoSigned: true,
-        requiredTripUploadTypes: ["OFFLOADING"],
-      };
-  }
+  const rule = TRIP_COMPLETION_RULES[template] ?? TRIP_COMPLETION_RULES[JobTripTemplate.CUSTOM];
+  return {
+    requireGeneratedDoSigned: rule.requireGeneratedDoSigned,
+    requiredTripUploadTypes: [...rule.requiredTripUploadTypes],
+  };
 }
 
 export type DefaultTripSeed = {

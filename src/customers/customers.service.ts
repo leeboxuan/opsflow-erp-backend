@@ -14,7 +14,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
 import { AuditService } from "../audit/audit.service";
 import {
-  buildPlaceholderRateLinesFromPdf,
+  parseQuotationRateLinesFromDocxBuffer,
   parseQuotationRateLinesFromXlsxBuffer,
 } from "./quotation-parse.helpers";
 import {
@@ -33,12 +33,12 @@ import { applyQSearch } from "../common/listing/listing.search";
 const COMPANY_DOCS_BUCKET = "job-documents";
 
 const QUOTATION_MIMES = [
-  "application/pdf",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ];
 
-const QUOTATION_EXT = /\.(pdf|xlsx|xls)$/i;
+const QUOTATION_EXT = /\.(xlsx|xls|docx)$/i;
 
 @Injectable()
 export class CustomersService {
@@ -715,8 +715,7 @@ export class CustomersService {
       QUOTATION_MIMES.some((m) => mime === m) || QUOTATION_EXT.test(name);
     if (!allowedMime) {
       throw new BadRequestException(
-        "Quotation must be PDF, XLSX, or XLS. Got: " +
-          (mime || file.originalname || "unknown"),
+        "Quotation must be an Excel or DOCX file (.xlsx, .xls, .docx). PDF is not supported.",
       );
     }
 
@@ -728,7 +727,7 @@ export class CustomersService {
       throw new BadRequestException("effectiveDate must be YYYY-MM-DD");
     }
 
-    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".pdf";
+    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".xlsx";
     const key = `${tenantId}/companies/${companyId}/quotations/${Date.now()}${ext}`;
 
     await this.putCompanyQuotationObject(
@@ -737,19 +736,30 @@ export class CustomersService {
       file.mimetype ?? "application/octet-stream",
     );
 
-    let parsedLines =
-      mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    const isExcelFile =
+      mime ===
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
       mime === "application/vnd.ms-excel" ||
-      /\.xlsx?$/i.test(name)
-        ? parseQuotationRateLinesFromXlsxBuffer(file.buffer)
-        : buildPlaceholderRateLinesFromPdf();
+      /\.xlsx?$/i.test(name);
+    const isDocxFile =
+      mime ===
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      /\.docx$/i.test(name);
+
+    let parsedLines = isExcelFile
+      ? parseQuotationRateLinesFromXlsxBuffer(file.buffer)
+      : [];
+
+    if (!isExcelFile && isDocxFile) {
+      parsedLines = await parseQuotationRateLinesFromDocxBuffer(file.buffer);
+    }
 
     const parsedSummaryJson =
       parsedLines.length === 0
         ? {
             note:
-              mime === "application/pdf"
-                ? "PDF uploaded; structured lines not auto-extracted. Re-upload XLSX or map lines manually."
+              isDocxFile
+                ? "DOCX uploaded; no deterministic Annex A lines extracted. Quotation saved without structured lines."
                 : "No Annex-style rows detected in spreadsheet.",
           }
         : { lineCount: parsedLines.length };
@@ -868,7 +878,7 @@ export class CustomersService {
 
     return this.prisma.customerQuotationRateLine.findMany({
       where: { tenantId, quotationId: q.id },
-      orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
+      orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
     });
   }
 }
