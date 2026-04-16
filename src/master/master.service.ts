@@ -212,6 +212,7 @@ export class MasterDataService {
     const { rows, sheetName } = parsed;
     const items: any[] = [];
     const warnings: string[] = [];
+    const codeCounter = new Map<string, number>();
     let skippedRows = 0;
     let currentSectionCode: string | null = null;
     let currentSectionTitle: string | null = null;
@@ -269,7 +270,16 @@ export class MasterDataService {
           continue;
         }
 
-        const code = `${currentSectionCode ?? "X"}-${colA}`;
+        const baseCode = `${currentSectionCode ?? "X"}-${colA}`;
+        const seen = codeCounter.get(baseCode) ?? 0;
+        const nextSeen = seen + 1;
+        codeCounter.set(baseCode, nextSeen);
+        const code = nextSeen > 1 ? `${baseCode}-${nextSeen}` : baseCode;
+        if (nextSeen > 1) {
+          warnings.push(
+            `Duplicate base code "${baseCode}" at row ${i + 1}; generated "${code}"`,
+          );
+        }
         const label = colB;
         const rateCents = Math.round(numericRate * 100);
 

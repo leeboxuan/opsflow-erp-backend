@@ -81,4 +81,34 @@ describe("MasterDataService getActiveMasterItems", () => {
       rateCents: 3500,
     });
   });
+
+  it("parseDriverPayoutItems generates unique codes with suffixes for duplicates", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const XLSX = require("xlsx");
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["A", "DESCRIPTION - CONTAINER RATE", "UOM", "Rates"],
+      [1, "Normal full trip", "Per Trip", 18],
+      [2, "Normal half trip", "Per Trip", 10],
+      ["A", "DESCRIPTION - CONTAINER RATE", "UOM", "Rates"],
+      [1, "Normal full trip duplicate section", "Per Trip", 20],
+      [2, "Normal half trip duplicate section", "Per Trip", 11],
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, "LATEST RATES");
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    const prisma: any = {};
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+    const parsed = (svc as any).parseDriverPayoutItems(Buffer.from(buf));
+
+    expect(parsed.items.map((i: any) => i.code)).toEqual([
+      "A-1",
+      "A-2",
+      "A-1-2",
+      "A-2-2",
+    ]);
+    const unique = new Set(parsed.items.map((i: any) => i.code));
+    expect(unique.size).toBe(parsed.items.length);
+  });
 });
