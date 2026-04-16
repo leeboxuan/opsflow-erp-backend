@@ -1787,7 +1787,12 @@ export class OpsJobsService {
 
     const dhcReferences = await (async () => {
       const activeFile = await this.prisma.masterFile.findFirst({
-        where: { tenantId, type: MasterFileType.DHC_REFERENCE, isActive: true },
+        where: {
+          tenantId,
+          type: MasterFileType.DHC_REFERENCE,
+          customerCompanyId: null,
+          isActive: true,
+        },
         orderBy: { uploadedAt: "desc" },
         select: { id: true },
       });
@@ -1806,7 +1811,12 @@ export class OpsJobsService {
     const driverTripRates =
       await (async () => {
         const activeFile = await this.prisma.masterFile.findFirst({
-          where: { tenantId, type: MasterFileType.DRIVER_PAYOUT, isActive: true },
+          where: {
+            tenantId,
+            type: MasterFileType.DRIVER_PAYOUT,
+            customerCompanyId: null,
+            isActive: true,
+          },
           orderBy: { uploadedAt: "desc" },
           select: { id: true },
         });

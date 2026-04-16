@@ -282,10 +282,23 @@ export class MasterDataService {
   ) {
     if (!file?.buffer?.length) throw new BadRequestException("file is required");
     const effectiveDate = this.parseDate(effectiveDateIso);
+    const providedCustomerCompanyId = customerCompanyId?.trim() || null;
     const scopedCustomerCompanyId =
-      type === MasterFileType.CUSTOMER_QUOTATION ? customerCompanyId ?? null : null;
+      type === MasterFileType.CUSTOMER_QUOTATION ? providedCustomerCompanyId : null;
+
     if (type === MasterFileType.CUSTOMER_QUOTATION && !scopedCustomerCompanyId) {
-      throw new BadRequestException("customerCompanyId is required for CUSTOMER_QUOTATION master file");
+      throw new BadRequestException(
+        "CUSTOMER_QUOTATION upload requires customerCompanyId",
+      );
+    }
+    if (
+      (type === MasterFileType.DRIVER_PAYOUT ||
+        type === MasterFileType.DHC_REFERENCE) &&
+      providedCustomerCompanyId
+    ) {
+      throw new BadRequestException(
+        `${type} must be tenant-scoped; customerCompanyId must be null`,
+      );
     }
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
     const key = `${tenantId}/masters/${type.toLowerCase()}/${Date.now()}${ext}`;
@@ -436,6 +449,23 @@ export class MasterDataService {
       },
     });
     if (!masterFile) throw new NotFoundException("Master file not found");
+    if (
+      masterFile.type === MasterFileType.CUSTOMER_QUOTATION &&
+      !masterFile.customerCompanyId
+    ) {
+      throw new BadRequestException(
+        "Invalid CUSTOMER_QUOTATION master scope: customerCompanyId is missing",
+      );
+    }
+    if (
+      (masterFile.type === MasterFileType.DRIVER_PAYOUT ||
+        masterFile.type === MasterFileType.DHC_REFERENCE) &&
+      masterFile.customerCompanyId
+    ) {
+      throw new BadRequestException(
+        `Invalid ${masterFile.type} scope: customerCompanyId must be null`,
+      );
+    }
 
     const buffer = await this.downloadMasterObject(masterFile.fileUrl);
     const file: Express.Multer.File = {
