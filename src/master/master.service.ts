@@ -450,18 +450,37 @@ export class MasterDataService {
     type: MasterFileType,
     customerCompanyId?: string | null,
   ) {
-    if (type === MasterFileType.CUSTOMER_QUOTATION && !customerCompanyId) {
-      throw new BadRequestException("customerCompanyId is required for CUSTOMER_QUOTATION");
-    }
-    const active = await this.prisma.masterFile.findFirst({
-      where: {
+    let activeWhere: any;
+    if (type === MasterFileType.CUSTOMER_QUOTATION) {
+      if (!customerCompanyId) {
+        throw new BadRequestException(
+          "customerCompanyId is required for CUSTOMER_QUOTATION",
+        );
+      }
+      activeWhere = {
         tenantId,
-        type,
+        type: MasterFileType.CUSTOMER_QUOTATION,
         isActive: true,
-        ...(type === MasterFileType.CUSTOMER_QUOTATION
-          ? { customerCompanyId: customerCompanyId ?? null }
-          : { customerCompanyId: null }),
-      },
+        customerCompanyId,
+      };
+    } else if (type === MasterFileType.DRIVER_PAYOUT) {
+      activeWhere = {
+        tenantId,
+        type: MasterFileType.DRIVER_PAYOUT,
+        isActive: true,
+        customerCompanyId: null,
+      };
+    } else {
+      activeWhere = {
+        tenantId,
+        type: MasterFileType.DHC_REFERENCE,
+        isActive: true,
+        customerCompanyId: null,
+      };
+    }
+
+    const active = await this.prisma.masterFile.findFirst({
+      where: activeWhere,
       orderBy: { uploadedAt: "desc" },
     });
     if (!active) return { masterFile: null, items: [] };
