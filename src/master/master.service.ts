@@ -191,52 +191,126 @@ export class MasterDataService {
       throw new BadRequestException("Excel import requires xlsx package");
     }
     const wb = XLSX.read(buffer, { type: "buffer" });
-    const sheetName = wb.SheetNames[0];
+    const sheetName =
+      wb.SheetNames.find((n: string) =>
+        String(n).trim().toLowerCase() === "latest rates",
+      ) ?? wb.SheetNames[0];
     if (!sheetName) return null;
     const rows: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "" });
     if (!rows.length) return null;
-    const header = rows[0].map((c: any) => String(c ?? "").trim().toLowerCase());
-    const idx = (n: string) => header.findIndex((h: string) => h === n);
-    return { rows, idx };
+    return { rows, sheetName };
   }
 
   private parseDriverPayoutItems(buffer: Buffer) {
     const parsed = this.parseControlledSheetRows(buffer);
-    if (!parsed || !parsed.rows.length) return { items: [], summary: { note: "No rows found" } };
-    const { rows, idx } = parsed;
-    const idxCode = idx("code");
-    const idxLabel = idx("label");
-    const idxRate = idx("ratecents") >= 0 ? idx("ratecents") : idx("rate");
-    if (idxCode < 0 || idxLabel < 0 || idxRate < 0) {
-      throw new BadRequestException("Driver payout Excel must include code, label, and rate/rateCents");
+    if (!parsed || !parsed.rows.length) {
+      return {
+        items: [],
+        summary: { note: "No rows found", sheetUsed: null, totalParsedRows: 0, skippedRows: 0, warnings: [] },
+      };
     }
+    const { rows, sheetName } = parsed;
     const items: any[] = [];
-    for (let i = 1; i < rows.length; i++) {
+    const warnings: string[] = [];
+    let skippedRows = 0;
+    let currentSectionCode: string | null = null;
+    let currentSectionTitle: string | null = null;
+
+    const parseNumericRate = (raw: unknown): number | null => {
+      if (typeof raw === "number" && !Number.isNaN(raw)) return raw;
+      const s = String(raw ?? "").trim();
+      if (!s) return null;
+      // only accept plain single numeric values for payout rows
+      if (!/^-?\d+(?:\.\d+)?$/.test(s)) return null;
+      const n = Number(s);
+      if (Number.isNaN(n)) return null;
+      return n;
+    };
+
+    for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      const code = String(r[idxCode] ?? "").trim();
-      const label = String(r[idxLabel] ?? "").trim();
-      const rateCents = idx("ratecents") >= 0
-        ? Number(String(r[idxRate] ?? "").replace(/[$,\s]/g, ""))
-        : this.parseMoney(r[idxRate]);
-      if (!code || !label || rateCents == null || Number.isNaN(rateCents) || rateCents < 0) continue;
-      items.push({
-        section: idx("section") >= 0 ? String(r[idx("section")] ?? "").trim() || null : null,
-        code,
-        label,
-        description: idx("description") >= 0 ? String(r[idx("description")] ?? "").trim() || null : null,
-        category: idx("category") >= 0 ? String(r[idx("category")] ?? "").trim() || null : null,
-        containerSize: idx("containersize") >= 0 ? String(r[idx("containersize")] ?? "").trim() || null : null,
-        tripMode: idx("tripmode") >= 0 ? String(r[idx("tripmode")] ?? "").trim() || null : null,
-        areaScope: idx("areascope") >= 0 ? String(r[idx("areascope")] ?? "").trim() || null : null,
-        unit: idx("unit") >= 0 ? String(r[idx("unit")] ?? "").trim() || null : null,
-        rateCents: Math.round(Number(rateCents)),
-        notes: idx("notes") >= 0 ? String(r[idx("notes")] ?? "").trim() || null : null,
-        isSelectableForTripEarning: true,
-        sortOrder: i - 1,
-        active: true,
-      });
+      if (!Array.isArray(r)) continue;
+      const colA = String(r[0] ?? "").trim();
+      const colB = String(r[1] ?? "").trim();
+      const colC = String(r[2] ?? "").trim();
+      const colD = r[3];
+
+      if (!colA && !colB && !colC && String(colD ?? "").trim() === "") {
+        continue;
+      }
+
+      // Section header row: A/B/C... in col A and description header in col B
+      if (/^[A-Z]$/.test(colA) && /description/i.test(colB)) {
+        currentSectionCode = colA;
+        currentSectionTitle = colB;
+        continue;
+      }
+
+      // Skip obvious table header rows
+      if (
+        /^(description|uom|rates?)$/i.test(colA) ||
+        /^(description|uom|rates?)$/i.test(colB)
+      ) {
+        skippedRows += 1;
+        continue;
+      }
+
+      // Item row: numeric item number in col A + description in col B + rate in col D
+      if (/^\d+$/.test(colA) && colB) {
+        const numericRate = parseNumericRate(colD);
+        if (numericRate == null || numericRate < 0) {
+          skippedRows += 1;
+          const rawRate = String(colD ?? "").trim();
+          if (rawRate) {
+            warnings.push(
+              `Skipped row ${i + 1}: non-single numeric rate "${rawRate}"`,
+            );
+          }
+          continue;
+        }
+
+        const code = `${currentSectionCode ?? "X"}-${colA}`;
+        const label = colB;
+        const rateCents = Math.round(numericRate * 100);
+
+        items.push({
+          section: currentSectionCode,
+          code,
+          label,
+          description: null,
+          category: currentSectionTitle,
+          containerSize: null,
+          tripMode: null,
+          areaScope: null,
+          unit: colC || null,
+          rateCents,
+          notes: null,
+          isSelectableForTripEarning: true,
+          sortOrder: items.length,
+          active: true,
+        });
+        continue;
+      }
+
+      skippedRows += 1;
+      if (colA || colB || colC || String(colD ?? "").trim()) {
+        warnings.push(`Skipped row ${i + 1}: not a recognized payout item row`);
+      }
     }
-    return { items, summary: { lineCount: items.length } };
+
+    if (!items.length) {
+      warnings.push("No parseable payout item rows were found in the workbook.");
+    }
+
+    return {
+      items,
+      summary: {
+        sheetUsed: sheetName,
+        totalParsedRows: items.length,
+        skippedRows,
+        warnings,
+      },
+    };
   }
 
   private async parseDhcItems(file: Express.Multer.File) {
