@@ -390,6 +390,13 @@ model DhcReferenceItem {
   category     String?
   unit         String?
   rateCents    Int?
+  yardDepot    String?
+  oldRateCents Int?
+  newRateCents Int?
+  software     String?
+  operatorCode String?
+  operatorName String?
+  effectiveDate DateTime?
   notes        String?
   sortOrder    Int      @default(0)
   active       Boolean  @default(true)

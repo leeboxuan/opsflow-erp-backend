@@ -10,6 +10,7 @@ import {
   parseQuotationRateLinesFromDocxBuffer,
   parseQuotationRateLinesFromXlsxBuffer,
 } from "../customers/quotation-parse.helpers";
+import { parseDhcExcelBuffer } from "./parsers/dhc-excel.parser";
 import {
   CreateDriverTripRateMasterDto,
   DriverTripRateImportSummaryDto,
@@ -59,14 +60,6 @@ export class MasterDataService {
     const n = Number(String(raw ?? "").replace(/[$,\s]/g, ""));
     if (Number.isNaN(n)) return null;
     return Math.round(n * 100);
-  }
-
-  private parseStrictMoneyToCents(raw: unknown): number | null {
-    const s = String(raw ?? "").trim();
-    if (!s) return null;
-    const validMoney = /^-?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?$/;
-    if (!validMoney.test(s)) return null;
-    return this.parseMoney(s);
   }
 
   private parseDate(effectiveDateIso?: string | null): Date | null {
@@ -397,154 +390,74 @@ export class MasterDataService {
 
   private async parseDhcItems(file: Express.Multer.File) {
     const name = String(file.originalname ?? "").toLowerCase();
-    const isPdf = String(file.mimetype ?? "").toLowerCase() === "application/pdf" || /\.pdf$/i.test(name);
-    if (!isPdf) throw new BadRequestException("DHC reference upload must be PDF");
-    const parserVersion = "dhc_pdf_v2";
-    const rawLines = await this.parsePdfTabular(file.buffer);
-    const normalizedLines = rawLines
-      .map((line) => String(line ?? "").replace(/\s+/g, " ").trim())
-      .filter(Boolean);
-
-    const lineFreq = new Map<string, number>();
-    for (const line of normalizedLines) {
-      lineFreq.set(line, (lineFreq.get(line) ?? 0) + 1);
+    const isExcel = /\.xlsx$/i.test(name);
+    if (!isExcel) {
+      return {
+        items: [],
+        summary: {
+          parserVersion: "dhc_excel_v1",
+          parsedRows: 0,
+          skippedRows: 0,
+          warnings: ["DHC_REFERENCE canonical import requires .xlsx source file."],
+          note: "DHC upload accepted but not parsed: please upload Excel (.xlsx) source file.",
+        },
+        status: MasterFileStatus.PARSE_FAILED,
+      };
     }
-
-    const warnings: string[] = [];
-    const isJunkOrHeaderFooter = (line: string): boolean => {
-      if (/^(page\s*)?\d+\s*(of|\/)\s*\d+$/i.test(line)) return true;
-      if (/^page\s+\d+$/i.test(line)) return true;
-      if (/^(effective\s*date|date)\s*[:\-]/i.test(line)) return true;
-      if (/^(dhc|depot handling)(\s+reference)?(\s+rates?)?$/i.test(line)) return true;
-      if (/^(code|description|label|rate|amount|uom)(\s+(code|description|label|rate|amount|uom))+$/i.test(line)) {
-        return true;
-      }
-      if (/^this page intentionally left blank$/i.test(line)) return true;
-      return false;
-    };
-
-    const filteredLines = normalizedLines.filter((line) => {
-      if (isJunkOrHeaderFooter(line)) return false;
-      if ((lineFreq.get(line) ?? 0) > 1 && /^(code|description|label|rate|amount|uom)\b/i.test(line)) {
-        return false;
-      }
-      return true;
-    });
-
-    const amountOnlyRe = /^-?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?$/;
-    const codeLabelAmountRe =
-      /^([A-Z0-9._/-]*\d[A-Z0-9._/-]*)\s+(.+?)\s+(-?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)$/i;
-    const labelAmountRe = /^(.+?)\s+(-?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)$/;
-    const codeLabelRe = /^([A-Z0-9._/-]*\d[A-Z0-9._/-]*)\s+(.+)$/i;
-
-    const parsedRows: Array<{ code: string | null; label: string; rateCents: number; notes: string | null }> = [];
-    let skippedLines = 0;
-
-    for (let i = 0; i < filteredLines.length; i++) {
-      const line = filteredLines[i];
-      let parsed: { code: string | null; label: string; rateCents: number; notes: string | null } | null = null;
-
-      const m1 = line.match(codeLabelAmountRe);
-      if (m1) {
-        const cents = this.parseStrictMoneyToCents(m1[3]);
-        if (cents != null && cents >= 0) {
-          parsed = {
-            code: m1[1].trim().toUpperCase(),
-            label: m1[2].trim().replace(/\s+/g, " "),
-            rateCents: cents,
-            notes: null,
-          };
-        }
-      }
-
-      if (!parsed) {
-        const m2 = line.match(labelAmountRe);
-        if (m2) {
-          const cents = this.parseStrictMoneyToCents(m2[2]);
-          if (cents != null && cents >= 0) {
-            parsed = {
-              code: null,
-              label: m2[1].trim().replace(/\s+/g, " "),
-              rateCents: cents,
-              notes: null,
-            };
-          }
-        }
-      }
-
-      if (!parsed && i + 1 < filteredLines.length && amountOnlyRe.test(filteredLines[i + 1])) {
-        const cents = this.parseStrictMoneyToCents(filteredLines[i + 1]);
-        if (cents != null && cents >= 0) {
-          const m3 = line.match(codeLabelRe);
-          parsed = {
-            code: m3 ? m3[1].trim().toUpperCase() : null,
-            label: (m3 ? m3[2] : line).trim().replace(/\s+/g, " "),
-            rateCents: cents,
-            notes: null,
-          };
-          i += 1;
-        }
-      }
-
-      if (parsed) {
-        parsedRows.push(parsed);
-      } else {
-        skippedLines += 1;
-      }
-    }
-
-    const deduped: typeof parsedRows = [];
+    const parsed = parseDhcExcelBuffer(file.buffer);
+    const dedupedItems: any[] = [];
     const seen = new Set<string>();
     let duplicateRowsRemoved = 0;
-    for (const row of parsedRows) {
-      const key = `${(row.code ?? "").toUpperCase().trim()}|${row.label.toLowerCase()}|${row.rateCents}`;
+    for (const row of parsed.items) {
+      const key = [
+        row.yardDepot ?? "",
+        row.operatorCode ?? "",
+        row.operatorName ?? "",
+        row.oldRateCents ?? "",
+        row.newRateCents ?? "",
+        row.software ?? "",
+        row.effectiveDate ? row.effectiveDate.toISOString().slice(0, 10) : "",
+      ].join("|");
       if (seen.has(key)) {
         duplicateRowsRemoved += 1;
         continue;
       }
       seen.add(key);
-      deduped.push(row);
+      dedupedItems.push(row);
     }
-
-    const items = deduped.map((row, i) => ({
-      code: row.code || `DHC-${String(i + 1).padStart(3, "0")}`,
+    const items = dedupedItems.map((row, idx) => ({
+      section: row.section,
+      code: row.code,
       label: row.label,
-      description: null,
-      category: null,
-      unit: null,
+      description: row.description,
+      category: row.category,
+      unit: row.unit,
       rateCents: row.rateCents,
-      notes: row.notes ?? "Parsed from PDF (deterministic)",
-      sortOrder: i,
+      notes: row.notes,
+      yardDepot: row.yardDepot,
+      oldRateCents: row.oldRateCents,
+      newRateCents: row.newRateCents,
+      software: row.software,
+      operatorCode: row.operatorCode,
+      operatorName: row.operatorName,
+      effectiveDate: row.effectiveDate,
+      sortOrder: idx,
       active: true,
     }));
-    if (!items.length) {
-      warnings.push("No deterministic DHC rows could be extracted from PDF text.");
-    }
-
+    const summary = {
+      ...parsed.summary,
+      parsedRows: items.length,
+      duplicateRowsRemoved,
+      lineCount: items.length,
+    };
     return {
       items,
-      summary: items.length
-        ? {
-            lineCount: items.length,
-            totalLines: normalizedLines.length,
-            candidateLines: filteredLines.length,
-            parsedRows: items.length,
-            skippedLines,
-            duplicateRowsRemoved,
-            warnings,
-            parserVersion,
-            note: "PDF parsed on upload (deterministic parser).",
-          }
-        : {
-            totalLines: normalizedLines.length,
-            candidateLines: filteredLines.length,
-            parsedRows: 0,
-            skippedLines,
-            duplicateRowsRemoved,
-            warnings,
-            parserVersion,
-            note: "PDF uploaded. No deterministic DHC rows parsed.",
-          },
+      summary: {
+        ...summary,
+        note: items.length
+          ? "DHC Excel parsed as deterministic canonical source."
+          : "DHC Excel parsed but no valid rows detected.",
+      },
       status: items.length ? MasterFileStatus.PARSED : MasterFileStatus.PARSE_FAILED,
     };
   }
@@ -722,6 +635,14 @@ export class MasterDataService {
       target.status === MasterFileStatus.PARSE_FAILED
     ) {
       throw new BadRequestException("Cannot activate a DHC reference file that has no parsed rows.");
+    }
+    if (target.type === MasterFileType.DHC_REFERENCE) {
+      const parsedCount = await this.prisma.dhcReferenceItem.count({
+        where: { tenantId, masterFileId: target.id, active: true },
+      });
+      if (parsedCount <= 0) {
+        throw new BadRequestException("Cannot activate a DHC reference file that has no parsed rows.");
+      }
     }
     await this.prisma.$transaction(async (tx) => {
       await tx.masterFile.updateMany({

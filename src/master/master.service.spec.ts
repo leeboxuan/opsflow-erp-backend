@@ -83,6 +83,31 @@ describe("MasterDataService getActiveMasterItems", () => {
     });
   });
 
+  it("returns no active DHC items when only failed versions exist", async () => {
+    const masterFileFindFirst = jest.fn().mockResolvedValue(null);
+    const prisma: any = {
+      masterFile: { findFirst: masterFileFindFirst },
+      driverPayoutItem: { findMany: jest.fn() },
+      dhcReferenceItem: { findMany: jest.fn() },
+      customerQuotationItem: { findMany: jest.fn() },
+    };
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+
+    const result = await svc.getActiveMasterItems("t1", MasterFileType.DHC_REFERENCE, null);
+    expect(result).toEqual({ masterFile: null, items: [] });
+    expect(masterFileFindFirst).toHaveBeenCalledWith({
+      where: {
+        tenantId: "t1",
+        type: MasterFileType.DHC_REFERENCE,
+        status: MasterFileStatus.PARSED,
+        isActive: true,
+        customerCompanyId: null,
+      },
+      orderBy: { uploadedAt: "desc" },
+    });
+  });
+
   it("parseDriverPayoutItems generates unique codes with suffixes for duplicates", async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const XLSX = require("xlsx");
@@ -170,43 +195,54 @@ describe("MasterDataService getActiveMasterItems", () => {
     });
   });
 
-  it("parseDhcItems extracts deterministic rows, skips junk, dedupes, and preserves order", async () => {
+  it("parseDhcItems parses Excel header/carry-forward groups and serial W.E.F date", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const XLSX = require("xlsx");
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["DHC Listing rate on Mar 2026"],
+      ["Yard", "Old", "New", "Software", "Op Code", "Operator Name", "W.E.F"],
+      ["Allied 2", 71, 80, "CMS +$5 Admin Fee", "HY", "HYUNDAI MERCHANT MARINE", 45839],
+      ["", "", "", "", "KM", "KOREA MARINE TRANSPORT CO LTD", ""],
+      ["Jurong Port", 72, 81, "CMS +$5 Admin Fee", "MSC", "MEDITERRANEAN SHIPPING CO", 45870],
+      ["", "", "", "", "", "", ""],
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, "Table 1");
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
     const prisma: any = {};
     const supabase: any = { getClient: jest.fn() };
     const svc = new MasterDataService(prisma, supabase);
-    jest.spyOn(svc as any, "parsePdfTabular").mockResolvedValue([
-      "DHC REFERENCE RATES",
-      "Page 1 of 2",
-      "CODE DESCRIPTION RATE",
-      "DHC01 Depot handling PSA $12.00",
-      "DHC02 Depot handling Tuas",
-      "$15.50",
-      "Special cargo surcharge $25",
-      "Effective Date: 2026-04-17",
-      "DHC01   Depot handling PSA   $12.00",
-      "Page 2 of 2",
-      "CODE DESCRIPTION RATE",
-    ]);
 
     const parsed = await (svc as any).parseDhcItems({
-      originalname: "dhc.pdf",
-      mimetype: "application/pdf",
-      buffer: Buffer.from("x"),
+      originalname: "dhc.xlsx",
+      mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      buffer: Buffer.from(buf),
     });
 
     expect(parsed.status).toBe(MasterFileStatus.PARSED);
     expect(parsed.items).toHaveLength(3);
-    expect(parsed.items.map((i: any) => i.code)).toEqual(["DHC01", "DHC02", "DHC-003"]);
-    expect(parsed.items.map((i: any) => i.label)).toEqual([
-      "Depot handling PSA",
-      "Depot handling Tuas",
-      "Special cargo surcharge",
+    expect(parsed.items.map((i: any) => i.operatorCode)).toEqual(["HY", "KM", "MSC"]);
+    expect(parsed.items.map((i: any) => i.yardDepot)).toEqual([
+      "Allied 2",
+      "Allied 2",
+      "Jurong Port",
     ]);
     expect(parsed.items.map((i: any) => i.sortOrder)).toEqual([0, 1, 2]);
+    expect(parsed.items[0]).toMatchObject({
+      oldRateCents: 7100,
+      newRateCents: 8000,
+      software: "CMS +$5 Admin Fee",
+    });
+    expect(parsed.items[1]).toMatchObject({
+      oldRateCents: 7100,
+      newRateCents: 8000,
+    });
+    expect(parsed.items[0].effectiveDate).toBeInstanceOf(Date);
     expect(parsed.summary).toMatchObject({
-      parserVersion: "dhc_pdf_v2",
+      parserVersion: "dhc_excel_v1",
       parsedRows: 3,
-      duplicateRowsRemoved: 1,
+      headerRow: 2,
     });
   });
 
@@ -235,7 +271,7 @@ describe("MasterDataService getActiveMasterItems", () => {
     jest.spyOn(svc as any, "uploadMasterObject").mockResolvedValue(undefined);
     jest.spyOn(svc as any, "parseDhcItems").mockResolvedValue({
       items: [],
-      summary: { parsedRows: 0, parserVersion: "dhc_pdf_v2" },
+      summary: { parsedRows: 0, parserVersion: "dhc_excel_v1" },
       status: MasterFileStatus.PARSE_FAILED,
     });
 
@@ -243,8 +279,8 @@ describe("MasterDataService getActiveMasterItems", () => {
       "t1",
       MasterFileType.DHC_REFERENCE,
       {
-        originalname: "dhc.pdf",
-        mimetype: "application/pdf",
+        originalname: "dhc.xlsx",
+        mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         buffer: Buffer.from("x"),
       } as any,
       null,
@@ -281,6 +317,31 @@ describe("MasterDataService getActiveMasterItems", () => {
     const svc = new MasterDataService(prisma, supabase);
 
     await expect(svc.activateMasterFile("t1", "mf-failed")).rejects.toThrow(
+      "Cannot activate a DHC reference file that has no parsed rows.",
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("activateMasterFile rejects DHC master with parsed status but zero rows", async () => {
+    const prisma: any = {
+      masterFile: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "mf-empty",
+          tenantId: "t1",
+          type: MasterFileType.DHC_REFERENCE,
+          status: MasterFileStatus.PARSED,
+          customerCompanyId: null,
+        }),
+      },
+      dhcReferenceItem: {
+        count: jest.fn().mockResolvedValue(0),
+      },
+      $transaction: jest.fn(),
+    };
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+
+    await expect(svc.activateMasterFile("t1", "mf-empty")).rejects.toThrow(
       "Cannot activate a DHC reference file that has no parsed rows.",
     );
     expect(prisma.$transaction).not.toHaveBeenCalled();
