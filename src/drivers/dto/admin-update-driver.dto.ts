@@ -19,4 +19,12 @@ export class AdminUpdateDriverDto {
   @IsOptional()
   @IsString()
   assignedVehicleId?: string;
+
+  @ApiProperty({
+    description: "Assigned fleet vehicle id for job assignment",
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  assignedFleetVehicleId?: string;
 }

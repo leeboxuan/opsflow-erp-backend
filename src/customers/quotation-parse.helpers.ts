@@ -9,11 +9,15 @@ export type ParsedQuotationRateLineInput = {
   code: string;
   label: string;
   description?: string | null;
+  category?: string | null;
   unit?: string | null;
   rateCents: number;
   containerSize?: string | null;
   tripMode?: string | null;
   areaScope?: string | null;
+  notes?: string | null;
+  isSelectableForJob?: boolean;
+  isSelectableForTripEarning?: boolean;
   sortOrder: number;
   sourceType: string;
 };
@@ -34,6 +38,15 @@ function parseMoneyToCents(raw: unknown): number | null {
   const n = Number(cleaned);
   if (Number.isNaN(n)) return null;
   return Math.round(n * 100);
+}
+
+function parseBooleanCell(value: unknown, defaultValue: boolean): boolean {
+  if (value == null) return defaultValue;
+  const s = String(value).trim().toLowerCase();
+  if (!s) return defaultValue;
+  if (["1", "true", "yes", "y"].includes(s)) return true;
+  if (["0", "false", "no", "n"].includes(s)) return false;
+  return defaultValue;
 }
 
 function updateAnnexContext(text: string, context: AnnexContext): AnnexContext {
@@ -176,6 +189,74 @@ export function parseQuotationRateLinesFromXlsxBuffer(
   let sortOrder = 0;
   let currentSection: string | null = null;
 
+  const header = (rows[0] ?? []).map((c: any) => String(c ?? "").trim().toLowerCase());
+  const idx = (name: string) => header.findIndex((h: string) => h === name);
+  const controlledHeaderDetected =
+    idx("code") >= 0 &&
+    idx("label") >= 0 &&
+    (idx("ratecents") >= 0 || idx("rate") >= 0);
+
+  if (controlledHeaderDetected) {
+    const idxSection = idx("section");
+    const idxCode = idx("code");
+    const idxLabel = idx("label");
+    const idxDescription = idx("description");
+    const idxCategory = idx("category");
+    const idxContainerSize = idx("containersize");
+    const idxTripMode = idx("tripmode");
+    const idxAreaScope = idx("areascope");
+    const idxUnit = idx("unit");
+    const idxRateCents = idx("ratecents");
+    const idxRate = idx("rate");
+    const idxNotes = idx("notes");
+    const idxSelectableJob = idx("isselectableforjob");
+    const idxSelectableTrip = idx("isselectablefortripearning");
+
+    for (let r = 1; r < rows.length; r++) {
+      const row = rows[r];
+      if (!Array.isArray(row)) continue;
+      const code = String(row[idxCode] ?? "").trim();
+      const label = String(row[idxLabel] ?? "").trim() || code;
+      if (!code || !label) continue;
+
+      const rawRate = idxRateCents >= 0 ? row[idxRateCents] : row[idxRate];
+      const rateCents =
+        idxRateCents >= 0
+          ? Number(String(rawRate ?? "").replace(/[$,\s]/g, ""))
+          : parseMoneyToCents(rawRate);
+      if (rateCents == null || Number.isNaN(rateCents) || rateCents < 0) continue;
+
+      out.push({
+        section: idxSection >= 0 ? String(row[idxSection] ?? "").trim() || null : null,
+        code,
+        label,
+        description:
+          idxDescription >= 0 ? String(row[idxDescription] ?? "").trim() || null : null,
+        category: idxCategory >= 0 ? String(row[idxCategory] ?? "").trim() || null : null,
+        containerSize:
+          idxContainerSize >= 0
+            ? String(row[idxContainerSize] ?? "").trim() || null
+            : null,
+        tripMode: idxTripMode >= 0 ? String(row[idxTripMode] ?? "").trim() || null : null,
+        areaScope:
+          idxAreaScope >= 0 ? String(row[idxAreaScope] ?? "").trim() || null : null,
+        unit: idxUnit >= 0 ? String(row[idxUnit] ?? "").trim() || null : null,
+        rateCents: Math.round(Number(rateCents)),
+        notes: idxNotes >= 0 ? String(row[idxNotes] ?? "").trim() || null : null,
+        isSelectableForJob:
+          idxSelectableJob >= 0 ? parseBooleanCell(row[idxSelectableJob], true) : true,
+        isSelectableForTripEarning:
+          idxSelectableTrip >= 0
+            ? parseBooleanCell(row[idxSelectableTrip], false)
+            : false,
+        sortOrder: sortOrder++,
+        sourceType: "EXCEL_MASTER_CONTROLLED",
+      });
+    }
+
+    return out;
+  }
+
   for (const row of rows) {
     if (!Array.isArray(row)) continue;
     const a = row[0] != null ? String(row[0]).trim() : "";
@@ -207,6 +288,8 @@ export function parseQuotationRateLinesFromXlsxBuffer(
       rateCents,
       sortOrder: sortOrder++,
       sourceType: "PARSER_ANNEX",
+      isSelectableForJob: true,
+      isSelectableForTripEarning: false,
     });
   }
 

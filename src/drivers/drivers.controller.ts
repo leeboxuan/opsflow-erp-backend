@@ -21,6 +21,8 @@ export interface DriverDto {
   email: string;
   name: string | null;
   role: Role;
+  defaultVehicleId?: string | null;
+  defaultFleetVehicleId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -55,11 +57,21 @@ export class DriversController {
       throw new NotFoundException('Driver profile not found');
     }
 
+    const profile = await this.prisma.drivers.findFirst({
+      where: { tenantId, userId },
+      select: {
+        assignedVehicleId: true,
+        assignedFleetVehicleId: true,
+      },
+    });
+
     return {
       id: membership.user.id,
       email: membership.user.email,
       name: membership.user.name,
       role: membership.role,
+      defaultVehicleId: profile?.assignedVehicleId ?? null,
+      defaultFleetVehicleId: profile?.assignedFleetVehicleId ?? null,
       createdAt: membership.user.createdAt,
       updatedAt: membership.user.updatedAt,
     };
@@ -96,11 +108,21 @@ export class DriversController {
       throw new NotFoundException('Driver profile not found');
     }
 
+    const profile = await this.prisma.drivers.findFirst({
+      where: { tenantId, userId },
+      select: {
+        assignedVehicleId: true,
+        assignedFleetVehicleId: true,
+      },
+    });
+
     return {
       id: user.id,
       email: user.email,
       name: user.name,
       role: membership.role,
+      defaultVehicleId: profile?.assignedVehicleId ?? null,
+      defaultFleetVehicleId: profile?.assignedFleetVehicleId ?? null,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     };

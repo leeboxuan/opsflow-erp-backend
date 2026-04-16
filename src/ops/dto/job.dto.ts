@@ -52,6 +52,7 @@ export class JobChargeResponseDto {
   id!: string;
   sourceType!: JobChargeSourceType;
   sourceRefId!: string | null;
+  sourceCustomerQuotationItemId?: string | null;
   code!: string;
   label!: string;
   description!: string | null;
@@ -63,6 +64,7 @@ export class JobChargeResponseDto {
   taxCode!: string | null;
   taxRateBasisPoints!: number | null;
   sortOrder!: number;
+  metadataJson?: Record<string, unknown> | null;
 }
 
 export class JobDto {
@@ -110,6 +112,7 @@ export class JobDto {
   assignedDriverId: string | null;
   assignedDriverName?: string | null;
   assignedVehicleId: string | null;
+  assignedFleetVehicleId?: string | null;
   assignedVehiclePlateNo?: string | null;
 
   assignedAt: Date | null;
@@ -141,6 +144,7 @@ export class JobTrackingDto {
   lastLocationAt: Date | null;
   assignedDriverId: string | null;
   assignedVehicleId: string | null;
+  assignedFleetVehicleId?: string | null;
   status: JobStatus;
 }
 

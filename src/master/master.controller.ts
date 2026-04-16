@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UploadedFile,
   UseGuards,
@@ -22,7 +23,7 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
 import { MasterDataService } from "./master.service";
-import { Role } from "@prisma/client";
+import { MasterFileType, Role } from "@prisma/client";
 import { RoleGuard, Roles } from "../auth/guards/role.guard";
 import {
   CreateDriverTripRateMasterDto,
@@ -120,5 +121,83 @@ export class MasterDataController {
       req.tenant.tenantId,
       file.buffer,
     );
+  }
+
+  @Post("files/:type/upload")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Upload and parse a master file version" })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+        effectiveDate: { type: "string", example: "2026-04-17" },
+        customerCompanyId: { type: "string" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  uploadMasterFile(
+    @Req() req: any,
+    @Param("type") type: MasterFileType,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { effectiveDate?: string; customerCompanyId?: string },
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    if (!Object.values(MasterFileType).includes(type)) {
+      throw new BadRequestException(`Invalid type: ${type}`);
+    }
+    return this.master.uploadAndParseMasterFile(
+      req.tenant.tenantId,
+      type,
+      file,
+      req.user?.userId ?? null,
+      body?.effectiveDate,
+      body?.customerCompanyId ?? null,
+    );
+  }
+
+  @Get("files")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "List uploaded master files" })
+  listMasterFiles(@Req() req: any) {
+    return this.master.listMasterFiles(req.tenant.tenantId);
+  }
+
+  @Get("files/:type/active/items")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Get active parsed items for a master file type" })
+  getActiveMasterItems(
+    @Req() req: any,
+    @Param("type") type: MasterFileType,
+    @Query("customerCompanyId") customerCompanyId?: string,
+  ) {
+    if (!Object.values(MasterFileType).includes(type)) {
+      throw new BadRequestException(`Invalid type: ${type}`);
+    }
+    return this.master.getActiveMasterItems(
+      req.tenant.tenantId,
+      type,
+      customerCompanyId ?? null,
+    );
+  }
+
+  @Patch("files/:id/activate")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Activate a specific master file version" })
+  activateMasterFile(@Req() req: any, @Param("id") id: string) {
+    return this.master.activateMasterFile(req.tenant.tenantId, id);
+  }
+
+  @Post("files/:id/reprocess")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Reprocess by downloading stored source file and replacing parsed rows for this master file",
+  })
+  async reprocessMasterFile(@Req() req: any, @Param("id") id: string) {
+    return this.master.reprocessMasterFile(req.tenant.tenantId, id);
   }
 }

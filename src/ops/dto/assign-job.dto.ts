@@ -11,4 +11,9 @@ export class AssignJobDto {
   @IsOptional()
   @IsString()
   vehicleId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  fleetVehicleId?: string;
 }

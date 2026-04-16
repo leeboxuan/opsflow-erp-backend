@@ -17,6 +17,7 @@ import { AuditService } from "../audit/audit.service";
 import { SupabaseService } from "../auth/supabase.service";
 import { JobLocationDto } from "./dto/location.dto";
 import { JobDto, JobDocumentDto } from "./dto/job.dto";
+import { resolveTripCompletionRule } from "./job-workflow.helpers";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
 
@@ -69,6 +70,7 @@ function toJobDto(j: any): JobDto {
     assignedDriverId: j.assignedDriverId ?? null,
     assignedDriverName: j.assignedDriver?.name ?? null,
     assignedVehicleId: j.assignedVehicleId ?? null,
+    assignedFleetVehicleId: j.assignedFleetVehicleId ?? null,
     assignedVehiclePlateNo: (j as any).assignedVehiclePlateNo ?? null,
 
     assignedAt: j.assignedAt ?? null,
@@ -305,28 +307,41 @@ export class DriverJobsService {
     ]);
 
     const vehicleIds = [...new Set(jobs.map((j) => j.assignedVehicleId).filter(Boolean))] as string[];
+    const fleetVehicleIds = [...new Set(jobs.map((j) => j.assignedFleetVehicleId).filter(Boolean))] as string[];
 
-    const vehicles = vehicleIds.length
-      ? await this.prisma.vehicle.findMany({
-          where: {
-            tenantId,
-            id: { in: vehicleIds },
-          },
-          select: {
-            id: true,
-            plateNo: true,
-          },
-        })
-      : [];
+    const [vehicles, fleetVehicles] = await this.prisma.$transaction([
+      vehicleIds.length
+        ? this.prisma.vehicle.findMany({
+            where: {
+              tenantId,
+              id: { in: vehicleIds },
+            },
+            select: {
+              id: true,
+              plateNo: true,
+            },
+          })
+        : Promise.resolve([] as Array<{ id: string; plateNo: string }>),
+      fleetVehicleIds.length
+        ? this.prisma.fleetVehicle.findMany({
+            where: { tenantId, id: { in: fleetVehicleIds } },
+            select: { id: true, plateNo: true },
+          })
+        : Promise.resolve([] as Array<{ id: string; plateNo: string }>),
+    ]);
 
-    const vehicleMap = new Map(vehicles.map((v) => [v.id, v.plateNo]));
+    const vehicleMap = new Map([
+      ...vehicles.map((v) => [v.id, v.plateNo] as const),
+      ...fleetVehicles.map((v) => [v.id, v.plateNo] as const),
+    ]);
 
     const data = jobs.map((job: any) => {
       const dto = toJobDto({
         ...job,
-        assignedVehiclePlateNo: job.assignedVehicleId
-          ? vehicleMap.get(job.assignedVehicleId) ?? null
-          : null,
+        assignedVehiclePlateNo:
+          (job.assignedVehicleId && vehicleMap.get(job.assignedVehicleId)) ||
+          (job.assignedFleetVehicleId && vehicleMap.get(job.assignedFleetVehicleId)) ||
+          null,
       });
 
       return {
@@ -433,25 +448,37 @@ export class DriverJobsService {
       }),
     ]);
 
-    const vehicleIds = [
-      ...new Set(jobs.map((j) => j.assignedVehicleId).filter(Boolean)),
-    ] as string[];
+    const vehicleIds = [...new Set(jobs.map((j) => j.assignedVehicleId).filter(Boolean))] as string[];
+    const fleetVehicleIds = [...new Set(jobs.map((j) => j.assignedFleetVehicleId).filter(Boolean))] as string[];
 
-    const vehicles = vehicleIds.length
-      ? await this.prisma.vehicle.findMany({
-          where: { tenantId, id: { in: vehicleIds } },
-          select: { id: true, plateNo: true },
-        })
-      : [];
+    const [vehicles, fleetVehicles] = await this.prisma.$transaction([
+      vehicleIds.length
+        ? this.prisma.vehicle.findMany({
+            where: { tenantId, id: { in: vehicleIds } },
+            select: { id: true, plateNo: true },
+          })
+        : Promise.resolve([] as Array<{ id: string; plateNo: string }>),
+      fleetVehicleIds.length
+        ? this.prisma.fleetVehicle.findMany({
+            where: { tenantId, id: { in: fleetVehicleIds } },
+            select: { id: true, plateNo: true },
+          })
+        : Promise.resolve([] as Array<{ id: string; plateNo: string }>),
+    ]);
 
-    const vehicleMap = new Map(vehicles.map((v) => [v.id, v.plateNo]));
+    const vehicleMap = new Map([
+      ...vehicles.map((v) => [v.id, v.plateNo] as const),
+      ...fleetVehicles.map((v) => [v.id, v.plateNo] as const),
+    ]);
 
     const data = jobs.map((job: any) => {
       const dto = toJobDto({
         ...job,
-        assignedVehiclePlateNo: job.assignedVehicleId
-          ? vehicleMap.get(job.assignedVehicleId) ?? null
-          : null,
+        assignedVehiclePlateNo:
+          (job.assignedVehicleId && vehicleMap.get(job.assignedVehicleId)) ||
+          (job.assignedFleetVehicleId &&
+            vehicleMap.get(job.assignedFleetVehicleId)) ||
+          null,
       });
 
       return { ...dto, documents: dto.documents ?? [] };
@@ -587,18 +614,33 @@ export class DriverJobsService {
 
     let assignedVehiclePlateNo: string | null = null;
 
-    if (job.assignedVehicleId) {
-      const vehicle = await this.prisma.vehicle.findFirst({
-        where: {
-          id: job.assignedVehicleId,
-          tenantId,
-        },
-        select: {
-          plateNo: true,
-        },
-      });
+    if (job.assignedVehicleId || job.assignedFleetVehicleId) {
+      const [vehicle, fleetVehicle] = await this.prisma.$transaction([
+        job.assignedVehicleId
+          ? this.prisma.vehicle.findFirst({
+              where: {
+                id: job.assignedVehicleId,
+                tenantId,
+              },
+              select: {
+                plateNo: true,
+              },
+            })
+          : Promise.resolve(null),
+        job.assignedFleetVehicleId
+          ? this.prisma.fleetVehicle.findFirst({
+              where: {
+                id: job.assignedFleetVehicleId,
+                tenantId,
+              },
+              select: {
+                plateNo: true,
+              },
+            })
+          : Promise.resolve(null),
+      ]);
 
-      assignedVehiclePlateNo = vehicle?.plateNo ?? null;
+      assignedVehiclePlateNo = vehicle?.plateNo ?? fleetVehicle?.plateNo ?? null;
     }
 
     const tripsWithUrls = await Promise.all(
@@ -1045,7 +1087,9 @@ export class DriverJobsService {
       throw new BadRequestException("Trip must be InTransit to complete");
     }
 
-    const rule = (trip.completionRuleJson as Record<string, unknown>) || {};
+    const rule = resolveTripCompletionRule(trip.completionRuleJson);
+    const missing: string[] = [];
+
     if (rule.requireGeneratedDoSigned) {
       const hasGeneratedDo = job.documents.some(
         (d: { type: JobDocumentType }) => d.type === JobDocumentType.DO,
@@ -1054,21 +1098,43 @@ export class DriverJobsService {
         (d: { type: JobDocumentType }) => d.type === JobDocumentType.SIGNATURE,
       );
       if (!hasGeneratedDo || !hasSig) {
-        throw new BadRequestException(
-          "Generated receiver DO must exist and be signed before completing this trip",
-        );
+        missing.push("generated receiver DO with signature");
       }
     }
 
-    const required = (rule.requiredTripUploadTypes as string[] | undefined) ?? [];
-    for (const rt of required) {
-      const tEnum = rt as TripDocumentType;
-      const found = await this.prisma.tripDocument.findFirst({
-        where: { tenantId, tripId, type: tEnum },
+    if (rule.allowedUploadTypes.length > 0) {
+      const tripDocs = await this.prisma.tripDocument.findMany({
+        where: {
+          tenantId,
+          tripId,
+          type: { in: rule.allowedUploadTypes },
+        },
+        select: { type: true },
       });
-      if (!found) {
-        throw new BadRequestException(`Missing required trip document type: ${rt}`);
+
+      if (rule.minUploadCount > 0 && tripDocs.length < rule.minUploadCount) {
+        missing.push(
+          `at least ${rule.minUploadCount} trip upload(s) from allowed types [${rule.allowedUploadTypes.join(", ")}] (${tripDocs.length}/${rule.minUploadCount} uploaded)`,
+        );
       }
+
+      if (rule.requiredUploadTypesExact.length > 0) {
+        const uploadedTypes = new Set(tripDocs.map((d) => d.type));
+        const missingExact = rule.requiredUploadTypesExact.filter(
+          (t) => !uploadedTypes.has(t),
+        );
+        if (missingExact.length > 0) {
+          missing.push(
+            `required trip upload type(s) missing: ${missingExact.join(", ")}`,
+          );
+        }
+      }
+    }
+
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Trip cannot be completed yet. Missing: ${missing.join("; ")}`,
+      );
     }
 
     const now = new Date();

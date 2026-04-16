@@ -94,31 +94,65 @@ export class AdminDriversService {
 
     const userIds = memberships.map((m) => m.userId);
 
-    // One query: fetch vehicles assigned to these drivers (tenant scoped)
-    const assignedVehicles = await this.prisma.vehicle.findMany({
-      where: {
-        tenantId,
-        driverId: { in: userIds },
-      },
-      select: {
-        id: true,
-        plateNo: true,
-        type: true,
-        driverId: true,
-      },
-    });
+    const [driverProfiles, vehicles, fleetVehicles] = await this.prisma.$transaction([
+      this.prisma.drivers.findMany({
+        where: { tenantId, userId: { in: userIds } },
+        select: {
+          userId: true,
+          assignedVehicleId: true,
+          assignedFleetVehicleId: true,
+        },
+      }),
+      this.prisma.vehicle.findMany({
+        where: {
+          tenantId,
+          driverId: { in: userIds },
+        },
+        select: {
+          id: true,
+          plateNo: true,
+          type: true,
+          driverId: true,
+        },
+      }),
+      this.prisma.fleetVehicle.findMany({
+        where: {
+          tenantId,
+          driverId: { in: userIds },
+        },
+        select: {
+          id: true,
+          plateNo: true,
+          type: true,
+          driverId: true,
+        },
+      }),
+    ]);
 
-    // Build a map driverId -> vehicle
+    const profileByUserId = new Map<
+      string | null,
+      { userId: string | null; assignedVehicleId: string | null; assignedFleetVehicleId: string | null }
+    >(driverProfiles.map((p) => [p.userId, p]));
+
     const vehicleByDriverId = new Map<
       string,
       { id: string; plateNo: string; type: any }
     >();
-    for (const v of assignedVehicles) {
+    for (const v of vehicles) {
       if (v.driverId) vehicleByDriverId.set(v.driverId, v);
+    }
+    const fleetVehicleByDriverId = new Map<
+      string,
+      { id: string; plateNo: string; type: any }
+    >();
+    for (const v of fleetVehicles) {
+      if (v.driverId) fleetVehicleByDriverId.set(v.driverId, v);
     }
 
     const data = memberships.map((m) => {
       const v = vehicleByDriverId.get(m.userId) ?? null;
+      const fv = fleetVehicleByDriverId.get(m.userId) ?? null;
+      const profile = profileByUserId.get(m.userId);
 
       return {
         id: m.user.id,
@@ -131,10 +165,14 @@ export class AdminDriversService {
         createdAt: m.user.createdAt,
         updatedAt: m.user.updatedAt,
 
-        // ✅ add these
+        defaultVehicleId: profile?.assignedVehicleId ?? null,
+        defaultFleetVehicleId: profile?.assignedFleetVehicleId ?? null,
         assignedVehicleId: v?.id ?? null,
         assignedVehiclePlateNo: v?.plateNo ?? null,
         assignedVehicleType: v?.type ?? null,
+        assignedFleetVehicleId: fv?.id ?? null,
+        assignedFleetVehiclePlateNo: fv?.plateNo ?? null,
+        assignedFleetVehicleType: fv?.type ?? null,
       };
     });
 
@@ -270,6 +308,17 @@ export class AdminDriversService {
     const phone =
       ((dto.phone ?? (user as any).phone ?? "") as string).trim() || "-";
 
+    const hasVehicle =
+      dto.assignedVehicleId !== undefined && !!dto.assignedVehicleId;
+    const hasFleetVehicle =
+      dto.assignedFleetVehicleId !== undefined && !!dto.assignedFleetVehicleId;
+
+    if (hasVehicle && hasFleetVehicle) {
+      throw new BadRequestException(
+        "Driver default assignment must be either vehicle or fleet vehicle, not both",
+      );
+    }
+
     if (dto.assignedVehicleId !== undefined) {
       const vehicle = await this.prisma.vehicle.findFirst({
         where: { id: dto.assignedVehicleId, tenantId },
@@ -278,6 +327,27 @@ export class AdminDriversService {
         throw new BadRequestException("Vehicle not found");
       }
     }
+    if (dto.assignedFleetVehicleId !== undefined) {
+      const fleetVehicle = await this.prisma.fleetVehicle.findFirst({
+        where: { id: dto.assignedFleetVehicleId, tenantId },
+      });
+      if (dto.assignedFleetVehicleId && !fleetVehicle) {
+        throw new BadRequestException("Fleet vehicle not found");
+      }
+    }
+
+    const vehicleAssignmentPatch =
+      dto.assignedVehicleId !== undefined
+        ? {
+            assignedVehicleId: dto.assignedVehicleId || null,
+            assignedFleetVehicleId: null,
+          }
+        : dto.assignedFleetVehicleId !== undefined
+          ? {
+              assignedVehicleId: null,
+              assignedFleetVehicleId: dto.assignedFleetVehicleId || null,
+            }
+          : {};
 
     await this.prisma.drivers.upsert({
       where: { tenantId_email: { tenantId, email: user.email } },
@@ -285,9 +355,7 @@ export class AdminDriversService {
         name,
         phone,
         userId: user.id,
-        ...(dto.assignedVehicleId !== undefined && {
-          assignedVehicleId: dto.assignedVehicleId || null,
-        }),
+        ...vehicleAssignmentPatch,
         updatedAt: new Date(),
       },
       create: {
@@ -297,7 +365,16 @@ export class AdminDriversService {
         name,
         phone,
         userId: user.id,
+        ...vehicleAssignmentPatch,
         updatedAt: new Date(),
+      },
+    });
+
+    const profile = await this.prisma.drivers.findFirst({
+      where: { tenantId, userId: user.id },
+      select: {
+        assignedVehicleId: true,
+        assignedFleetVehicleId: true,
       },
     });
 
@@ -311,6 +388,8 @@ export class AdminDriversService {
       membershipId: membership.id,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
+      defaultVehicleId: profile?.assignedVehicleId ?? null,
+      defaultFleetVehicleId: profile?.assignedFleetVehicleId ?? null,
     };
   }
 

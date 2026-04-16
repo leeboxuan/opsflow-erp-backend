@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import {
   MembershipStatus,
+  MasterFileType,
   QuotationVersionStatus,
   Role,
   UserRole,
@@ -29,6 +30,7 @@ import { createClient } from "@supabase/supabase-js";
 import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
+import { MasterDataService } from "../master/master.service";
 
 const COMPANY_DOCS_BUCKET = "job-documents";
 
@@ -49,6 +51,7 @@ export class CustomersService {
     private readonly supabaseService: SupabaseService,
     private readonly configService: ConfigService,
     private readonly audit: AuditService,
+    private readonly masterDataService: MasterDataService,
   ) {
     const supabaseUrl =
       this.configService.get<string>("SUPABASE_PROJECT_URL") ||
@@ -759,10 +762,20 @@ export class CustomersService {
         ? {
             note:
               isDocxFile
-                ? "DOCX uploaded; no deterministic Annex A lines extracted. Quotation saved without structured lines."
-                : "No Annex-style rows detected in spreadsheet.",
+                ? "DOCX uploaded for reference/versioning. Structured extraction is not guaranteed; no deterministic lines were saved."
+                : "No structured rows detected in spreadsheet.",
           }
-        : { lineCount: parsedLines.length };
+        : isDocxFile
+          ? {
+              lineCount: parsedLines.length,
+              note:
+                "DOCX uploaded for reference/versioning. Structured extraction is not guaranteed; parsed lines may require review.",
+            }
+          : {
+              lineCount: parsedLines.length,
+              note:
+                "Excel parsed as structured master source for selectable rates.",
+            };
 
     const quotation = await this.prisma.$transaction(async (tx) => {
       await tx.customerCompanyQuotation.updateMany({
@@ -807,10 +820,50 @@ export class CustomersService {
             sourceType: line.sourceType,
           })),
         });
+
+        if (isExcelFile) {
+          await tx.customerRateMasterLine.updateMany({
+            where: { tenantId, customerCompanyId: companyId },
+            data: { active: false },
+          });
+
+          await tx.customerRateMasterLine.createMany({
+            data: parsedLines.map((line) => ({
+              tenantId,
+              customerCompanyId: companyId,
+              sourceQuotationId: q.id,
+              section: line.section ?? null,
+              code: line.code,
+              label: line.label,
+              description: line.description ?? null,
+              category: line.category ?? null,
+              containerSize: line.containerSize ?? null,
+              tripMode: line.tripMode ?? null,
+              areaScope: line.areaScope ?? null,
+              unit: line.unit ?? null,
+              rateCents: line.rateCents,
+              notes: line.notes ?? null,
+              isSelectableForJob: line.isSelectableForJob ?? true,
+              isSelectableForTripEarning: line.isSelectableForTripEarning ?? false,
+              active: true,
+              sortOrder: line.sortOrder,
+              sourceType: line.sourceType,
+            })),
+          });
+        }
       }
 
       return q;
     });
+
+    await this.masterDataService.uploadAndParseMasterFile(
+      tenantId,
+      MasterFileType.CUSTOMER_QUOTATION,
+      file,
+      actorUserId,
+      effectiveDateIso,
+      companyId,
+    );
 
     await this.audit.log(
       tenantId,

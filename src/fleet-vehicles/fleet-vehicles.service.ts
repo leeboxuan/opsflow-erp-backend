@@ -1,26 +1,30 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
-  BadRequestException,
 } from "@nestjs/common";
 import { VehicleStatus, VehicleType } from "@prisma/client";
-import { PrismaService } from "../prisma/prisma.service";
-import {
-  parsePaginationFromQuery,
-  buildPaginationMeta,
-} from "../common/pagination";
 import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
-import { CreateVehicleDto } from "./dto/create-vehicle.dto";
-import { UpdateVehicleDto } from "./dto/update-vehicle.dto";
 import {
-  ListVehiclesQueryDto,
-  VEHICLE_LIST_FILTER,
-  VEHICLE_SORT_FIELDS,
-} from "./dto/list-vehicles.query.dto";
-import type { VehicleDto, ListVehiclesResult } from "./vehicles.types";
+  buildPaginationMeta,
+  parsePaginationFromQuery,
+} from "../common/pagination";
+import { PrismaService } from "../prisma/prisma.service";
+import { AssignFleetVehicleDriverDto } from "./dto/assign-fleet-vehicle-driver.dto";
+import { CreateFleetVehicleDto } from "./dto/create-fleet-vehicle.dto";
+import {
+  FLEET_VEHICLE_LIST_FILTER,
+  FLEET_VEHICLE_SORT_FIELDS,
+  ListFleetVehiclesQueryDto,
+} from "./dto/list-fleet-vehicles.query.dto";
+import { UpdateFleetVehicleDto } from "./dto/update-fleet-vehicle.dto";
+import type {
+  FleetVehicleDto,
+  ListFleetVehiclesResult,
+} from "./fleet-vehicles.types";
 
-function toVehicleDto(v: any): VehicleDto {
+function toFleetVehicleDto(v: any): FleetVehicleDto {
   return {
     id: v.id,
     tenantId: v.tenantId,
@@ -39,11 +43,11 @@ function toVehicleDto(v: any): VehicleDto {
     updatedAt: v.updatedAt,
   };
 }
+
 @Injectable()
-export class VehiclesService {
+export class FleetVehiclesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Normalize plate: trim, collapse spaces, uppercase */
   normalizePlateNo(plateNo: string): string {
     return String(plateNo ?? "")
       .trim()
@@ -51,27 +55,25 @@ export class VehiclesService {
       .toUpperCase();
   }
 
-  async create(tenantId: string, dto: CreateVehicleDto): Promise<VehicleDto> {
+  async create(tenantId: string, dto: CreateFleetVehicleDto): Promise<FleetVehicleDto> {
     const plateNo = this.normalizePlateNo(dto.plateNo);
-    const existing = await this.prisma.vehicle.findUnique({
+    const existing = await this.prisma.fleetVehicle.findUnique({
       where: {
         tenantId_plateNo: { tenantId, plateNo },
       },
     });
     if (existing) {
-      throw new BadRequestException("Vehicle plate number already exists");
+      throw new BadRequestException("Fleet vehicle plate number already exists");
     }
 
     if (dto.driverId) {
       const user = await this.prisma.user.findFirst({
         where: { id: dto.driverId, tenantId },
       });
-      if (!user) {
-        throw new BadRequestException("Driver user not found");
-      }
+      if (!user) throw new BadRequestException("Driver user not found");
     }
 
-    const vehicle = await this.prisma.vehicle.create({
+    const vehicle = await this.prisma.fleetVehicle.create({
       data: {
         tenantId,
         plateNo,
@@ -88,27 +90,26 @@ export class VehiclesService {
         coeExpiryDate: dto.coeExpiryDate ? new Date(dto.coeExpiryDate) : null,
       },
     });
-    return toVehicleDto(vehicle);
+    return toFleetVehicleDto(vehicle);
   }
 
   async list(
     tenantId: string,
-    query: ListVehiclesQueryDto,
-  ): Promise<ListVehiclesResult> {
+    query: ListFleetVehiclesQueryDto,
+  ): Promise<ListFleetVehiclesResult> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
     const where: any = { tenantId };
-
     const filterMap: Record<string, any> = {
-      [VEHICLE_LIST_FILTER.UNASSIGNED]: { driverId: null },
-      [VEHICLE_LIST_FILTER.ASSIGNED]: {
+      [FLEET_VEHICLE_LIST_FILTER.UNASSIGNED]: { driverId: null },
+      [FLEET_VEHICLE_LIST_FILTER.ASSIGNED]: {
         driverId: query.driverId ?? { not: null },
       },
     };
     applyMappedFilter(where, query.filter, filterMap);
     if (
-      query.filter !== VEHICLE_LIST_FILTER.ASSIGNED &&
-      query.filter !== VEHICLE_LIST_FILTER.UNASSIGNED &&
+      query.filter !== FLEET_VEHICLE_LIST_FILTER.ASSIGNED &&
+      query.filter !== FLEET_VEHICLE_LIST_FILTER.UNASSIGNED &&
       query.driverId
     ) {
       where.driverId = query.driverId;
@@ -117,7 +118,6 @@ export class VehiclesService {
     if (query.status) where.status = query.status;
     if (query.type) where.type = query.type;
 
-    // q: search plateNo, type, or vehicleDescription (special handling for VehicleType enum)
     const q = query.q?.trim();
     if (q) {
       const orConditions: any[] = [
@@ -138,13 +138,13 @@ export class VehiclesService {
     const orderBy = buildOrderBy(
       query.sortBy,
       query.sortDir === "asc" ? "asc" : "desc",
-      [...VEHICLE_SORT_FIELDS],
+      [...FLEET_VEHICLE_SORT_FIELDS],
       { createdAt: "desc" },
     );
 
     const [total, data] = await this.prisma.$transaction([
-      this.prisma.vehicle.count({ where }),
-      this.prisma.vehicle.findMany({
+      this.prisma.fleetVehicle.count({ where }),
+      this.prisma.fleetVehicle.findMany({
         where,
         orderBy,
         skip,
@@ -156,38 +156,38 @@ export class VehiclesService {
     ]);
 
     return {
-      data: data.map(toVehicleDto),
+      data: data.map(toFleetVehicleDto),
       meta: buildPaginationMeta(page, pageSize, total),
     };
   }
 
-  async getById(tenantId: string, id: string): Promise<VehicleDto> {
-    const vehicle = await this.prisma.vehicle.findFirst({
+  async getById(tenantId: string, id: string): Promise<FleetVehicleDto> {
+    const vehicle = await this.prisma.fleetVehicle.findFirst({
       where: { id, tenantId },
       include: {
         driver: { select: { id: true, name: true, email: true } },
       },
     });
-    if (!vehicle) throw new NotFoundException("Vehicle not found");
-    return toVehicleDto(vehicle);
+    if (!vehicle) throw new NotFoundException("Fleet vehicle not found");
+    return toFleetVehicleDto(vehicle);
   }
 
   async update(
     tenantId: string,
     id: string,
-    dto: UpdateVehicleDto,
-  ): Promise<VehicleDto> {
-    const vehicle = await this.prisma.vehicle.findFirst({
+    dto: UpdateFleetVehicleDto,
+  ): Promise<FleetVehicleDto> {
+    const vehicle = await this.prisma.fleetVehicle.findFirst({
       where: { id, tenantId },
     });
-    if (!vehicle) throw new NotFoundException("Vehicle not found");
+    if (!vehicle) throw new NotFoundException("Fleet vehicle not found");
 
     const plateNo =
       dto.plateNo !== undefined
         ? this.normalizePlateNo(dto.plateNo)
         : undefined;
     if (plateNo !== undefined) {
-      const existing = await this.prisma.vehicle.findFirst({
+      const existing = await this.prisma.fleetVehicle.findFirst({
         where: {
           tenantId,
           plateNo,
@@ -195,7 +195,7 @@ export class VehiclesService {
         },
       });
       if (existing) {
-        throw new BadRequestException("Vehicle plate number already exists");
+        throw new BadRequestException("Fleet vehicle plate number already exists");
       }
     }
 
@@ -206,7 +206,7 @@ export class VehiclesService {
       if (!user) throw new BadRequestException("Driver user not found");
     }
 
-    const updated = await this.prisma.vehicle.update({
+    const updated = await this.prisma.fleetVehicle.update({
       where: { id },
       data: {
         ...(plateNo !== undefined && { plateNo }),
@@ -227,135 +227,111 @@ export class VehiclesService {
             : null,
         }),
         ...(dto.coeExpiryDate !== undefined && {
-          coeExpiryDate: dto.coeExpiryDate
-            ? new Date(dto.coeExpiryDate)
-            : null,
+          coeExpiryDate: dto.coeExpiryDate ? new Date(dto.coeExpiryDate) : null,
         }),
       },
     });
-    return toVehicleDto(updated);
-  }
-
-  async suspend(tenantId: string, id: string): Promise<VehicleDto> {
-    const vehicle = await this.prisma.vehicle.findFirst({
-      where: { id, tenantId },
-    });
-    if (!vehicle) throw new NotFoundException("Vehicle not found");
-    const updated = await this.prisma.vehicle.update({
-      where: { id },
-      data: { status: VehicleStatus.INACTIVE },
-    });
-    return toVehicleDto(updated);
-  }
-
-  async unsuspend(tenantId: string, id: string): Promise<VehicleDto> {
-    const vehicle = await this.prisma.vehicle.findFirst({
-      where: { id, tenantId },
-    });
-    if (!vehicle) throw new NotFoundException("Vehicle not found");
-    const updated = await this.prisma.vehicle.update({
-      where: { id },
-      data: { status: VehicleStatus.ACTIVE },
-    });
-    return toVehicleDto(updated);
+    return toFleetVehicleDto(updated);
   }
 
   async delete(tenantId: string, id: string): Promise<{ id: string }> {
-    const vehicle = await this.prisma.vehicle.findFirst({
+    const vehicle = await this.prisma.fleetVehicle.findFirst({
       where: { id, tenantId },
     });
-    if (!vehicle) throw new NotFoundException("Vehicle not found");
-    await this.prisma.vehicle.delete({ where: { id } });
+    if (!vehicle) throw new NotFoundException("Fleet vehicle not found");
+    await this.prisma.fleetVehicle.delete({ where: { id } });
     return { id };
   }
 
+  async suspend(tenantId: string, id: string): Promise<FleetVehicleDto> {
+    const vehicle = await this.prisma.fleetVehicle.findFirst({
+      where: { id, tenantId },
+    });
+    if (!vehicle) throw new NotFoundException("Fleet vehicle not found");
+    const updated = await this.prisma.fleetVehicle.update({
+      where: { id },
+      data: { status: VehicleStatus.INACTIVE },
+    });
+    return toFleetVehicleDto(updated);
+  }
 
-  async assignDriver(tenantId: string, vehicleId: string, driverId: string | null) {
-    // 1) ensure vehicle is in tenant
-    const vehicle = await this.prisma.vehicle.findFirst({
-      where: { id: vehicleId, tenantId },
+  async unsuspend(tenantId: string, id: string): Promise<FleetVehicleDto> {
+    const vehicle = await this.prisma.fleetVehicle.findFirst({
+      where: { id, tenantId },
+    });
+    if (!vehicle) throw new NotFoundException("Fleet vehicle not found");
+    const updated = await this.prisma.fleetVehicle.update({
+      where: { id },
+      data: { status: VehicleStatus.ACTIVE },
+    });
+    return toFleetVehicleDto(updated);
+  }
+
+  async assignDriver(
+    tenantId: string,
+    fleetVehicleId: string,
+    dto: AssignFleetVehicleDriverDto,
+  ): Promise<FleetVehicleDto> {
+    const vehicle = await this.prisma.fleetVehicle.findFirst({
+      where: { id: fleetVehicleId, tenantId },
       select: { id: true, driverId: true },
     });
-    if (!vehicle) throw new NotFoundException("Vehicle not found");
-  
-    // Unassign
+    if (!vehicle) throw new NotFoundException("Fleet vehicle not found");
+
+    const driverId = dto.driverId ?? null;
     if (!driverId) {
       const updated = await this.prisma.$transaction(async (tx) => {
-        // Clear vehicle->driver link
-        const v = await tx.vehicle.update({
-          where: { id: vehicleId },
+        const v = await tx.fleetVehicle.update({
+          where: { id: fleetVehicleId },
           data: { driverId: null },
         });
-
-        // Clear any drivers that were pointing at this vehicle
         await tx.drivers.updateMany({
-          where: { tenantId, assignedVehicleId: vehicleId },
-          data: { assignedVehicleId: null },
+          where: { tenantId, assignedFleetVehicleId: fleetVehicleId },
+          data: { assignedFleetVehicleId: null },
         });
-
         return v;
       });
-
-      return toVehicleDto(updated);
+      return toFleetVehicleDto(updated);
     }
-  
-    // 2) validate driver exists AND belongs to tenant via membership
+
     const driver = await this.prisma.user.findFirst({
       where: {
         id: driverId,
-        // if you have roles, enforce driver role too
-        // role: "DRIVER",
-        memberships: {
-          some: {
-            tenantId,
-            // optionally enforce active membership if you have status field
-            // status: "ACTIVE",
-          },
-        },
+        memberships: { some: { tenantId } },
       },
       select: { id: true },
     });
-  
-    if (!driver) {
-      throw new BadRequestException("Driver not found in this tenant");
-    }
-  
-    // 3) enforce 1 driver -> 1 vehicle and keep drivers.assignedVehicleId in sync
-    // If you want to allow one driver to have multiple vehicles, adjust this block.
-    const updated = await this.prisma.$transaction(async (tx) => {
-      // Unassign this driver from any other vehicle in this tenant
-      await tx.vehicle.updateMany({
-        where: { tenantId, driverId },
-        data: { driverId: null },
-      });
+    if (!driver) throw new BadRequestException("Driver not found in this tenant");
 
-      // Unassign this driver from any fleet vehicle in this tenant
+    const updated = await this.prisma.$transaction(async (tx) => {
       await tx.fleetVehicle.updateMany({
         where: { tenantId, driverId },
         data: { driverId: null },
       });
 
-      // Clear any drivers that currently point at this vehicle
+      await tx.vehicle.updateMany({
+        where: { tenantId, driverId },
+        data: { driverId: null },
+      });
+
       await tx.drivers.updateMany({
-        where: { tenantId, assignedVehicleId: vehicleId },
+        where: { tenantId, userId: driverId },
         data: { assignedVehicleId: null },
       });
 
-      // Set this vehicle's driver
-      const v = await tx.vehicle.update({
-        where: { id: vehicleId },
+      const v = await tx.fleetVehicle.update({
+        where: { id: fleetVehicleId },
         data: { driverId },
       });
 
-      // Point the driver's row at this vehicle
       await tx.drivers.updateMany({
         where: { tenantId, userId: driverId },
-        data: { assignedVehicleId: vehicleId, assignedFleetVehicleId: null },
+        data: { assignedFleetVehicleId: fleetVehicleId },
       });
 
       return v;
     });
 
-    return toVehicleDto(updated);
+    return toFleetVehicleDto(updated);
   }
 }

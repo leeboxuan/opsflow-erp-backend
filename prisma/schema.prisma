@@ -31,6 +31,7 @@ model Tenant {
   transport_order_items        transport_order_items[]
   trips                        Trip[]
   vehicles                     Vehicle[]
+  fleetVehicles                FleetVehicle[]
   transport_order_item_units   transport_order_item_units[]
   customer_companies           customer_companies[]
   Invoice                      Invoice[]
@@ -43,6 +44,11 @@ model Tenant {
   JobItem                      JobItem[]
   customerCompanyQuotations    CustomerCompanyQuotation[]
   customerQuotationRateLines   CustomerQuotationRateLine[]
+  customerRateMasterLines      CustomerRateMasterLine[]
+  masterFiles                  MasterFile[]
+  customerQuotationItems       CustomerQuotationItem[]
+  driverPayoutItems            DriverPayoutItem[]
+  dhcReferenceItems            DhcReferenceItem[]
   jobCharges                   JobCharge[]
   depotHandlingReferences      DepotHandlingReference[]
   driverTripRateMasters        DriverTripRateMaster[]
@@ -74,9 +80,11 @@ model User {
   customerContact  customer_contacts?  @relation("UserCustomerContact", fields: [customerContactId], references: [id], onDelete: SetNull)
   jobsAssigned     Job[]               @relation("JobAssignedDriver")
   vehiclesAssigned Vehicle[]           @relation("VehicleDriver")
+  fleetVehiclesAssigned FleetVehicle[] @relation("FleetVehicleDriver")
   jobsCreated      Job[]               @relation("JobCreatedBy")
   quotationsUploaded CustomerCompanyQuotation[] @relation("QuotationUploadedBy")
   jobChargesSelected JobCharge[]       @relation("JobChargeSelectedBy")
+  masterFilesUploaded MasterFile[]      @relation("MasterFileUploadedBy")
 
   @@index([customerCompanyId])
   @@index([customerContactId])
@@ -130,6 +138,8 @@ model customer_companies {
   transportOrders TransportOrder[]    @relation("TransportOrderCustomerCompany")
   jobs            Job[]               @relation("JobCustomerCompany")
   quotations      CustomerCompanyQuotation[]
+  rateMasterLines CustomerRateMasterLine[]
+  masterFiles     MasterFile[]
 
   @@unique([tenantId, normalizedName])
   @@index([tenantId])
@@ -237,6 +247,7 @@ model Trip {
   driverId             String?
   routeVersion         Int                       @default(1)
   vehicleId            String?
+  fleetVehicleId       String?
   /// When set, this trip belongs to an OpsFlow job (multi-leg). Transport-order trips keep jobId null.
   jobId                String?
   /// Sequence within the job (1-based). Null for legacy transport-only trips.
@@ -248,6 +259,7 @@ model Trip {
   /// Snapshot: driver earning for this leg once assigned (frozen).
   driverEarningCents      Int?
   earningRateMasterId     String?
+  payoutItemId            String?
   earningLabelSnapshot    String?
   trailerNumber           String?
   trailerLastLocationCode String?
@@ -259,8 +271,10 @@ model Trip {
   drivers              drivers?                  @relation(fields: [driverId], references: [id])
   tenant               Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   vehicles             Vehicle?                  @relation(fields: [vehicleId], references: [id])
+  fleetVehicle         FleetVehicle?             @relation(fields: [fleetVehicleId], references: [id])
   job                  Job?                      @relation(fields: [jobId], references: [id], onDelete: Cascade)
   earningRateMaster    DriverTripRateMaster?     @relation(fields: [earningRateMasterId], references: [id], onDelete: SetNull)
+  payoutItem           DriverPayoutItem?         @relation(fields: [payoutItemId], references: [id], onDelete: SetNull)
   documents            TripDocument[]
 
   @@index([tenantId, status])
@@ -268,9 +282,122 @@ model Trip {
   @@index([tenantId, assignedDriverUserId])
   @@index([tenantId, driverId])
   @@index([tenantId, vehicleId])
+  @@index([tenantId, fleetVehicleId])
+  @@index([tenantId, payoutItemId])
   @@index([tenantId, jobId])
   @@index([tenantId, jobId, jobSequence])
   @@map("trips")
+}
+
+model MasterFile {
+  id               String            @id @default(cuid())
+  tenantId         String
+  customerCompanyId String?
+  type             MasterFileType
+  fileName         String
+  fileUrl          String
+  uploadedByUserId String?
+  uploadedAt       DateTime          @default(now())
+  effectiveDate    DateTime?
+  status           MasterFileStatus  @default(PARSED)
+  parseSummaryJson Json?
+  isActive         Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerCompany        customer_companies?     @relation(fields: [customerCompanyId], references: [id], onDelete: SetNull)
+  uploadedBy             User?                   @relation("MasterFileUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  customerQuotationItems CustomerQuotationItem[]
+  driverPayoutItems      DriverPayoutItem[]
+  dhcReferenceItems      DhcReferenceItem[]
+
+  @@index([tenantId, customerCompanyId, type, isActive])
+  @@index([tenantId, type, uploadedAt])
+  @@map("master_files")
+}
+
+model CustomerQuotationItem {
+  id           String   @id @default(cuid())
+  tenantId     String
+  masterFileId String
+  section      String?
+  code         String
+  label        String
+  description  String?
+  category     String?
+  containerSize String?
+  tripMode     String?
+  areaScope    String?
+  unit         String?
+  rateCents    Int
+  notes        String?
+  sortOrder    Int      @default(0)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  masterFile MasterFile @relation(fields: [masterFileId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, masterFileId])
+  @@index([tenantId, active, code])
+  @@map("customer_quotation_items")
+}
+
+model DriverPayoutItem {
+  id                      String   @id @default(cuid())
+  tenantId                String
+  masterFileId            String
+  section                 String?
+  code                    String
+  label                   String
+  description             String?
+  category                String?
+  containerSize           String?
+  tripMode                String?
+  areaScope               String?
+  unit                    String?
+  rateCents               Int
+  notes                   String?
+  isSelectableForTripEarning Boolean @default(true)
+  sortOrder               Int      @default(0)
+  active                  Boolean  @default(true)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  masterFile MasterFile @relation(fields: [masterFileId], references: [id], onDelete: Cascade)
+  trips      Trip[]
+
+  @@index([tenantId, masterFileId])
+  @@index([tenantId, active, code])
+  @@map("driver_payout_items")
+}
+
+model DhcReferenceItem {
+  id           String   @id @default(cuid())
+  tenantId     String
+  masterFileId String
+  section      String?
+  code         String
+  label        String
+  description  String?
+  category     String?
+  unit         String?
+  rateCents    Int?
+  notes        String?
+  sortOrder    Int      @default(0)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  masterFile MasterFile @relation(fields: [masterFileId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, masterFileId])
+  @@index([tenantId, active, code])
+  @@map("dhc_reference_items")
 }
 
 model Vehicle {
@@ -297,6 +424,34 @@ model Vehicle {
   @@index([tenantId, type])
   @@index([tenantId, driverId])
   @@map("vehicles")
+}
+
+model FleetVehicle {
+  id                 String        @id @default(cuid())
+  tenantId           String
+  plateNo            String
+  type               VehicleType
+  status             VehicleStatus @default(ACTIVE)
+  vehicleDescription String?
+  driverId           String?
+  roadTaxExpiryDate  DateTime?
+  lastServicingDate  DateTime?
+  coeExpiryDate      DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driver         User?    @relation("FleetVehicleDriver", fields: [driverId], references: [id], onDelete: SetNull)
+  driversDefault drivers[]
+  jobsAssigned   Job[]
+  trips          Trip[]
+
+  @@unique([tenantId, plateNo])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, type])
+  @@index([tenantId, driverId])
+  @@map("fleet_vehicles")
 }
 
 model Stop {
@@ -446,6 +601,7 @@ model drivers {
   name                       String
   phone                      String
   assignedVehicleId           String?
+  assignedFleetVehicleId      String?
   createdAt                  DateTime                  @default(now())
   updatedAt                  DateTime
   userId                     String?
@@ -455,11 +611,13 @@ model drivers {
   users                      User?                     @relation(fields: [userId], references: [id])
   trips                      Trip[]
   assignedVehicle             Vehicle?                  @relation(fields: [assignedVehicleId], references: [id], onDelete: SetNull)
+  assignedFleetVehicle        FleetVehicle?             @relation(fields: [assignedFleetVehicleId], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, email])
   @@unique([tenantId, userId])
   @@index([tenantId])
   @@index([tenantId, assignedVehicleId])
+  @@index([tenantId, assignedFleetVehicleId])
 }
 
 model Job {
@@ -484,6 +642,7 @@ model Job {
   receiverPhone      String
   assignedDriverId   String?
   assignedVehicleId  String?
+  assignedFleetVehicleId String?
   assignedAt         DateTime?
   startedAt          DateTime?
   completedAt        DateTime?
@@ -517,6 +676,7 @@ model Job {
   tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customerCompany customer_companies @relation("JobCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: Restrict)
   assignedDriver  User?              @relation("JobAssignedDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
+  assignedFleetVehicle FleetVehicle? @relation(fields: [assignedFleetVehicleId], references: [id], onDelete: SetNull)
   createdBy       User?              @relation("JobCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   documents       JobDocument[]
   items           JobItem[]
@@ -528,6 +688,7 @@ model Job {
   @@index([tenantId, status])
   @@index([tenantId, pickupDate])
   @@index([tenantId, assignedDriverId])
+  @@index([tenantId, assignedFleetVehicleId])
   @@index([tenantId, createdByUserId])
   @@map("jobs")
 }
@@ -591,6 +752,7 @@ model CustomerCompanyQuotation {
   customerCompany customer_companies @relation(fields: [customerCompanyId], references: [id], onDelete: Cascade)
   uploadedBy      User?              @relation("QuotationUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
   rateLines       CustomerQuotationRateLine[]
+  masterRateLines CustomerRateMasterLine[]
 
   @@index([tenantId, customerCompanyId])
   @@index([tenantId, customerCompanyId, status])
@@ -623,6 +785,40 @@ model CustomerQuotationRateLine {
   @@map("customer_quotation_rate_lines")
 }
 
+/// Canonical structured rate master (Excel-controlled) used for job charge/rate selection.
+model CustomerRateMasterLine {
+  id            String   @id @default(cuid())
+  tenantId      String
+  customerCompanyId String
+  sourceQuotationId String?
+  section       String?
+  code          String
+  label         String
+  description   String?
+  category      String?
+  containerSize String?
+  tripMode      String?
+  areaScope     String?
+  unit          String?
+  rateCents     Int
+  notes         String?
+  isSelectableForJob         Boolean @default(true)
+  isSelectableForTripEarning Boolean @default(false)
+  active        Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  sourceType    String   @default("EXCEL_MASTER")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerCompany customer_companies @relation(fields: [customerCompanyId], references: [id], onDelete: Cascade)
+  sourceQuotation CustomerCompanyQuotation? @relation(fields: [sourceQuotationId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, customerCompanyId, active])
+  @@index([tenantId, customerCompanyId, code])
+  @@map("customer_rate_master_lines")
+}
+
 /// Frozen billable lines selected for a job (never updated from live quotation/master).
 model JobCharge {
   id                String             @id @default(cuid())
@@ -630,6 +826,7 @@ model JobCharge {
   jobId             String
   sourceType        JobChargeSourceType
   sourceRefId       String?
+  sourceCustomerQuotationItemId String?
   code              String
   label             String
   description       String?
@@ -652,6 +849,7 @@ model JobCharge {
   selectedBy   User?  @relation("JobChargeSelectedBy", fields: [selectedByUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, jobId])
+  @@index([tenantId, sourceCustomerQuotationItemId])
   @@map("job_charges")
 }
 
@@ -900,6 +1098,18 @@ enum JobTripTemplate {
 
 enum QuotationVersionStatus {
   ACTIVE
+  SUPERSEDED
+}
+
+enum MasterFileType {
+  CUSTOMER_QUOTATION
+  DRIVER_PAYOUT
+  DHC_REFERENCE
+}
+
+enum MasterFileStatus {
+  PARSED
+  PARSE_FAILED
   SUPERSEDED
 }
 

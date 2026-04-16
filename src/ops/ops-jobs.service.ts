@@ -9,10 +9,12 @@ import {
 } from "@nestjs/common";
 import {
   JobStatus,
+  JobChargeSourceType,
   JobType,
   JobDocumentType,
+  MasterFileType,
+  Prisma,
   Role,
-  QuotationVersionStatus,
   TripStatus,
 } from "@prisma/client";
 import {
@@ -182,6 +184,7 @@ function toJobDto(j: any): JobDto {
     assignedDriverId: j.assignedDriverId,
     assignedDriverName,
     assignedVehicleId: j.assignedVehicleId,
+    assignedFleetVehicleId: j.assignedFleetVehicleId ?? null,
     assignedVehiclePlateNo: (j as any).assignedVehiclePlateNo ?? null,
 
     assignedAt: j.assignedAt,
@@ -234,6 +237,7 @@ function toJobDto(j: any): JobDto {
         id: c.id,
         sourceType: c.sourceType,
         sourceRefId: c.sourceRefId ?? null,
+        sourceCustomerQuotationItemId: c.sourceCustomerQuotationItemId ?? null,
         code: c.code,
         label: c.label,
         description: c.description ?? null,
@@ -245,6 +249,7 @@ function toJobDto(j: any): JobDto {
         taxCode: c.taxCode ?? null,
         taxRateBasisPoints: c.taxRateBasisPoints ?? null,
         sortOrder: c.sortOrder,
+        metadataJson: (c.metadataJson as Record<string, unknown> | null) ?? null,
       })) ?? [],
   };
 }
@@ -296,18 +301,79 @@ export class OpsJobsService {
     await this.prisma.$transaction(async (tx) => {
       await tx.jobCharge.deleteMany({ where: { tenantId, jobId } });
       if (!dto.charges.length) return;
+
+      const quotationRefIds = dto.charges
+        .filter(
+          (c) =>
+            c.sourceType === JobChargeSourceType.CUSTOMER_QUOTATION &&
+            typeof c.sourceRefId === "string" &&
+            c.sourceRefId.trim().length > 0,
+        )
+        .map((c) => c.sourceRefId!.trim());
+
+      const quotationItems: any[] = quotationRefIds.length
+        ? await tx.customerQuotationItem.findMany({
+            where: {
+              tenantId,
+              id: { in: [...new Set(quotationRefIds)] },
+            },
+            include: {
+              masterFile: {
+                select: { id: true, customerCompanyId: true, isActive: true, uploadedAt: true },
+              },
+            },
+          })
+        : [];
+      const quotationItemById = new Map<string, any>(
+        quotationItems.map((q: any) => [q.id, q]),
+      );
+
       await tx.jobCharge.createMany({
         data: dto.charges.map((c, i) => ({
+          ...(c.sourceType === JobChargeSourceType.CUSTOMER_QUOTATION &&
+          c.sourceRefId &&
+          quotationItemById.has(c.sourceRefId)
+            ? (() => {
+                const item = quotationItemById.get(c.sourceRefId!)!;
+                return {
+                  sourceCustomerQuotationItemId: item.id,
+                  code: item.code,
+                  label: item.label,
+                  description: item.description ?? null,
+                  unitPriceCents: c.unitPriceCents,
+                  amountCents: c.qty * c.unitPriceCents,
+                  metadataJson: {
+                    quotationSnapshot: {
+                      sourceCustomerQuotationItemId: item.id,
+                      sourceMasterFileId: item.masterFileId,
+                      sourceMasterCustomerCompanyId: item.masterFile.customerCompanyId ?? null,
+                      section: item.section ?? null,
+                      code: item.code,
+                      label: item.label,
+                      description: item.description ?? null,
+                      unit: item.unit ?? null,
+                      selectedRateCents: c.unitPriceCents,
+                      selectedAmountCents: c.qty * c.unitPriceCents,
+                      notes: item.notes ?? null,
+                      capturedAt: now.toISOString(),
+                    },
+                  } as Prisma.InputJsonValue,
+                };
+              })()
+            : {
+                sourceCustomerQuotationItemId: null,
+                code: c.code,
+                label: c.label,
+                description: c.description ?? null,
+                unitPriceCents: c.unitPriceCents,
+                amountCents: c.qty * c.unitPriceCents,
+                metadataJson: null,
+              }),
           tenantId,
           jobId,
           sourceType: c.sourceType,
           sourceRefId: c.sourceRefId ?? null,
-          code: c.code,
-          label: c.label,
-          description: c.description ?? null,
           qty: c.qty,
-          unitPriceCents: c.unitPriceCents,
-          amountCents: c.qty * c.unitPriceCents,
           currency: c.currency ?? "SGD",
           taxable: c.taxable ?? true,
           taxCode: c.taxCode ?? null,
@@ -851,13 +917,23 @@ export class OpsJobsService {
 
     const dto = toJobDto(job);
 
-    // Best-effort: attach assigned vehicle plate number if there is an assignedVehicleId
-    if (job.assignedVehicleId) {
-      const vehicle = await this.prisma.vehicle.findFirst({
-        where: { id: job.assignedVehicleId, tenantId },
-        select: { plateNo: true },
-      });
-      dto.assignedVehiclePlateNo = vehicle?.plateNo ?? null;
+    // Best-effort: attach assigned plate number from either vehicle source.
+    if (job.assignedVehicleId || job.assignedFleetVehicleId) {
+      const [vehicle, fleetVehicle] = await this.prisma.$transaction([
+        job.assignedVehicleId
+          ? this.prisma.vehicle.findFirst({
+              where: { id: job.assignedVehicleId, tenantId },
+              select: { plateNo: true },
+            })
+          : Promise.resolve(null),
+        job.assignedFleetVehicleId
+          ? this.prisma.fleetVehicle.findFirst({
+              where: { id: job.assignedFleetVehicleId, tenantId },
+              select: { plateNo: true },
+            })
+          : Promise.resolve(null),
+      ]);
+      dto.assignedVehiclePlateNo = vehicle?.plateNo ?? fleetVehicle?.plateNo ?? null;
     }
 
     if (!job.documents?.length) return dto;
@@ -1079,51 +1155,84 @@ export class OpsJobsService {
       );
     }
 
+    if (dto.vehicleId && dto.fleetVehicleId) {
+      throw new BadRequestException(
+        "Provide only one of vehicleId or fleetVehicleId",
+      );
+    }
+
     let vehicleId: string | null = dto.vehicleId ?? null;
+    let fleetVehicleId: string | null = dto.fleetVehicleId ?? null;
 
     // If no vehicleId is provided, try to infer from driver
-    if (!vehicleId) {
+    if (!vehicleId && !fleetVehicleId) {
       const driver = await this.prisma.drivers.findFirst({
         where: { tenantId, userId: dto.driverId },
-        select: { id: true, assignedVehicleId: true },
+        select: { id: true, assignedVehicleId: true, assignedFleetVehicleId: true },
       });
 
-      // Prefer the explicit driver.assignedVehicleId field
+      if (driver?.assignedVehicleId && driver?.assignedFleetVehicleId) {
+        throw new BadRequestException(
+          "Driver has inconsistent default assignment (both vehicle and fleet vehicle)",
+        );
+      }
+
+      // Prefer explicit assignment pointers on drivers table.
       if (driver?.assignedVehicleId) {
         vehicleId = driver.assignedVehicleId;
+      } else if (driver?.assignedFleetVehicleId) {
+        fleetVehicleId = driver.assignedFleetVehicleId;
       } else {
-        // Fallback: use Vehicle relation where this user is the assigned driver
-        const vehicleFromRelation = await this.prisma.vehicle.findFirst({
-          where: { tenantId, driverId: dto.driverId },
-          select: { id: true },
-        });
+        const [vehicleFromRelation, fleetVehicleFromRelation] =
+          await this.prisma.$transaction([
+            this.prisma.vehicle.findFirst({
+              where: { tenantId, driverId: dto.driverId },
+              select: { id: true },
+            }),
+            this.prisma.fleetVehicle.findFirst({
+              where: { tenantId, driverId: dto.driverId },
+              select: { id: true },
+            }),
+          ]);
 
         if (vehicleFromRelation) {
           vehicleId = vehicleFromRelation.id;
 
-          // Best-effort sync back to drivers table so future lookups are consistent
           if (driver) {
             await this.prisma.drivers.update({
               where: { id: driver.id },
-              data: { assignedVehicleId: vehicleId },
+              data: { assignedVehicleId: vehicleId, assignedFleetVehicleId: null },
+            });
+          }
+        } else if (fleetVehicleFromRelation) {
+          fleetVehicleId = fleetVehicleFromRelation.id;
+          if (driver) {
+            await this.prisma.drivers.update({
+              where: { id: driver.id },
+              data: { assignedVehicleId: null, assignedFleetVehicleId: fleetVehicleId },
             });
           }
         }
       }
 
-      if (!vehicleId) {
+      if (!vehicleId && !fleetVehicleId) {
         throw new BadRequestException(
-          "Driver has no assigned vehicle; provide vehicleId",
+          "Driver has no assigned vehicle or fleet vehicle; provide vehicleId or fleetVehicleId",
         );
       }
     }
 
-    const vehicle = await this.prisma.vehicle.findFirst({
-      where: { id: vehicleId, tenantId },
-    });
-
-    if (!vehicle) {
-      throw new BadRequestException("Vehicle not found");
+    if (vehicleId) {
+      const vehicle = await this.prisma.vehicle.findFirst({
+        where: { id: vehicleId, tenantId },
+      });
+      if (!vehicle) throw new BadRequestException("Vehicle not found");
+    }
+    if (fleetVehicleId) {
+      const fleetVehicle = await this.prisma.fleetVehicle.findFirst({
+        where: { id: fleetVehicleId, tenantId },
+      });
+      if (!fleetVehicle) throw new BadRequestException("Fleet vehicle not found");
     }
 
     const updated = await this.prisma.job.update({
@@ -1131,6 +1240,7 @@ export class OpsJobsService {
       data: {
         assignedDriverId: dto.driverId,
         assignedVehicleId: vehicleId,
+        assignedFleetVehicleId: fleetVehicleId,
         assignedAt: new Date(),
         status: JobStatus.Assigned,
       },
@@ -1152,7 +1262,7 @@ export class OpsJobsService {
       "ASSIGN",
       "JOB",
       jobId,
-      { driverId: dto.driverId, vehicleId },
+      { driverId: dto.driverId, vehicleId, fleetVehicleId },
       actorUserId,
     );
 
@@ -1609,32 +1719,130 @@ export class OpsJobsService {
     if (!job) throw new NotFoundException("Job not found");
     this.assertCanAccessJob(job, user);
 
-    const activeQ = await this.prisma.customerCompanyQuotation.findFirst({
+    const masterRateLines = await this.prisma.customerRateMasterLine.findMany({
       where: {
         tenantId,
         customerCompanyId: job.customerCompanyId,
-        status: QuotationVersionStatus.ACTIVE,
+        active: true,
+        isSelectableForJob: true,
       },
-      orderBy: { createdAt: "desc" },
-      select: { id: true },
+      orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
     });
 
-    const quotationLines = activeQ
-      ? await this.prisma.customerQuotationRateLine.findMany({
-          where: { tenantId, quotationId: activeQ.id },
-          orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
-        })
-      : [];
+    const quotationLines =
+      await (async () => {
+        const activeFile = await this.prisma.masterFile.findFirst({
+          where: {
+            tenantId,
+            type: MasterFileType.CUSTOMER_QUOTATION,
+            customerCompanyId: job.customerCompanyId,
+            isActive: true,
+          },
+          orderBy: { uploadedAt: "desc" },
+          select: { id: true },
+        });
+        if (activeFile) {
+          const rows = await this.prisma.customerQuotationItem.findMany({
+            where: { tenantId, masterFileId: activeFile.id, active: true },
+            orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+          });
+          return rows.map((r) => ({ ...r, source: "MASTER_FILE_CUSTOMER_QUOTATION" }));
+        }
+        if (masterRateLines.length > 0) {
+          return masterRateLines.map((r) => ({
+            id: r.id,
+            section: r.section,
+            code: r.code,
+            label: r.label,
+            description: r.description,
+            unit: r.unit,
+            rateCents: r.rateCents,
+            containerSize: r.containerSize,
+            tripMode: r.tripMode,
+            areaScope: r.areaScope,
+            sortOrder: r.sortOrder,
+            sourceType: r.sourceType,
+            category: r.category,
+            notes: r.notes,
+            source: "CUSTOMER_RATE_MASTER",
+          }));
+        }
+        return this.prisma.customerQuotationRateLine.findMany({
+            where: {
+              tenantId,
+              quotation: {
+                tenantId,
+                customerCompanyId: job.customerCompanyId,
+              },
+            },
+            orderBy: [
+              { quotation: { createdAt: "desc" } },
+              { sortOrder: "asc" },
+              { code: "asc" },
+              { id: "asc" },
+            ],
+            take: 300,
+          });
+      })();
 
-    const dhcReferences = await this.prisma.depotHandlingReference.findMany({
-      where: { tenantId, active: true },
-      orderBy: { code: "asc" },
-    });
+    const dhcReferences = await (async () => {
+      const activeFile = await this.prisma.masterFile.findFirst({
+        where: { tenantId, type: MasterFileType.DHC_REFERENCE, isActive: true },
+        orderBy: { uploadedAt: "desc" },
+        select: { id: true },
+      });
+      if (activeFile) {
+        return this.prisma.dhcReferenceItem.findMany({
+          where: { tenantId, masterFileId: activeFile.id, active: true },
+          orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
+        });
+      }
+      return this.prisma.depotHandlingReference.findMany({
+        where: { tenantId, active: true },
+        orderBy: { code: "asc" },
+      });
+    })();
 
-    const driverTripRates = await this.prisma.driverTripRateMaster.findMany({
-      where: { tenantId, active: true },
-      orderBy: { code: "asc" },
-    });
+    const driverTripRates =
+      await (async () => {
+        const activeFile = await this.prisma.masterFile.findFirst({
+          where: { tenantId, type: MasterFileType.DRIVER_PAYOUT, isActive: true },
+          orderBy: { uploadedAt: "desc" },
+          select: { id: true },
+        });
+        if (activeFile) {
+          const rows = await this.prisma.driverPayoutItem.findMany({
+            where: { tenantId, masterFileId: activeFile.id, active: true, isSelectableForTripEarning: true },
+            orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
+          });
+          return rows.map((r) => ({
+            id: r.id,
+            code: r.code,
+            label: r.label,
+            amountCents: r.rateCents,
+            currency: "SGD",
+            active: true,
+            sourceType: "MASTER_FILE_DRIVER_PAYOUT",
+          }));
+        }
+        if (masterRateLines.length > 0) {
+          return masterRateLines
+            .filter((r) => r.isSelectableForTripEarning)
+            .map((r) => ({
+              id: r.id,
+              code: r.code,
+              label: r.label,
+              amountCents: r.rateCents,
+              currency: "SGD",
+              active: true,
+              sourceType: "CUSTOMER_RATE_MASTER",
+            }));
+        }
+        return this.prisma.driverTripRateMaster.findMany({
+          where: { tenantId, active: true },
+          orderBy: { code: "asc" },
+        });
+      })();
 
     return {
       quotationLines,
@@ -1787,6 +1995,20 @@ export class OpsJobsService {
         data.driverEarningCents = null;
         data.earningLabelSnapshot = null;
       } else {
+        const payoutItem = await this.prisma.driverPayoutItem.findFirst({
+          where: {
+            id: dto.earningRateMasterId,
+            tenantId,
+            active: true,
+            masterFile: { isActive: true, type: MasterFileType.DRIVER_PAYOUT },
+          },
+        });
+        if (payoutItem) {
+          data.payoutItemId = payoutItem.id;
+          data.earningRateMasterId = null;
+          data.driverEarningCents = payoutItem.rateCents;
+          data.earningLabelSnapshot = payoutItem.label;
+        } else {
         const master = await this.prisma.driverTripRateMaster.findFirst({
           where: {
             id: dto.earningRateMasterId,
@@ -1797,9 +2019,11 @@ export class OpsJobsService {
         if (!master) {
           throw new BadRequestException("Driver trip rate master not found");
         }
+        data.payoutItemId = null;
         data.earningRateMasterId = master.id;
         data.driverEarningCents = master.amountCents;
         data.earningLabelSnapshot = master.label;
+        }
       }
     }
 
@@ -1900,6 +2124,7 @@ export class OpsJobsService {
         lastLocationAt: true,
         assignedDriverId: true,
         assignedVehicleId: true,
+        assignedFleetVehicleId: true,
         status: true,
       },
     });
@@ -1914,6 +2139,7 @@ export class OpsJobsService {
       lastLocationAt: job.lastLocationAt,
       assignedDriverId: job.assignedDriverId,
       assignedVehicleId: job.assignedVehicleId,
+      assignedFleetVehicleId: job.assignedFleetVehicleId ?? null,
       status: job.status,
     };
   }
@@ -2203,13 +2429,20 @@ export class OpsJobsService {
 
       try {
         let assignedVehicleId: string | null = null;
+        let assignedFleetVehicleId: string | null = null;
 
         if (driverId) {
           const driver = await this.prisma.drivers.findFirst({
             where: { tenantId, userId: driverId },
-            select: { assignedVehicleId: true },
+            select: { assignedVehicleId: true, assignedFleetVehicleId: true },
           });
+          if (driver?.assignedVehicleId && driver?.assignedFleetVehicleId) {
+            throw new BadRequestException(
+              "Driver has inconsistent default assignment (both vehicle and fleet vehicle)",
+            );
+          }
           assignedVehicleId = driver?.assignedVehicleId ?? null;
+          assignedFleetVehicleId = driver?.assignedFleetVehicleId ?? null;
         }
 
         const internalRef = await this.getNextInternalRef(tenantId, jobType);
@@ -2239,6 +2472,7 @@ export class OpsJobsService {
               assignedDriverId: driverId,
               assignedAt: new Date(),
               assignedVehicleId,
+              assignedFleetVehicleId,
             }),
             items: {
               create: [

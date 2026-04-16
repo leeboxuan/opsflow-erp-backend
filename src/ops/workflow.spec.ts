@@ -23,12 +23,19 @@ describe("workflow helpers", () => {
     expect(rows[0].jobTripTemplate).toBe(JobTripTemplate.PICKUP_TO_DELIVERY);
     expect(rows[0].completionRuleJson).toEqual({
       requireGeneratedDoSigned: true,
-      requiredTripUploadTypes: [TripDocumentType.OFFLOADING],
+      tripUploads: {
+        minUploadCount: 1,
+        allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
+      },
     });
     expect(rows[1].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_DEPOT);
     expect(rows[1].completionRuleJson).toEqual({
       requireGeneratedDoSigned: true,
-      requiredTripUploadTypes: [TripDocumentType.PICKUP_DO],
+      tripUploads: {
+        minUploadCount: 1,
+        allowedUploadTypes: [TripDocumentType.PICKUP_DO],
+        requiredUploadTypesExact: [TripDocumentType.PICKUP_DO],
+      },
     });
   });
 
@@ -43,12 +50,20 @@ describe("workflow helpers", () => {
     expect(rows[0].jobTripTemplate).toBe(JobTripTemplate.DEPOT_TO_DELIVERY);
     expect(rows[0].completionRuleJson).toEqual({
       requireGeneratedDoSigned: true,
-      requiredTripUploadTypes: [TripDocumentType.PICKUP_DO],
+      tripUploads: {
+        minUploadCount: 2,
+        allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
+        requiredUploadTypesExact: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
+      },
     });
     expect(rows[1].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_PORT);
     expect(rows[1].completionRuleJson).toEqual({
       requireGeneratedDoSigned: true,
-      requiredTripUploadTypes: [TripDocumentType.OFFLOADING],
+      tripUploads: {
+        minUploadCount: 1,
+        allowedUploadTypes: [TripDocumentType.OFFLOADING],
+        requiredUploadTypesExact: [TripDocumentType.OFFLOADING],
+      },
     });
   });
 
@@ -63,7 +78,10 @@ describe("workflow helpers", () => {
     expect(rows[0].jobTripTemplate).toBe(JobTripTemplate.PICKUP_TO_DELIVERY);
     expect(rows[0].completionRuleJson).toEqual({
       requireGeneratedDoSigned: true,
-      requiredTripUploadTypes: [TripDocumentType.OFFLOADING],
+      tripUploads: {
+        minUploadCount: 1,
+        allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
+      },
     });
   });
 

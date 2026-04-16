@@ -28,4 +28,28 @@ export class AdminDriverDto {
 
   @ApiProperty()
   updatedAt: Date;
+
+  @ApiProperty({ nullable: true, required: false })
+  defaultVehicleId?: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
+  defaultFleetVehicleId?: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
+  assignedVehicleId?: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
+  assignedVehiclePlateNo?: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
+  assignedVehicleType?: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
+  assignedFleetVehicleId?: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
+  assignedFleetVehiclePlateNo?: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
+  assignedFleetVehicleType?: string | null;
 }

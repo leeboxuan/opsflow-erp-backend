@@ -6,6 +6,24 @@ describe("job charge workflow hardening", () => {
   it("create job persists frozen JobCharge rows from chargeSnapshot", async () => {
     const jobChargeDeleteMany = jest.fn().mockResolvedValue({});
     const jobChargeCreateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const quotationItemFindMany = jest.fn().mockResolvedValue([
+      {
+        id: "ql1",
+        masterFileId: "mf1",
+        section: "ANNEX A",
+        code: "A1",
+        label: "Haulage",
+        description: "Container haulage",
+        unit: "trip",
+        notes: "Customer quotation note",
+        masterFile: {
+          id: "mf1",
+          customerCompanyId: "comp1",
+          isActive: true,
+          uploadedAt: new Date("2026-04-09T00:00:00.000Z"),
+        },
+      },
+    ]);
     const prisma: any = {
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
@@ -123,7 +141,10 @@ describe("job charge workflow hardening", () => {
       trip: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
       $transaction: jest.fn(async (input: any) => {
         if (typeof input === "function") {
-          return input({ jobCharge: { deleteMany: jobChargeDeleteMany, createMany: jobChargeCreateMany } });
+          return input({
+            customerQuotationItem: { findMany: quotationItemFindMany },
+            jobCharge: { deleteMany: jobChargeDeleteMany, createMany: jobChargeCreateMany },
+          });
         }
         return Promise.all(input);
       }),
@@ -170,14 +191,17 @@ describe("job charge workflow hardening", () => {
       where: { tenantId: "t1", jobId: "job1" },
     });
     expect(jobChargeCreateMany).toHaveBeenCalled();
+    expect(quotationItemFindMany).toHaveBeenCalled();
     const createManyArgs = jobChargeCreateMany.mock.calls[0][0];
     expect(createManyArgs.data[0]).toMatchObject({
       tenantId: "t1",
       jobId: "job1",
       sourceType: "CUSTOMER_QUOTATION",
       sourceRefId: "ql1",
+      sourceCustomerQuotationItemId: "ql1",
       code: "A1",
       label: "Haulage",
+      description: "Container haulage",
       qty: 1,
       unitPriceCents: 12500,
       amountCents: 12500,
@@ -187,6 +211,17 @@ describe("job charge workflow hardening", () => {
       taxRateBasisPoints: 900,
       sortOrder: 0,
       selectedByUserId: "u1",
+    });
+    expect(createManyArgs.data[0].metadataJson?.quotationSnapshot).toMatchObject({
+      sourceCustomerQuotationItemId: "ql1",
+      section: "ANNEX A",
+      code: "A1",
+      label: "Haulage",
+      description: "Container haulage",
+      unit: "trip",
+      selectedRateCents: 12500,
+      selectedAmountCents: 12500,
+      notes: "Customer quotation note",
     });
   });
 

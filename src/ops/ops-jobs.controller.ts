@@ -295,7 +295,7 @@ export class OpsJobsController {
   }
 
   @Post(":jobId/assign")
-  @ApiOperation({ summary: "Assign driver (and optional vehicle) to job" })
+  @ApiOperation({ summary: "Assign driver and optional vehicle or fleet vehicle to job" })
   async assign(
     @Req() req: any,
     @Param("jobId") jobId: string,
