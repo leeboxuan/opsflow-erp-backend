@@ -756,6 +756,7 @@ export class CustomersService {
     if (!isExcelFile && isDocxFile) {
       parsedLines = await parseQuotationRateLinesFromDocxBuffer(file.buffer);
     }
+    const parsedWithManualAmountCount = parsedLines.filter((line) => line.requiresManualAmount).length;
 
     const parsedSummaryJson =
       parsedLines.length === 0
@@ -768,11 +769,13 @@ export class CustomersService {
         : isDocxFile
           ? {
               lineCount: parsedLines.length,
+              parsedWithManualAmountCount,
               note:
                 "DOCX uploaded for reference/versioning. Structured extraction is not guaranteed; parsed lines may require review.",
             }
           : {
               lineCount: parsedLines.length,
+              parsedWithManualAmountCount,
               note:
                 "Excel parsed as structured master source for selectable rates.",
             };
@@ -813,6 +816,8 @@ export class CustomersService {
             description: line.description ?? null,
             unit: line.unit ?? null,
             rateCents: line.rateCents,
+            requiresManualAmount: !!line.requiresManualAmount,
+            rawRateText: line.rawRateText ?? null,
             containerSize: line.containerSize ?? null,
             tripMode: line.tripMode ?? null,
             areaScope: line.areaScope ?? null,
@@ -842,7 +847,9 @@ export class CustomersService {
               areaScope: line.areaScope ?? null,
               unit: line.unit ?? null,
               rateCents: line.rateCents,
-              notes: line.notes ?? null,
+              notes: line.notes ?? line.rawRateText ?? null,
+              requiresManualAmount: !!line.requiresManualAmount,
+              rawRateText: line.rawRateText ?? null,
               isSelectableForJob: line.isSelectableForJob ?? true,
               isSelectableForTripEarning: line.isSelectableForTripEarning ?? false,
               active: true,

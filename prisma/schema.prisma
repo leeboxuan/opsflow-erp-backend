@@ -330,7 +330,9 @@ model CustomerQuotationItem {
   tripMode     String?
   areaScope    String?
   unit         String?
-  rateCents    Int
+  rateCents    Int?
+  requiresManualAmount Boolean @default(false)
+  rawRateText  String?
   notes        String?
   sortOrder    Int      @default(0)
   active       Boolean  @default(true)
@@ -358,7 +360,9 @@ model DriverPayoutItem {
   tripMode                String?
   areaScope               String?
   unit                    String?
-  rateCents               Int
+  rateCents               Int?
+  requiresManualAmount    Boolean @default(false)
+  rawRateText             String?
   notes                   String?
   isSelectableForTripEarning Boolean @default(true)
   sortOrder               Int      @default(0)
@@ -768,7 +772,9 @@ model CustomerQuotationRateLine {
   label        String
   description  String?
   unit         String?
-  rateCents    Int
+  rateCents    Int?
+  requiresManualAmount Boolean @default(false)
+  rawRateText  String?
   containerSize String?
   tripMode     String?
   areaScope    String?
@@ -800,7 +806,9 @@ model CustomerRateMasterLine {
   tripMode      String?
   areaScope     String?
   unit          String?
-  rateCents     Int
+  rateCents     Int?
+  requiresManualAmount Boolean @default(false)
+  rawRateText   String?
   notes         String?
   isSelectableForJob         Boolean @default(true)
   isSelectableForTripEarning Boolean @default(false)

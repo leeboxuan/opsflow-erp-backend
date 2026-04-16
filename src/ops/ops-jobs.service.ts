@@ -328,6 +328,25 @@ export class OpsJobsService {
         quotationItems.map((q: any) => [q.id, q]),
       );
 
+      for (const c of dto.charges) {
+        if (
+          c.sourceType !== JobChargeSourceType.CUSTOMER_QUOTATION ||
+          !c.sourceRefId ||
+          !quotationItemById.has(c.sourceRefId)
+        ) {
+          continue;
+        }
+        const item = quotationItemById.get(c.sourceRefId)!;
+        if (
+          item.requiresManualAmount &&
+          (!Number.isInteger(c.unitPriceCents) || c.unitPriceCents <= 0)
+        ) {
+          throw new BadRequestException(
+            `Manual amount is required for quotation item "${item.label}" before saving charges`,
+          );
+        }
+      }
+
       await tx.jobCharge.createMany({
         data: dto.charges.map((c, i) => ({
           ...(c.sourceType === JobChargeSourceType.CUSTOMER_QUOTATION &&
@@ -1764,6 +1783,8 @@ export class OpsJobsService {
             sourceType: r.sourceType,
             category: r.category,
             notes: r.notes,
+            requiresManualAmount: r.requiresManualAmount,
+            rawRateText: r.rawRateText,
             source: "CUSTOMER_RATE_MASTER",
           }));
         }
@@ -1822,7 +1843,13 @@ export class OpsJobsService {
         });
         if (activeFile) {
           const rows = await this.prisma.driverPayoutItem.findMany({
-            where: { tenantId, masterFileId: activeFile.id, active: true, isSelectableForTripEarning: true },
+            where: {
+              tenantId,
+              masterFileId: activeFile.id,
+              active: true,
+              isSelectableForTripEarning: true,
+              rateCents: { not: null },
+            },
             orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
           });
           return rows.map((r) => ({
@@ -1837,7 +1864,7 @@ export class OpsJobsService {
         }
         if (masterRateLines.length > 0) {
           return masterRateLines
-            .filter((r) => r.isSelectableForTripEarning)
+            .filter((r) => r.isSelectableForTripEarning && r.rateCents != null)
             .map((r) => ({
               id: r.id,
               code: r.code,
@@ -2014,6 +2041,11 @@ export class OpsJobsService {
           },
         });
         if (payoutItem) {
+          if (payoutItem.rateCents == null) {
+            throw new BadRequestException(
+              `Selected payout item "${payoutItem.label}" requires manual amount and cannot be assigned as fixed trip earning`,
+            );
+          }
           data.payoutItemId = payoutItem.id;
           data.earningRateMasterId = null;
           data.driverEarningCents = payoutItem.rateCents;

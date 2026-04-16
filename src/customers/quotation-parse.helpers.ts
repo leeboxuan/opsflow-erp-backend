@@ -11,7 +11,9 @@ export type ParsedQuotationRateLineInput = {
   description?: string | null;
   category?: string | null;
   unit?: string | null;
-  rateCents: number;
+  rateCents: number | null;
+  requiresManualAmount?: boolean;
+  rawRateText?: string | null;
   containerSize?: string | null;
   tripMode?: string | null;
   areaScope?: string | null;
@@ -38,6 +40,44 @@ function parseMoneyToCents(raw: unknown): number | null {
   const n = Number(cleaned);
   if (Number.isNaN(n)) return null;
   return Math.round(n * 100);
+}
+
+function parseRateCell(
+  raw: unknown,
+): { rateCents: number | null; requiresManualAmount: boolean; rawRateText: string | null } {
+  if (raw == null) {
+    return { rateCents: null, requiresManualAmount: false, rawRateText: null };
+  }
+  if (typeof raw === "number" && !Number.isNaN(raw)) {
+    return {
+      rateCents: Math.round(raw * 100),
+      requiresManualAmount: false,
+      rawRateText: null,
+    };
+  }
+
+  const rawText = String(raw).trim();
+  if (!rawText) {
+    return { rateCents: null, requiresManualAmount: false, rawRateText: null };
+  }
+
+  const moneyLikeMatches =
+    rawText.match(/-?\$?\s*\d[\d,]*(?:\.\d{1,2})?/g)?.filter(Boolean) ?? [];
+  const hasAmbiguousDelimiter =
+    rawText.includes("/") || /\bto\b/i.test(rawText) || /\bor\b/i.test(rawText);
+  if (moneyLikeMatches.length >= 2 && hasAmbiguousDelimiter) {
+    return {
+      rateCents: null,
+      requiresManualAmount: true,
+      rawRateText: rawText,
+    };
+  }
+
+  return {
+    rateCents: parseMoneyToCents(rawText),
+    requiresManualAmount: false,
+    rawRateText: null,
+  };
 }
 
 function parseBooleanCell(value: unknown, defaultValue: boolean): boolean {
@@ -116,6 +156,8 @@ function parseRateLineFromDocxText(
     description: null,
     unit,
     rateCents,
+    requiresManualAmount: false,
+    rawRateText: null,
     sortOrder,
     sourceType: "PARSER_ANNEX_DOCX",
   };
@@ -153,6 +195,8 @@ function buildRateLineFromDocxSequence(
     description: null,
     unit,
     rateCents,
+    requiresManualAmount: false,
+    rawRateText: null,
     sortOrder,
     sourceType: "PARSER_ANNEX_DOCX",
   };
@@ -220,11 +264,35 @@ export function parseQuotationRateLinesFromXlsxBuffer(
       if (!code || !label) continue;
 
       const rawRate = idxRateCents >= 0 ? row[idxRateCents] : row[idxRate];
-      const rateCents =
+      const parsedRate =
         idxRateCents >= 0
-          ? Number(String(rawRate ?? "").replace(/[$,\s]/g, ""))
-          : parseMoneyToCents(rawRate);
-      if (rateCents == null || Number.isNaN(rateCents) || rateCents < 0) continue;
+          ? (() => {
+              const rawText = String(rawRate ?? "").trim();
+              const moneyLikeMatches =
+                rawText.match(/-?\$?\s*\d[\d,]*(?:\.\d{1,2})?/g)?.filter(Boolean) ?? [];
+              const hasAmbiguousDelimiter =
+                rawText.includes("/") || /\bto\b/i.test(rawText) || /\bor\b/i.test(rawText);
+              if (moneyLikeMatches.length >= 2 && hasAmbiguousDelimiter) {
+                return {
+                  rateCents: null,
+                  requiresManualAmount: true,
+                  rawRateText: rawText,
+                };
+              }
+              const n = Number(String(rawRate ?? "").replace(/[$,\s]/g, ""));
+              return {
+                rateCents: Number.isNaN(n) ? null : Math.round(n),
+                requiresManualAmount: false,
+                rawRateText: null,
+              };
+            })()
+          : parseRateCell(rawRate);
+      if (
+        (!parsedRate.requiresManualAmount && parsedRate.rateCents == null) ||
+        (parsedRate.rateCents != null && parsedRate.rateCents < 0)
+      ) {
+        continue;
+      }
 
       out.push({
         section: idxSection >= 0 ? String(row[idxSection] ?? "").trim() || null : null,
@@ -241,8 +309,14 @@ export function parseQuotationRateLinesFromXlsxBuffer(
         areaScope:
           idxAreaScope >= 0 ? String(row[idxAreaScope] ?? "").trim() || null : null,
         unit: idxUnit >= 0 ? String(row[idxUnit] ?? "").trim() || null : null,
-        rateCents: Math.round(Number(rateCents)),
-        notes: idxNotes >= 0 ? String(row[idxNotes] ?? "").trim() || null : null,
+        rateCents:
+          parsedRate.rateCents == null ? null : Math.round(Number(parsedRate.rateCents)),
+        requiresManualAmount: parsedRate.requiresManualAmount,
+        rawRateText: parsedRate.rawRateText,
+        notes:
+          idxNotes >= 0
+            ? String(row[idxNotes] ?? "").trim() || parsedRate.rawRateText
+            : parsedRate.rawRateText,
         isSelectableForJob:
           idxSelectableJob >= 0 ? parseBooleanCell(row[idxSelectableJob], true) : true,
         isSelectableForTripEarning:
@@ -271,8 +345,13 @@ export function parseQuotationRateLinesFromXlsxBuffer(
       continue;
     }
 
-    const rateCents = parseMoneyToCents(d);
-    if (rateCents == null || rateCents < 0) continue;
+    const parsedRate = parseRateCell(d);
+    if (
+      (!parsedRate.requiresManualAmount && parsedRate.rateCents == null) ||
+      (parsedRate.rateCents != null && parsedRate.rateCents < 0)
+    ) {
+      continue;
+    }
 
     const code = a || `LINE_${sortOrder + 1}`;
     const label = a || b || code;
@@ -285,7 +364,10 @@ export function parseQuotationRateLinesFromXlsxBuffer(
       label,
       description,
       unit,
-      rateCents,
+      rateCents: parsedRate.rateCents,
+      requiresManualAmount: parsedRate.requiresManualAmount,
+      rawRateText: parsedRate.rawRateText,
+      notes: parsedRate.rawRateText,
       sortOrder: sortOrder++,
       sourceType: "PARSER_ANNEX",
       isSelectableForJob: true,

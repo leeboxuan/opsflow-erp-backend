@@ -111,4 +111,61 @@ describe("MasterDataService getActiveMasterItems", () => {
     const unique = new Set(parsed.items.map((i: any) => i.code));
     expect(unique.size).toBe(parsed.items.length);
   });
+
+  it("parseDriverPayoutItems keeps section E/category and preserves ambiguous rows as manual amount", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const XLSX = require("xlsx");
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["D", "DESCRIPTION - MISCELLANEOUS", "UOM", "Rates"],
+      [1, "Previous section row", "Per Month", 120],
+      ["E", "", "", ""],
+      ["Fixed Monthly Payments", "", "", ""],
+      ["DESCRIPTION", "UOM", "RATES", ""],
+      [1, "Early section E row", "Per Month", "$450 / $500"],
+      [2, "Another early section E row", "Per Month", "$650 / $700"],
+      [3, "Season Parking (OPTIONAL) - DRIVER", "Per Month", 150],
+      [4, "Accommodation in Singapore", "Per Month", 550],
+      [5, "Cashcard", "Per Month", 50],
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, "LATEST RATES");
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    const prisma: any = {};
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+    const parsed = (svc as any).parseDriverPayoutItems(Buffer.from(buf));
+
+    const fixedMonthlyItems = parsed.items.filter((i: any) =>
+      [
+        "Season Parking (OPTIONAL) - DRIVER",
+        "Accommodation in Singapore",
+        "Cashcard",
+      ].includes(i.label),
+    );
+
+    expect(fixedMonthlyItems).toHaveLength(3);
+    fixedMonthlyItems.forEach((item: any) => {
+      expect(item.section).toBe("E");
+      expect(item.category).toBe("Fixed Monthly Payments");
+    });
+
+    const manualRows = parsed.items.filter((i: any) =>
+      ["Early section E row", "Another early section E row"].includes(i.label),
+    );
+    expect(manualRows).toHaveLength(2);
+    manualRows.forEach((item: any) => {
+      expect(item.section).toBe("E");
+      expect(item.category).toBe("Fixed Monthly Payments");
+      expect(item.rateCents).toBeNull();
+      expect(item.requiresManualAmount).toBe(true);
+      expect(item.isSelectableForTripEarning).toBe(false);
+      expect(item.rawRateText).toMatch(/\$/);
+    });
+
+    expect(parsed.items.find((i: any) => i.label === "Previous section row")).toMatchObject({
+      section: "D",
+      category: "DESCRIPTION - MISCELLANEOUS",
+    });
+  });
 });

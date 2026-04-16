@@ -134,6 +134,7 @@ export class MasterDataService {
         : [];
 
     if (lines.length > 0) {
+      const parsedWithManualAmountCount = lines.filter((l) => l.requiresManualAmount).length;
       return {
         items: lines.map((l) => ({
           section: l.section ?? null,
@@ -146,12 +147,15 @@ export class MasterDataService {
           areaScope: l.areaScope ?? null,
           unit: l.unit ?? null,
           rateCents: l.rateCents,
-          notes: l.notes ?? null,
+          notes: l.notes ?? l.rawRateText ?? null,
+          requiresManualAmount: !!l.requiresManualAmount,
+          rawRateText: l.rawRateText ?? null,
           sortOrder: l.sortOrder,
           active: true,
         })),
         summary: {
           lineCount: lines.length,
+          parsedWithManualAmountCount,
           note: isDocx
             ? "DOCX parsed on upload (best effort). Structured extraction is not guaranteed."
             : "Structured quotation rows parsed on upload.",
@@ -214,8 +218,10 @@ export class MasterDataService {
     const warnings: string[] = [];
     const codeCounter = new Map<string, number>();
     let skippedRows = 0;
+    let parsedWithManualAmountCount = 0;
     let currentSectionCode: string | null = null;
     let currentSectionTitle: string | null = null;
+    let pendingSectionTitle = false;
 
     const parseNumericRate = (raw: unknown): number | null => {
       if (typeof raw === "number" && !Number.isNaN(raw)) return raw;
@@ -226,6 +232,34 @@ export class MasterDataService {
       const n = Number(s);
       if (Number.isNaN(n)) return null;
       return n;
+    };
+
+    const parseRateCell = (
+      raw: unknown,
+    ): { rateCents: number | null; requiresManualAmount: boolean; rawRateText: string | null } => {
+      const rawText = String(raw ?? "").trim();
+      if (!rawText) return { rateCents: null, requiresManualAmount: false, rawRateText: null };
+
+      const moneyLikeMatches =
+        rawText.match(/-?\$?\s*\d[\d,]*(?:\.\d{1,2})?/g)?.filter(Boolean) ?? [];
+      const hasAmbiguousDelimiter =
+        rawText.includes("/") || /\bto\b/i.test(rawText) || /\bor\b/i.test(rawText);
+      if (moneyLikeMatches.length >= 2 && hasAmbiguousDelimiter) {
+        return { rateCents: null, requiresManualAmount: true, rawRateText: rawText };
+      }
+
+      const numericRate = parseNumericRate(raw);
+      if (numericRate == null) {
+        return { rateCents: null, requiresManualAmount: false, rawRateText: null };
+      }
+      return { rateCents: numericRate, requiresManualAmount: false, rawRateText: null };
+    };
+
+    const normalizeSectionTitle = (sectionCode: string, rawTitle: string): string | null => {
+      const cleaned = rawTitle.trim().replace(/\s+/g, " ");
+      if (cleaned) return cleaned;
+      if (sectionCode === "E") return "Fixed Monthly Payments";
+      return null;
     };
 
     for (let i = 0; i < rows.length; i++) {
@@ -240,10 +274,25 @@ export class MasterDataService {
         continue;
       }
 
-      // Section header row: A/B/C... in col A and description header in col B
-      if (/^[A-Z]$/.test(colA) && /description/i.test(colB)) {
+      // Section start row: any section letter in col A (A/B/C/D/E...)
+      if (/^[A-Z]$/.test(colA)) {
         currentSectionCode = colA;
-        currentSectionTitle = colB;
+        currentSectionTitle = normalizeSectionTitle(colA, colB);
+        pendingSectionTitle = !currentSectionTitle;
+        continue;
+      }
+
+      // Some sheets place section title on a separate row after section letter (e.g. "E" then "Fixed Monthly Payments")
+      if (
+        pendingSectionTitle &&
+        !/^(description|uom|rates?)$/i.test(colA) &&
+        !/^(description|uom|rates?)$/i.test(colB) &&
+        !/^\d+$/.test(colA) &&
+        String(colD ?? "").trim() === ""
+      ) {
+        const rowTitle = [colA, colB, colC].map((v) => v.trim()).find(Boolean) ?? "";
+        currentSectionTitle = normalizeSectionTitle(currentSectionCode ?? "", rowTitle);
+        pendingSectionTitle = false;
         continue;
       }
 
@@ -252,14 +301,19 @@ export class MasterDataService {
         /^(description|uom|rates?)$/i.test(colA) ||
         /^(description|uom|rates?)$/i.test(colB)
       ) {
+        pendingSectionTitle = false;
         skippedRows += 1;
         continue;
       }
 
       // Item row: numeric item number in col A + description in col B + rate in col D
       if (/^\d+$/.test(colA) && colB) {
-        const numericRate = parseNumericRate(colD);
-        if (numericRate == null || numericRate < 0) {
+        const parsedRate = parseRateCell(colD);
+        const isManualAmount = parsedRate.requiresManualAmount;
+        if (
+          (!isManualAmount && parsedRate.rateCents == null) ||
+          (parsedRate.rateCents != null && parsedRate.rateCents < 0)
+        ) {
           skippedRows += 1;
           const rawRate = String(colD ?? "").trim();
           if (rawRate) {
@@ -281,7 +335,9 @@ export class MasterDataService {
           );
         }
         const label = colB;
-        const rateCents = Math.round(numericRate * 100);
+        const rateCents =
+          parsedRate.rateCents == null ? null : Math.round(parsedRate.rateCents * 100);
+        if (isManualAmount) parsedWithManualAmountCount += 1;
 
         items.push({
           section: currentSectionCode,
@@ -294,11 +350,18 @@ export class MasterDataService {
           areaScope: null,
           unit: colC || null,
           rateCents,
-          notes: null,
-          isSelectableForTripEarning: true,
+          notes: parsedRate.rawRateText,
+          requiresManualAmount: isManualAmount,
+          rawRateText: parsedRate.rawRateText,
+          isSelectableForTripEarning: !isManualAmount,
           sortOrder: items.length,
           active: true,
         });
+        if (isManualAmount) {
+          warnings.push(
+            `Parsed row ${i + 1} with ambiguous rate "${parsedRate.rawRateText}" as manual-amount item`,
+          );
+        }
         continue;
       }
 
@@ -317,6 +380,7 @@ export class MasterDataService {
       summary: {
         sheetUsed: sheetName,
         totalParsedRows: items.length,
+        parsedWithManualAmountCount,
         skippedRows,
         warnings,
       },

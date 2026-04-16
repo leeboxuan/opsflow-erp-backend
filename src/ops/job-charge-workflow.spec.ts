@@ -331,4 +331,67 @@ describe("job charge workflow hardening", () => {
       "Selected jobs must have saved JobCharge rows before invoicing. Missing charges for: JOB-2",
     );
   });
+
+  it("requires manual amount when quotation source row is marked requiresManualAmount", async () => {
+    const jobChargeDeleteMany = jest.fn().mockResolvedValue({});
+    const jobChargeCreateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const prisma: any = {
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "comp1",
+          status: "Draft",
+        }),
+      },
+      $transaction: jest.fn(async (input: any) => {
+        if (typeof input === "function") {
+          return input({
+            customerQuotationItem: {
+              findMany: jest.fn().mockResolvedValue([
+                {
+                  id: "ql-manual",
+                  label: "Season Parking",
+                  requiresManualAmount: true,
+                  masterFile: { customerCompanyId: "comp1" },
+                },
+              ]),
+            },
+            jobCharge: {
+              deleteMany: jobChargeDeleteMany,
+              createMany: jobChargeCreateMany,
+            },
+          });
+        }
+        return Promise.all(input);
+      }),
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    await expect(
+      svc.saveJobCharges(
+        "t1",
+        "job1",
+        {
+          charges: [
+            {
+              sourceType: "CUSTOMER_QUOTATION",
+              sourceRefId: "ql-manual",
+              code: "E-1",
+              label: "Season Parking",
+              qty: 1,
+              unitPriceCents: 0,
+            },
+          ],
+        } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow(
+      'Manual amount is required for quotation item "Season Parking" before saving charges',
+    );
+    expect(jobChargeDeleteMany).toHaveBeenCalled();
+    expect(jobChargeCreateMany).not.toHaveBeenCalled();
+  });
 });

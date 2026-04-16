@@ -131,6 +131,31 @@ describe("workflow helpers", () => {
     });
   });
 
+  it("preserves ambiguous XLSX rate rows for manual amount entry", () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const XLSX = require("xlsx");
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["Annex A"],
+      ["Section E"],
+      ["E1", "Season Parking", "month", "$450 / $500"],
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, "Annex A");
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    const lines = parseQuotationRateLinesFromXlsxBuffer(Buffer.from(buf));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      code: "E1",
+      description: "Season Parking",
+      rateCents: null,
+      requiresManualAmount: true,
+      rawRateText: "$450 / $500",
+      notes: "$450 / $500",
+      isSelectableForJob: true,
+    });
+  });
+
   it("parses DOCX Annex tables into structured rate lines", async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const AdmZip = require("adm-zip");
