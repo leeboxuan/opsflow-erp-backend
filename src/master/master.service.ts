@@ -61,6 +61,14 @@ export class MasterDataService {
     return Math.round(n * 100);
   }
 
+  private parseStrictMoneyToCents(raw: unknown): number | null {
+    const s = String(raw ?? "").trim();
+    if (!s) return null;
+    const validMoney = /^-?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?$/;
+    if (!validMoney.test(s)) return null;
+    return this.parseMoney(s);
+  }
+
   private parseDate(effectiveDateIso?: string | null): Date | null {
     if (!effectiveDateIso || !String(effectiveDateIso).trim()) return null;
     const d = new Date(String(effectiveDateIso).trim() + "T00:00:00.000Z");
@@ -391,31 +399,152 @@ export class MasterDataService {
     const name = String(file.originalname ?? "").toLowerCase();
     const isPdf = String(file.mimetype ?? "").toLowerCase() === "application/pdf" || /\.pdf$/i.test(name);
     if (!isPdf) throw new BadRequestException("DHC reference upload must be PDF");
-    const lines = await this.parsePdfTabular(file.buffer);
-    const items = lines
-      .map((line, i) => {
-        const m = line.match(/^([A-Z0-9._-]+)\s+(.+?)\s+(-?\$?\d[\d,]*(?:\.\d{1,2})?)$/i);
-        if (!m) return null;
-        const cents = this.parseMoney(m[3]);
-        if (cents == null) return null;
-        return {
-          code: m[1].trim(),
-          label: m[2].trim(),
-          description: null,
-          category: null,
-          unit: null,
-          rateCents: cents,
-          notes: "Parsed from PDF (best effort)",
-          sortOrder: i,
-          active: true,
-        };
-      })
-      .filter(Boolean) as any[];
+    const parserVersion = "dhc_pdf_v2";
+    const rawLines = await this.parsePdfTabular(file.buffer);
+    const normalizedLines = rawLines
+      .map((line) => String(line ?? "").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    const lineFreq = new Map<string, number>();
+    for (const line of normalizedLines) {
+      lineFreq.set(line, (lineFreq.get(line) ?? 0) + 1);
+    }
+
+    const warnings: string[] = [];
+    const isJunkOrHeaderFooter = (line: string): boolean => {
+      if (/^(page\s*)?\d+\s*(of|\/)\s*\d+$/i.test(line)) return true;
+      if (/^page\s+\d+$/i.test(line)) return true;
+      if (/^(effective\s*date|date)\s*[:\-]/i.test(line)) return true;
+      if (/^(dhc|depot handling)(\s+reference)?(\s+rates?)?$/i.test(line)) return true;
+      if (/^(code|description|label|rate|amount|uom)(\s+(code|description|label|rate|amount|uom))+$/i.test(line)) {
+        return true;
+      }
+      if (/^this page intentionally left blank$/i.test(line)) return true;
+      return false;
+    };
+
+    const filteredLines = normalizedLines.filter((line) => {
+      if (isJunkOrHeaderFooter(line)) return false;
+      if ((lineFreq.get(line) ?? 0) > 1 && /^(code|description|label|rate|amount|uom)\b/i.test(line)) {
+        return false;
+      }
+      return true;
+    });
+
+    const amountOnlyRe = /^-?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?$/;
+    const codeLabelAmountRe =
+      /^([A-Z0-9._/-]*\d[A-Z0-9._/-]*)\s+(.+?)\s+(-?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)$/i;
+    const labelAmountRe = /^(.+?)\s+(-?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)$/;
+    const codeLabelRe = /^([A-Z0-9._/-]*\d[A-Z0-9._/-]*)\s+(.+)$/i;
+
+    const parsedRows: Array<{ code: string | null; label: string; rateCents: number; notes: string | null }> = [];
+    let skippedLines = 0;
+
+    for (let i = 0; i < filteredLines.length; i++) {
+      const line = filteredLines[i];
+      let parsed: { code: string | null; label: string; rateCents: number; notes: string | null } | null = null;
+
+      const m1 = line.match(codeLabelAmountRe);
+      if (m1) {
+        const cents = this.parseStrictMoneyToCents(m1[3]);
+        if (cents != null && cents >= 0) {
+          parsed = {
+            code: m1[1].trim().toUpperCase(),
+            label: m1[2].trim().replace(/\s+/g, " "),
+            rateCents: cents,
+            notes: null,
+          };
+        }
+      }
+
+      if (!parsed) {
+        const m2 = line.match(labelAmountRe);
+        if (m2) {
+          const cents = this.parseStrictMoneyToCents(m2[2]);
+          if (cents != null && cents >= 0) {
+            parsed = {
+              code: null,
+              label: m2[1].trim().replace(/\s+/g, " "),
+              rateCents: cents,
+              notes: null,
+            };
+          }
+        }
+      }
+
+      if (!parsed && i + 1 < filteredLines.length && amountOnlyRe.test(filteredLines[i + 1])) {
+        const cents = this.parseStrictMoneyToCents(filteredLines[i + 1]);
+        if (cents != null && cents >= 0) {
+          const m3 = line.match(codeLabelRe);
+          parsed = {
+            code: m3 ? m3[1].trim().toUpperCase() : null,
+            label: (m3 ? m3[2] : line).trim().replace(/\s+/g, " "),
+            rateCents: cents,
+            notes: null,
+          };
+          i += 1;
+        }
+      }
+
+      if (parsed) {
+        parsedRows.push(parsed);
+      } else {
+        skippedLines += 1;
+      }
+    }
+
+    const deduped: typeof parsedRows = [];
+    const seen = new Set<string>();
+    let duplicateRowsRemoved = 0;
+    for (const row of parsedRows) {
+      const key = `${(row.code ?? "").toUpperCase().trim()}|${row.label.toLowerCase()}|${row.rateCents}`;
+      if (seen.has(key)) {
+        duplicateRowsRemoved += 1;
+        continue;
+      }
+      seen.add(key);
+      deduped.push(row);
+    }
+
+    const items = deduped.map((row, i) => ({
+      code: row.code || `DHC-${String(i + 1).padStart(3, "0")}`,
+      label: row.label,
+      description: null,
+      category: null,
+      unit: null,
+      rateCents: row.rateCents,
+      notes: row.notes ?? "Parsed from PDF (deterministic)",
+      sortOrder: i,
+      active: true,
+    }));
+    if (!items.length) {
+      warnings.push("No deterministic DHC rows could be extracted from PDF text.");
+    }
+
     return {
       items,
       summary: items.length
-        ? { lineCount: items.length, note: "PDF parsed on upload (best effort)." }
-        : { note: "PDF uploaded. Structured extraction is not guaranteed; no deterministic DHC rows parsed." },
+        ? {
+            lineCount: items.length,
+            totalLines: normalizedLines.length,
+            candidateLines: filteredLines.length,
+            parsedRows: items.length,
+            skippedLines,
+            duplicateRowsRemoved,
+            warnings,
+            parserVersion,
+            note: "PDF parsed on upload (deterministic parser).",
+          }
+        : {
+            totalLines: normalizedLines.length,
+            candidateLines: filteredLines.length,
+            parsedRows: 0,
+            skippedLines,
+            duplicateRowsRemoved,
+            warnings,
+            parserVersion,
+            note: "PDF uploaded. No deterministic DHC rows parsed.",
+          },
       status: items.length ? MasterFileStatus.PARSED : MasterFileStatus.PARSE_FAILED,
     };
   }
@@ -465,18 +594,23 @@ export class MasterDataService {
 
     const status = parsed.status ?? (parsed.items.length > 0 ? MasterFileStatus.PARSED : MasterFileStatus.PARSE_FAILED);
 
+    const shouldActivateNewFile = !(
+      type === MasterFileType.DHC_REFERENCE && status === MasterFileStatus.PARSE_FAILED
+    );
     const masterFile = await this.prisma.$transaction(async (tx) => {
-      await tx.masterFile.updateMany({
-        where: {
-          tenantId,
-          type,
-          isActive: true,
-          ...(type === MasterFileType.CUSTOMER_QUOTATION
-            ? { customerCompanyId: scopedCustomerCompanyId }
-            : { customerCompanyId: null }),
-        },
-        data: { isActive: false, status: MasterFileStatus.SUPERSEDED },
-      });
+      if (shouldActivateNewFile) {
+        await tx.masterFile.updateMany({
+          where: {
+            tenantId,
+            type,
+            isActive: true,
+            ...(type === MasterFileType.CUSTOMER_QUOTATION
+              ? { customerCompanyId: scopedCustomerCompanyId }
+              : { customerCompanyId: null }),
+          },
+          data: { isActive: false, status: MasterFileStatus.SUPERSEDED },
+        });
+      }
       const mf = await tx.masterFile.create({
         data: {
           tenantId,
@@ -489,7 +623,7 @@ export class MasterDataService {
           effectiveDate,
           status,
           parseSummaryJson: parsed.summary as Prisma.InputJsonValue,
-          isActive: true,
+          isActive: shouldActivateNewFile,
         },
       });
       if (type === MasterFileType.CUSTOMER_QUOTATION && parsed.items.length) {
@@ -548,6 +682,7 @@ export class MasterDataService {
       activeWhere = {
         tenantId,
         type: MasterFileType.DHC_REFERENCE,
+        status: MasterFileStatus.PARSED,
         isActive: true,
         customerCompanyId: null,
       };
@@ -582,6 +717,12 @@ export class MasterDataService {
   async activateMasterFile(tenantId: string, id: string) {
     const target = await this.prisma.masterFile.findFirst({ where: { tenantId, id } });
     if (!target) throw new NotFoundException("Master file not found");
+    if (
+      target.type === MasterFileType.DHC_REFERENCE &&
+      target.status === MasterFileStatus.PARSE_FAILED
+    ) {
+      throw new BadRequestException("Cannot activate a DHC reference file that has no parsed rows.");
+    }
     await this.prisma.$transaction(async (tx) => {
       await tx.masterFile.updateMany({
         where: {

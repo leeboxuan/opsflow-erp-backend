@@ -1,4 +1,4 @@
-import { MasterFileType } from "@prisma/client";
+import { MasterFileStatus, MasterFileType } from "@prisma/client";
 import { MasterDataService } from "./master.service";
 
 describe("MasterDataService getActiveMasterItems", () => {
@@ -68,6 +68,7 @@ describe("MasterDataService getActiveMasterItems", () => {
       where: {
         tenantId: "t1",
         type: MasterFileType.DHC_REFERENCE,
+        status: MasterFileStatus.PARSED,
         isActive: true,
         customerCompanyId: null,
       },
@@ -167,5 +168,121 @@ describe("MasterDataService getActiveMasterItems", () => {
       section: "D",
       category: "DESCRIPTION - MISCELLANEOUS",
     });
+  });
+
+  it("parseDhcItems extracts deterministic rows, skips junk, dedupes, and preserves order", async () => {
+    const prisma: any = {};
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+    jest.spyOn(svc as any, "parsePdfTabular").mockResolvedValue([
+      "DHC REFERENCE RATES",
+      "Page 1 of 2",
+      "CODE DESCRIPTION RATE",
+      "DHC01 Depot handling PSA $12.00",
+      "DHC02 Depot handling Tuas",
+      "$15.50",
+      "Special cargo surcharge $25",
+      "Effective Date: 2026-04-17",
+      "DHC01   Depot handling PSA   $12.00",
+      "Page 2 of 2",
+      "CODE DESCRIPTION RATE",
+    ]);
+
+    const parsed = await (svc as any).parseDhcItems({
+      originalname: "dhc.pdf",
+      mimetype: "application/pdf",
+      buffer: Buffer.from("x"),
+    });
+
+    expect(parsed.status).toBe(MasterFileStatus.PARSED);
+    expect(parsed.items).toHaveLength(3);
+    expect(parsed.items.map((i: any) => i.code)).toEqual(["DHC01", "DHC02", "DHC-003"]);
+    expect(parsed.items.map((i: any) => i.label)).toEqual([
+      "Depot handling PSA",
+      "Depot handling Tuas",
+      "Special cargo surcharge",
+    ]);
+    expect(parsed.items.map((i: any) => i.sortOrder)).toEqual([0, 1, 2]);
+    expect(parsed.summary).toMatchObject({
+      parserVersion: "dhc_pdf_v2",
+      parsedRows: 3,
+      duplicateRowsRemoved: 1,
+    });
+  });
+
+  it("uploadAndParseMasterFile keeps PARSE_FAILED DHC upload inactive", async () => {
+    const masterFileUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
+    const masterFileCreate = jest.fn().mockResolvedValue({
+      id: "mf-failed",
+      tenantId: "t1",
+      type: MasterFileType.DHC_REFERENCE,
+      status: MasterFileStatus.PARSE_FAILED,
+      isActive: false,
+    });
+    const dhcCreateMany = jest.fn().mockResolvedValue({ count: 0 });
+    const prisma: any = {
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          masterFile: { updateMany: masterFileUpdateMany, create: masterFileCreate },
+          customerQuotationItem: { createMany: jest.fn() },
+          driverPayoutItem: { createMany: jest.fn() },
+          dhcReferenceItem: { createMany: dhcCreateMany },
+        }),
+      ),
+    };
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+    jest.spyOn(svc as any, "uploadMasterObject").mockResolvedValue(undefined);
+    jest.spyOn(svc as any, "parseDhcItems").mockResolvedValue({
+      items: [],
+      summary: { parsedRows: 0, parserVersion: "dhc_pdf_v2" },
+      status: MasterFileStatus.PARSE_FAILED,
+    });
+
+    await svc.uploadAndParseMasterFile(
+      "t1",
+      MasterFileType.DHC_REFERENCE,
+      {
+        originalname: "dhc.pdf",
+        mimetype: "application/pdf",
+        buffer: Buffer.from("x"),
+      } as any,
+      null,
+      null,
+      null,
+    );
+
+    expect(masterFileUpdateMany).not.toHaveBeenCalled();
+    expect(masterFileCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tenantId: "t1",
+        type: MasterFileType.DHC_REFERENCE,
+        status: MasterFileStatus.PARSE_FAILED,
+        isActive: false,
+      }),
+    });
+    expect(dhcCreateMany).not.toHaveBeenCalled();
+  });
+
+  it("activateMasterFile rejects PARSE_FAILED DHC master", async () => {
+    const prisma: any = {
+      masterFile: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "mf-failed",
+          tenantId: "t1",
+          type: MasterFileType.DHC_REFERENCE,
+          status: MasterFileStatus.PARSE_FAILED,
+          customerCompanyId: null,
+        }),
+      },
+      $transaction: jest.fn(),
+    };
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+
+    await expect(svc.activateMasterFile("t1", "mf-failed")).rejects.toThrow(
+      "Cannot activate a DHC reference file that has no parsed rows.",
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
