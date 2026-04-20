@@ -1012,7 +1012,7 @@ export class OpsJobsService {
 
     // Best-effort: attach assigned plate number from either vehicle source.
     if (job.assignedVehicleId || job.assignedFleetVehicleId) {
-      const [vehicle, fleetVehicle] = await this.prisma.$transaction([
+      const [vehicle, fleetVehicle] = await Promise.all([
         job.assignedVehicleId
           ? this.prisma.vehicle.findFirst({
               where: { id: job.assignedVehicleId, tenantId },
