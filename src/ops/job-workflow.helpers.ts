@@ -182,13 +182,13 @@ export function buildDefaultTripSeeds(
       {
         jobSequence: 1,
         jobTripTemplate: JobTripTemplate.DEPOT_TO_DELIVERY,
-        title: "Depot collection to delivery",
+        title: "Container pickup to stuffing destination",
         plannedStartAt: planned,
       },
       {
         jobSequence: 2,
-        jobTripTemplate: JobTripTemplate.DELIVERY_TO_PORT,
-        title: "Delivery to port",
+        jobTripTemplate: JobTripTemplate.DELIVERY_TO_DEPOT,
+        title: "Stuffing destination to return depot",
         plannedStartAt: planned,
       },
     ];

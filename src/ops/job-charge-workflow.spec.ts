@@ -194,6 +194,273 @@ describe("job charge workflow hardening", () => {
     expect(prisma.driverTripRateMaster.findMany).not.toHaveBeenCalled();
   });
 
+  it("create job accepts nested importDetails and maps to import routing fields", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
+      },
+      masterSingaporePort: {
+        findFirst: jest.fn().mockResolvedValue({ code: "JURONG" }),
+      },
+      job_internal_ref_counters: {
+        upsert: jest.fn().mockResolvedValue({ nextSeq: 1 }),
+      },
+      job: {
+        create: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "comp1",
+          internalRef: "WF-2026-04-0001-IMP",
+          externalRef: null,
+          jobType: JobType.IMPORT,
+          status: "Draft",
+          notes: null,
+          createdByUserId: "u1",
+          pickupDate: new Date("2026-04-24T00:00:00.000Z"),
+          pickupAddress1: "Jurong Port",
+          pickupAddress2: null,
+          pickupPostal: null,
+          pickupContactName: null,
+          pickupContactPhone: null,
+          deliveryAddress1: "Addr",
+          deliveryAddress2: null,
+          deliveryPostal: null,
+          receiverName: "Receiver",
+          receiverPhone: "123",
+          assignedDriverId: null,
+          assignedVehicleId: null,
+          assignedFleetVehicleId: null,
+          assignedVehiclePlateNo: null,
+          assignedAt: null,
+          startedAt: null,
+          completedAt: null,
+          deliveredAt: null,
+          podRecipientName: null,
+          cancelledReason: null,
+          cancelledAt: null,
+          cancelledByUserId: null,
+          lastLat: null,
+          lastLng: null,
+          lastLocationAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          customerCompany: { id: "comp1", name: "Customer A" },
+          assignedDriver: null,
+          items: [{ id: "i1", itemCode: "BOX", description: null, qty: 1 }],
+        }),
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "comp1",
+          internalRef: "WF-2026-04-0001-IMP",
+          externalRef: null,
+          jobType: JobType.IMPORT,
+          status: "Draft",
+          notes: null,
+          createdByUserId: "u1",
+          pickupDate: new Date("2026-04-24T00:00:00.000Z"),
+          pickupAddress1: "Jurong Port",
+          pickupAddress2: null,
+          pickupPostal: null,
+          pickupContactName: null,
+          pickupContactPhone: null,
+          deliveryAddress1: "Addr",
+          deliveryAddress2: null,
+          deliveryPostal: null,
+          receiverName: "Receiver",
+          receiverPhone: "123",
+          assignedDriverId: null,
+          assignedVehicleId: null,
+          assignedFleetVehicleId: null,
+          assignedVehiclePlateNo: null,
+          assignedAt: null,
+          startedAt: null,
+          completedAt: null,
+          deliveredAt: null,
+          podRecipientName: null,
+          cancelledReason: null,
+          cancelledAt: null,
+          cancelledByUserId: null,
+          lastLat: null,
+          lastLng: null,
+          lastLocationAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          customerCompany: { id: "comp1", name: "Customer A" },
+          assignedDriver: null,
+          createdBy: { id: "u1", name: "Ops User", email: "ops@example.com" },
+          items: [{ id: "i1", itemCode: "BOX", description: null, qty: 1 }],
+          trips: [],
+          charges: [],
+          documents: [],
+        }),
+      },
+      trip: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc as any, "generateDoDocument").mockResolvedValue({});
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.IMPORT,
+        customerCompanyId: "comp1",
+        pickupDate: "2026-04-24",
+        pickupAddress1: "Jurong Port",
+        deliveryAddress1: "Addr",
+        receiverName: "Receiver",
+        receiverPhone: "123",
+        items: [{ itemCode: "BOX", qty: 1 }],
+        importDetails: {
+          pickupPortCode: "JURONG",
+          portName: "Jurong Port",
+          returningDepotCode: "GUL_DEFAULT",
+        },
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    const data = prisma.job.create.mock.calls[0][0].data;
+    expect(data.pickupPortCode).toBe("JURONG");
+    expect(data.portName).toBe("Jurong Port");
+    expect(data.returningDepotCode).toBe("GUL_DEFAULT");
+  });
+
+  it("create job accepts nested exportDetails and maps export routing fields", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
+      },
+      masterSingaporeDepot: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({ code: "PSA_DEPOT_A" })
+          .mockResolvedValueOnce({ code: "PSA_DEPOT_B" }),
+      },
+      job_internal_ref_counters: {
+        upsert: jest.fn().mockResolvedValue({ nextSeq: 1 }),
+      },
+      job: {
+        create: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "comp1",
+          internalRef: "WF-2026-04-0001-EXP",
+          externalRef: null,
+          jobType: JobType.EXPORT,
+          status: "Draft",
+          notes: null,
+          createdByUserId: "u1",
+          pickupDate: new Date("2026-04-24T00:00:00.000Z"),
+          pickupAddress1: "Pickup A1",
+          deliveryAddress1: "Stuffing A1",
+          receiverName: "Stuffing PIC",
+          receiverPhone: "99999999",
+          assignedDriverId: null,
+          assignedVehicleId: null,
+          assignedFleetVehicleId: null,
+          assignedVehiclePlateNo: null,
+          assignedAt: null,
+          startedAt: null,
+          completedAt: null,
+          deliveredAt: null,
+          podRecipientName: null,
+          cancelledReason: null,
+          cancelledAt: null,
+          cancelledByUserId: null,
+          lastLat: null,
+          lastLng: null,
+          lastLocationAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          customerCompany: { id: "comp1", name: "Customer A" },
+          assignedDriver: null,
+          items: [{ id: "i1", itemCode: "BOX", description: null, qty: 1 }],
+        }),
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "comp1",
+          internalRef: "WF-2026-04-0001-EXP",
+          externalRef: null,
+          jobType: JobType.EXPORT,
+          status: "Draft",
+          notes: null,
+          createdByUserId: "u1",
+          pickupDate: new Date("2026-04-24T00:00:00.000Z"),
+          pickupAddress1: "Pickup A1",
+          deliveryAddress1: "Stuffing A1",
+          receiverName: "Stuffing PIC",
+          receiverPhone: "99999999",
+          assignedDriverId: null,
+          assignedVehicleId: null,
+          assignedFleetVehicleId: null,
+          assignedVehiclePlateNo: null,
+          assignedAt: null,
+          startedAt: null,
+          completedAt: null,
+          deliveredAt: null,
+          podRecipientName: null,
+          cancelledReason: null,
+          cancelledAt: null,
+          cancelledByUserId: null,
+          lastLat: null,
+          lastLng: null,
+          lastLocationAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          customerCompany: { id: "comp1", name: "Customer A" },
+          assignedDriver: null,
+          createdBy: { id: "u1", name: "Ops User", email: "ops@example.com" },
+          items: [{ id: "i1", itemCode: "BOX", description: null, qty: 1 }],
+          trips: [],
+          charges: [],
+          documents: [],
+        }),
+      },
+      trip: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc as any, "generateDoDocument").mockResolvedValue({});
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.EXPORT,
+        customerCompanyId: "comp1",
+        pickupDate: "2026-04-24",
+        pickupAddress1: "Legacy pickup",
+        deliveryAddress1: "Legacy delivery",
+        receiverName: "Legacy receiver",
+        receiverPhone: "123",
+        items: [{ itemCode: "BOX", qty: 1 }],
+        exportDetails: {
+          pickupDepotCode: "PSA_DEPOT_A",
+          containerPickupAddress1: "Pickup A1",
+          stuffingAddress1: "Stuffing A1",
+          stuffingContactName: "Stuffing PIC",
+          stuffingContactPhone: "99999999",
+          returnDepotCode: "PSA_DEPOT_B",
+          exportPortCode: "PSA",
+        },
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    const data = prisma.job.create.mock.calls[0][0].data;
+    expect(data.exportOriginDepotCode).toBe("PSA_DEPOT_A");
+    expect(data.returningDepotCode).toBe("PSA_DEPOT_B");
+    expect(data.exportPortCode).toBe("PSA");
+    expect(data.pickupAddress1).toBe("Pickup A1");
+    expect(data.deliveryAddress1).toBe("Stuffing A1");
+    expect(data.receiverName).toBe("Stuffing PIC");
+    expect(data.receiverPhone).toBe("99999999");
+  });
+
   it("invoice draft from jobs uses saved JobCharge rows and fails if any selected job has none", async () => {
     const prisma: any = {
       job: {

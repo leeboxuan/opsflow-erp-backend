@@ -823,8 +823,66 @@ export class OpsJobsService {
       throw new BadRequestException("At least one valid item is required");
     }
 
+    const importDetails = (dto as any).importDetails ?? {};
+    const exportDetails = (dto as any).exportDetails ?? {};
+    const pickupPortCode = (
+      dto.pickupPortCode ?? importDetails.pickupPortCode
+    )?.trim();
+    const portTerminalCode = (
+      dto.portTerminalCode ?? importDetails.portTerminalCode
+    )?.trim();
+    const portName = (dto.portName ?? importDetails.portName)?.trim();
+    const psaStorageRentLastDay =
+      dto.psaStorageRentLastDay ?? importDetails.psaStorageRentLastDay;
+    const vesselName = (dto.vesselName ?? importDetails.vesselName)?.trim();
+    const vesselEta = dto.vesselEta ?? importDetails.vesselEta;
+    const portnetReady =
+      dto.portnetReady ?? importDetails.portnetReady ?? false;
+    const permitReady = dto.permitReady ?? importDetails.permitReady ?? false;
+    const returningDepotCode = (
+      dto.returningDepotCode ??
+      importDetails.returningDepotCode ??
+      exportDetails.returnDepotCode
+    )?.trim();
+    const returnLastDay =
+      dto.returnLastDay ??
+      importDetails.returnLastDay ??
+      exportDetails.returnLastDay;
+    const exportOriginDepotCode = (
+      dto.exportOriginDepotCode ??
+      exportDetails.pickupDepotCode ??
+      exportDetails.exportOriginDepotCode
+    )?.trim();
+    const exportPortCode = (
+      dto.exportPortCode ?? exportDetails.exportPortCode
+    )?.trim();
+    const containerPickupAddress1 = (
+      exportDetails.containerPickupAddress1 ?? dto.pickupAddress1
+    )?.trim();
+    const containerPickupAddress2 = (
+      exportDetails.containerPickupAddress2 ?? dto.pickupAddress2
+    )?.trim();
+    const containerPickupPostal = (
+      exportDetails.containerPickupPostal ?? dto.pickupPostal
+    )?.trim();
+    const stuffingAddress1 = (
+      exportDetails.stuffingAddress1 ?? dto.deliveryAddress1
+    )?.trim();
+    const stuffingAddress2 = (
+      exportDetails.stuffingAddress2 ?? dto.deliveryAddress2
+    )?.trim();
+    const stuffingPostal = (
+      exportDetails.stuffingPostal ?? dto.deliveryPostal
+    )?.trim();
+    const stuffingContactName = (
+      exportDetails.stuffingContactName ?? dto.receiverName
+    )?.trim();
+    const stuffingContactPhone = (
+      exportDetails.stuffingContactPhone ?? dto.receiverPhone
+    )?.trim();
+
     if (dto.jobType === JobType.IMPORT) {
-      const portCode = dto.pickupPortCode?.trim();
+      const portCode = pickupPortCode;
       if (!portCode) {
         throw new BadRequestException(
           "pickupPortCode is required for IMPORT jobs (Singapore port master code)",
@@ -835,6 +893,44 @@ export class OpsJobsService {
       });
       if (!port) {
         throw new BadRequestException(`Unknown pickupPortCode: ${portCode}`);
+      }
+    }
+
+    if (dto.jobType === JobType.EXPORT) {
+      if (!exportOriginDepotCode) {
+        throw new BadRequestException(
+          "exportDetails.pickupDepotCode is required for EXPORT jobs",
+        );
+      }
+      if (!stuffingAddress1) {
+        throw new BadRequestException(
+          "exportDetails.stuffingAddress1 is required for EXPORT jobs",
+        );
+      }
+      if (!returningDepotCode) {
+        throw new BadRequestException(
+          "exportDetails.returnDepotCode is required for EXPORT jobs",
+        );
+      }
+
+      const [pickupDepot, returnDepot] = await Promise.all([
+        this.prisma.masterSingaporeDepot.findFirst({
+          where: { code: exportOriginDepotCode },
+        }),
+        this.prisma.masterSingaporeDepot.findFirst({
+          where: { code: returningDepotCode },
+        }),
+      ]);
+
+      if (!pickupDepot) {
+        throw new BadRequestException(
+          `Unknown export pickup depot code: ${exportOriginDepotCode}`,
+        );
+      }
+      if (!returnDepot) {
+        throw new BadRequestException(
+          `Unknown export return depot code: ${returningDepotCode}`,
+        );
       }
     }
 
@@ -853,30 +949,54 @@ export class OpsJobsService {
         notes: dto.notes ?? null,
         createdByUserId: actorUserId,
         pickupDate: pickupDateParsed,
-        pickupAddress1: dto.pickupAddress1,
-        pickupAddress2: dto.pickupAddress2 ?? null,
-        pickupPostal: dto.pickupPostal ?? null,
+        pickupAddress1:
+          dto.jobType === JobType.EXPORT
+            ? (containerPickupAddress1 ?? dto.pickupAddress1)
+            : dto.pickupAddress1,
+        pickupAddress2:
+          dto.jobType === JobType.EXPORT
+            ? (containerPickupAddress2 ?? null)
+            : (dto.pickupAddress2 ?? null),
+        pickupPostal:
+          dto.jobType === JobType.EXPORT
+            ? (containerPickupPostal ?? null)
+            : (dto.pickupPostal ?? null),
         pickupContactName: dto.pickupContactName ?? null,
         pickupContactPhone: dto.pickupContactPhone ?? null,
-        deliveryAddress1: dto.deliveryAddress1,
-        deliveryAddress2: dto.deliveryAddress2 ?? null,
-        deliveryPostal: dto.deliveryPostal ?? null,
-        receiverName: dto.receiverName,
-        receiverPhone: dto.receiverPhone,
-        pickupPortCode: dto.pickupPortCode?.trim() || null,
-        portTerminalCode: dto.portTerminalCode?.trim() || null,
-        portName: dto.portName?.trim() || null,
-        psaStorageRentLastDay: dto.psaStorageRentLastDay
-          ? new Date(dto.psaStorageRentLastDay)
+        deliveryAddress1:
+          dto.jobType === JobType.EXPORT
+            ? (stuffingAddress1 ?? dto.deliveryAddress1)
+            : dto.deliveryAddress1,
+        deliveryAddress2:
+          dto.jobType === JobType.EXPORT
+            ? (stuffingAddress2 ?? null)
+            : (dto.deliveryAddress2 ?? null),
+        deliveryPostal:
+          dto.jobType === JobType.EXPORT
+            ? (stuffingPostal ?? null)
+            : (dto.deliveryPostal ?? null),
+        receiverName:
+          dto.jobType === JobType.EXPORT
+            ? (stuffingContactName ?? dto.receiverName)
+            : dto.receiverName,
+        receiverPhone:
+          dto.jobType === JobType.EXPORT
+            ? (stuffingContactPhone ?? dto.receiverPhone)
+            : dto.receiverPhone,
+        pickupPortCode: pickupPortCode || null,
+        portTerminalCode: portTerminalCode || null,
+        portName: portName || null,
+        psaStorageRentLastDay: psaStorageRentLastDay
+          ? new Date(psaStorageRentLastDay)
           : null,
-        vesselName: dto.vesselName?.trim() || null,
-        vesselEta: dto.vesselEta ? new Date(dto.vesselEta) : null,
-        portnetReady: dto.portnetReady ?? false,
-        permitReady: dto.permitReady ?? false,
-        returningDepotCode: dto.returningDepotCode?.trim() || null,
-        returnLastDay: dto.returnLastDay ? new Date(dto.returnLastDay) : null,
-        exportOriginDepotCode: dto.exportOriginDepotCode?.trim() || null,
-        exportPortCode: dto.exportPortCode?.trim() || null,
+        vesselName: vesselName || null,
+        vesselEta: vesselEta ? new Date(vesselEta) : null,
+        portnetReady,
+        permitReady,
+        returningDepotCode: returningDepotCode || null,
+        returnLastDay: returnLastDay ? new Date(returnLastDay) : null,
+        exportOriginDepotCode: exportOriginDepotCode || null,
+        exportPortCode: exportPortCode || null,
         items: {
           create: validItems.map((item: any) => ({
             tenantId,

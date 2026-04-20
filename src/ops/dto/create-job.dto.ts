@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   IsEnum,
   IsOptional,
+  ValidateIf,
   IsString,
   IsDateString,
   MinLength,
@@ -31,6 +32,167 @@ export class CreateJobItemDto {
   @IsNumber()
   qty?: number;
 
+}
+
+export class CreateJobImportDetailsDto {
+  @ApiPropertyOptional({ description: "Required for IMPORT; must match master_singapore_ports.code" })
+  @IsOptional()
+  @IsString()
+  pickupPortCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  portTerminalCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  portName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  psaStorageRentLastDay?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  vesselName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  vesselEta?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  portnetReady?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  permitReady?: boolean;
+
+  @ApiPropertyOptional({ description: "master_singapore_depots.code" })
+  @IsOptional()
+  @IsString()
+  returningDepotCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  returnLastDay?: string;
+}
+
+export class CreateJobExportDetailsDto {
+  @ApiPropertyOptional({
+    description:
+      "Container pickup source depot code (master_singapore_depots.code)",
+  })
+  @IsOptional()
+  @IsString()
+  pickupDepotCode?: string;
+
+  @ApiPropertyOptional({
+    description: "Container pickup source address line 1",
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  containerPickupAddress1?: string;
+
+  @ApiPropertyOptional({
+    description: "Container pickup source address line 2",
+  })
+  @IsOptional()
+  @IsString()
+  containerPickupAddress2?: string;
+
+  @ApiPropertyOptional({
+    description: "Container pickup source postal code",
+  })
+  @IsOptional()
+  @IsString()
+  containerPickupPostal?: string;
+
+  @ApiPropertyOptional({
+    description: "Stuffing destination address line 1",
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  stuffingAddress1?: string;
+
+  @ApiPropertyOptional({
+    description: "Stuffing destination address line 2",
+  })
+  @IsOptional()
+  @IsString()
+  stuffingAddress2?: string;
+
+  @ApiPropertyOptional({
+    description: "Stuffing destination postal code",
+  })
+  @IsOptional()
+  @IsString()
+  stuffingPostal?: string;
+
+  @ApiPropertyOptional({
+    description: "Stuffing destination contact person",
+  })
+  @IsOptional()
+  @IsString()
+  stuffingContactName?: string;
+
+  @ApiPropertyOptional({
+    description: "Stuffing destination contact phone",
+  })
+  @IsOptional()
+  @IsString()
+  stuffingContactPhone?: string;
+
+  @ApiPropertyOptional({
+    description: "Container return destination depot code",
+  })
+  @IsOptional()
+  @IsString()
+  returnDepotCode?: string;
+
+  @ApiPropertyOptional({
+    description: "Container return due date",
+  })
+  @IsOptional()
+  @IsDateString()
+  returnLastDay?: string;
+
+  @ApiPropertyOptional({
+    description: "Export origin depot code (legacy alias of pickupDepotCode)",
+  })
+  @IsOptional()
+  @IsString()
+  exportOriginDepotCode?: string;
+
+  @ApiPropertyOptional({ description: "Singapore export port code (context)" })
+  @IsOptional()
+  @IsString()
+  exportPortCode?: string;
+
+  @ApiPropertyOptional({ description: "Export terminal code (optional context)" })
+  @IsOptional()
+  @IsString()
+  exportTerminalCode?: string;
+
+  @ApiPropertyOptional({ description: "Vessel name for export context" })
+  @IsOptional()
+  @IsString()
+  vesselName?: string;
+
+  @ApiPropertyOptional({ description: "Vessel ETA for export context" })
+  @IsOptional()
+  @IsDateString()
+  vesselEta?: string;
 }
 
 export class CreateJobDto {
@@ -119,62 +281,119 @@ export class CreateJobDto {
   @MinLength(1)
   notes?: string;
 
-  @ApiPropertyOptional({ description: "Required for IMPORT; must match master_singapore_ports.code" })
+  @ApiPropertyOptional({
+    type: CreateJobImportDetailsDto,
+    description:
+      "IMPORT-only nested details. Preferred shape for import routing and vessel fields.",
+  })
+  @ValidateIf((o) => o.jobType === JobType.IMPORT)
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreateJobImportDetailsDto)
+  importDetails?: CreateJobImportDetailsDto;
+
+  @ApiPropertyOptional({
+    type: CreateJobExportDetailsDto,
+    description: "EXPORT-only nested details. Preferred shape for export routing fields.",
+  })
+  @ValidateIf((o) => o.jobType === JobType.EXPORT)
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreateJobExportDetailsDto)
+  exportDetails?: CreateJobExportDetailsDto;
+
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer importDetails.pickupPortCode)",
+    deprecated: true,
+  })
   @IsOptional()
   @IsString()
   pickupPortCode?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer importDetails.portTerminalCode)",
+    deprecated: true,
+  })
   @IsOptional()
   @IsString()
   portTerminalCode?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer importDetails.portName)",
+    deprecated: true,
+  })
   @IsOptional()
   @IsString()
   portName?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer importDetails.psaStorageRentLastDay)",
+    deprecated: true,
+  })
   @IsOptional()
   @IsDateString()
   psaStorageRentLastDay?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer importDetails.vesselName)",
+    deprecated: true,
+  })
   @IsOptional()
   @IsString()
   vesselName?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer importDetails.vesselEta)",
+    deprecated: true,
+  })
   @IsOptional()
   @IsDateString()
   vesselEta?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer importDetails.portnetReady)",
+    deprecated: true,
+  })
   @IsOptional()
   @IsBoolean()
   portnetReady?: boolean;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer importDetails.permitReady)",
+    deprecated: true,
+  })
   @IsOptional()
   @IsBoolean()
   permitReady?: boolean;
 
-  @ApiPropertyOptional({ description: "master_singapore_depots.code" })
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer importDetails.returningDepotCode)",
+    deprecated: true,
+  })
   @IsOptional()
   @IsString()
   returningDepotCode?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer importDetails.returnLastDay)",
+    deprecated: true,
+  })
   @IsOptional()
   @IsDateString()
   returnLastDay?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer exportDetails.pickupDepotCode)",
+    deprecated: true,
+  })
   @IsOptional()
   @IsString()
   exportOriginDepotCode?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer exportDetails.exportPortCode)",
+    deprecated: true,
+  })
   @IsOptional()
   @IsString()
   exportPortCode?: string;

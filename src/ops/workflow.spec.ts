@@ -58,13 +58,13 @@ describe("workflow helpers", () => {
         requiredUploadTypesExact: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
       },
     });
-    expect(rows[1].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_PORT);
+    expect(rows[1].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_DEPOT);
     expect(rows[1].completionRuleJson).toEqual({
       requireGeneratedDoSigned: true,
       tripUploads: {
         minUploadCount: 1,
-        allowedUploadTypes: [TripDocumentType.OFFLOADING],
-        requiredUploadTypesExact: [TripDocumentType.OFFLOADING],
+        allowedUploadTypes: [TripDocumentType.PICKUP_DO],
+        requiredUploadTypesExact: [TripDocumentType.PICKUP_DO],
       },
     });
     expect(rows[0].status).toBe("Draft");
