@@ -38,7 +38,6 @@ import { ImportConfirmRequestDto } from "./dto/import-job-row.dto";
 import { LclImportConfirmRequestDto } from "./dto/lcl-import.dto";
 import { JobBatchImportConfirmRequestDto } from "./dto/job-batch-import.dto";
 import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
-import { JobChargeOptionsQueryDto } from "./dto/job-charge-options-query.dto";
 import {
   AppendJobTripDto,
   PatchJobTripDto,
@@ -68,7 +67,9 @@ export class OpsJobsController {
   }
 
   @Get("meta/driver-trip-rates")
-  @ApiOperation({ summary: "List active driver trip rate master rows (tenant)" })
+  @ApiOperation({
+    summary: "List tenant driver earning options for trip assignment",
+  })
   async listDriverTripRates(@Req() req: any) {
     return this.jobs.listDriverTripRateMasters(req.tenant.tenantId);
   }
@@ -80,7 +81,9 @@ export class OpsJobsController {
   }
 
   @Post()
-  @ApiOperation({ summary: "Create Draft job" })
+  @ApiOperation({
+    summary: "Create Draft job (ops fields only; no billing quotation snapshot)",
+  })
   async create(@Req() req: any, @Body() dto: CreateJobDto) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -266,28 +269,6 @@ export class OpsJobsController {
     return this.jobs.lclImportConfirm(tenantId, dto, accessUser);
   }
 
-  @Get("charge-options")
-  @ApiOperation({
-    summary:
-      "Pre-create customer charge options using quotation/master/legacy fallback",
-  })
-  async getChargeOptions(
-    @Req() req: any,
-    @Query() query: JobChargeOptionsQueryDto,
-  ) {
-    const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
-    return this.jobs.getPreCreateChargeOptions(
-      tenantId,
-      query.customerCompanyId,
-      accessUser,
-    );
-  }
-
   @Get(":jobId")
   @ApiOperation({ summary: "Get job by id" })
   @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
@@ -376,7 +357,10 @@ export class OpsJobsController {
   }
 
   @Post(":jobId/documents/quotation")
-  @ApiOperation({ summary: "Upload quotation document (PDF/XLSX/XLS)" })
+  @ApiOperation({
+    summary:
+      "Attach or replace an optional quotation document on an existing job (not required for job creation)",
+  })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
     schema: {
@@ -505,7 +489,7 @@ export class OpsJobsController {
   @Get(":jobId/charges/available")
   @ApiOperation({
     summary:
-      "Available quotation lines, DHC refs, driver rate master + current job charge snapshot",
+      "[Deprecated] Billing charge options for an existing job: quotation lines, DHC refs, and current charge snapshot",
   })
   async getAvailableCharges(
     @Req() req: any,
@@ -517,7 +501,25 @@ export class OpsJobsController {
       role: req.tenant.role,
       customerCompanyId: req.tenant.customerCompanyId,
     };
-    return this.jobs.getAvailableChargesForJob(tenantId, jobId, accessUser);
+    return this.jobs.getBillingChargeOptionsForJob(tenantId, jobId, accessUser);
+  }
+
+  @Get(":jobId/billing-charge-options")
+  @ApiOperation({
+    summary:
+      "Billing charge options for an existing job (quotation lines, DHC refs, current snapshot)",
+  })
+  async getBillingChargeOptions(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.getBillingChargeOptionsForJob(tenantId, jobId, accessUser);
   }
 
   @Put(":jobId/charges")

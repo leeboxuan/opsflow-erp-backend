@@ -13,7 +13,6 @@ import {
 } from "class-validator";
 import { JobType } from "@prisma/client";
 import { Type } from "class-transformer";
-import { SaveJobChargesDto } from "./save-job-charges.dto";
 
 
 export class CreateJobItemDto {
@@ -180,14 +179,6 @@ export class CreateJobDto {
   @IsString()
   exportPortCode?: string;
 
-  @ApiPropertyOptional({
-    type: SaveJobChargesDto,
-    description: "Optional frozen charge snapshot at creation",
-  })
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => SaveJobChargesDto)
-  chargeSnapshot?: SaveJobChargesDto;
 }
 
 

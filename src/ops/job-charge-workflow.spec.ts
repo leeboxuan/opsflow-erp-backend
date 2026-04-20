@@ -3,27 +3,9 @@ import { OpsJobsService } from "./ops-jobs.service";
 import { InvoicesService } from "../finance/invoices.service";
 
 describe("job charge workflow hardening", () => {
-  it("create job persists frozen JobCharge rows from chargeSnapshot", async () => {
+  it("create job ignores chargeSnapshot-like payload and does not persist charges", async () => {
     const jobChargeDeleteMany = jest.fn().mockResolvedValue({});
     const jobChargeCreateMany = jest.fn().mockResolvedValue({ count: 1 });
-    const quotationItemFindMany = jest.fn().mockResolvedValue([
-      {
-        id: "ql1",
-        masterFileId: "mf1",
-        section: "ANNEX A",
-        code: "A1",
-        label: "Haulage",
-        description: "Container haulage",
-        unit: "trip",
-        notes: "Customer quotation note",
-        masterFile: {
-          id: "mf1",
-          customerCompanyId: "comp1",
-          isActive: true,
-          uploadedAt: new Date("2026-04-09T00:00:00.000Z"),
-        },
-      },
-    ]);
     const prisma: any = {
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
@@ -117,24 +99,7 @@ describe("job charge workflow hardening", () => {
             createdBy: { id: "u1", name: "Ops User", email: "ops@example.com" },
             items: [{ id: "i1", itemCode: "BOX", description: null, qty: 1 }],
             trips: [],
-            charges: [
-              {
-                id: "jc1",
-                sourceType: "CUSTOMER_QUOTATION",
-                sourceRefId: "ql1",
-                code: "A1",
-                label: "Haulage",
-                description: null,
-                qty: 1,
-                unitPriceCents: 12500,
-                amountCents: 12500,
-                currency: "SGD",
-                taxable: true,
-                taxCode: "SR",
-                taxRateBasisPoints: 900,
-                sortOrder: 0,
-              },
-            ],
+            charges: [],
             documents: [],
           }),
       },
@@ -142,7 +107,6 @@ describe("job charge workflow hardening", () => {
       $transaction: jest.fn(async (input: any) => {
         if (typeof input === "function") {
           return input({
-            customerQuotationItem: { findMany: quotationItemFindMany },
             jobCharge: { deleteMany: jobChargeDeleteMany, createMany: jobChargeCreateMany },
           });
         }
@@ -187,42 +151,47 @@ describe("job charge workflow hardening", () => {
       { userId: "u1", role: Role.OPS },
     );
 
-    expect(jobChargeDeleteMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", jobId: "job1" },
-    });
-    expect(jobChargeCreateMany).toHaveBeenCalled();
-    expect(quotationItemFindMany).toHaveBeenCalled();
-    const createManyArgs = jobChargeCreateMany.mock.calls[0][0];
-    expect(createManyArgs.data[0]).toMatchObject({
-      tenantId: "t1",
-      jobId: "job1",
-      sourceType: "CUSTOMER_QUOTATION",
-      sourceRefId: "ql1",
-      sourceCustomerQuotationItemId: "ql1",
-      code: "A1",
-      label: "Haulage",
-      description: "Container haulage",
-      qty: 1,
-      unitPriceCents: 12500,
-      amountCents: 12500,
-      currency: "SGD",
-      taxable: true,
-      taxCode: "SR",
-      taxRateBasisPoints: 900,
-      sortOrder: 0,
-      selectedByUserId: "u1",
-    });
-    expect(createManyArgs.data[0].metadataJson?.quotationSnapshot).toMatchObject({
-      sourceCustomerQuotationItemId: "ql1",
-      section: "ANNEX A",
-      code: "A1",
-      label: "Haulage",
-      description: "Container haulage",
-      unit: "trip",
-      selectedRateCents: 12500,
-      selectedAmountCents: 12500,
-      notes: "Customer quotation note",
-    });
+    expect(jobChargeDeleteMany).not.toHaveBeenCalled();
+    expect(jobChargeCreateMany).not.toHaveBeenCalled();
+  });
+
+  it("driver trip rate options for ops use tenant payout master file rows when active", async () => {
+    const prisma: any = {
+      masterFile: {
+        findFirst: jest.fn().mockResolvedValue({ id: "mf-driver" }),
+      },
+      driverPayoutItem: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "dp1",
+            code: "TRIP-A",
+            label: "Trip A",
+            rateCents: 8000,
+          },
+        ]),
+      },
+      driverTripRateMaster: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    const rows = await svc.listDriverTripRateMasters("t1");
+
+    expect(rows).toEqual([
+      {
+        id: "dp1",
+        code: "TRIP-A",
+        label: "Trip A",
+        amountCents: 8000,
+        currency: "SGD",
+        active: true,
+        sourceType: "MASTER_FILE_DRIVER_PAYOUT",
+      },
+    ]);
+    expect(prisma.driverTripRateMaster.findMany).not.toHaveBeenCalled();
   });
 
   it("invoice draft from jobs uses saved JobCharge rows and fails if any selected job has none", async () => {

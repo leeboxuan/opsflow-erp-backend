@@ -291,16 +291,6 @@ export class OpsJobsService {
     }
   }
 
-  private assertCanAccessCustomerCompany(customerCompanyId: string, user: any) {
-    if (user?.role !== Role.CUSTOMER) return;
-    const scopedCustomerCompanyId = this.getCustomerCompanyIdOrThrow(user);
-    if (scopedCustomerCompanyId !== customerCompanyId) {
-      throw new ForbiddenException(
-        "Not allowed to access charge options for this customer company",
-      );
-    }
-  }
-
   private async resolveQuotationChargeLinesForCustomer(
     tenantId: string,
     customerCompanyId: string,
@@ -376,38 +366,6 @@ export class OpsJobsService {
     })();
 
     return { quotationLines, masterRateLines };
-  }
-
-  private normalizeChargeOptionLine(line: any) {
-    const source =
-      typeof line?.source === "string" && line.source.trim().length > 0
-        ? line.source
-        : "LEGACY_CUSTOMER_QUOTATION_RATE_LINE";
-    const rateCents = Number.isInteger(line?.rateCents) ? line.rateCents : null;
-    return {
-      id: line.id,
-      section: line.section ?? null,
-      code: line.code,
-      label: line.label,
-      description: line.description ?? null,
-      unit: line.unit ?? null,
-      defaultQty: 1,
-      unitPriceCents: rateCents,
-      rateCents,
-      requiresManualAmount: !!line.requiresManualAmount,
-      source,
-      containerSize: line.containerSize ?? null,
-      category: line.category ?? null,
-      tripMode: line.tripMode ?? null,
-      notes: line.notes ?? line.rawRateText ?? null,
-      metadata: {
-        areaScope: line.areaScope ?? null,
-        rawRateText: line.rawRateText ?? null,
-        sourceType: line.sourceType ?? null,
-        sortOrder: line.sortOrder ?? null,
-        quotationId: line.quotationId ?? null,
-      },
-    };
   }
 
   private async persistJobCharges(
@@ -956,15 +914,6 @@ export class OpsJobsService {
         pickupDateParsed,
       ),
     });
-
-    if (dto.chargeSnapshot?.charges?.length) {
-      await this.persistJobCharges(
-        tenantId,
-        job.id,
-        dto.chargeSnapshot,
-        actorUserId,
-      );
-    }
 
     // Best-effort auto-generate DO after job creation.
     // We do not fail the whole job creation if document generation/storage fails.
@@ -1838,46 +1787,13 @@ export class OpsJobsService {
     return this.getOne(tenantId, jobId, user);
   }
 
-  async getPreCreateChargeOptions(
-    tenantId: string,
-    customerCompanyId: string,
-    user: any,
-  ): Promise<{
-    customerCompanyId: string;
-    chargeOptions: any[];
-    fallbackOrder: string[];
-  }> {
-    const trimmedCustomerCompanyId = String(customerCompanyId ?? "").trim();
-    if (!trimmedCustomerCompanyId) {
-      throw new BadRequestException("customerCompanyId is required");
-    }
-    this.assertCanAccessCustomerCompany(trimmedCustomerCompanyId, user);
-
-    const { quotationLines } = await this.resolveQuotationChargeLinesForCustomer(
-      tenantId,
-      trimmedCustomerCompanyId,
-    );
-    return {
-      customerCompanyId: trimmedCustomerCompanyId,
-      chargeOptions: quotationLines.map((line) =>
-        this.normalizeChargeOptionLine(line),
-      ),
-      fallbackOrder: [
-        "MASTER_FILE_CUSTOMER_QUOTATION",
-        "CUSTOMER_RATE_MASTER",
-        "LEGACY_CUSTOMER_QUOTATION_RATE_LINE",
-      ],
-    };
-  }
-
-  async getAvailableChargesForJob(
+  async getBillingChargeOptionsForJob(
     tenantId: string,
     jobId: string,
     user: any,
   ): Promise<{
     quotationLines: any[];
     dhcReferences: any[];
-    driverTripRates: any[];
     existingSnapshot: any[];
   }> {
     const job = await this.prisma.job.findFirst({
@@ -1889,11 +1805,10 @@ export class OpsJobsService {
     if (!job) throw new NotFoundException("Job not found");
     this.assertCanAccessJob(job, user);
 
-    const { quotationLines, masterRateLines } =
-      await this.resolveQuotationChargeLinesForCustomer(
-        tenantId,
-        job.customerCompanyId,
-      );
+    const { quotationLines } = await this.resolveQuotationChargeLinesForCustomer(
+      tenantId,
+      job.customerCompanyId,
+    );
 
     const dhcReferences = await (async () => {
       const activeFile = await this.prisma.masterFile.findFirst({
@@ -1918,67 +1833,57 @@ export class OpsJobsService {
       });
     })();
 
-    const driverTripRates =
-      await (async () => {
-        const activeFile = await this.prisma.masterFile.findFirst({
-          where: {
-            tenantId,
-            type: MasterFileType.DRIVER_PAYOUT,
-            customerCompanyId: null,
-            isActive: true,
-          },
-          orderBy: { uploadedAt: "desc" },
-          select: { id: true },
-        });
-        if (activeFile) {
-          const rows = await this.prisma.driverPayoutItem.findMany({
-            where: {
-              tenantId,
-              masterFileId: activeFile.id,
-              active: true,
-              isSelectableForTripEarning: true,
-              rateCents: { not: null },
-            },
-            orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
-          });
-          return rows.map((r) => ({
-            id: r.id,
-            code: r.code,
-            label: r.label,
-            amountCents: r.rateCents,
-            currency: "SGD",
-            active: true,
-            sourceType: "MASTER_FILE_DRIVER_PAYOUT",
-          }));
-        }
-        if (masterRateLines.length > 0) {
-          return masterRateLines
-            .filter((r) => r.isSelectableForTripEarning && r.rateCents != null)
-            .map((r) => ({
-              id: r.id,
-              code: r.code,
-              label: r.label,
-              amountCents: r.rateCents,
-              currency: "SGD",
-              active: true,
-              sourceType: "CUSTOMER_RATE_MASTER",
-            }));
-        }
-        return this.prisma.driverTripRateMaster.findMany({
-          where: { tenantId, active: true },
-          orderBy: { code: "asc" },
-        });
-      })();
-
     return {
       quotationLines,
       dhcReferences,
-      driverTripRates,
       existingSnapshot: job.charges ?? [],
     };
   }
 
+  async getAvailableChargesForJob(
+    tenantId: string,
+    jobId: string,
+    user: any,
+  ): Promise<{
+    quotationLines: any[];
+    dhcReferences: any[];
+    existingSnapshot: any[];
+  }> {
+    return this.getBillingChargeOptionsForJob(tenantId, jobId, user);
+  }
+
   async listDriverTripRateMasters(tenantId: string) {
+    const activeFile = await this.prisma.masterFile.findFirst({
+      where: {
+        tenantId,
+        type: MasterFileType.DRIVER_PAYOUT,
+        customerCompanyId: null,
+        isActive: true,
+      },
+      orderBy: { uploadedAt: "desc" },
+      select: { id: true },
+    });
+    if (activeFile) {
+      const rows = await this.prisma.driverPayoutItem.findMany({
+        where: {
+          tenantId,
+          masterFileId: activeFile.id,
+          active: true,
+          isSelectableForTripEarning: true,
+          rateCents: { not: null },
+        },
+        orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
+      });
+      return rows.map((r) => ({
+        id: r.id,
+        code: r.code,
+        label: r.label,
+        amountCents: r.rateCents,
+        currency: "SGD",
+        active: true,
+        sourceType: "MASTER_FILE_DRIVER_PAYOUT",
+      }));
+    }
     return this.prisma.driverTripRateMaster.findMany({
       where: { tenantId, active: true },
       orderBy: { code: "asc" },
