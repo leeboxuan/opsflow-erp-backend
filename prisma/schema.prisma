@@ -658,6 +658,8 @@ model Job {
   startedAt          DateTime?
   completedAt        DateTime?
   deliveredAt        DateTime?
+  /// Set when ops explicitly hands this job over to finance invoicing flow.
+  invoiceReadyAt     DateTime?
   podRecipientName   String?
   cancelledReason    String?
   cancelledAt        DateTime?

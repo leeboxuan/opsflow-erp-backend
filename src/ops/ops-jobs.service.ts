@@ -149,6 +149,8 @@ function toJobDto(j: any): JobDto {
     externalRef: j.externalRef ?? null,
     jobType: j.jobType,
     status: j.status,
+    invoiceReadyAt: j.invoiceReadyAt ?? null,
+    isInvoiceReady: !!j.invoiceReadyAt,
     notes: j.notes ?? null,
 
     createdByUserId: j.createdByUserId ?? null,
@@ -221,12 +223,16 @@ function toJobDto(j: any): JobDto {
         jobTripTemplate: t.jobTripTemplate ?? null,
         title: t.title ?? null,
         status: t.status,
+        isPublished: t.status !== TripStatus.Draft,
+        isCompleted:
+          t.status === TripStatus.Delivered || t.status === TripStatus.Closed,
         plannedStartAt: t.plannedStartAt ?? null,
         startedAt: t.startedAt ?? null,
         closedAt: t.closedAt ?? null,
         trailerNumber: t.trailerNumber ?? null,
         trailerLastLocationCode: t.trailerLastLocationCode ?? null,
         driverEarningCents: t.driverEarningCents ?? null,
+        hasDriverPayout: Number.isInteger(t.driverEarningCents),
         earningLabelSnapshot: t.earningLabelSnapshot ?? null,
         earningRateMasterId: t.earningRateMasterId ?? null,
         completionRuleJson: t.completionRuleJson ?? null,
@@ -1936,7 +1942,7 @@ export class OpsJobsService {
         jobTripTemplate: dto.jobTripTemplate,
         title: dto.title?.trim() || dto.jobTripTemplate,
         plannedStartAt,
-        status: TripStatus.Planned,
+        status: TripStatus.Draft,
         completionRuleJson: completionRuleForTemplate(dto.jobTripTemplate),
       },
     });
@@ -2091,6 +2097,110 @@ export class OpsJobsService {
     return this.getOne(tenantId, jobId, user);
   }
 
+  async publishTrip(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    user: any,
+  ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+      select: {
+        id: true,
+        status: true,
+        driverEarningCents: true,
+      },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    if (trip.status !== TripStatus.Draft) {
+      throw new BadRequestException(
+        "Trip is already published or cannot be published from current status",
+      );
+    }
+    if (!Number.isInteger(trip.driverEarningCents) || trip.driverEarningCents <= 0) {
+      throw new BadRequestException(
+        "Driver payout is required before publishing a trip",
+      );
+    }
+
+    await this.prisma.trip.update({
+      where: { id: tripId },
+      data: { status: TripStatus.Planned },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "TRIP_PUBLISH",
+      "TRIP",
+      tripId,
+      { jobId },
+      actorUserId,
+    );
+
+    return this.getOne(tenantId, jobId, user);
+  }
+
+  async sendJobToInvoice(
+    tenantId: string,
+    jobId: string,
+    user: any,
+  ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+      select: { id: true, status: true, invoiceReadyAt: true },
+    });
+    if (!job) throw new NotFoundException("Job not found");
+    if (job.status === JobStatus.Cancelled) {
+      throw new BadRequestException("Cancelled jobs cannot be sent to invoice");
+    }
+    if (job.invoiceReadyAt) {
+      throw new BadRequestException("Job is already marked as invoice-ready");
+    }
+
+    const trips = await this.prisma.trip.findMany({
+      where: { tenantId, jobId },
+      select: { id: true, status: true },
+      orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }],
+    });
+    if (trips.length === 0) {
+      throw new BadRequestException(
+        "Job must have at least one trip before sending to invoice",
+      );
+    }
+
+    const nonCompleted = trips.filter(
+      (t) => t.status !== TripStatus.Delivered && t.status !== TripStatus.Closed,
+    );
+    if (nonCompleted.length > 0) {
+      throw new BadRequestException(
+        "All trips must be completed before sending job to invoice",
+      );
+    }
+
+    const now = new Date();
+    await this.prisma.job.update({
+      where: { id: jobId },
+      data: { invoiceReadyAt: now },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "JOB_SEND_TO_INVOICE",
+      "JOB",
+      jobId,
+      { tripCount: trips.length, sentAt: now.toISOString() },
+      actorUserId,
+    );
+
+    return this.getOne(tenantId, jobId, user);
+  }
+
   async uploadPickupDo(
     tenantId: string,
     jobId: string,
@@ -2219,12 +2329,16 @@ export class OpsJobsService {
       jobTripTemplate: t.jobTripTemplate ?? null,
       title: t.title ?? null,
       status: t.status,
+      isPublished: t.status !== TripStatus.Draft,
+      isCompleted:
+        t.status === TripStatus.Delivered || t.status === TripStatus.Closed,
       plannedStartAt: t.plannedStartAt ?? null,
       startedAt: t.startedAt ?? null,
       closedAt: t.closedAt ?? null,
       trailerNumber: t.trailerNumber ?? null,
       trailerLastLocationCode: t.trailerLastLocationCode ?? null,
       driverEarningCents: t.driverEarningCents ?? null,
+      hasDriverPayout: Number.isInteger(t.driverEarningCents),
       earningLabelSnapshot: t.earningLabelSnapshot ?? null,
       earningRateMasterId: t.earningRateMasterId ?? null,
       completionRuleJson:

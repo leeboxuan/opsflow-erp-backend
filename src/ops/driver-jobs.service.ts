@@ -52,6 +52,8 @@ function toJobDto(j: any): JobDto {
     externalRef: j.externalRef ?? null,
     jobType: j.jobType,
     status: j.status,
+    invoiceReadyAt: j.invoiceReadyAt ?? null,
+    isInvoiceReady: !!j.invoiceReadyAt,
     notes: j.notes ?? null,
 
     pickupDate: j.pickupDate ?? null,
@@ -110,12 +112,16 @@ function toJobDto(j: any): JobDto {
         jobTripTemplate: t.jobTripTemplate ?? null,
         title: t.title ?? null,
         status: t.status,
+        isPublished: t.status !== TripStatus.Draft,
+        isCompleted:
+          t.status === TripStatus.Delivered || t.status === TripStatus.Closed,
         plannedStartAt: t.plannedStartAt ?? null,
         startedAt: t.startedAt ?? null,
         closedAt: t.closedAt ?? null,
         trailerNumber: t.trailerNumber ?? null,
         trailerLastLocationCode: t.trailerLastLocationCode ?? null,
         driverEarningCents: t.driverEarningCents ?? null,
+        hasDriverPayout: Number.isInteger(t.driverEarningCents),
         earningLabelSnapshot: t.earningLabelSnapshot ?? null,
         earningRateMasterId: t.earningRateMasterId ?? null,
         completionRuleJson: t.completionRuleJson ?? null,
@@ -133,6 +139,34 @@ export class DriverJobsService {
     private readonly audit: AuditService,
     private readonly supabaseService: SupabaseService,
   ) {}
+
+  private publishedTripVisibilityWhere() {
+    return {
+      OR: [
+        { trips: { none: {} } },
+        { trips: { some: { status: { not: TripStatus.Draft } } } },
+      ],
+    };
+  }
+
+  private async findPublishedTripOrThrow(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+  ) {
+    const trip = await this.prisma.trip.findFirst({
+      where: {
+        id: tripId,
+        tenantId,
+        jobId,
+        status: { not: TripStatus.Draft },
+      },
+    });
+    if (!trip) {
+      throw new NotFoundException("Trip not found");
+    }
+    return trip;
+  }
 
   private parseMonthToRange(month: string): { gte: Date; lt: Date } {
     const m = month.trim().match(/^(\d{4})-(\d{2})$/);
@@ -208,6 +242,7 @@ export class DriverJobsService {
         id: jobId,
         tenantId,
         assignedDriverId: driverUserId,
+        ...this.publishedTripVisibilityWhere(),
       },
       include,
     });
@@ -245,6 +280,7 @@ export class DriverJobsService {
       tenantId,
       assignedDriverId: driverUserId,
       status: statusFilter,
+      ...this.publishedTripVisibilityWhere(),
     };
 
     // Filtering rules:
@@ -394,6 +430,7 @@ export class DriverJobsService {
       tenantId,
       assignedDriverId: driverUserId,
       status: { in: [JobStatus.Completed, JobStatus.Cancelled] },
+      ...this.publishedTripVisibilityWhere(),
       // Practical stable rule: filter history by pickupDate range.
       pickupDate: range,
     };
@@ -603,6 +640,7 @@ export class DriverJobsService {
         },
       },
       trips: {
+        where: { status: { not: TripStatus.Draft } },
         orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }],
         include: {
           documents: {
@@ -678,7 +716,7 @@ export class DriverJobsService {
     const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
 
     const tripCount = await this.prisma.trip.count({
-      where: { tenantId, jobId },
+      where: { tenantId, jobId, status: { not: TripStatus.Draft } },
     });
     if (tripCount > 0) {
       throw new BadRequestException(
@@ -726,7 +764,7 @@ export class DriverJobsService {
     });
 
     const tripCount = await this.prisma.trip.count({
-      where: { tenantId, jobId },
+      where: { tenantId, jobId, status: { not: TripStatus.Draft } },
     });
     if (tripCount === 0) {
       throw new BadRequestException("This job has no trips; use POST .../start");
@@ -761,11 +799,9 @@ export class DriverJobsService {
       throw new BadRequestException("Parking photo must be an image");
     }
 
-    const trip = await this.prisma.trip.findFirst({
-      where: { id: tripId, tenantId, jobId },
-    });
-    if (!trip) {
-      throw new NotFoundException("Trip not found on this job");
+    const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
+    if (trip.status !== TripStatus.Planned && trip.status !== TripStatus.Dispatched) {
+      throw new BadRequestException("Trip must be published and ready to start");
     }
     if (trip.startedAt) {
       throw new BadRequestException("Trip already started");
@@ -1010,7 +1046,7 @@ export class DriverJobsService {
     });
 
     const tripCount = await this.prisma.trip.count({
-      where: { tenantId, jobId },
+      where: { tenantId, jobId, status: { not: TripStatus.Draft } },
     });
     if (tripCount > 0) {
       throw new BadRequestException(
@@ -1078,10 +1114,7 @@ export class DriverJobsService {
       documents: true,
     });
 
-    const trip = await this.prisma.trip.findFirst({
-      where: { id: tripId, tenantId, jobId },
-    });
-    if (!trip) throw new NotFoundException("Trip not found");
+    const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
 
     if (trip.status !== TripStatus.InTransit) {
       throw new BadRequestException("Trip must be InTransit to complete");
@@ -1213,10 +1246,7 @@ export class DriverJobsService {
     driverUserId: string,
   ): Promise<JobDocumentDto[]> {
     await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
-    const trip = await this.prisma.trip.findFirst({
-      where: { id: tripId, tenantId, jobId },
-    });
-    if (!trip) throw new NotFoundException("Trip not found");
+    await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
     const docs = await this.prisma.tripDocument.findMany({
       where: { tenantId, tripId },
       orderBy: { createdAt: "desc" },
@@ -1246,10 +1276,7 @@ export class DriverJobsService {
     file: Express.Multer.File,
   ): Promise<JobDocumentDto> {
     await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
-    const trip = await this.prisma.trip.findFirst({
-      where: { id: tripId, tenantId, jobId },
-    });
-    if (!trip) throw new NotFoundException("Trip not found");
+    await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
 
     const mime = String(file.mimetype ?? "").toLowerCase();
     if (!mime.startsWith("image/") && type !== TripDocumentType.PICKUP_DO) {

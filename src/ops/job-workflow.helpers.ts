@@ -217,7 +217,7 @@ export function tripCreateManyForJob(
     jobTripTemplate: s.jobTripTemplate,
     title: s.title,
     plannedStartAt: s.plannedStartAt,
-    status: TripStatus.Planned,
+    status: TripStatus.Draft,
     completionRuleJson: completionRuleForTemplate(s.jobTripTemplate),
   }));
 }

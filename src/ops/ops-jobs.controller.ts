@@ -43,7 +43,7 @@ import {
   PatchJobTripDto,
   ReorderJobTripsDto,
 } from "./dto/job-trip.dto";
-import { JobTripResponseDto } from "./dto/job.dto";
+import { JobDto, JobTripResponseDto } from "./dto/job.dto";
 
 @ApiTags("ops-jobs")
 @Controller("jobs")
@@ -539,7 +539,7 @@ export class OpsJobsController {
   }
 
   @Post(":jobId/trips")
-  @ApiOperation({ summary: "Append a trip to an existing job" })
+  @ApiOperation({ summary: "Append a draft trip to an existing job" })
   async appendTrip(
     @Req() req: any,
     @Param("jobId") jobId: string,
@@ -585,6 +585,42 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.patchTrip(tenantId, jobId, tripId, dto, accessUser);
+  }
+
+  @Post(":jobId/trips/:tripId/publish")
+  @ApiOperation({
+    summary:
+      "Publish a draft trip for driver execution (requires assigned driver payout)",
+  })
+  @ApiOkResponse({ type: JobDto })
+  async publishTrip(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.publishTrip(tenantId, jobId, tripId, accessUser);
+  }
+
+  @Post(":jobId/send-to-invoice")
+  @ApiOperation({
+    summary:
+      "Mark a job invoice-ready after all trips are completed (ops-to-finance handoff)",
+  })
+  @ApiOkResponse({ type: JobDto })
+  async sendToInvoice(@Req() req: any, @Param("jobId") jobId: string) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.sendJobToInvoice(tenantId, jobId, accessUser);
   }
 
   @Post(":jobId/documents/pickup-do")

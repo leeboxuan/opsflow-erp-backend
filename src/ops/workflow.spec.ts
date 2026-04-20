@@ -37,6 +37,8 @@ describe("workflow helpers", () => {
         requiredUploadTypesExact: [TripDocumentType.PICKUP_DO],
       },
     });
+    expect(rows[0].status).toBe("Draft");
+    expect(rows[1].status).toBe("Draft");
   });
 
   it("tripCreateManyForJob creates two EXPORT legs", () => {
@@ -65,6 +67,8 @@ describe("workflow helpers", () => {
         requiredUploadTypesExact: [TripDocumentType.OFFLOADING],
       },
     });
+    expect(rows[0].status).toBe("Draft");
+    expect(rows[1].status).toBe("Draft");
   });
 
   it("tripCreateManyForJob creates one LCL leg with expected completion rule", () => {
@@ -83,6 +87,7 @@ describe("workflow helpers", () => {
         allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
       },
     });
+    expect(rows[0].status).toBe("Draft");
   });
 
   it("completionRuleForTemplate uses explicit per-template rule map", () => {

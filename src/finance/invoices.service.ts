@@ -456,6 +456,15 @@ export class InvoicesService {
       taxRate: number;
     }> = [];
 
+    const jobsNotInvoiceReady = jobs
+      .filter((j) => !j.invoiceReadyAt)
+      .map((j) => j.internalRef || j.id);
+    if (jobsNotInvoiceReady.length > 0) {
+      throw new BadRequestException(
+        `Selected jobs must be sent to invoice by ops first. Not ready: ${jobsNotInvoiceReady.join(", ")}`,
+      );
+    }
+
     const jobsWithoutCharges = jobs
       .filter((j) => !j.charges || j.charges.length === 0)
       .map((j) => j.internalRef || j.id);

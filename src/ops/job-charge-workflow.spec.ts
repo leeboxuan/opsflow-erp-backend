@@ -204,6 +204,7 @@ describe("job charge workflow hardening", () => {
               id: "j1",
               internalRef: "JOB-1",
               receiverName: "Receiver",
+              invoiceReadyAt: new Date("2026-04-20T00:00:00.000Z"),
               customerCompanyId: "comp1",
               customerCompany: { id: "comp1", name: "Customer A" },
               charges: [
@@ -221,6 +222,7 @@ describe("job charge workflow hardening", () => {
               id: "j2",
               internalRef: "JOB-2",
               receiverName: "Receiver",
+              invoiceReadyAt: new Date("2026-04-20T00:00:00.000Z"),
               customerCompanyId: "comp1",
               customerCompany: { id: "comp1", name: "Customer A" },
               charges: [
@@ -240,6 +242,7 @@ describe("job charge workflow hardening", () => {
               id: "j1",
               internalRef: "JOB-1",
               receiverName: "Receiver",
+              invoiceReadyAt: new Date("2026-04-20T00:00:00.000Z"),
               customerCompanyId: "comp1",
               customerCompany: { id: "comp1", name: "Customer A" },
               charges: [
@@ -257,6 +260,7 @@ describe("job charge workflow hardening", () => {
               id: "j2",
               internalRef: "JOB-2",
               receiverName: "Receiver",
+              invoiceReadyAt: new Date("2026-04-20T00:00:00.000Z"),
               customerCompanyId: "comp1",
               customerCompany: { id: "comp1", name: "Customer A" },
               charges: [],
@@ -299,6 +303,92 @@ describe("job charge workflow hardening", () => {
     ).rejects.toThrow(
       "Selected jobs must have saved JobCharge rows before invoicing. Missing charges for: JOB-2",
     );
+  });
+
+  it("publishTrip fails when draft trip has no payout assigned", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          status: "Draft",
+          driverEarningCents: null,
+        }),
+        update: jest.fn(),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    await expect(
+      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS }),
+    ).rejects.toThrow("Driver payout is required before publishing a trip");
+    expect(prisma.trip.update).not.toHaveBeenCalled();
+  });
+
+  it("publishTrip moves draft trip to Planned when payout exists", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          status: "Draft",
+          driverEarningCents: 7500,
+        }),
+        update: jest.fn().mockResolvedValue({ id: "trip1" }),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+
+    await svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS });
+
+    expect(prisma.trip.update).toHaveBeenCalledWith({
+      where: { id: "trip1" },
+      data: { status: "Planned" },
+    });
+  });
+
+  it("sendJobToInvoice validates trip completion gate", async () => {
+    const prisma: any = {
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          status: "Completed",
+          invoiceReadyAt: null,
+        }),
+        update: jest.fn(),
+      },
+      trip: {
+        findMany: jest
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ id: "t1", status: "InTransit" }])
+          .mockResolvedValueOnce([
+            { id: "t1", status: "Delivered" },
+            { id: "t2", status: "Closed" },
+          ]),
+      },
+      customerQuotationItem: { findMany: jest.fn() },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+
+    await expect(
+      svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
+    ).rejects.toThrow("Job must have at least one trip before sending to invoice");
+
+    await expect(
+      svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
+    ).rejects.toThrow("All trips must be completed before sending job to invoice");
+
+    await svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS });
+
+    expect(prisma.job.update).toHaveBeenCalled();
+    expect(prisma.customerQuotationItem.findMany).not.toHaveBeenCalled();
   });
 
   it("requires manual amount when quotation source row is marked requiresManualAmount", async () => {

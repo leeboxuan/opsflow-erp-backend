@@ -35,12 +35,15 @@ export class JobTripResponseDto {
   jobTripTemplate!: JobTripTemplate | null;
   title!: string | null;
   status!: string;
+  isPublished!: boolean;
+  isCompleted!: boolean;
   plannedStartAt!: Date | null;
   startedAt!: Date | null;
   closedAt!: Date | null;
   trailerNumber!: string | null;
   trailerLastLocationCode!: string | null;
   driverEarningCents!: number | null;
+  hasDriverPayout!: boolean;
   earningLabelSnapshot!: string | null;
   earningRateMasterId!: string | null;
   /** Populated on driver detail when trip documents are loaded */
@@ -77,6 +80,8 @@ export class JobDto {
   externalRef?: string | null;
   jobType: JobType;
   status: JobStatus;
+  invoiceReadyAt?: Date | null;
+  isInvoiceReady?: boolean;
   notes?: string | null;
 
   createdByUserId?: string | null;

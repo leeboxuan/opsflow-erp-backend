@@ -366,6 +366,7 @@ export class DriverMvpService {
       where: {
         tenantId,
         assignedDriverUserId: driverUserId,
+        status: { not: TripStatus.Draft },
         plannedStartAt: { gte: dayStart, lt: dayEnd },
       },
       orderBy: { plannedStartAt: "asc" },
