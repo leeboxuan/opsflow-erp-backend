@@ -291,6 +291,125 @@ export class OpsJobsService {
     }
   }
 
+  private assertCanAccessCustomerCompany(customerCompanyId: string, user: any) {
+    if (user?.role !== Role.CUSTOMER) return;
+    const scopedCustomerCompanyId = this.getCustomerCompanyIdOrThrow(user);
+    if (scopedCustomerCompanyId !== customerCompanyId) {
+      throw new ForbiddenException(
+        "Not allowed to access charge options for this customer company",
+      );
+    }
+  }
+
+  private async resolveQuotationChargeLinesForCustomer(
+    tenantId: string,
+    customerCompanyId: string,
+  ): Promise<{ quotationLines: any[]; masterRateLines: any[] }> {
+    const masterRateLines = await this.prisma.customerRateMasterLine.findMany({
+      where: {
+        tenantId,
+        customerCompanyId,
+        active: true,
+        isSelectableForJob: true,
+      },
+      orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+    });
+
+    const quotationLines = await (async () => {
+      const activeFile = await this.prisma.masterFile.findFirst({
+        where: {
+          tenantId,
+          type: MasterFileType.CUSTOMER_QUOTATION,
+          customerCompanyId,
+          isActive: true,
+        },
+        orderBy: { uploadedAt: "desc" },
+        select: { id: true },
+      });
+      if (activeFile) {
+        const rows = await this.prisma.customerQuotationItem.findMany({
+          where: { tenantId, masterFileId: activeFile.id, active: true },
+          orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+        });
+        return rows.map((r) => ({
+          ...r,
+          source: "MASTER_FILE_CUSTOMER_QUOTATION",
+        }));
+      }
+      if (masterRateLines.length > 0) {
+        return masterRateLines.map((r) => ({
+          id: r.id,
+          section: r.section,
+          code: r.code,
+          label: r.label,
+          description: r.description,
+          unit: r.unit,
+          rateCents: r.rateCents,
+          containerSize: r.containerSize,
+          tripMode: r.tripMode,
+          areaScope: r.areaScope,
+          sortOrder: r.sortOrder,
+          sourceType: r.sourceType,
+          category: r.category,
+          notes: r.notes,
+          requiresManualAmount: r.requiresManualAmount,
+          rawRateText: r.rawRateText,
+          source: "CUSTOMER_RATE_MASTER",
+        }));
+      }
+      return this.prisma.customerQuotationRateLine.findMany({
+        where: {
+          tenantId,
+          quotation: {
+            tenantId,
+            customerCompanyId,
+          },
+        },
+        orderBy: [
+          { quotation: { createdAt: "desc" } },
+          { sortOrder: "asc" },
+          { code: "asc" },
+          { id: "asc" },
+        ],
+        take: 300,
+      });
+    })();
+
+    return { quotationLines, masterRateLines };
+  }
+
+  private normalizeChargeOptionLine(line: any) {
+    const source =
+      typeof line?.source === "string" && line.source.trim().length > 0
+        ? line.source
+        : "LEGACY_CUSTOMER_QUOTATION_RATE_LINE";
+    const rateCents = Number.isInteger(line?.rateCents) ? line.rateCents : null;
+    return {
+      id: line.id,
+      section: line.section ?? null,
+      code: line.code,
+      label: line.label,
+      description: line.description ?? null,
+      unit: line.unit ?? null,
+      defaultQty: 1,
+      unitPriceCents: rateCents,
+      rateCents,
+      requiresManualAmount: !!line.requiresManualAmount,
+      source,
+      containerSize: line.containerSize ?? null,
+      category: line.category ?? null,
+      tripMode: line.tripMode ?? null,
+      notes: line.notes ?? line.rawRateText ?? null,
+      metadata: {
+        areaScope: line.areaScope ?? null,
+        rawRateText: line.rawRateText ?? null,
+        sourceType: line.sourceType ?? null,
+        sortOrder: line.sortOrder ?? null,
+        quotationId: line.quotationId ?? null,
+      },
+    };
+  }
+
   private async persistJobCharges(
     tenantId: string,
     jobId: string,
@@ -1719,6 +1838,38 @@ export class OpsJobsService {
     return this.getOne(tenantId, jobId, user);
   }
 
+  async getPreCreateChargeOptions(
+    tenantId: string,
+    customerCompanyId: string,
+    user: any,
+  ): Promise<{
+    customerCompanyId: string;
+    chargeOptions: any[];
+    fallbackOrder: string[];
+  }> {
+    const trimmedCustomerCompanyId = String(customerCompanyId ?? "").trim();
+    if (!trimmedCustomerCompanyId) {
+      throw new BadRequestException("customerCompanyId is required");
+    }
+    this.assertCanAccessCustomerCompany(trimmedCustomerCompanyId, user);
+
+    const { quotationLines } = await this.resolveQuotationChargeLinesForCustomer(
+      tenantId,
+      trimmedCustomerCompanyId,
+    );
+    return {
+      customerCompanyId: trimmedCustomerCompanyId,
+      chargeOptions: quotationLines.map((line) =>
+        this.normalizeChargeOptionLine(line),
+      ),
+      fallbackOrder: [
+        "MASTER_FILE_CUSTOMER_QUOTATION",
+        "CUSTOMER_RATE_MASTER",
+        "LEGACY_CUSTOMER_QUOTATION_RATE_LINE",
+      ],
+    };
+  }
+
   async getAvailableChargesForJob(
     tenantId: string,
     jobId: string,
@@ -1738,73 +1889,11 @@ export class OpsJobsService {
     if (!job) throw new NotFoundException("Job not found");
     this.assertCanAccessJob(job, user);
 
-    const masterRateLines = await this.prisma.customerRateMasterLine.findMany({
-      where: {
+    const { quotationLines, masterRateLines } =
+      await this.resolveQuotationChargeLinesForCustomer(
         tenantId,
-        customerCompanyId: job.customerCompanyId,
-        active: true,
-        isSelectableForJob: true,
-      },
-      orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
-    });
-
-    const quotationLines =
-      await (async () => {
-        const activeFile = await this.prisma.masterFile.findFirst({
-          where: {
-            tenantId,
-            type: MasterFileType.CUSTOMER_QUOTATION,
-            customerCompanyId: job.customerCompanyId,
-            isActive: true,
-          },
-          orderBy: { uploadedAt: "desc" },
-          select: { id: true },
-        });
-        if (activeFile) {
-          const rows = await this.prisma.customerQuotationItem.findMany({
-            where: { tenantId, masterFileId: activeFile.id, active: true },
-            orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
-          });
-          return rows.map((r) => ({ ...r, source: "MASTER_FILE_CUSTOMER_QUOTATION" }));
-        }
-        if (masterRateLines.length > 0) {
-          return masterRateLines.map((r) => ({
-            id: r.id,
-            section: r.section,
-            code: r.code,
-            label: r.label,
-            description: r.description,
-            unit: r.unit,
-            rateCents: r.rateCents,
-            containerSize: r.containerSize,
-            tripMode: r.tripMode,
-            areaScope: r.areaScope,
-            sortOrder: r.sortOrder,
-            sourceType: r.sourceType,
-            category: r.category,
-            notes: r.notes,
-            requiresManualAmount: r.requiresManualAmount,
-            rawRateText: r.rawRateText,
-            source: "CUSTOMER_RATE_MASTER",
-          }));
-        }
-        return this.prisma.customerQuotationRateLine.findMany({
-            where: {
-              tenantId,
-              quotation: {
-                tenantId,
-                customerCompanyId: job.customerCompanyId,
-              },
-            },
-            orderBy: [
-              { quotation: { createdAt: "desc" } },
-              { sortOrder: "asc" },
-              { code: "asc" },
-              { id: "asc" },
-            ],
-            take: 300,
-          });
-      })();
+        job.customerCompanyId,
+      );
 
     const dhcReferences = await (async () => {
       const activeFile = await this.prisma.masterFile.findFirst({

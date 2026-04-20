@@ -53,6 +53,46 @@ const USERS = {
   ],
 };
 
+const SG_PORTS = [
+  { id: "msp_ppap", code: "PPAP", name: "Pasir Panjang Terminal" },
+  { id: "msp_tuas", code: "TUAS", name: "Tuas Port" },
+  { id: "msp_brani", code: "BRANI", name: "Brani Terminal" },
+  { id: "msp_kt", code: "KEPPEL", name: "Keppel Terminal" },
+  { id: "msp_jurong", code: "JURONG", name: "Jurong Port" },
+  { id: "msp_sem", code: "SEMBAWANG", name: "Sembawang Wharves" },
+];
+
+const SG_DEPOTS = [
+  { id: "msd_gul7", code: "GUL7", name: "7 Gul Circle warehouse / yard" },
+  {
+    id: "msd_gul_default",
+    code: "GUL_DEFAULT",
+    name: "7 Gul Circle - default return",
+  },
+  {
+    id: "msd_tuas",
+    code: "TUAS_DEPOT",
+    name: "Tuas logistics depot (placeholder)",
+  },
+  {
+    id: "msd_pasir",
+    code: "PASIR_DEPOT",
+    name: "Pasir Panjang area depot (placeholder)",
+  },
+];
+
+async function seedSingaporeMasters() {
+  await prisma.masterSingaporePort.createMany({
+    data: SG_PORTS,
+    skipDuplicates: true,
+  });
+  await prisma.masterSingaporeDepot.createMany({
+    data: SG_DEPOTS,
+    skipDuplicates: true,
+  });
+  console.log("✅ Singapore ports/depots seeded");
+}
+
 function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
@@ -654,6 +694,7 @@ async function upsertWalletTxForOrder(params: {
 
 async function main() {
   console.log("🌱 Starting demo seed...\n");
+  await seedSingaporeMasters();
 
   // 1) Tenant
   const tenant = await prisma.tenant.upsert({

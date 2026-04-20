@@ -38,6 +38,7 @@ import { ImportConfirmRequestDto } from "./dto/import-job-row.dto";
 import { LclImportConfirmRequestDto } from "./dto/lcl-import.dto";
 import { JobBatchImportConfirmRequestDto } from "./dto/job-batch-import.dto";
 import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
+import { JobChargeOptionsQueryDto } from "./dto/job-charge-options-query.dto";
 import {
   AppendJobTripDto,
   PatchJobTripDto,
@@ -263,6 +264,28 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.lclImportConfirm(tenantId, dto, accessUser);
+  }
+
+  @Get("charge-options")
+  @ApiOperation({
+    summary:
+      "Pre-create customer charge options using quotation/master/legacy fallback",
+  })
+  async getChargeOptions(
+    @Req() req: any,
+    @Query() query: JobChargeOptionsQueryDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.getPreCreateChargeOptions(
+      tenantId,
+      query.customerCompanyId,
+      accessUser,
+    );
   }
 
   @Get(":jobId")
