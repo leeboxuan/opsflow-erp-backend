@@ -26,18 +26,27 @@ export type ParsedQuotationRateLineInput = {
   sourceType: string;
 };
 
-type ParsedQuotationNormalizedRow = {
-  annex: string | null;
-  sectionCode: string | null;
-  itemNo: string | null;
-  section: string | null;
+export type ParsedQuotationVariant = {
+  variantKey: string;
+  variantLabel: string;
+  rateCents: number | null;
+  rawValueText: string | null;
+  requiresManualAmount: boolean;
+  sortOrder: number;
+};
+
+export type ParsedQuotationParentItem = {
+  annex: string;
+  sectionCode: string;
+  lineNo: number;
   code: string;
   label: string;
-  description: string | null;
-  unit: string | null;
-  variants: Array<{ label: string; amountCents: number | null; currency: string }>;
+  groupTitle: string;
   notes: string | null;
-  requiresManualAmount: boolean;
+  sortOrder: number;
+  variants: ParsedQuotationVariant[];
+  unit?: string | null;
+  description?: string | null;
 };
 
 type AnnexContext = {
@@ -136,161 +145,228 @@ function isLikelyNotesLine(text: string): boolean {
   return /^(notes?|remarks?)\b/i.test(text.trim());
 }
 
-function extractAmountsWithLabels(
-  row: any[],
-  headerRow: string[],
-): Array<{ label: string; amountCents: number | null; currency: string }> {
-  const variants: Array<{ label: string; amountCents: number | null; currency: string }> = [];
-  for (let i = 0; i < row.length; i++) {
-    const cell = row[i];
-    if (cell == null || String(cell).trim() === "") continue;
-    const parsed = parseRateCell(cell);
-    if (parsed.rateCents == null || parsed.rateCents < 0) continue;
-    const rawLabel = String(headerRow[i] ?? "").trim();
-    const variantLabel = rawLabel || `VARIANT_${i + 1}`;
-    variants.push({ label: variantLabel, amountCents: parsed.rateCents, currency: "SGD" });
-  }
-  return variants;
+function toVariantKey(label: string): string {
+  const s = String(label ?? "").trim().toUpperCase();
+  if (/20/.test(s)) return "20FT";
+  if (/40/.test(s)) return "40FT";
+  if (/NORMAL/.test(s) && /TRAILER/.test(s)) return "NORMAL_TRAILER";
+  if (/LOW/.test(s) && /BED/.test(s)) return "LOW_BED";
+  if (/WITHIN/.test(s) && /JURONG/.test(s)) return "WITHIN_JURONG";
+  if (/OUT/.test(s) && /JURONG/.test(s)) return "OUT_OF_JURONG";
+  if (/DEFAULT/.test(s)) return "DEFAULT";
+  return s.replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "DEFAULT";
 }
 
-function parseAnnexLikeRowsFromSheet(rows: any[][]): ParsedQuotationNormalizedRow[] {
-  const out: ParsedQuotationNormalizedRow[] = [];
-  let context: AnnexContext = { annex: null, section: null };
-  let headerRow: string[] = [];
-  let inNotesBlock = false;
-  let autoLine = 1;
+function detectAnnex(text: string): { annex: string | null; sectionCode: string | null } {
+  const m = text.match(/\bANNEX\s*([A-C])\b/i);
+  if (!m) return { annex: null, sectionCode: null };
+  const sectionCode = m[1].toUpperCase();
+  return { annex: `ANNEX ${sectionCode}`, sectionCode };
+}
 
-  for (const row of rows) {
-    if (!Array.isArray(row)) continue;
-    const cells = row.map((c: any) => String(c ?? "").trim());
-    if (cells.every((c) => !c)) continue;
+function isGroupTitleRow(cells: string[]): boolean {
+  const nonEmpty = cells.filter(Boolean);
+  if (!nonEmpty.length) return false;
+  if (nonEmpty.length > 2) return false;
+  const joined = nonEmpty.join(" ").trim();
+  if (!joined) return false;
+  if (/^ANNEX\b/i.test(joined)) return false;
+  if (/^\d+/.test(joined)) return false;
+  return /RATES|CHARGES|TRUCKING|TRANSPORTATION|LCL/i.test(joined);
+}
 
-    for (const cell of cells) {
-      if (!cell) continue;
-      context = updateAnnexContext(cell, context);
-    }
+function isVariantHeaderRow(cells: string[]): boolean {
+  const joined = cells.filter(Boolean).join(" ").toLowerCase();
+  return (
+    /per\s*20/.test(joined) ||
+    /per\s*40/.test(joined) ||
+    /normal\s*trailer/.test(joined) ||
+    /low\s*bed/.test(joined)
+  );
+}
 
-    const joined = cells.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-    if (!joined) continue;
-    if (isLikelyNotesLine(joined)) {
-      inNotesBlock = true;
-      continue;
-    }
-    if (inNotesBlock) continue;
-
-    const lowered = cells.map((c) => c.toLowerCase());
-    const looksLikeHeader =
-      lowered.some((c) => /\b(item|code|description|rate|amount|20ft|40ft|unit)\b/.test(c)) &&
-      lowered.filter(Boolean).length >= 2;
-    if (looksLikeHeader) {
-      headerRow = cells;
-      continue;
-    }
-
-    const first = cells[0] ?? "";
-    const second = cells[1] ?? "";
-    const third = cells[2] ?? "";
-
-    const itemNo = /^[a-z]?\d+(?:\.\d+)*[a-z-]*$/i.test(first) ? first : null;
-    const code = itemNo ?? `LINE_${autoLine++}`;
-    const label = (second || first || code).trim();
+function parseCellBasedVariants(raw: string): ParsedQuotationVariant[] {
+  const out: ParsedQuotationVariant[] = [];
+  const regex = /(\$?\s*\d[\d,]*(?:\.\d{1,2})?)\s*\(([^)]+)\)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(raw))) {
+    const amount = parseMoneyToCents(match[1]);
+    const label = String(match[2] ?? "").trim();
     if (!label) continue;
-    const description = third || null;
-
-    const variants = extractAmountsWithLabels(row, headerRow);
-    const rawTexts = cells.filter(Boolean).join(" | ");
-    const backToBack = /\bback[-\s]?to[-\s]?back\b/i.test(rawTexts);
-    let requiresManualAmount = variants.length === 0 && backToBack;
-
-    if (variants.length === 0 && !requiresManualAmount) {
-      const inlineRate = parseRateCell(rawTexts);
-      if (inlineRate.rateCents != null && inlineRate.rateCents >= 0) {
-        variants.push({
-          label: "RATE",
-          amountCents: inlineRate.rateCents,
-          currency: "SGD",
-        });
-      } else if (inlineRate.requiresManualAmount) {
-        requiresManualAmount = true;
-      }
-    }
-
-    if (variants.length === 0 && !requiresManualAmount) continue;
-
     out.push({
-      annex: context.annex,
-      sectionCode: context.section,
-      itemNo,
-      section: sectionFromContext(context),
-      code,
-      label,
-      description,
-      unit: null,
-      variants,
-      notes: backToBack ? "Back-to-Back" : null,
-      requiresManualAmount,
+      variantKey: toVariantKey(label),
+      variantLabel: label,
+      rateCents: amount,
+      rawValueText: raw,
+      requiresManualAmount: amount == null,
+      sortOrder: out.length,
     });
+  }
+  return out;
+}
+
+export function parseQuotationMatrixFromXlsxBuffer(buffer: Buffer): ParsedQuotationParentItem[] {
+  let XLSX: any;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    XLSX = require("xlsx");
+  } catch {
+    return [];
+  }
+  const workbook = XLSX.read(buffer, { type: "buffer" });
+  const out: ParsedQuotationParentItem[] = [];
+  let sortOrder = 0;
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+    if (!rows.length) continue;
+
+    let annex = "";
+    let sectionCode = "";
+    let groupTitle = "";
+    let variantCols: Array<{ col: number; label: string }> = [];
+
+    for (const row of rows) {
+      if (!Array.isArray(row)) continue;
+      const cells = row.map((c: any) => String(c ?? "").trim());
+      if (cells.every((c) => !c)) continue;
+      const joined = cells.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+      if (!joined) continue;
+      if (isLikelyNotesLine(joined)) continue;
+
+      const annexHit = detectAnnex(joined);
+      if (annexHit.annex) {
+        annex = annexHit.annex;
+        sectionCode = annexHit.sectionCode ?? sectionCode;
+        groupTitle = "";
+        variantCols = [];
+        continue;
+      }
+      const sectionHit = joined.match(/\bSECTION\s*([A-Z])\b/i);
+      if (sectionHit) {
+        sectionCode = sectionHit[1].toUpperCase();
+        continue;
+      }
+
+      if (isGroupTitleRow(cells)) {
+        groupTitle = joined;
+        continue;
+      }
+
+      if (isVariantHeaderRow(cells)) {
+        variantCols = [];
+        cells.forEach((c, idx) => {
+          if (!c) return;
+          const key = toVariantKey(c);
+          if (["20FT", "40FT", "NORMAL_TRAILER", "LOW_BED"].includes(key)) {
+            variantCols.push({ col: idx, label: c });
+          }
+        });
+        continue;
+      }
+
+      const c0 = String(cells[0] ?? "").trim();
+      const numbered = c0.match(/^(\d+)$/);
+      const alphaNum = c0.match(/^([A-Z])(\d+)$/i);
+      if (!numbered && !alphaNum) continue;
+      const lineNo = Number(numbered?.[1] ?? alphaNum?.[2]);
+      const codeSection = ((alphaNum?.[1] ?? sectionCode) || "X").toUpperCase();
+      const code = alphaNum ? c0.toUpperCase() : `${codeSection}_${lineNo}`;
+      const label = alphaNum ? code : String(cells[1] ?? "").trim();
+      const description = alphaNum ? String(cells[1] ?? "").trim() || null : null;
+      if (!label) continue;
+
+      const variants: ParsedQuotationVariant[] = [];
+      if (variantCols.length > 0) {
+        for (const v of variantCols) {
+          const raw = String(cells[v.col] ?? "").trim();
+          if (!raw) continue;
+          const cents = parseMoneyToCents(raw);
+          variants.push({
+            variantKey: toVariantKey(v.label),
+            variantLabel: v.label,
+            rateCents: cents,
+            rawValueText: cents == null ? raw : null,
+            requiresManualAmount: cents == null,
+            sortOrder: variants.length,
+          });
+        }
+      }
+
+      const trailingStart = alphaNum ? 3 : 2;
+      const trailingText = cells.slice(trailingStart).filter(Boolean).join(" ").trim();
+      if (variants.length === 0 && trailingText) {
+        const cellBased = parseCellBasedVariants(trailingText);
+        if (cellBased.length > 0) {
+          cellBased.forEach((v) => variants.push({ ...v, sortOrder: variants.length }));
+        } else {
+          const cents = parseMoneyToCents(trailingText);
+          const onlyMoney = /^[$\s\d,.\-]+$/.test(trailingText);
+          variants.push({
+            variantKey: "DEFAULT",
+            variantLabel: "Default",
+            rateCents: onlyMoney ? cents : null,
+            rawValueText: onlyMoney ? null : trailingText,
+            requiresManualAmount: !onlyMoney || cents == null,
+            sortOrder: 0,
+          });
+        }
+      }
+
+      if (!variants.length) continue;
+      out.push({
+        annex: annex || "ANNEX UNKNOWN",
+        sectionCode: codeSection,
+        lineNo,
+        code,
+        label,
+        groupTitle: groupTitle || "UNSPECIFIED",
+        notes: null,
+        sortOrder: sortOrder++,
+        variants,
+        unit: String(cells[2] ?? "").trim() || null,
+        description,
+      });
+    }
   }
 
   return out;
 }
 
-function normalizedRowsToParsedLines(
-  rows: ParsedQuotationNormalizedRow[],
-): ParsedQuotationRateLineInput[] {
+function matrixRowsToParsedLines(rows: ParsedQuotationParentItem[]): ParsedQuotationRateLineInput[] {
   const out: ParsedQuotationRateLineInput[] = [];
   let sortOrder = 0;
   for (const row of rows) {
-    if (row.variants.length > 0) {
-      for (const variant of row.variants) {
-        const variantLabel = String(variant.label ?? "").trim();
-        out.push({
-          annex: row.annex,
-          sectionCode: row.sectionCode,
-          itemNo: row.itemNo,
-          section: row.section,
-          code:
-            variantLabel && variantLabel !== "RATE"
-              ? `${row.code}_${variantLabel.replace(/[^a-z0-9]+/gi, "_").toUpperCase()}`
-              : row.code,
-          label:
-            variantLabel && variantLabel !== "RATE"
-              ? `${row.label} (${variantLabel})`
-              : row.label,
-          description: row.description,
-          unit: row.unit,
-          rateCents: variant.amountCents,
-          requiresManualAmount: row.requiresManualAmount,
-          rawRateText: null,
-          containerSize: variantLabel || null,
-          notes: row.notes,
-          sortOrder: sortOrder++,
-          sourceType: "PARSER_ANNEX_MULTI",
-          isSelectableForJob: true,
-          isSelectableForTripEarning: false,
-        });
-      }
-      continue;
+    for (const variant of row.variants) {
+      out.push({
+        annex: row.annex,
+        sectionCode: row.sectionCode,
+        itemNo: String(row.lineNo),
+        section: `${row.annex} ${row.sectionCode}`,
+        code:
+          row.variants.length === 1 && variant.variantKey === "DEFAULT"
+            ? row.code
+            : `${row.code}_${variant.variantKey}`,
+        label:
+          row.variants.length === 1 && variant.variantKey === "DEFAULT"
+            ? row.label
+            : `${row.label} (${variant.variantLabel})`,
+        description: row.description ?? row.groupTitle,
+        category: row.groupTitle,
+        unit: row.unit ?? null,
+        rateCents: variant.rateCents,
+        requiresManualAmount: variant.requiresManualAmount,
+        rawRateText: variant.rawValueText,
+        containerSize: variant.variantKey,
+        notes: row.notes ?? variant.rawValueText,
+        sortOrder: sortOrder++,
+        sourceType: "PARSER_ANNEX_MATRIX",
+        isSelectableForJob: true,
+        isSelectableForTripEarning: false,
+      });
     }
-
-    out.push({
-      annex: row.annex,
-      sectionCode: row.sectionCode,
-      itemNo: row.itemNo,
-      section: row.section,
-      code: row.code,
-      label: row.label,
-      description: row.description,
-      unit: row.unit,
-      rateCents: null,
-      requiresManualAmount: true,
-      rawRateText: row.notes,
-      notes: row.notes,
-      sortOrder: sortOrder++,
-      sourceType: "PARSER_ANNEX_MULTI",
-      isSelectableForJob: true,
-      isSelectableForTripEarning: false,
-    });
   }
   return out;
 }
@@ -503,12 +579,13 @@ export function parseQuotationRateLinesFromXlsxBuffer(
       continue;
     }
 
-    const normalized = parseAnnexLikeRowsFromSheet(rows);
-    const parsed = normalizedRowsToParsedLines(normalized);
+    const matrix = parseQuotationMatrixFromXlsxBuffer(buffer);
+    const parsed = matrixRowsToParsedLines(matrix);
     for (const line of parsed) {
       line.sortOrder = out.length;
       out.push(line);
     }
+    break;
   }
 
   return out;
