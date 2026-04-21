@@ -20,7 +20,9 @@ import {
 } from "./quotation-parse.helpers";
 import {
   CreateCustomerCompanyUserDto,
+  CustomerCompanyDocumentDto,
   ListCompaniesQueryDto,
+  ListCustomerCompanyDocumentsQueryDto,
   ListContactsQueryDto,
   CreateCustomerCompanyDto,
   UpdateCustomerCompanyDto,
@@ -41,6 +43,7 @@ const QUOTATION_MIMES = [
 ];
 
 const QUOTATION_EXT = /\.(xlsx|xls|docx)$/i;
+const CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS = 60 * 60;
 
 @Injectable()
 export class CustomersService {
@@ -651,6 +654,223 @@ export class CustomersService {
     return {
       userId: updated.userId,
       status: updated.status,
+    };
+  }
+
+  private async assertCustomerCompanyExists(tenantId: string, companyId: string) {
+    const company = await this.prisma.customer_companies.findFirst({
+      where: { id: companyId, tenantId },
+      select: { id: true },
+    });
+    if (!company) throw new NotFoundException("Customer company not found");
+  }
+
+  private async attachCustomerDocumentSignedUrl(row: {
+    id: string;
+    customerCompanyId: string;
+    type: string;
+    fileName: string;
+    fileUrl: string;
+    mimeType: string;
+    fileSizeBytes: number | null;
+    uploadedByUserId: string | null;
+    uploadedAt: Date;
+    status: string;
+    uploadedBy?: { name: string | null } | null;
+  }): Promise<CustomerCompanyDocumentDto> {
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase.storage
+      .from(COMPANY_DOCS_BUCKET)
+      .createSignedUrl(row.fileUrl, CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS);
+
+    return {
+      id: row.id,
+      customerCompanyId: row.customerCompanyId,
+      type: "CUSTOMER_DOCUMENT",
+      fileName: row.fileName,
+      fileUrl: error ? null : (data?.signedUrl ?? null),
+      mimeType: row.mimeType,
+      fileSizeBytes: row.fileSizeBytes ?? null,
+      uploadedByUserId: row.uploadedByUserId ?? null,
+      uploadedByName: row.uploadedBy?.name ?? null,
+      uploadedAt: row.uploadedAt,
+      status: row.status as "ACTIVE" | "DELETED",
+    };
+  }
+
+  async listCustomerCompanyDocuments(
+    tenantId: string,
+    customerCompanyId: string,
+    query: ListCustomerCompanyDocumentsQueryDto,
+  ): Promise<{
+    data: CustomerCompanyDocumentDto[];
+    meta: { page: number; pageSize: number; total: number };
+  }> {
+    await this.assertCustomerCompanyExists(tenantId, customerCompanyId);
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
+
+    const where: any = {
+      tenantId,
+      customerCompanyId,
+      type: "CUSTOMER_DOCUMENT",
+      status: "ACTIVE",
+    };
+    applyQSearch(where, query.q, ["fileName"]);
+
+    const orderBy = buildOrderBy(
+      query.sortBy,
+      query.sortDir,
+      ["uploadedAt", "createdAt", "fileName"],
+      { uploadedAt: "desc" },
+    );
+
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.customerCompanyDocument.findMany({
+        where,
+        orderBy,
+        skip,
+        take,
+        include: { uploadedBy: { select: { name: true } } },
+      }),
+      this.prisma.customerCompanyDocument.count({ where }),
+    ]);
+
+    return {
+      data: await Promise.all(rows.map((r) => this.attachCustomerDocumentSignedUrl(r))),
+      meta: buildPaginationMeta(page, pageSize, total),
+    };
+  }
+
+  async uploadCustomerCompanyDocument(
+    tenantId: string,
+    customerCompanyId: string,
+    file: Express.Multer.File,
+    actorUserId: string | null,
+  ): Promise<CustomerCompanyDocumentDto> {
+    await this.assertCustomerCompanyExists(tenantId, customerCompanyId);
+
+    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? "";
+    const key = `${tenantId}/companies/${customerCompanyId}/documents/${Date.now()}${ext}`;
+
+    const supabase = this.supabaseService.getClient();
+    const { error } = await supabase.storage.from(COMPANY_DOCS_BUCKET).upload(key, file.buffer, {
+      contentType: file.mimetype ?? "application/octet-stream",
+      upsert: false,
+    });
+    if (error) {
+      throw new BadRequestException(`Storage upload failed: ${error.message}`);
+    }
+
+    const created = await this.prisma.customerCompanyDocument.create({
+      data: {
+        tenantId,
+        customerCompanyId,
+        type: "CUSTOMER_DOCUMENT",
+        fileName: file.originalname ?? "document",
+        fileUrl: key,
+        storageKey: key,
+        mimeType: file.mimetype ?? "application/octet-stream",
+        fileSizeBytes: file.size ?? null,
+        uploadedByUserId: actorUserId ?? null,
+        status: "ACTIVE",
+      },
+      include: { uploadedBy: { select: { name: true } } },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "CUSTOMER_COMPANY_DOCUMENT_UPLOAD",
+      "CUSTOMER_COMPANY",
+      customerCompanyId,
+      { documentId: created.id, fileName: created.fileName, storageKey: created.storageKey },
+      actorUserId,
+    );
+
+    return this.attachCustomerDocumentSignedUrl(created);
+  }
+
+  async getCustomerCompanyDocument(
+    tenantId: string,
+    customerCompanyId: string,
+    documentId: string,
+  ): Promise<CustomerCompanyDocumentDto> {
+    const row = await this.prisma.customerCompanyDocument.findFirst({
+      where: {
+        id: documentId,
+        tenantId,
+        customerCompanyId,
+        type: "CUSTOMER_DOCUMENT",
+        status: "ACTIVE",
+      },
+      include: { uploadedBy: { select: { name: true } } },
+    });
+    if (!row) throw new NotFoundException("Customer company document not found");
+    return this.attachCustomerDocumentSignedUrl(row);
+  }
+
+  async deleteCustomerCompanyDocument(
+    tenantId: string,
+    customerCompanyId: string,
+    documentId: string,
+    actorUserId: string | null,
+  ): Promise<{ ok: true }> {
+    const row = await this.prisma.customerCompanyDocument.findFirst({
+      where: {
+        id: documentId,
+        tenantId,
+        customerCompanyId,
+        type: "CUSTOMER_DOCUMENT",
+        status: "ACTIVE",
+      },
+      select: { id: true, storageKey: true },
+    });
+    if (!row) throw new NotFoundException("Customer company document not found");
+
+    const supabase = this.supabaseService.getClient();
+    await supabase.storage.from(COMPANY_DOCS_BUCKET).remove([row.storageKey]);
+
+    await this.prisma.customerCompanyDocument.update({
+      where: { id: row.id },
+      data: { status: "DELETED" },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "CUSTOMER_COMPANY_DOCUMENT_DELETE",
+      "CUSTOMER_COMPANY",
+      customerCompanyId,
+      { documentId: row.id, storageKey: row.storageKey },
+      actorUserId,
+    );
+
+    return { ok: true };
+  }
+
+  async getCustomerCompanyDocumentDownloadUrl(
+    tenantId: string,
+    customerCompanyId: string,
+    documentId: string,
+  ): Promise<{ url: string | null; expiresInSeconds: number }> {
+    const row = await this.prisma.customerCompanyDocument.findFirst({
+      where: {
+        id: documentId,
+        tenantId,
+        customerCompanyId,
+        type: "CUSTOMER_DOCUMENT",
+        status: "ACTIVE",
+      },
+      select: { fileUrl: true },
+    });
+    if (!row) throw new NotFoundException("Customer company document not found");
+
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase.storage
+      .from(COMPANY_DOCS_BUCKET)
+      .createSignedUrl(row.fileUrl, CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS);
+
+    return {
+      url: error ? null : (data?.signedUrl ?? null),
+      expiresInSeconds: CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS,
     };
   }
 

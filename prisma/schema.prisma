@@ -43,6 +43,7 @@ model Tenant {
   auditLogs                    AuditLog[]
   JobItem                      JobItem[]
   customerCompanyQuotations    CustomerCompanyQuotation[]
+  customerCompanyDocuments     CustomerCompanyDocument[]
   customerQuotationRateLines   CustomerQuotationRateLine[]
   customerRateMasterLines      CustomerRateMasterLine[]
   masterFiles                  MasterFile[]
@@ -83,6 +84,7 @@ model User {
   fleetVehiclesAssigned FleetVehicle[] @relation("FleetVehicleDriver")
   jobsCreated      Job[]               @relation("JobCreatedBy")
   quotationsUploaded CustomerCompanyQuotation[] @relation("QuotationUploadedBy")
+  customerCompanyDocumentsUploaded CustomerCompanyDocument[] @relation("CustomerCompanyDocumentUploadedBy")
   jobChargesSelected JobCharge[]       @relation("JobChargeSelectedBy")
   masterFilesUploaded MasterFile[]      @relation("MasterFileUploadedBy")
 
@@ -138,6 +140,7 @@ model customer_companies {
   transportOrders TransportOrder[]    @relation("TransportOrderCustomerCompany")
   jobs            Job[]               @relation("JobCustomerCompany")
   quotations      CustomerCompanyQuotation[]
+  documents       CustomerCompanyDocument[]
   rateMasterLines CustomerRateMasterLine[]
   masterFiles     MasterFile[]
 
@@ -772,6 +775,31 @@ model CustomerCompanyQuotation {
   @@map("customer_company_quotations")
 }
 
+model CustomerCompanyDocument {
+  id                String                        @id @default(cuid())
+  tenantId          String
+  customerCompanyId String
+  type              CustomerCompanyDocumentType   @default(CUSTOMER_DOCUMENT)
+  fileName          String
+  storageKey        String
+  fileUrl           String
+  mimeType          String
+  fileSizeBytes     Int?
+  uploadedByUserId  String?
+  uploadedAt        DateTime                      @default(now())
+  status            CustomerCompanyDocumentStatus @default(ACTIVE)
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
+
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerCompany customer_companies @relation(fields: [customerCompanyId], references: [id], onDelete: Cascade)
+  uploadedBy      User?              @relation("CustomerCompanyDocumentUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, customerCompanyId, status, uploadedAt])
+  @@index([tenantId, customerCompanyId, type])
+  @@map("customer_company_documents")
+}
+
 model CustomerQuotationRateLine {
   id           String   @id @default(cuid())
   tenantId     String
@@ -1116,6 +1144,15 @@ enum JobTripTemplate {
 enum QuotationVersionStatus {
   ACTIVE
   SUPERSEDED
+}
+
+enum CustomerCompanyDocumentType {
+  CUSTOMER_DOCUMENT
+}
+
+enum CustomerCompanyDocumentStatus {
+  ACTIVE
+  DELETED
 }
 
 enum MasterFileType {

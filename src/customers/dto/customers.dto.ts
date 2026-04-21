@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  IsIn,
   IsOptional,
   IsString,
   IsEmail,
@@ -21,6 +22,60 @@ export class ListContactsQueryDto extends ListQueryBaseDto {
   @IsOptional()
   @IsString()
   search?: string;
+}
+
+const CUSTOMER_COMPANY_DOCUMENT_SORT_FIELDS = [
+  "uploadedAt",
+  "createdAt",
+  "fileName",
+] as const;
+
+export class ListCustomerCompanyDocumentsQueryDto extends ListQueryBaseDto {
+  @ApiPropertyOptional({
+    description: "Sort field",
+    enum: CUSTOMER_COMPANY_DOCUMENT_SORT_FIELDS,
+  })
+  @IsOptional()
+  @IsIn(CUSTOMER_COMPANY_DOCUMENT_SORT_FIELDS)
+  sortBy?: (typeof CUSTOMER_COMPANY_DOCUMENT_SORT_FIELDS)[number];
+}
+
+export class CustomerCompanyDocumentDto {
+  @ApiProperty()
+  id: string;
+
+  @ApiProperty()
+  customerCompanyId: string;
+
+  @ApiProperty({ enum: ["CUSTOMER_DOCUMENT"] })
+  type: "CUSTOMER_DOCUMENT";
+
+  @ApiProperty()
+  fileName: string;
+
+  @ApiPropertyOptional({
+    description: "Signed URL for client download/view",
+    nullable: true,
+  })
+  fileUrl?: string | null;
+
+  @ApiProperty()
+  mimeType: string;
+
+  @ApiPropertyOptional({ nullable: true })
+  fileSizeBytes?: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  uploadedByUserId?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  uploadedByName?: string | null;
+
+  @ApiProperty()
+  uploadedAt: Date;
+
+  @ApiProperty({ enum: ["ACTIVE", "DELETED"] })
+  status: "ACTIVE" | "DELETED";
 }
 
 export class CustomerCompanyDto {
