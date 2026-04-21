@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
 import {
@@ -20,6 +20,7 @@ import {
 
 @Injectable()
 export class MasterDataService {
+  private readonly logger = new Logger(MasterDataService.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
@@ -906,14 +907,20 @@ export class MasterDataService {
   }
 
   private async listDatasetRows(tenantId: string, type: MasterRateDatasetType) {
-    const dataset = await this.prisma.masterRateDataset.findFirst({
-      where: { tenantId, type, status: MasterRateDatasetStatus.ACTIVE },
-      orderBy: { versionNo: "desc" },
-      select: { id: true },
-    });
+    const dataset =
+      (await this.prisma.masterRateDataset.findFirst({
+        where: { tenantId, type, status: MasterRateDatasetStatus.ACTIVE },
+        orderBy: { versionNo: "desc" },
+        select: { id: true },
+      })) ??
+      (await this.prisma.masterRateDataset.findFirst({
+        where: { tenantId, type },
+        orderBy: { versionNo: "desc" },
+        select: { id: true },
+      }));
     if (!dataset) return [];
     return this.prisma.masterRateDatasetRow.findMany({
-      where: { tenantId, datasetId: dataset.id, isActive: true },
+      where: { tenantId, datasetId: dataset.id },
       orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
     });
   }
@@ -1261,7 +1268,70 @@ export class MasterDataService {
       return { createdCount: 0, updatedCount: 0, skippedCount: 0, errors: [], items: [] };
     }
 
-    const header = rows[0].map((c: any) => String(c).trim().toLowerCase());
+    const parsedRows: any[] = [];
+    let headerRowIndex = rows.findIndex((r: any[]) => {
+      const normalized = (r ?? []).map((c: any) => String(c).trim().toLowerCase());
+      return (
+        normalized.includes("code") &&
+        normalized.includes("label") &&
+        (normalized.includes("amountcents") ||
+          normalized.includes("amount") ||
+          normalized.includes("rate"))
+      );
+    });
+
+    // Fallback parser for sectioned template:
+    // [A, DESCRIPTION..., UOM, Rates]
+    // [1, "Normal full trip", "Per Trip", 18]
+    if (headerRowIndex < 0) {
+      let currentSection = "";
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (!Array.isArray(row) || row.every((c) => String(c ?? "").trim() === "")) continue;
+        const c0 = String(row[0] ?? "").trim();
+        const c1 = String(row[1] ?? "").trim();
+        const c2 = String(row[2] ?? "").trim();
+        const c3 = row[3];
+
+        if (/^[A-Z]$/.test(c0) && /description/i.test(c1)) {
+          currentSection = c0;
+          continue;
+        }
+
+        const itemNo = String(row[0] ?? "").trim();
+        const looksLikeItemNo = /^\d+$/.test(itemNo);
+        if (!looksLikeItemNo) continue;
+        const label = c1;
+        if (!label) continue;
+        const parsedRate = this.parseTruckingRateOptions(c3);
+        parsedRows.push({
+          code: currentSection ? `${currentSection}-${itemNo}` : itemNo,
+          label,
+          section: currentSection || null,
+          unit: c2 || null,
+          amountCents: parsedRate.amountCents,
+          currency: "SGD",
+          isActive: true,
+          rawRateText: parsedRate.rawRateText,
+          requiresManualAmount: parsedRate.requiresManualAmount,
+          hasMultipleRates: parsedRate.hasMultipleRates,
+          rateOptionsJson: parsedRate.rateOptionsJson,
+          defaultRateOptionIndex: parsedRate.defaultRateOptionIndex,
+          notes: null,
+          metadataJson: null,
+          sortOrder: parsedRows.length,
+        });
+      }
+      if (!parsedRows.length) {
+        throw new BadRequestException(
+          "Excel must contain either standard headers (code/label/amount) or sectioned trucking template rows.",
+        );
+      }
+    }
+
+    const header = headerRowIndex >= 0
+      ? rows[headerRowIndex].map((c: any) => String(c).trim().toLowerCase())
+      : [];
     const idxCode = header.findIndex((h: string) => h === "code");
     const idxLabel = header.findIndex((h: string) => h === "label");
     const idxAmountCents = header.findIndex((h: string) => h === "amountcents");
@@ -1270,23 +1340,11 @@ export class MasterDataService {
     const idxCurrency = header.findIndex((h: string) => h === "currency");
     const idxActive = header.findIndex((h: string) => h === "active");
 
-    if (
-      idxCode < 0 ||
-      idxLabel < 0 ||
-      (idxAmountCents < 0 && idxAmount < 0 && idxRate < 0)
-    ) {
-      throw new BadRequestException(
-        "Excel must contain headers: code, label, and amount/rate column.",
-      );
-    }
-
     let createdCount = 0;
     let updatedCount = 0;
     let skippedCount = 0;
     const errors: Array<{ rowNumber: number; reason: string }> = [];
-    const parsedRows: any[] = [];
-
-    for (let i = 1; i < rows.length; i++) {
+    for (let i = headerRowIndex + 1; i < rows.length && headerRowIndex >= 0; i++) {
       const row = rows[i];
       const rowNumber = i + 1;
       if (!Array.isArray(row) || row.every((c) => String(c ?? "").trim() === "")) {
@@ -1436,12 +1494,15 @@ export class MasterDataService {
       isActive: r.active !== false,
       sortOrder: Number.isInteger(r.sortOrder) ? r.sortOrder : i,
     }));
-    await this.createDatasetVersionWithRows(
+    const dataset = await this.createDatasetVersionWithRows(
       tenantId,
       MasterRateDatasetType.TRUCKING_RATES,
       rows,
       actorUserId,
       file.originalname ?? null,
+    );
+    this.logger.log(
+      `Imported trucking dataset tenant=${tenantId} dataset=${dataset.id} insertedRows=${rows.length}`,
     );
     return {
       ...result,
