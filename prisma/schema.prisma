@@ -48,6 +48,9 @@ model Tenant {
   customerRateMasterLines      CustomerRateMasterLine[]
   masterFiles                  MasterFile[]
   customerQuotationItems       CustomerQuotationItem[]
+  tenantQuotationItems         TenantQuotationItem[]
+  masterRateDatasets           MasterRateDataset[]
+  masterRateDatasetRows        MasterRateDatasetRow[]
   driverPayoutItems            DriverPayoutItem[]
   dhcReferenceItems            DhcReferenceItem[]
   jobCharges                   JobCharge[]
@@ -348,6 +351,97 @@ model CustomerQuotationItem {
   @@index([tenantId, masterFileId])
   @@index([tenantId, active, code])
   @@map("customer_quotation_items")
+}
+
+model TenantQuotationItem {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  section              String?
+  code                 String
+  label                String
+  description          String?
+  category             String?
+  containerSize        String?
+  tripMode             String?
+  areaScope            String?
+  unit                 String?
+  rateCents            Int?
+  requiresManualAmount Boolean  @default(false)
+  rawRateText          String?
+  notes                String?
+  sortOrder            Int      @default(0)
+  active               Boolean  @default(true)
+  sourceType           String   @default("EXCEL_IMPORT")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, active, sortOrder])
+  @@index([tenantId, code])
+  @@map("tenant_quotation_items")
+}
+
+model MasterRateDataset {
+  id               String                @id @default(cuid())
+  tenantId         String
+  type             MasterRateDatasetType
+  versionNo        Int
+  status           MasterRateDatasetStatus @default(DRAFT)
+  createdAt        DateTime              @default(now())
+  createdByUserId  String?
+  updatedAt        DateTime              @updatedAt
+  updatedByUserId  String?
+  importedAt       DateTime?
+  importedByUserId String?
+  sourceFileName   String?
+  activatedAt      DateTime?
+  activatedByUserId String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rows   MasterRateDatasetRow[]
+
+  @@index([tenantId, type, status])
+  @@unique([tenantId, type, versionNo])
+  @@map("master_rate_datasets")
+}
+
+model MasterRateDatasetRow {
+  id                     String   @id @default(cuid())
+  datasetId              String
+  tenantId               String
+  code                   String
+  label                  String
+  section                String?
+  description            String?
+  category               String?
+  unit                   String?
+  containerSize          String?
+  tripMode               String?
+  areaScope              String?
+  currency               String   @default("SGD")
+  rateCents              Int?
+  rawRateText            String?
+  requiresManualAmount   Boolean  @default(false)
+  hasMultipleRates       Boolean  @default(false)
+  rateOptionsJson        Json?
+  defaultRateOptionIndex Int?
+  notes                  String?
+  sortOrder              Int?
+  isActive               Boolean  @default(true)
+  metadataJson           Json?
+  createdAt              DateTime @default(now())
+  createdByUserId        String?
+  updatedAt              DateTime @updatedAt
+  updatedByUserId        String?
+
+  dataset MasterRateDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  tenant  Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, datasetId])
+  @@index([tenantId, code])
+  @@index([tenantId, isActive, sortOrder])
+  @@map("master_rate_dataset_rows")
 }
 
 model DriverPayoutItem {
@@ -907,6 +1001,11 @@ model DepotHandlingReference {
   amountCents  Int?
   currency     String   @default("SGD")
   active       Boolean  @default(true)
+  rawRateText  String?
+  requiresManualAmount Boolean @default(false)
+  hasMultipleRates Boolean @default(false)
+  rateOptionsJson Json?
+  defaultRateOptionIndex Int?
   metadataJson Json?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -924,9 +1023,14 @@ model DriverTripRateMaster {
   tenantId     String
   code         String
   label        String
-  amountCents  Int
+  amountCents  Int?
   currency     String   @default("SGD")
   active       Boolean  @default(true)
+  rawRateText  String?
+  requiresManualAmount Boolean @default(false)
+  hasMultipleRates Boolean @default(false)
+  rateOptionsJson Json?
+  defaultRateOptionIndex Int?
   metadataJson Json?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -1166,6 +1270,17 @@ enum MasterFileStatus {
   PARSED
   PARSE_FAILED
   SUPERSEDED
+}
+
+enum MasterRateDatasetType {
+  QUOTATION
+  TRUCKING_RATES
+  DHC_RATES
+}
+
+enum MasterRateDatasetStatus {
+  DRAFT
+  ACTIVE
 }
 
 enum JobChargeSourceType {

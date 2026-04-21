@@ -155,23 +155,21 @@ describe("job charge workflow hardening", () => {
     expect(jobChargeCreateMany).not.toHaveBeenCalled();
   });
 
-  it("driver trip rate options for ops use tenant payout master file rows when active", async () => {
+  it("driver trip rate options for ops come from trucking dataset rows", async () => {
     const prisma: any = {
-      masterFile: {
-        findFirst: jest.fn().mockResolvedValue({ id: "mf-driver" }),
-      },
-      driverPayoutItem: {
+      driverTripRateMaster: {
         findMany: jest.fn().mockResolvedValue([
           {
-            id: "dp1",
+            id: "tm1",
             code: "TRIP-A",
             label: "Trip A",
-            rateCents: 8000,
+            amountCents: 8000,
+            currency: "SGD",
+            active: true,
+            hasMultipleRates: false,
+            requiresManualAmount: false,
           },
         ]),
-      },
-      driverTripRateMaster: {
-        findMany: jest.fn().mockResolvedValue([]),
       },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
@@ -182,19 +180,20 @@ describe("job charge workflow hardening", () => {
 
     expect(rows).toEqual([
       {
-        id: "dp1",
+        id: "tm1",
         code: "TRIP-A",
         label: "Trip A",
         amountCents: 8000,
         currency: "SGD",
         active: true,
-        sourceType: "MASTER_FILE_DRIVER_PAYOUT",
+        hasMultipleRates: false,
+        requiresManualAmount: false,
       },
     ]);
-    expect(prisma.driverTripRateMaster.findMany).not.toHaveBeenCalled();
+    expect(prisma.driverTripRateMaster.findMany).toHaveBeenCalled();
   });
 
-  it("billing charge options resolve quotation rows from active tenant QUOTATION master", async () => {
+  it("billing charge options resolve quotation rows from tenant quotation dataset", async () => {
     const prisma: any = {
       job: {
         findFirst: jest.fn().mockResolvedValue({
@@ -205,16 +204,13 @@ describe("job charge workflow hardening", () => {
           charges: [],
         }),
       },
-      masterFile: {
-        findFirst: jest
-          .fn()
-          .mockResolvedValueOnce({ id: "mf-q" })
-          .mockResolvedValueOnce(null),
-      },
-      customerQuotationItem: {
+      tenantQuotationItem: {
         findMany: jest.fn().mockResolvedValue([
           { id: "qi1", code: "Q-1", label: "Haulage", active: true, sortOrder: 0 },
         ]),
+      },
+      masterFile: {
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       dhcReferenceItem: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -232,27 +228,61 @@ describe("job charge workflow hardening", () => {
       role: Role.OPS,
     });
 
-    expect(prisma.masterFile.findFirst).toHaveBeenCalledWith({
-      where: {
-        tenantId: "t1",
-        type: "QUOTATION",
-        customerCompanyId: null,
-        isActive: true,
-      },
-      orderBy: { uploadedAt: "desc" },
-      select: { id: true },
-    });
-    expect(prisma.customerQuotationItem.findMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", masterFileId: "mf-q", active: true },
+    expect(prisma.tenantQuotationItem.findMany).toHaveBeenCalledWith({
+      where: { tenantId: "t1", active: true },
       orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
     });
     expect(result.quotationLines).toEqual([
       expect.objectContaining({
         id: "qi1",
         code: "Q-1",
-        source: "MASTER_FILE_QUOTATION",
+        source: "TENANT_QUOTATION_DATASET",
       }),
     ]);
+  });
+
+  it("billing charge options resolve DHC refs from tenant DHC dataset with fixed/multiple/manual states", async () => {
+    const prisma: any = {
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "comp1",
+          status: "Draft",
+          charges: [],
+        }),
+      },
+      tenantQuotationItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      depotHandlingReference: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "d-fixed", code: "D1", label: "Fixed", amountCents: 8000, hasMultipleRates: false, requiresManualAmount: false },
+          { id: "d-multi", code: "D2", label: "Multi", amountCents: null, hasMultipleRates: true, rateOptionsJson: [{ label: "Old", amountCents: 7000 }, { label: "New", amountCents: 9000 }], requiresManualAmount: false },
+          { id: "d-manual", code: "D3", label: "Manual", amountCents: null, hasMultipleRates: false, requiresManualAmount: true },
+        ]),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    const result = await svc.getBillingChargeOptionsForJob("t1", "job1", {
+      userId: "u1",
+      role: Role.OPS,
+    });
+
+    expect(prisma.depotHandlingReference.findMany).toHaveBeenCalledWith({
+      where: { tenantId: "t1", active: true },
+      orderBy: { code: "asc" },
+    });
+    expect(result.dhcReferences).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "d-fixed", amountCents: 8000, hasMultipleRates: false }),
+        expect.objectContaining({ id: "d-multi", amountCents: null, hasMultipleRates: true }),
+        expect.objectContaining({ id: "d-manual", amountCents: null, requiresManualAmount: true }),
+      ]),
+    );
   });
 
   it("create job accepts nested importDetails and maps to import routing fields", async () => {
@@ -698,7 +728,7 @@ describe("job charge workflow hardening", () => {
             { id: "t2", status: "Closed" },
           ]),
       },
-      customerQuotationItem: { findMany: jest.fn() },
+      tenantQuotationItem: { findMany: jest.fn() },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
@@ -716,7 +746,7 @@ describe("job charge workflow hardening", () => {
     await svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS });
 
     expect(prisma.job.update).toHaveBeenCalled();
-    expect(prisma.customerQuotationItem.findMany).not.toHaveBeenCalled();
+    expect(prisma.tenantQuotationItem.findMany).not.toHaveBeenCalled();
   });
 
   it("requires manual amount when quotation source row is marked requiresManualAmount", async () => {
@@ -734,13 +764,12 @@ describe("job charge workflow hardening", () => {
       $transaction: jest.fn(async (input: any) => {
         if (typeof input === "function") {
           return input({
-            customerQuotationItem: {
+            tenantQuotationItem: {
               findMany: jest.fn().mockResolvedValue([
                 {
                   id: "ql-manual",
                   label: "Season Parking",
                   requiresManualAmount: true,
-                  masterFile: { customerCompanyId: "comp1" },
                 },
               ]),
             },
@@ -780,5 +809,86 @@ describe("job charge workflow hardening", () => {
     );
     expect(jobChargeDeleteMany).toHaveBeenCalled();
     expect(jobChargeCreateMany).not.toHaveBeenCalled();
+  });
+
+  it("patchTrip resolves trucking rate behavior for fixed/multiple/manual rows", async () => {
+    const tripFindFirst = jest.fn().mockResolvedValue({
+      id: "trip1",
+      tenantId: "t1",
+      jobId: "job1",
+    });
+    const tripUpdate = jest.fn().mockResolvedValue({});
+    const driverTripRateFindFirst = jest
+      .fn()
+      .mockResolvedValueOnce({
+        id: "m-fixed",
+        label: "Fixed",
+        amountCents: 9000,
+        hasMultipleRates: false,
+        requiresManualAmount: false,
+      })
+      .mockResolvedValueOnce({
+        id: "m-multi",
+        label: "Multi",
+        amountCents: null,
+        hasMultipleRates: true,
+        defaultRateOptionIndex: null,
+        requiresManualAmount: false,
+      })
+      .mockResolvedValueOnce({
+        id: "m-manual",
+        label: "Manual",
+        amountCents: null,
+        hasMultipleRates: false,
+        requiresManualAmount: true,
+      });
+    const prisma: any = {
+      trip: {
+        findFirst: tripFindFirst,
+        update: tripUpdate,
+      },
+      driverTripRateMaster: {
+        findFirst: driverTripRateFindFirst,
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+
+    await svc.patchTrip(
+      "t1",
+      "job1",
+      "trip1",
+      { earningRateMasterId: "m-fixed" } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+    expect(tripUpdate).toHaveBeenCalledWith({
+      where: { id: "trip1" },
+      data: expect.objectContaining({
+        earningRateMasterId: "m-fixed",
+        driverEarningCents: 9000,
+      }),
+    });
+
+    await expect(
+      svc.patchTrip(
+        "t1",
+        "job1",
+        "trip1",
+        { earningRateMasterId: "m-multi" } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow("requires manual/default rate selection");
+
+    await expect(
+      svc.patchTrip(
+        "t1",
+        "job1",
+        "trip1",
+        { earningRateMasterId: "m-manual" } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow("requires manual/default rate selection");
   });
 });

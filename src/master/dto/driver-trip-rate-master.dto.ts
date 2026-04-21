@@ -19,10 +19,11 @@ export class CreateDriverTripRateMasterDto {
   @MinLength(1)
   label!: string;
 
-  @ApiProperty({ example: 4500, description: "Amount in cents" })
+  @ApiPropertyOptional({ example: 4500, description: "Amount in cents" })
+  @IsOptional()
   @IsInt()
   @Min(0)
-  amountCents!: number;
+  amountCents?: number;
 
   @ApiPropertyOptional({ default: "SGD" })
   @IsOptional()
@@ -65,6 +66,35 @@ export class UpdateDriverTripRateMasterDto {
   active?: boolean;
 }
 
+export class DriverTripRateImportItemDto {
+  @ApiProperty()
+  code!: string;
+
+  @ApiProperty()
+  label!: string;
+
+  @ApiPropertyOptional({ nullable: true })
+  amountCents!: number | null;
+
+  @ApiProperty()
+  currency!: string;
+
+  @ApiPropertyOptional({ nullable: true })
+  rawRateText!: string | null;
+
+  @ApiProperty()
+  requiresManualAmount!: boolean;
+
+  @ApiProperty()
+  hasMultipleRates!: boolean;
+
+  @ApiPropertyOptional({ nullable: true })
+  rateOptionsJson!: Array<{ label: string; amountCents: number | null }> | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  defaultRateOptionIndex!: number | null;
+}
+
 export class DriverTripRateImportErrorDto {
   @ApiProperty({ example: 3 })
   rowNumber!: number;
@@ -85,4 +115,7 @@ export class DriverTripRateImportSummaryDto {
 
   @ApiProperty({ type: [DriverTripRateImportErrorDto] })
   errors!: DriverTripRateImportErrorDto[];
+
+  @ApiProperty({ type: [DriverTripRateImportItemDto] })
+  items!: DriverTripRateImportItemDto[];
 }

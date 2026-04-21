@@ -31,6 +31,9 @@ import {
   UpdateDriverTripRateMasterDto,
 } from "./dto/driver-trip-rate-master.dto";
 import { SaveMasterQuotationItemsDto } from "./dto/master-file-items.dto";
+import { SaveQuotationDatasetDto } from "./dto/quotation-dataset.dto";
+import { SaveTruckingRatesDatasetDto } from "./dto/trucking-rate-dataset.dto";
+import { SaveDhcRatesDatasetDto } from "./dto/dhc-rate-dataset.dto";
 
 @ApiTags("master-data")
 @Controller("master")
@@ -124,6 +127,98 @@ export class MasterDataController {
     );
   }
 
+  @Post("trucking-rates/import")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({
+    summary: "Import tenant trucking rates dataset from Excel only (no file storage)",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  importTruckingRates(
+    @Req() req: any,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<DriverTripRateImportSummaryDto> {
+    if (!file) throw new BadRequestException("file is required");
+    return this.master.importTruckingRatesDataset(
+      req.tenant.tenantId,
+      file,
+      req.user?.userId ?? null,
+    );
+  }
+
+  @Get("trucking-rates/items")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "List tenant trucking rates dataset rows" })
+  listTruckingRateItems(@Req() req: any) {
+    return this.master.listDriverTripRateMasters(req.tenant.tenantId);
+  }
+
+  @Patch("trucking-rates/items")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Replace tenant trucking rates dataset rows" })
+  saveTruckingRateItems(
+    @Req() req: any,
+    @Body() dto: SaveTruckingRatesDatasetDto,
+  ) {
+    return this.master.replaceDriverTripRateMasters(
+      req.tenant.tenantId,
+      dto.items ?? [],
+      req.user?.userId ?? null,
+    );
+  }
+
+  @Post("dhc-rates/import")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({
+    summary: "Import tenant DHC rates dataset from Excel only (no file storage)",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  importDhcRates(@Req() req: any, @UploadedFile() file: Express.Multer.File) {
+    if (!file) throw new BadRequestException("file is required");
+    return this.master.importDhcRatesDataset(
+      req.tenant.tenantId,
+      file,
+      req.user?.userId ?? null,
+    );
+  }
+
+  @Get("dhc-rates/items")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "List tenant DHC rates dataset rows" })
+  listDhcRateItems(@Req() req: any) {
+    return this.master.listDhcRateDatasetItems(req.tenant.tenantId);
+  }
+
+  @Patch("dhc-rates/items")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Replace tenant DHC rates dataset rows" })
+  saveDhcRateItems(@Req() req: any, @Body() dto: SaveDhcRatesDatasetDto) {
+    return this.master.replaceDhcRatesDataset(
+      req.tenant.tenantId,
+      dto.items ?? [],
+      req.user?.userId ?? null,
+    );
+  }
+
   @Post("files/:type/upload")
   @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
   @ApiOperation({ summary: "Upload and parse a master file version" })
@@ -157,6 +252,52 @@ export class MasterDataController {
       req.user?.userId ?? null,
       body?.effectiveDate,
       body?.customerCompanyId ?? null,
+    );
+  }
+
+  @Post("quotation/import")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({
+    summary: "Import tenant quotation dataset from Excel only (no file storage)",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  importQuotationDataset(
+    @Req() req: any,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    return this.master.importQuotationDataset(
+      req.tenant.tenantId,
+      file,
+      req.user?.userId ?? null,
+    );
+  }
+
+  @Get("quotation/items")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "List tenant quotation dataset rows" })
+  getQuotationItems(@Req() req: any) {
+    return this.master.listQuotationDatasetItems(req.tenant.tenantId);
+  }
+
+  @Patch("quotation/items")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Replace tenant quotation dataset rows" })
+  saveQuotationItems(@Req() req: any, @Body() dto: SaveQuotationDatasetDto) {
+    return this.master.replaceQuotationDatasetItems(
+      req.tenant.tenantId,
+      dto.items ?? [],
+      req.user?.userId ?? null,
     );
   }
 

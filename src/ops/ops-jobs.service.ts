@@ -13,6 +13,8 @@ import {
   JobType,
   JobDocumentType,
   MasterFileType,
+  MasterRateDatasetStatus,
+  MasterRateDatasetType,
   Prisma,
   Role,
   TripStatus,
@@ -301,24 +303,23 @@ export class OpsJobsService {
     tenantId: string,
     _customerCompanyId: string,
   ): Promise<{ quotationLines: any[]; masterRateLines: any[] }> {
-    const activeFile = await this.prisma.masterFile.findFirst({
+    const dataset = await this.prisma.masterRateDataset.findFirst({
       where: {
         tenantId,
-        type: MasterFileType.QUOTATION,
-        customerCompanyId: null,
-        isActive: true,
+        type: MasterRateDatasetType.QUOTATION,
+        status: MasterRateDatasetStatus.ACTIVE,
       },
-      orderBy: { uploadedAt: "desc" },
+      orderBy: { versionNo: "desc" },
       select: { id: true },
     });
-    if (!activeFile) return { quotationLines: [], masterRateLines: [] };
+    if (!dataset) return { quotationLines: [], masterRateLines: [] };
 
-    const rows = await this.prisma.customerQuotationItem.findMany({
-      where: { tenantId, masterFileId: activeFile.id, active: true },
+    const rows = await this.prisma.masterRateDatasetRow.findMany({
+      where: { tenantId, datasetId: dataset.id, isActive: true },
       orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
     });
     return {
-      quotationLines: rows.map((r) => ({ ...r, source: "MASTER_FILE_QUOTATION" })),
+      quotationLines: rows.map((r) => ({ ...r, source: "TENANT_QUOTATION_DATASET" })),
       masterRateLines: [],
     };
   }
@@ -344,14 +345,14 @@ export class OpsJobsService {
         .map((c) => c.sourceRefId!.trim());
 
       const quotationItems: any[] = quotationRefIds.length
-        ? await tx.customerQuotationItem.findMany({
+        ? await tx.masterRateDatasetRow.findMany({
             where: {
               tenantId,
               id: { in: [...new Set(quotationRefIds)] },
-            },
-            include: {
-              masterFile: {
-                select: { id: true, customerCompanyId: true, isActive: true, uploadedAt: true },
+              isActive: true,
+              dataset: {
+                type: MasterRateDatasetType.QUOTATION,
+                status: MasterRateDatasetStatus.ACTIVE,
               },
             },
           })
@@ -387,7 +388,7 @@ export class OpsJobsService {
             ? (() => {
                 const item = quotationItemById.get(c.sourceRefId!)!;
                 return {
-                  sourceCustomerQuotationItemId: item.id,
+                  sourceCustomerQuotationItemId: null,
                   code: item.code,
                   label: item.label,
                   description: item.description ?? null,
@@ -395,9 +396,7 @@ export class OpsJobsService {
                   amountCents: c.qty * c.unitPriceCents,
                   metadataJson: {
                     quotationSnapshot: {
-                      sourceCustomerQuotationItemId: item.id,
-                      sourceMasterFileId: item.masterFileId,
-                      sourceMasterCustomerCompanyId: item.masterFile.customerCompanyId ?? null,
+                      sourceTenantQuotationItemId: item.id,
                       section: item.section ?? null,
                       code: item.code,
                       label: item.label,
@@ -1885,28 +1884,21 @@ export class OpsJobsService {
       job.customerCompanyId,
     );
 
-    const dhcReferences = await (async () => {
-      const activeFile = await this.prisma.masterFile.findFirst({
-        where: {
-          tenantId,
-          type: MasterFileType.DHC_REFERENCE,
-          customerCompanyId: null,
-          isActive: true,
-        },
-        orderBy: { uploadedAt: "desc" },
-        select: { id: true },
-      });
-      if (activeFile) {
-        return this.prisma.dhcReferenceItem.findMany({
-          where: { tenantId, masterFileId: activeFile.id, active: true },
-          orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
-        });
-      }
-      return this.prisma.depotHandlingReference.findMany({
-        where: { tenantId, active: true },
-        orderBy: { code: "asc" },
-      });
-    })();
+    const dhcDataset = await this.prisma.masterRateDataset.findFirst({
+      where: {
+        tenantId,
+        type: MasterRateDatasetType.DHC_RATES,
+        status: MasterRateDatasetStatus.ACTIVE,
+      },
+      orderBy: { versionNo: "desc" },
+      select: { id: true },
+    });
+    const dhcReferences = dhcDataset
+      ? await this.prisma.masterRateDatasetRow.findMany({
+          where: { tenantId, datasetId: dhcDataset.id, isActive: true },
+          orderBy: { code: "asc" },
+        })
+      : [];
 
     return {
       quotationLines,
@@ -1928,39 +1920,18 @@ export class OpsJobsService {
   }
 
   async listDriverTripRateMasters(tenantId: string) {
-    const activeFile = await this.prisma.masterFile.findFirst({
+    const dataset = await this.prisma.masterRateDataset.findFirst({
       where: {
         tenantId,
-        type: MasterFileType.DRIVER_PAYOUT,
-        customerCompanyId: null,
-        isActive: true,
+        type: MasterRateDatasetType.TRUCKING_RATES,
+        status: MasterRateDatasetStatus.ACTIVE,
       },
-      orderBy: { uploadedAt: "desc" },
+      orderBy: { versionNo: "desc" },
       select: { id: true },
     });
-    if (activeFile) {
-      const rows = await this.prisma.driverPayoutItem.findMany({
-        where: {
-          tenantId,
-          masterFileId: activeFile.id,
-          active: true,
-          isSelectableForTripEarning: true,
-          rateCents: { not: null },
-        },
-        orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
-      });
-      return rows.map((r) => ({
-        id: r.id,
-        code: r.code,
-        label: r.label,
-        amountCents: r.rateCents,
-        currency: "SGD",
-        active: true,
-        sourceType: "MASTER_FILE_DRIVER_PAYOUT",
-      }));
-    }
-    return this.prisma.driverTripRateMaster.findMany({
-      where: { tenantId, active: true },
+    if (!dataset) return [];
+    return this.prisma.masterRateDatasetRow.findMany({
+      where: { tenantId, datasetId: dataset.id, isActive: true },
       orderBy: { code: "asc" },
     });
   }
@@ -2098,43 +2069,37 @@ export class OpsJobsService {
     if (dto.earningRateMasterId !== undefined) {
       if (dto.earningRateMasterId === null) {
         data.earningRateMasterId = null;
+        data.payoutItemId = null;
         data.driverEarningCents = null;
         data.earningLabelSnapshot = null;
       } else {
-        const payoutItem = await this.prisma.driverPayoutItem.findFirst({
+        const master = await this.prisma.masterRateDatasetRow.findFirst({
           where: {
             id: dto.earningRateMasterId,
             tenantId,
-            active: true,
-            masterFile: { isActive: true, type: MasterFileType.DRIVER_PAYOUT },
-          },
-        });
-        if (payoutItem) {
-          if (payoutItem.rateCents == null) {
-            throw new BadRequestException(
-              `Selected payout item "${payoutItem.label}" requires manual amount and cannot be assigned as fixed trip earning`,
-            );
-          }
-          data.payoutItemId = payoutItem.id;
-          data.earningRateMasterId = null;
-          data.driverEarningCents = payoutItem.rateCents;
-          data.earningLabelSnapshot = payoutItem.label;
-        } else {
-        const master = await this.prisma.driverTripRateMaster.findFirst({
-          where: {
-            id: dto.earningRateMasterId,
-            tenantId,
-            active: true,
+            isActive: true,
+            dataset: {
+              type: MasterRateDatasetType.TRUCKING_RATES,
+              status: MasterRateDatasetStatus.ACTIVE,
+            },
           },
         });
         if (!master) {
           throw new BadRequestException("Driver trip rate master not found");
         }
+        if (
+          (master.hasMultipleRates && master.defaultRateOptionIndex == null) ||
+          master.requiresManualAmount ||
+          master.amountCents == null
+        ) {
+          throw new BadRequestException(
+            `Selected trucking rate "${master.label}" requires manual/default rate selection before assignment`,
+          );
+        }
         data.payoutItemId = null;
         data.earningRateMasterId = master.id;
         data.driverEarningCents = master.amountCents;
         data.earningLabelSnapshot = master.label;
-        }
       }
     }
 

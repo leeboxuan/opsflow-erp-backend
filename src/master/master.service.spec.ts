@@ -378,6 +378,278 @@ describe("MasterDataService getActiveMasterItems", () => {
     expect(result.masterFile?.id).toBe("mf-q");
   });
 
+  it("importQuotationDataset parses Excel and saves rows without storage upload", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const XLSX = require("xlsx");
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["Annex A"],
+      ["Item", "Description", "20ft", "40ft"],
+      ["A1", "Round Trip Charges", 140, 170],
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, "Annex A");
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    const prisma: any = {
+      tenantQuotationItem: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+        findMany: jest.fn().mockResolvedValue([
+          { id: "q1", code: "A1_20FT", label: "Round Trip Charges (20ft)" },
+        ]),
+      },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+    const uploadSpy = jest.spyOn(svc as any, "uploadMasterObject");
+
+    const result = await svc.importQuotationDataset("t1", {
+      originalname: "quotation.xlsx",
+      mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      buffer: Buffer.from(buf),
+    } as any);
+
+    expect(uploadSpy).not.toHaveBeenCalled();
+    expect(prisma.tenantQuotationItem.deleteMany).toHaveBeenCalledWith({
+      where: { tenantId: "t1" },
+    });
+    expect(prisma.tenantQuotationItem.createMany).toHaveBeenCalled();
+    expect(result.importedCount).toBeGreaterThan(0);
+  });
+
+  it("importQuotationDataset rejects non-excel files", async () => {
+    const prisma: any = {};
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+
+    await expect(
+      svc.importQuotationDataset("t1", {
+        originalname: "quotation.pdf",
+        mimetype: "application/pdf",
+        buffer: Buffer.from("x"),
+      } as any),
+    ).rejects.toThrow("Quotation import must be Excel (.xlsx/.xls)");
+  });
+
+  it("importDriverTripRateMastersFromExcel preserves multiple amount options", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const XLSX = require("xlsx");
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["code", "label", "amount", "currency", "active"],
+      ["TRIP-A", "Trip A", "$80 / $120", "SGD", "true"],
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    const upsert = jest.fn().mockResolvedValue({});
+    const prisma: any = {
+      driverTripRateMaster: {
+        findMany: jest
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([
+            {
+              id: "d1",
+              code: "TRIP-A",
+              label: "Trip A",
+              amountCents: null,
+              hasMultipleRates: true,
+              rawRateText: "$80 / $120",
+            },
+          ]),
+        upsert,
+      },
+    };
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+
+    const result = await svc.importDriverTripRateMastersFromExcel("t1", Buffer.from(buf));
+
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          amountCents: null,
+          hasMultipleRates: true,
+          rawRateText: "$80 / $120",
+          requiresManualAmount: false,
+          rateOptionsJson: expect.any(Array),
+        }),
+      }),
+    );
+    expect(result.items[0]).toMatchObject({
+      code: "TRIP-A",
+      hasMultipleRates: true,
+    });
+  });
+
+  it("replaceDriverTripRateMasters keeps null amount and manual flags", async () => {
+    const prisma: any = {
+      driverTripRateMaster: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "d1",
+            code: "MANUAL-ROW",
+            label: "Manual row",
+            amountCents: null,
+            requiresManualAmount: true,
+            hasMultipleRates: false,
+            active: true,
+          },
+        ]),
+      },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+
+    const rows = await svc.replaceDriverTripRateMasters("t1", [
+      {
+        code: "MANUAL-ROW",
+        label: "Manual row",
+        amountCents: null,
+        requiresManualAmount: true,
+      },
+    ]);
+
+    expect(prisma.driverTripRateMaster.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          code: "MANUAL-ROW",
+          amountCents: null,
+          requiresManualAmount: true,
+        }),
+      ],
+    });
+    expect(rows[0]).toMatchObject({
+      code: "MANUAL-ROW",
+      amountCents: null,
+      requiresManualAmount: true,
+    });
+  });
+
+  it("importDhcRatesDataset saves rows into depot handling dataset", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const XLSX = require("xlsx");
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["Yard", "Old", "New", "Software", "Op Code", "Operator Name", "W.E.F"],
+      ["Allied", 71, 80, "CMS", "HY", "HYUNDAI", 45839],
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, "Table 1");
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    const prisma: any = {
+      depotHandlingReference: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([{ id: "d1", code: "HY", label: "HYUNDAI" }]),
+      },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+
+    const result = await svc.importDhcRatesDataset("t1", {
+      originalname: "dhc.xlsx",
+      buffer: Buffer.from(buf),
+    } as any);
+
+    expect(prisma.depotHandlingReference.deleteMany).toHaveBeenCalledWith({
+      where: { tenantId: "t1" },
+    });
+    expect(prisma.depotHandlingReference.createMany).toHaveBeenCalled();
+    expect(result.importedCount).toBeGreaterThan(0);
+  });
+
+  it("importDhcRatesDataset preserves multiple old/new rate options", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const XLSX = require("xlsx");
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["Yard", "Old", "New", "Software", "Op Code", "Operator Name", "W.E.F"],
+      ["Allied", 71, 80, "CMS", "HY", "HYUNDAI", 45839],
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, "Table 1");
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    const createMany = jest.fn().mockResolvedValue({ count: 1 });
+    const prisma: any = {
+      depotHandlingReference: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        createMany,
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+
+    await svc.importDhcRatesDataset("t1", {
+      originalname: "dhc.xlsx",
+      buffer: Buffer.from(buf),
+    } as any);
+
+    expect(createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          hasMultipleRates: true,
+          amountCents: null,
+          rateOptionsJson: expect.any(Array),
+        }),
+      ],
+    });
+  });
+
+  it("replaceDhcRatesDataset keeps null amount and manual flags", async () => {
+    const prisma: any = {
+      depotHandlingReference: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "d1",
+            code: "DHC-MANUAL",
+            label: "Manual DHC",
+            amountCents: null,
+            requiresManualAmount: true,
+            hasMultipleRates: false,
+          },
+        ]),
+      },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+
+    const rows = await svc.replaceDhcRatesDataset("t1", [
+      {
+        code: "DHC-MANUAL",
+        label: "Manual DHC",
+        amountCents: null,
+        requiresManualAmount: true,
+      },
+    ]);
+
+    expect(prisma.depotHandlingReference.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          code: "DHC-MANUAL",
+          amountCents: null,
+          requiresManualAmount: true,
+        }),
+      ],
+    });
+    expect(rows[0]).toMatchObject({
+      code: "DHC-MANUAL",
+      amountCents: null,
+      requiresManualAmount: true,
+    });
+  });
+
   it("activateMasterFile rejects PARSE_FAILED DHC master", async () => {
     const prisma: any = {
       masterFile: {

@@ -4,6 +4,8 @@ import { SupabaseService } from "../auth/supabase.service";
 import {
   MasterFileStatus,
   MasterFileType,
+  MasterRateDatasetStatus,
+  MasterRateDatasetType,
   Prisma,
 } from "@prisma/client";
 import {
@@ -832,11 +834,318 @@ export class MasterDataService {
     return this.getActiveMasterItems(tenantId, MasterFileType.QUOTATION, null);
   }
 
-  listDriverTripRateMasters(tenantId: string) {
-    return this.prisma.driverTripRateMaster.findMany({
-      where: { tenantId },
-      orderBy: [{ active: "desc" }, { code: "asc" }],
+  private async createDatasetVersionWithRows(
+    tenantId: string,
+    type: MasterRateDatasetType,
+    rows: Array<Record<string, any>>,
+    actorUserId: string | null,
+    sourceFileName: string | null,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const latest = await tx.masterRateDataset.findFirst({
+        where: { tenantId, type },
+        orderBy: { versionNo: "desc" },
+        select: { versionNo: true },
+      });
+      const versionNo = (latest?.versionNo ?? 0) + 1;
+
+      await tx.masterRateDataset.updateMany({
+        where: { tenantId, type, status: MasterRateDatasetStatus.ACTIVE },
+        data: { status: MasterRateDatasetStatus.DRAFT },
+      });
+
+      const dataset = await tx.masterRateDataset.create({
+        data: {
+          tenantId,
+          type,
+          versionNo,
+          status: MasterRateDatasetStatus.ACTIVE,
+          createdByUserId: actorUserId,
+          updatedByUserId: actorUserId,
+          importedAt: new Date(),
+          importedByUserId: actorUserId,
+          sourceFileName,
+          activatedAt: new Date(),
+          activatedByUserId: actorUserId,
+        },
+      });
+
+      if (rows.length > 0) {
+        await tx.masterRateDatasetRow.createMany({
+          data: rows.map((r, index) => ({
+            tenantId,
+            datasetId: dataset.id,
+            code: r.code,
+            label: r.label,
+            section: r.section ?? null,
+            description: r.description ?? null,
+            category: r.category ?? null,
+            unit: r.unit ?? null,
+            containerSize: r.containerSize ?? null,
+            tripMode: r.tripMode ?? null,
+            areaScope: r.areaScope ?? null,
+            currency: r.currency ?? "SGD",
+            rateCents: r.rateCents ?? null,
+            rawRateText: r.rawRateText ?? null,
+            requiresManualAmount: !!r.requiresManualAmount,
+            hasMultipleRates: !!r.hasMultipleRates,
+            rateOptionsJson: (r.rateOptionsJson ?? null) as Prisma.InputJsonValue,
+            defaultRateOptionIndex: r.defaultRateOptionIndex ?? null,
+            notes: r.notes ?? null,
+            sortOrder: Number.isInteger(r.sortOrder) ? r.sortOrder : index,
+            isActive: r.isActive !== false,
+            metadataJson: (r.metadataJson ?? null) as Prisma.InputJsonValue,
+            createdByUserId: actorUserId,
+            updatedByUserId: actorUserId,
+          })),
+        });
+      }
+
+      return dataset;
     });
+  }
+
+  private async listDatasetRows(tenantId: string, type: MasterRateDatasetType) {
+    const dataset = await this.prisma.masterRateDataset.findFirst({
+      where: { tenantId, type, status: MasterRateDatasetStatus.ACTIVE },
+      orderBy: { versionNo: "desc" },
+      select: { id: true },
+    });
+    if (!dataset) return [];
+    return this.prisma.masterRateDatasetRow.findMany({
+      where: { tenantId, datasetId: dataset.id, isActive: true },
+      orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+    });
+  }
+
+  private async replaceDatasetRows(
+    tenantId: string,
+    type: MasterRateDatasetType,
+    rows: Array<Record<string, any>>,
+    actorUserId: string | null,
+  ) {
+    const dataset = await this.prisma.masterRateDataset.findFirst({
+      where: { tenantId, type, status: MasterRateDatasetStatus.ACTIVE },
+      orderBy: { versionNo: "desc" },
+      select: { id: true },
+    });
+    if (!dataset) {
+      throw new BadRequestException(`No active ${type} dataset found. Import first.`);
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.masterRateDatasetRow.deleteMany({
+        where: { tenantId, datasetId: dataset.id },
+      });
+      if (rows.length > 0) {
+        await tx.masterRateDatasetRow.createMany({
+          data: rows.map((r, index) => ({
+            tenantId,
+            datasetId: dataset.id,
+            code: r.code,
+            label: r.label,
+            section: r.section ?? null,
+            description: r.description ?? null,
+            category: r.category ?? null,
+            unit: r.unit ?? null,
+            containerSize: r.containerSize ?? null,
+            tripMode: r.tripMode ?? null,
+            areaScope: r.areaScope ?? null,
+            currency: r.currency ?? "SGD",
+            rateCents: r.rateCents ?? null,
+            rawRateText: r.rawRateText ?? null,
+            requiresManualAmount: !!r.requiresManualAmount,
+            hasMultipleRates: !!r.hasMultipleRates,
+            rateOptionsJson: (r.rateOptionsJson ?? null) as Prisma.InputJsonValue,
+            defaultRateOptionIndex: r.defaultRateOptionIndex ?? null,
+            notes: r.notes ?? null,
+            sortOrder: Number.isInteger(r.sortOrder) ? r.sortOrder : index,
+            isActive: r.isActive !== false,
+            metadataJson: (r.metadataJson ?? null) as Prisma.InputJsonValue,
+            createdByUserId: actorUserId,
+            updatedByUserId: actorUserId,
+          })),
+        });
+      }
+      await tx.masterRateDataset.update({
+        where: { id: dataset.id },
+        data: { updatedByUserId: actorUserId, activatedByUserId: actorUserId, activatedAt: new Date() },
+      });
+    });
+  }
+
+  async importQuotationDataset(
+    tenantId: string,
+    file: Express.Multer.File,
+    actorUserId: string | null = null,
+  ): Promise<{ importedCount: number; items: any[]; summary: Record<string, unknown> }> {
+    const name = String(file?.originalname ?? "").toLowerCase();
+    const isExcel = /\.xlsx?$/i.test(name);
+    if (!file?.buffer?.length) throw new BadRequestException("file is required");
+    if (!isExcel) {
+      throw new BadRequestException("Quotation import must be Excel (.xlsx/.xls)");
+    }
+
+    const lines = parseQuotationRateLinesFromXlsxBuffer(file.buffer);
+    const normalized = lines.map((l, index) => ({
+      tenantId,
+      section: l.section ?? null,
+      code: l.code,
+      label: l.label,
+      description: l.description ?? null,
+      category: l.category ?? null,
+      containerSize: l.containerSize ?? null,
+      tripMode: l.tripMode ?? null,
+      areaScope: l.areaScope ?? null,
+      unit: l.unit ?? null,
+      rateCents: l.rateCents ?? null,
+      requiresManualAmount: !!l.requiresManualAmount,
+      rawRateText: l.rawRateText ?? null,
+      notes: l.notes ?? null,
+      sortOrder: Number.isInteger(l.sortOrder) ? l.sortOrder : index,
+      active: true,
+      sourceType: l.sourceType ?? "EXCEL_IMPORT",
+    }));
+
+    const dataset = await this.createDatasetVersionWithRows(
+      tenantId,
+      MasterRateDatasetType.QUOTATION,
+      normalized.map((r, i) => ({
+        ...r,
+        isActive: true,
+        sortOrder: r.sortOrder ?? i,
+      })),
+      actorUserId,
+      file.originalname ?? null,
+    );
+
+    return {
+      importedCount: normalized.length,
+      items: await this.listQuotationDatasetItems(tenantId),
+      summary: {
+        datasetId: dataset.id,
+        versionNo: dataset.versionNo,
+        lineCount: normalized.length,
+        note: "Quotation dataset imported from Excel (file not stored).",
+      },
+    };
+  }
+
+  async listQuotationDatasetItems(tenantId: string) {
+    return this.listDatasetRows(tenantId, MasterRateDatasetType.QUOTATION).then((rows) =>
+      rows.map((r: any) => ({ ...r, active: r.isActive })),
+    );
+  }
+
+  async replaceQuotationDatasetItems(
+    tenantId: string,
+    items: Array<Record<string, any>>,
+    actorUserId: string | null = null,
+  ) {
+    const normalized = (items ?? []).map((r, index) => ({
+      tenantId,
+      section: r.section ?? null,
+      code: String(r.code ?? "").trim(),
+      label: String(r.label ?? "").trim(),
+      description: r.description ?? null,
+      category: r.category ?? null,
+      containerSize: r.containerSize ?? null,
+      tripMode: r.tripMode ?? null,
+      areaScope: r.areaScope ?? null,
+      unit: r.unit ?? null,
+      rateCents:
+        r.rateCents === null || r.rateCents === undefined
+          ? null
+          : Number.isInteger(Number(r.rateCents))
+            ? Number(r.rateCents)
+            : null,
+      requiresManualAmount: !!r.requiresManualAmount,
+      rawRateText: r.rawRateText ?? null,
+      notes: r.notes ?? null,
+      sortOrder: Number.isInteger(Number(r.sortOrder)) ? Number(r.sortOrder) : index,
+      isActive: r.active !== false,
+      sourceType: "MANUAL_EDIT",
+    }));
+
+    for (const row of normalized) {
+      if (!row.code || !row.label) {
+        throw new BadRequestException("Each item requires non-empty code and label");
+      }
+      if (row.rateCents !== null && row.rateCents < 0) {
+        throw new BadRequestException(`Invalid negative rateCents for item ${row.code}`);
+      }
+    }
+
+    await this.replaceDatasetRows(
+      tenantId,
+      MasterRateDatasetType.QUOTATION,
+      normalized,
+      actorUserId,
+    );
+
+    return this.listQuotationDatasetItems(tenantId);
+  }
+
+  listDriverTripRateMasters(tenantId: string) {
+    return this.listDatasetRows(tenantId, MasterRateDatasetType.TRUCKING_RATES).then((rows) =>
+      rows.map((r: any) => ({ ...r, active: r.isActive })),
+    );
+  }
+
+  private parseTruckingRateOptions(raw: unknown): {
+    amountCents: number | null;
+    rawRateText: string | null;
+    requiresManualAmount: boolean;
+    hasMultipleRates: boolean;
+    rateOptionsJson: Array<{ label: string; amountCents: number | null }> | null;
+    defaultRateOptionIndex: number | null;
+  } {
+    const text = String(raw ?? "").trim();
+    if (!text) {
+      return {
+        amountCents: null,
+        rawRateText: null,
+        requiresManualAmount: true,
+        hasMultipleRates: false,
+        rateOptionsJson: null,
+        defaultRateOptionIndex: null,
+      };
+    }
+    const matches =
+      text.match(/-?\$?\s*\d[\d,]*(?:\.\d{1,2})?/g)?.map((m) => m.trim()) ?? [];
+    const parsedOptions = matches.map((m, idx) => ({
+      label: `Option ${idx + 1}`,
+      amountCents: this.parseMoney(m),
+    }));
+
+    if (parsedOptions.length === 1) {
+      return {
+        amountCents: parsedOptions[0].amountCents ?? null,
+        rawRateText: null,
+        requiresManualAmount: false,
+        hasMultipleRates: false,
+        rateOptionsJson: null,
+        defaultRateOptionIndex: null,
+      };
+    }
+    if (parsedOptions.length >= 2) {
+      return {
+        amountCents: null,
+        rawRateText: text,
+        requiresManualAmount: false,
+        hasMultipleRates: true,
+        rateOptionsJson: parsedOptions,
+        defaultRateOptionIndex: null,
+      };
+    }
+
+    return {
+      amountCents: null,
+      rawRateText: text,
+      requiresManualAmount: true,
+      hasMultipleRates: false,
+      rateOptionsJson: null,
+      defaultRateOptionIndex: null,
+    };
   }
 
   async createDriverTripRateMaster(
@@ -857,9 +1166,14 @@ export class MasterDataService {
         tenantId,
         code,
         label,
-        amountCents: dto.amountCents,
+        amountCents: dto.amountCents ?? null,
         currency: dto.currency?.trim() || "SGD",
         active: dto.active ?? true,
+        requiresManualAmount: dto.amountCents == null,
+        hasMultipleRates: false,
+        rawRateText: null,
+        rateOptionsJson: null,
+        defaultRateOptionIndex: null,
       },
     });
   }
@@ -896,6 +1210,15 @@ export class MasterDataService {
         ...(dto.amountCents !== undefined ? { amountCents: dto.amountCents } : {}),
         ...(dto.currency !== undefined ? { currency: dto.currency.trim() || "SGD" } : {}),
         ...(dto.active !== undefined ? { active: dto.active } : {}),
+        ...(dto.amountCents !== undefined
+          ? {
+              requiresManualAmount: dto.amountCents == null,
+              hasMultipleRates: false,
+              rawRateText: null,
+              rateOptionsJson: null,
+              defaultRateOptionIndex: null,
+            }
+          : {}),
       },
     });
   }
@@ -929,13 +1252,13 @@ export class MasterDataService {
     const wb = XLSX.read(buffer, { type: "buffer" });
     const sheetName = wb.SheetNames[0];
     if (!sheetName) {
-      return { createdCount: 0, updatedCount: 0, skippedCount: 0, errors: [] };
+      return { createdCount: 0, updatedCount: 0, skippedCount: 0, errors: [], items: [] };
     }
 
     const sheet = wb.Sheets[sheetName];
     const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
     if (!rows.length) {
-      return { createdCount: 0, updatedCount: 0, skippedCount: 0, errors: [] };
+      return { createdCount: 0, updatedCount: 0, skippedCount: 0, errors: [], items: [] };
     }
 
     const header = rows[0].map((c: any) => String(c).trim().toLowerCase());
@@ -943,25 +1266,25 @@ export class MasterDataService {
     const idxLabel = header.findIndex((h: string) => h === "label");
     const idxAmountCents = header.findIndex((h: string) => h === "amountcents");
     const idxAmount = header.findIndex((h: string) => h === "amount");
+    const idxRate = header.findIndex((h: string) => h === "rate");
     const idxCurrency = header.findIndex((h: string) => h === "currency");
     const idxActive = header.findIndex((h: string) => h === "active");
 
-    if (idxCode < 0 || idxLabel < 0 || (idxAmountCents < 0 && idxAmount < 0)) {
+    if (
+      idxCode < 0 ||
+      idxLabel < 0 ||
+      (idxAmountCents < 0 && idxAmount < 0 && idxRate < 0)
+    ) {
       throw new BadRequestException(
-        "Excel must contain headers: code, label, and amountCents (or amount).",
+        "Excel must contain headers: code, label, and amount/rate column.",
       );
     }
-
-    const existing = await this.prisma.driverTripRateMaster.findMany({
-      where: { tenantId },
-      select: { code: true },
-    });
-    const existingCodeSet = new Set(existing.map((e) => e.code));
 
     let createdCount = 0;
     let updatedCount = 0;
     let skippedCount = 0;
     const errors: Array<{ rowNumber: number; reason: string }> = [];
+    const parsedRows: any[] = [];
 
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
@@ -973,14 +1296,8 @@ export class MasterDataService {
       const code = String(row[idxCode] ?? "").trim();
       const label = String(row[idxLabel] ?? "").trim();
       const rawAmount =
-        idxAmountCents >= 0 ? row[idxAmountCents] : row[idxAmount];
-      const amountNum = Number(String(rawAmount ?? "").replace(/[$,\s]/g, ""));
-      const amountCents =
-        idxAmountCents >= 0
-          ? Math.round(amountNum)
-          : Number.isNaN(amountNum)
-            ? Number.NaN
-            : Math.round(amountNum * 100);
+        idxAmountCents >= 0 ? row[idxAmountCents] : idxAmount >= 0 ? row[idxAmount] : row[idxRate];
+      const parsedRate = this.parseTruckingRateOptions(rawAmount);
       const currency =
         idxCurrency >= 0 ? String(row[idxCurrency] ?? "").trim() || "SGD" : "SGD";
       const activeRaw = idxActive >= 0 ? String(row[idxActive] ?? "").trim().toLowerCase() : "";
@@ -1003,38 +1320,257 @@ export class MasterDataService {
         errors.push({ rowNumber, reason: `label is required for code ${code}` });
         continue;
       }
-      if (Number.isNaN(amountCents) || amountCents < 0) {
+      if (
+        parsedRate.amountCents != null &&
+        (!Number.isInteger(parsedRate.amountCents) || parsedRate.amountCents < 0)
+      ) {
         skippedCount += 1;
         errors.push({ rowNumber, reason: `amount is invalid for code ${code}` });
         continue;
       }
 
-      const isExisting = existingCodeSet.has(code);
-      await this.prisma.driverTripRateMaster.upsert({
-        where: { tenantId_code: { tenantId, code } },
-        update: {
-          label,
-          amountCents,
-          currency,
-          active,
-        },
-        create: {
-          tenantId,
-          code,
-          label,
-          amountCents,
-          currency,
-          active,
-        },
-      });
+      createdCount += 1;
+      const _row = {
+        code,
+        label,
+        amountCents: parsedRate.amountCents,
+        currency,
+        isActive: active,
+        rawRateText: parsedRate.rawRateText,
+        requiresManualAmount: parsedRate.requiresManualAmount,
+        hasMultipleRates: parsedRate.hasMultipleRates,
+        rateOptionsJson: parsedRate.rateOptionsJson,
+        defaultRateOptionIndex: parsedRate.defaultRateOptionIndex,
+        notes: null,
+        metadataJson: null,
+        sortOrder: createdCount - 1,
+      };
+      parsedRows.push(_row);
+    }
+    const items = parsedRows.map((r) => ({
+      ...r,
+      active: r.isActive,
+    }));
+    return { createdCount, updatedCount, skippedCount, errors, items: items as any };
+  }
 
-      if (isExisting) updatedCount += 1;
-      else {
-        createdCount += 1;
-        existingCodeSet.add(code);
+  async replaceDriverTripRateMasters(
+    tenantId: string,
+    items: Array<Record<string, any>>,
+    actorUserId: string | null = null,
+  ) {
+    const normalized = (items ?? []).map((r) => {
+      const parsed = this.parseTruckingRateOptions(
+        r.rawRateText ??
+          (Array.isArray(r.rateOptionsJson)
+            ? r.rateOptionsJson
+                .map((o: any) => o?.amountCents)
+                .filter((v: any) => Number.isInteger(v))
+                .map((c: number) => (c / 100).toFixed(2))
+                .join(" / ")
+            : r.amountCents),
+      );
+      const providedAmount =
+        r.amountCents === null || r.amountCents === undefined
+          ? null
+          : Number.isInteger(Number(r.amountCents))
+            ? Number(r.amountCents)
+            : null;
+      return {
+        tenantId,
+        code: String(r.code ?? "").trim(),
+        label: String(r.label ?? "").trim(),
+        amountCents: providedAmount,
+        currency: String(r.currency ?? "SGD").trim() || "SGD",
+        isActive: r.active !== false,
+        rawRateText: r.rawRateText ?? parsed.rawRateText,
+        requiresManualAmount:
+          r.requiresManualAmount === undefined
+            ? parsed.requiresManualAmount
+            : !!r.requiresManualAmount,
+        hasMultipleRates:
+          r.hasMultipleRates === undefined
+            ? parsed.hasMultipleRates
+            : !!r.hasMultipleRates,
+        rateOptionsJson:
+          r.rateOptionsJson === undefined ? parsed.rateOptionsJson : r.rateOptionsJson,
+        defaultRateOptionIndex:
+          r.defaultRateOptionIndex === undefined
+            ? parsed.defaultRateOptionIndex
+            : r.defaultRateOptionIndex,
+      };
+    });
+
+    for (const row of normalized) {
+      if (!row.code || !row.label) {
+        throw new BadRequestException("Each trucking row requires code and label");
+      }
+      if (row.amountCents !== null && row.amountCents < 0) {
+        throw new BadRequestException(`Invalid negative amountCents for ${row.code}`);
       }
     }
 
-    return { createdCount, updatedCount, skippedCount, errors };
+    await this.replaceDatasetRows(
+      tenantId,
+      MasterRateDatasetType.TRUCKING_RATES,
+      normalized,
+      actorUserId,
+    );
+
+    return this.listDriverTripRateMasters(tenantId);
+  }
+
+  async importTruckingRatesDataset(
+    tenantId: string,
+    file: Express.Multer.File,
+    actorUserId: string | null = null,
+  ): Promise<DriverTripRateImportSummaryDto> {
+    const name = String(file?.originalname ?? "").toLowerCase();
+    if (!file?.buffer?.length) throw new BadRequestException("file is required");
+    if (!/\.xlsx?$/i.test(name)) {
+      throw new BadRequestException("Trucking rates import must be Excel (.xlsx/.xls)");
+    }
+    const result = await this.importDriverTripRateMastersFromExcel(tenantId, file.buffer);
+    const rows = (result.items ?? []).map((r: any, i: number) => ({
+      ...r,
+      isActive: r.active !== false,
+      sortOrder: Number.isInteger(r.sortOrder) ? r.sortOrder : i,
+    }));
+    await this.createDatasetVersionWithRows(
+      tenantId,
+      MasterRateDatasetType.TRUCKING_RATES,
+      rows,
+      actorUserId,
+      file.originalname ?? null,
+    );
+    return {
+      ...result,
+      items: await this.listDriverTripRateMasters(tenantId),
+    };
+  }
+
+  async importDhcRatesDataset(
+    tenantId: string,
+    file: Express.Multer.File,
+    actorUserId: string | null = null,
+  ): Promise<{ importedCount: number; items: any[]; summary: Record<string, unknown> }> {
+    const name = String(file?.originalname ?? "").toLowerCase();
+    if (!file?.buffer?.length) throw new BadRequestException("file is required");
+    if (!/\.xlsx?$/i.test(name)) {
+      throw new BadRequestException("DHC rates import must be Excel (.xlsx/.xls)");
+    }
+    const buffer = file.buffer;
+    const parsed = parseDhcExcelBuffer(buffer);
+    const rows = parsed.items.map((row, index) => {
+      const rateOptions: Array<{ label: string; amountCents: number | null }> = [];
+      if (row.oldRateCents != null) rateOptions.push({ label: "Old", amountCents: row.oldRateCents });
+      if (row.newRateCents != null) rateOptions.push({ label: "New", amountCents: row.newRateCents });
+      const deduped = Array.from(
+        new Map(rateOptions.map((opt) => [`${opt.label}:${opt.amountCents}`, opt])).values(),
+      );
+      const hasMultipleRates = deduped.length >= 2;
+      const singleAmount = deduped.length === 1 ? deduped[0].amountCents : null;
+
+      return {
+        code: row.code,
+        label: row.label,
+        amountCents: singleAmount,
+        currency: "SGD",
+        isActive: true,
+        rawRateText: hasMultipleRates ? `${row.oldRateCents ?? ""}/${row.newRateCents ?? ""}` : null,
+        requiresManualAmount: deduped.length === 0,
+        hasMultipleRates,
+        rateOptionsJson: hasMultipleRates ? deduped : null,
+        defaultRateOptionIndex: null,
+        metadataJson: {
+          section: row.section,
+          description: row.description,
+          category: row.category,
+          unit: row.unit,
+          notes: row.notes,
+          yardDepot: row.yardDepot,
+          oldRateCents: row.oldRateCents,
+          newRateCents: row.newRateCents,
+          software: row.software,
+          operatorCode: row.operatorCode,
+          operatorName: row.operatorName,
+          effectiveDate: row.effectiveDate ? row.effectiveDate.toISOString() : null,
+          sortOrder: index,
+        } as Prisma.InputJsonValue,
+      };
+    });
+
+    const dataset = await this.createDatasetVersionWithRows(
+      tenantId,
+      MasterRateDatasetType.DHC_RATES,
+      rows,
+      actorUserId,
+      file.originalname ?? null,
+    );
+
+    return {
+      importedCount: rows.length,
+      items: await this.listDhcRateDatasetItems(tenantId),
+      summary: {
+        ...parsed.summary,
+        datasetId: dataset.id,
+        versionNo: dataset.versionNo,
+        lineCount: rows.length,
+        note: "DHC rates imported into tenant dataset (file not stored).",
+      },
+    };
+  }
+
+  async listDhcRateDatasetItems(tenantId: string) {
+    return this.listDatasetRows(tenantId, MasterRateDatasetType.DHC_RATES).then((rows) =>
+      rows.map((r: any) => ({ ...r, active: r.isActive })),
+    );
+  }
+
+  async replaceDhcRatesDataset(
+    tenantId: string,
+    items: Array<Record<string, any>>,
+    actorUserId: string | null = null,
+  ) {
+    const normalized = (items ?? []).map((r) => ({
+      tenantId,
+      code: String(r.code ?? "").trim(),
+      label: String(r.label ?? "").trim(),
+      amountCents:
+        r.amountCents === null || r.amountCents === undefined
+          ? null
+          : Number.isInteger(Number(r.amountCents))
+            ? Number(r.amountCents)
+            : null,
+      currency: String(r.currency ?? "SGD").trim() || "SGD",
+      isActive: r.active !== false,
+      rawRateText: r.rawRateText ?? null,
+      requiresManualAmount: !!r.requiresManualAmount,
+      hasMultipleRates: !!r.hasMultipleRates,
+      rateOptionsJson: r.rateOptionsJson ?? null,
+      defaultRateOptionIndex:
+        r.defaultRateOptionIndex === null || r.defaultRateOptionIndex === undefined
+          ? null
+          : Number(r.defaultRateOptionIndex),
+      metadataJson: r.metadataJson ?? null,
+    }));
+
+    for (const row of normalized) {
+      if (!row.code || !row.label) {
+        throw new BadRequestException("Each DHC row requires code and label");
+      }
+      if (row.amountCents !== null && row.amountCents < 0) {
+        throw new BadRequestException(`Invalid negative amountCents for ${row.code}`);
+      }
+    }
+
+    await this.replaceDatasetRows(
+      tenantId,
+      MasterRateDatasetType.DHC_RATES,
+      normalized,
+      actorUserId,
+    );
+
+    return this.listDhcRateDatasetItems(tenantId);
   }
 }
