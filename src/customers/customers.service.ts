@@ -912,6 +912,16 @@ export class CustomersService {
     actorUserId: string | null,
     effectiveDateIso?: string | null,
   ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException("file is required");
+    }
+    const originalName = String(file.originalname ?? "").toLowerCase();
+    const mime = String(file.mimetype ?? "").toLowerCase();
+    const isPdf = originalName.endsWith(".pdf") || mime === "application/pdf";
+    if (!isPdf) {
+      throw new BadRequestException("Signed quotation must be a PDF file");
+    }
+
     const company = await this.prisma.customer_companies.findFirst({
       where: { id: companyId, tenantId },
       select: { id: true },

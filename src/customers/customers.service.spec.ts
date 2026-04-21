@@ -100,4 +100,46 @@ describe("CustomersService quotation upload behavior", () => {
     expect(customerRateMasterLineUpdateMany).not.toHaveBeenCalled();
     expect(storageUpload).toHaveBeenCalled();
   });
+
+  it("uploadCompanyQuotation rejects non-PDF signed quotation files", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1" }),
+      },
+    };
+    const supabaseService: any = {
+      getClient: jest.fn().mockReturnValue({
+        storage: {
+          from: jest.fn().mockReturnValue({
+            upload: jest.fn(),
+            createSignedUrl: jest.fn(),
+          }),
+        },
+      }),
+    };
+    const configService: any = {
+      get: jest.fn((k: string) => {
+        if (k === "SUPABASE_PROJECT_URL" || k === "SUPABASE_URL") return "https://supabase.example";
+        if (k === "SUPABASE_SERVICE_ROLE_KEY") return "service-role-key";
+        return null;
+      }),
+    };
+    const audit: any = { log: jest.fn().mockResolvedValue(undefined) };
+    const svc = new CustomersService(prisma, supabaseService, configService, audit);
+
+    await expect(
+      svc.uploadCompanyQuotation(
+        "t1",
+        "c1",
+        {
+          originalname: "signed-quotation.docx",
+          mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          buffer: Buffer.from("x"),
+          size: 10,
+        } as any,
+        "u1",
+        null,
+      ),
+    ).rejects.toThrow("Signed quotation must be a PDF file");
+  });
 });
