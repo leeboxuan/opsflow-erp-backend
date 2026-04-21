@@ -9,6 +9,8 @@ import {
   Prisma,
 } from "@prisma/client";
 import {
+  buildQuotationReconciliation,
+  parseQuotationMatrixFromXlsxBuffer,
   parseQuotationRateLinesFromXlsxBuffer,
 } from "../customers/quotation-parse.helpers";
 import { parseDhcExcelBuffer } from "./parsers/dhc-excel.parser";
@@ -111,6 +113,15 @@ export class MasterDataService {
       throw new BadRequestException("QUOTATION master upload must be Excel (.xlsx/.xls)");
     }
     const lines = parseQuotationRateLinesFromXlsxBuffer(file.buffer);
+    const matrix = parseQuotationMatrixFromXlsxBuffer(file.buffer);
+    const reconciliation = buildQuotationReconciliation(matrix);
+    const hasWfSections =
+      Object.keys(reconciliation.counts).some((k) => ["A/A", "A/B", "B/C"].includes(k));
+    if (!reconciliation.isMatch && hasWfSections) {
+      this.logger.warn(
+        `Quotation reconciliation warnings: ${reconciliation.warnings.join("; ")}`,
+      );
+    }
 
     if (lines.length > 0) {
       const parsedWithManualAmountCount = lines.filter((l) => l.requiresManualAmount).length;
@@ -135,6 +146,7 @@ export class MasterDataService {
         summary: {
           lineCount: lines.length,
           parsedWithManualAmountCount,
+          reconciliation,
           note: "Structured quotation rows parsed from Excel upload.",
         },
         status: MasterFileStatus.PARSED,
@@ -1034,6 +1046,15 @@ export class MasterDataService {
     );
 
     const lines = parseQuotationRateLinesFromXlsxBuffer(file.buffer);
+    const matrix = parseQuotationMatrixFromXlsxBuffer(file.buffer);
+    const reconciliation = buildQuotationReconciliation(matrix);
+    const hasWfSections =
+      Object.keys(reconciliation.counts).some((k) => ["A/A", "A/B", "B/C"].includes(k));
+    if (!reconciliation.isMatch && hasWfSections) {
+      this.logger.warn(
+        `Quotation reconciliation warnings: ${reconciliation.warnings.join("; ")}`,
+      );
+    }
     const normalized = lines.map((l, index) => ({
       tenantId,
       section: l.section ?? null,
@@ -1052,6 +1073,19 @@ export class MasterDataService {
       sortOrder: Number.isInteger(l.sortOrder) ? l.sortOrder : index,
       active: true,
       sourceType: l.sourceType ?? "EXCEL_IMPORT",
+      metadataJson: {
+        annex: (l as any).annex ?? null,
+        sectionCode: (l as any).sectionCode ?? null,
+        groupTitle: (l as any).groupTitle ?? null,
+        sectionDisplay: (l as any).sectionDisplay ?? null,
+        baseCode: (l as any).baseCode ?? null,
+        baseLabel: (l as any).baseLabel ?? null,
+        variantType: (l as any).variantType ?? null,
+        variantLabel: (l as any).variantLabel ?? null,
+        additionalRuleText: (l as any).additionalRuleText ?? null,
+        itemNo: (l as any).itemNo ?? null,
+        parserSourceType: (l as any).sourceType ?? null,
+      } as Prisma.InputJsonValue,
     }));
 
     const dataset = await this.createDatasetVersionWithRows(
@@ -1106,6 +1140,7 @@ export class MasterDataService {
         versionNo: dataset.versionNo,
         sourceFileStorageKey: storageKey,
         lineCount: normalized.length,
+        reconciliation,
         note: "Quotation dataset imported from Excel (source file stored for audit only).",
       },
     };

@@ -128,9 +128,9 @@ describe("workflow helpers", () => {
     const lines = parseQuotationRateLinesFromXlsxBuffer(Buffer.from(buf));
     expect(lines).toHaveLength(2);
     expect(lines[0]).toMatchObject({
-      code: "A1",
-      label: "A1",
-      description: "Container haulage",
+      code: "A_1",
+      label: "Container haulage",
+      description: null,
       unit: "trip",
       rateCents: 12550,
     });
@@ -151,8 +151,8 @@ describe("workflow helpers", () => {
     const lines = parseQuotationRateLinesFromXlsxBuffer(Buffer.from(buf));
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({
-      code: "E1",
-      description: "Season Parking",
+      code: "E_1",
+      description: null,
       rateCents: null,
       requiresManualAmount: true,
       rawRateText: "$450 / $500",

@@ -8,6 +8,11 @@ export type ParsedQuotationRateLineInput = {
   sectionCode?: string | null;
   groupTitle?: string | null;
   sectionDisplay?: string | null;
+  baseCode?: string | null;
+  baseLabel?: string | null;
+  variantType?: string | null;
+  variantLabel?: string | null;
+  additionalRuleText?: string | null;
   itemNo?: string | null;
   section?: string | null;
   code: string;
@@ -26,6 +31,13 @@ export type ParsedQuotationRateLineInput = {
   isSelectableForTripEarning?: boolean;
   sortOrder: number;
   sourceType: string;
+};
+
+export type QuotationReconciliationSummary = {
+  counts: Record<string, number>;
+  expected: Record<string, number>;
+  isMatch: boolean;
+  warnings: string[];
 };
 
 export type ParsedQuotationVariant = {
@@ -160,7 +172,7 @@ function toVariantKey(label: string): string {
 }
 
 function detectAnnex(text: string): { annex: string | null; sectionCode: string | null } {
-  const m = text.match(/\bANNEX\s*([A-C])\b/i);
+  const m = text.match(/\bANNEX\s*([A-Z])\b/i);
   if (!m) return { annex: null, sectionCode: null };
   const sectionCode = m[1].toUpperCase();
   return { annex: sectionCode, sectionCode };
@@ -183,7 +195,10 @@ function isVariantHeaderRow(cells: string[]): boolean {
     /per\s*20/.test(joined) ||
     /per\s*40/.test(joined) ||
     /normal\s*trailer/.test(joined) ||
-    /low\s*bed/.test(joined)
+    /low\s*bed/.test(joined) ||
+    /west\s*area/.test(joined) ||
+    /out\s+of\s+jurong/.test(joined) ||
+    /\bdefault\b/.test(joined)
   );
 }
 
@@ -205,6 +220,66 @@ function parseCellBasedVariants(raw: string): ParsedQuotationVariant[] {
     });
   }
   return out;
+}
+
+function uniquePushVariant(
+  variants: ParsedQuotationVariant[],
+  next: ParsedQuotationVariant,
+): void {
+  const key = `${next.variantKey}|${next.rateCents}|${next.rawValueText ?? ""}`;
+  const exists = variants.some(
+    (v) => `${v.variantKey}|${v.rateCents}|${v.rawValueText ?? ""}` === key,
+  );
+  if (!exists) variants.push({ ...next, sortOrder: variants.length });
+}
+
+function parseInlineLabeledVariants(text: string): ParsedQuotationVariant[] {
+  const out: ParsedQuotationVariant[] = [];
+  const regex =
+    /(Normal Trailer|Low Bed|West Area|Out of Jurong|Within Jurong|Expressway Escort Additional|Default)\s*[:\-]\s*([^;|]+)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text))) {
+    const variantLabel = String(match[1] ?? "").trim();
+    const rawValue = String(match[2] ?? "").trim();
+    const cents = parseMoneyToCents(rawValue);
+    out.push({
+      variantKey: toVariantKey(variantLabel),
+      variantLabel,
+      rateCents: cents,
+      rawValueText: cents == null ? rawValue : null,
+      requiresManualAmount: cents == null,
+      sortOrder: out.length,
+    });
+  }
+  return out;
+}
+
+function parseVariantFromLooseText(text: string): ParsedQuotationVariant | null {
+  const cleaned = String(text ?? "").trim();
+  if (!cleaned) return null;
+  const cents = parseMoneyToCents(cleaned);
+  const isTextRule = /back[-\s]?to[-\s]?back|per\s+unit|calendar\s+day/i.test(cleaned);
+  if (cents != null && !isTextRule) {
+    return {
+      variantKey: "DEFAULT",
+      variantLabel: "Default",
+      rateCents: cents,
+      rawValueText: null,
+      requiresManualAmount: false,
+      sortOrder: 0,
+    };
+  }
+  if (isTextRule || cleaned.length > 0) {
+    return {
+      variantKey: "DEFAULT",
+      variantLabel: "Default",
+      rateCents: null,
+      rawValueText: cleaned,
+      requiresManualAmount: true,
+      sortOrder: 0,
+    };
+  }
+  return null;
 }
 
 export function parseQuotationMatrixFromXlsxBuffer(buffer: Buffer): ParsedQuotationParentItem[] {
@@ -229,6 +304,22 @@ export function parseQuotationMatrixFromXlsxBuffer(buffer: Buffer): ParsedQuotat
     let sectionCode = "";
     let groupTitle = "";
     let variantCols: Array<{ col: number; label: string }> = [];
+    let currentItem: ParsedQuotationParentItem | null = null;
+    let pendingAdditionalRule: string | null = null;
+
+    const finalizeCurrent = () => {
+      if (!currentItem) return;
+      if (pendingAdditionalRule) {
+        currentItem.notes = currentItem.notes
+          ? `${currentItem.notes}; ${pendingAdditionalRule}`
+          : pendingAdditionalRule;
+        pendingAdditionalRule = null;
+      }
+      if (currentItem.variants.length > 0) {
+        out.push(currentItem);
+      }
+      currentItem = null;
+    };
 
     for (const row of rows) {
       if (!Array.isArray(row)) continue;
@@ -240,6 +331,7 @@ export function parseQuotationMatrixFromXlsxBuffer(buffer: Buffer): ParsedQuotat
 
       const annexHit = detectAnnex(joined);
       if (annexHit.annex) {
+        finalizeCurrent();
         annex = annexHit.annex;
         sectionCode = annexHit.sectionCode ?? sectionCode;
         groupTitle = "";
@@ -248,12 +340,14 @@ export function parseQuotationMatrixFromXlsxBuffer(buffer: Buffer): ParsedQuotat
       }
       const sectionHit = joined.match(/\bSECTION\s*([A-Z])\b/i);
       if (sectionHit) {
+        finalizeCurrent();
         sectionCode = sectionHit[1].toUpperCase();
         continue;
       }
 
       if (isGroupTitleRow(cells)) {
-        const codeTitle = joined.match(/^([A-C])\s+(.+)$/i);
+        finalizeCurrent();
+        const codeTitle = joined.match(/^([A-Z])\s+(.+)$/i);
         if (codeTitle) {
           sectionCode = codeTitle[1].toUpperCase();
           groupTitle = codeTitle[2].trim();
@@ -268,7 +362,11 @@ export function parseQuotationMatrixFromXlsxBuffer(buffer: Buffer): ParsedQuotat
         cells.forEach((c, idx) => {
           if (!c) return;
           const key = toVariantKey(c);
-          if (["20FT", "40FT", "NORMAL_TRAILER", "LOW_BED"].includes(key)) {
+          const looksLikeVariant =
+            idx >= 2 &&
+            !/^(item|no|code|description|uom|unit|rate|amount)$/i.test(c) &&
+            /per|trailer|bed|area|jurong|default|20|40|escort|canvas|platform/i.test(c);
+          if (looksLikeVariant || ["20FT", "40FT", "NORMAL_TRAILER", "LOW_BED"].includes(key)) {
             variantCols.push({ col: idx, label: c });
           }
         });
@@ -278,66 +376,65 @@ export function parseQuotationMatrixFromXlsxBuffer(buffer: Buffer): ParsedQuotat
       const c0 = String(cells[0] ?? "").trim();
       const numbered = c0.match(/^(\d+)$/);
       const alphaNum = c0.match(/^([A-Z])(\d+)$/i);
-      if (!numbered && !alphaNum) continue;
-      const lineNo = Number(numbered?.[1] ?? alphaNum?.[2]);
-      const codeSection = ((alphaNum?.[1] ?? sectionCode) || "X").toUpperCase();
-      const code = alphaNum ? c0.toUpperCase() : `${codeSection}_${lineNo}`;
-      const label = alphaNum ? code : String(cells[1] ?? "").trim();
-      const description = alphaNum ? String(cells[1] ?? "").trim() || null : null;
-      if (!label) continue;
+      if (numbered || alphaNum) {
+        finalizeCurrent();
+        const lineNo = Number(numbered?.[1] ?? alphaNum?.[2]);
+        const codeSection = ((alphaNum?.[1] ?? sectionCode) || "X").toUpperCase();
+        const code = alphaNum ? `${codeSection}_${lineNo}` : `${codeSection}_${lineNo}`;
+        const label = String(cells[1] ?? "").trim() || String(cells[2] ?? "").trim();
+        if (!label) continue;
+        currentItem = {
+          annex: annex || "X",
+          sectionCode: codeSection,
+          lineNo,
+          code,
+          label,
+          groupTitle: groupTitle || "UNSPECIFIED",
+          notes: null,
+          sortOrder: sortOrder++,
+          variants: [],
+          unit: String(cells[2] ?? "").trim() || null,
+          description: null,
+        };
+      }
 
-      const variants: ParsedQuotationVariant[] = [];
+      if (!currentItem) continue;
+
+      // Column-based variants
       if (variantCols.length > 0) {
         for (const v of variantCols) {
           const raw = String(cells[v.col] ?? "").trim();
           if (!raw) continue;
           const cents = parseMoneyToCents(raw);
-          variants.push({
+          uniquePushVariant(currentItem.variants, {
             variantKey: toVariantKey(v.label),
             variantLabel: v.label,
             rateCents: cents,
             rawValueText: cents == null ? raw : null,
             requiresManualAmount: cents == null,
-            sortOrder: variants.length,
+            sortOrder: currentItem.variants.length,
           });
         }
       }
 
-      const trailingStart = alphaNum ? 3 : 2;
-      const trailingText = cells.slice(trailingStart).filter(Boolean).join(" ").trim();
-      if (variants.length === 0 && trailingText) {
-        const cellBased = parseCellBasedVariants(trailingText);
-        if (cellBased.length > 0) {
-          cellBased.forEach((v) => variants.push({ ...v, sortOrder: variants.length }));
-        } else {
-          const cents = parseMoneyToCents(trailingText);
-          const onlyMoney = /^[$\s\d,.\-]+$/.test(trailingText);
-          variants.push({
-            variantKey: "DEFAULT",
-            variantLabel: "Default",
-            rateCents: onlyMoney ? cents : null,
-            rawValueText: onlyMoney ? null : trailingText,
-            requiresManualAmount: !onlyMoney || cents == null,
-            sortOrder: 0,
-          });
-        }
+      const cellText = cells.filter(Boolean).join(" ").trim();
+      const cellBased = parseCellBasedVariants(cellText);
+      cellBased.forEach((v) => uniquePushVariant(currentItem!.variants, v));
+      const labeled = parseInlineLabeledVariants(cellText);
+      labeled.forEach((v) => uniquePushVariant(currentItem!.variants, v));
+
+      if (/additional\s+\$?\d/i.test(cellText) && /per\s+hour/i.test(cellText)) {
+        pendingAdditionalRule = cellText;
       }
 
-      if (!variants.length) continue;
-      out.push({
-        annex: annex || "ANNEX UNKNOWN",
-        sectionCode: codeSection,
-        lineNo,
-        code,
-        label,
-        groupTitle: groupTitle || "UNSPECIFIED",
-        notes: null,
-        sortOrder: sortOrder++,
-        variants,
-        unit: String(cells[2] ?? "").trim() || null,
-        description,
-      });
+      if (currentItem.variants.length === 0) {
+        const loose = parseVariantFromLooseText(
+          String(cells[cells.length - 1] ?? "").trim() || cellText,
+        );
+        if (loose) uniquePushVariant(currentItem.variants, loose);
+      }
     }
+    finalizeCurrent();
   }
 
   return out;
@@ -348,11 +445,27 @@ function matrixRowsToParsedLines(rows: ParsedQuotationParentItem[]): ParsedQuota
   let sortOrder = 0;
   for (const row of rows) {
     for (const variant of row.variants) {
+      const variantType =
+        variant.variantKey === "20FT" || variant.variantKey === "40FT"
+          ? "CONTAINER_SIZE"
+          : variant.variantKey.includes("TRAILER") || variant.variantKey.includes("LOW_BED")
+            ? "EQUIPMENT"
+            : variant.variantKey.includes("JURONG") || variant.variantKey.includes("WEST")
+              ? "AREA"
+              : variant.variantKey === "DEFAULT"
+                ? "DEFAULT"
+                : "CONDITION";
       out.push({
         annex: row.annex,
         sectionCode: row.sectionCode,
         groupTitle: row.groupTitle,
         sectionDisplay: row.annex ? `ANNEX ${row.annex}` : null,
+        baseCode: row.code,
+        baseLabel: row.label,
+        variantType,
+        variantLabel: variant.variantLabel,
+        additionalRuleText:
+          row.notes && /additional\s+\$?\d/i.test(row.notes) ? row.notes : null,
         itemNo: String(row.lineNo),
         section: row.annex ? `ANNEX ${row.annex}` : null,
         code:
@@ -599,6 +712,31 @@ export function parseQuotationRateLinesFromXlsxBuffer(
   }
 
   return out;
+}
+
+export function buildQuotationReconciliation(
+  rows: ParsedQuotationParentItem[],
+): QuotationReconciliationSummary {
+  const counts: Record<string, number> = {};
+  for (const row of rows) {
+    const key = `${row.annex}/${row.sectionCode}`;
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  const expected: Record<string, number> = {
+    "A/A": 8,
+    "A/B": 14,
+    "B/C": 5,
+  };
+  const warnings: string[] = [];
+  for (const [key, expectedCount] of Object.entries(expected)) {
+    const actual = counts[key] ?? 0;
+    if (actual !== expectedCount) {
+      warnings.push(
+        `Reconciliation mismatch for ${key}: expected ${expectedCount}, got ${actual}`,
+      );
+    }
+  }
+  return { counts, expected, isMatch: warnings.length === 0, warnings };
 }
 
 export async function parseQuotationRateLinesFromDocxBuffer(
