@@ -6,6 +6,8 @@
 export type ParsedQuotationRateLineInput = {
   annex?: string | null;
   sectionCode?: string | null;
+  groupTitle?: string | null;
+  sectionDisplay?: string | null;
   itemNo?: string | null;
   section?: string | null;
   code: string;
@@ -161,7 +163,7 @@ function detectAnnex(text: string): { annex: string | null; sectionCode: string 
   const m = text.match(/\bANNEX\s*([A-C])\b/i);
   if (!m) return { annex: null, sectionCode: null };
   const sectionCode = m[1].toUpperCase();
-  return { annex: `ANNEX ${sectionCode}`, sectionCode };
+  return { annex: sectionCode, sectionCode };
 }
 
 function isGroupTitleRow(cells: string[]): boolean {
@@ -251,7 +253,13 @@ export function parseQuotationMatrixFromXlsxBuffer(buffer: Buffer): ParsedQuotat
       }
 
       if (isGroupTitleRow(cells)) {
-        groupTitle = joined;
+        const codeTitle = joined.match(/^([A-C])\s+(.+)$/i);
+        if (codeTitle) {
+          sectionCode = codeTitle[1].toUpperCase();
+          groupTitle = codeTitle[2].trim();
+        } else {
+          groupTitle = joined;
+        }
         continue;
       }
 
@@ -343,8 +351,10 @@ function matrixRowsToParsedLines(rows: ParsedQuotationParentItem[]): ParsedQuota
       out.push({
         annex: row.annex,
         sectionCode: row.sectionCode,
+        groupTitle: row.groupTitle,
+        sectionDisplay: row.annex ? `ANNEX ${row.annex}` : null,
         itemNo: String(row.lineNo),
-        section: `${row.annex} ${row.sectionCode}`,
+        section: row.annex ? `ANNEX ${row.annex}` : null,
         code:
           row.variants.length === 1 && variant.variantKey === "DEFAULT"
             ? row.code
@@ -353,8 +363,8 @@ function matrixRowsToParsedLines(rows: ParsedQuotationParentItem[]): ParsedQuota
           row.variants.length === 1 && variant.variantKey === "DEFAULT"
             ? row.label
             : `${row.label} (${variant.variantLabel})`,
-        description: row.description ?? row.groupTitle,
-        category: row.groupTitle,
+        description: row.description ?? null,
+        category: null,
         unit: row.unit ?? null,
         rateCents: variant.rateCents,
         requiresManualAmount: variant.requiresManualAmount,
