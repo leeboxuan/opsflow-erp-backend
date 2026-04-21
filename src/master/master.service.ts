@@ -1024,7 +1024,7 @@ export class MasterDataService {
       throw new BadRequestException("Quotation import must be Excel (.xlsx/.xls)");
     }
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
-    const storageKey = `${tenantId}/master-datasets/quotation/${Date.now()}-${Math.random()
+    const storageKey = `${tenantId}/masters/quotation/${Date.now()}-${Math.random()
       .toString(36)
       .slice(2, 8)}${ext}`;
     await this.uploadMasterObject(
@@ -1065,6 +1065,27 @@ export class MasterDataService {
       actorUserId,
       file.originalname ?? null,
     );
+    await this.prisma.masterFile.create({
+      data: {
+        tenantId,
+        customerCompanyId: null,
+        type: MasterFileType.QUOTATION,
+        fileName: file.originalname ?? "quotation-import.xlsx",
+        fileUrl: storageKey,
+        uploadedByUserId: actorUserId,
+        uploadedAt: new Date(),
+        effectiveDate: null,
+        status: MasterFileStatus.PARSED,
+        parseSummaryJson: {
+          source: "DATASET_IMPORT_AUDIT",
+          datasetType: "QUOTATION",
+          datasetId: dataset.id,
+          versionNo: dataset.versionNo,
+          lineCount: normalized.length,
+        } as Prisma.InputJsonValue,
+        isActive: false,
+      },
+    });
 
     return {
       importedCount: normalized.length,
@@ -1531,7 +1552,7 @@ export class MasterDataService {
       throw new BadRequestException("Trucking rates import must be Excel (.xlsx/.xls)");
     }
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
-    const storageKey = `${tenantId}/master-datasets/trucking-rates/${Date.now()}-${Math.random()
+    const storageKey = `${tenantId}/masters/driver_payout/${Date.now()}-${Math.random()
       .toString(36)
       .slice(2, 8)}${ext}`;
     await this.uploadMasterObject(
@@ -1552,6 +1573,27 @@ export class MasterDataService {
       actorUserId,
       file.originalname ?? null,
     );
+    await this.prisma.masterFile.create({
+      data: {
+        tenantId,
+        customerCompanyId: null,
+        type: MasterFileType.DRIVER_PAYOUT,
+        fileName: file.originalname ?? "trucking-rates-import.xlsx",
+        fileUrl: storageKey,
+        uploadedByUserId: actorUserId,
+        uploadedAt: new Date(),
+        effectiveDate: null,
+        status: MasterFileStatus.PARSED,
+        parseSummaryJson: {
+          source: "DATASET_IMPORT_AUDIT",
+          datasetType: "TRUCKING_RATES",
+          datasetId: dataset.id,
+          versionNo: dataset.versionNo,
+          lineCount: rows.length,
+        } as Prisma.InputJsonValue,
+        isActive: false,
+      },
+    });
     this.logger.log(
       `Imported trucking dataset tenant=${tenantId} dataset=${dataset.id} insertedRows=${rows.length} sourceFile=${storageKey}`,
     );
@@ -1572,7 +1614,7 @@ export class MasterDataService {
       throw new BadRequestException("DHC rates import must be Excel (.xlsx/.xls)");
     }
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
-    const storageKey = `${tenantId}/master-datasets/dhc-rates/${Date.now()}-${Math.random()
+    const storageKey = `${tenantId}/masters/dhc_reference/${Date.now()}-${Math.random()
       .toString(36)
       .slice(2, 8)}${ext}`;
     await this.uploadMasterObject(
@@ -1628,6 +1670,27 @@ export class MasterDataService {
       actorUserId,
       file.originalname ?? null,
     );
+    await this.prisma.masterFile.create({
+      data: {
+        tenantId,
+        customerCompanyId: null,
+        type: MasterFileType.DHC_REFERENCE,
+        fileName: file.originalname ?? "dhc-rates-import.xlsx",
+        fileUrl: storageKey,
+        uploadedByUserId: actorUserId,
+        uploadedAt: new Date(),
+        effectiveDate: null,
+        status: MasterFileStatus.PARSED,
+        parseSummaryJson: {
+          source: "DATASET_IMPORT_AUDIT",
+          datasetType: "DHC_RATES",
+          datasetId: dataset.id,
+          versionNo: dataset.versionNo,
+          lineCount: rows.length,
+        } as Prisma.InputJsonValue,
+        isActive: false,
+      },
+    });
 
     return {
       importedCount: rows.length,
