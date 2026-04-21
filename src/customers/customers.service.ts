@@ -6,7 +6,6 @@ import {
 } from "@nestjs/common";
 import {
   MembershipStatus,
-  MasterFileType,
   QuotationVersionStatus,
   Role,
   UserRole,
@@ -14,10 +13,6 @@ import {
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
 import { AuditService } from "../audit/audit.service";
-import {
-  parseQuotationRateLinesFromDocxBuffer,
-  parseQuotationRateLinesFromXlsxBuffer,
-} from "./quotation-parse.helpers";
 import {
   CreateCustomerCompanyUserDto,
   CustomerCompanyDocumentDto,
@@ -32,17 +27,9 @@ import { createClient } from "@supabase/supabase-js";
 import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
-import { MasterDataService } from "../master/master.service";
 
 const COMPANY_DOCS_BUCKET = "job-documents";
 
-const QUOTATION_MIMES = [
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.ms-excel",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-];
-
-const QUOTATION_EXT = /\.(xlsx|xls|docx)$/i;
 const CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS = 60 * 60;
 
 @Injectable()
@@ -54,7 +41,6 @@ export class CustomersService {
     private readonly supabaseService: SupabaseService,
     private readonly configService: ConfigService,
     private readonly audit: AuditService,
-    private readonly masterDataService: MasterDataService,
   ) {
     const supabaseUrl =
       this.configService.get<string>("SUPABASE_PROJECT_URL") ||
@@ -932,16 +918,6 @@ export class CustomersService {
     });
     if (!company) throw new NotFoundException("Customer company not found");
 
-    const mime = String(file.mimetype ?? "").toLowerCase();
-    const name = (file.originalname ?? "").toLowerCase();
-    const allowedMime =
-      QUOTATION_MIMES.some((m) => mime === m) || QUOTATION_EXT.test(name);
-    if (!allowedMime) {
-      throw new BadRequestException(
-        "Quotation must be an Excel or DOCX file (.xlsx, .xls, .docx). PDF is not supported.",
-      );
-    }
-
     const effectiveDate =
       effectiveDateIso && String(effectiveDateIso).trim()
         ? new Date(String(effectiveDateIso).trim() + "T00:00:00.000Z")
@@ -950,7 +926,7 @@ export class CustomersService {
       throw new BadRequestException("effectiveDate must be YYYY-MM-DD");
     }
 
-    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".xlsx";
+    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
     const key = `${tenantId}/companies/${companyId}/quotations/${Date.now()}${ext}`;
 
     await this.putCompanyQuotationObject(
@@ -958,47 +934,6 @@ export class CustomersService {
       file.buffer,
       file.mimetype ?? "application/octet-stream",
     );
-
-    const isExcelFile =
-      mime ===
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
-      mime === "application/vnd.ms-excel" ||
-      /\.xlsx?$/i.test(name);
-    const isDocxFile =
-      mime ===
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      /\.docx$/i.test(name);
-
-    let parsedLines = isExcelFile
-      ? parseQuotationRateLinesFromXlsxBuffer(file.buffer)
-      : [];
-
-    if (!isExcelFile && isDocxFile) {
-      parsedLines = await parseQuotationRateLinesFromDocxBuffer(file.buffer);
-    }
-    const parsedWithManualAmountCount = parsedLines.filter((line) => line.requiresManualAmount).length;
-
-    const parsedSummaryJson =
-      parsedLines.length === 0
-        ? {
-            note:
-              isDocxFile
-                ? "DOCX uploaded for reference/versioning. Structured extraction is not guaranteed; no deterministic lines were saved."
-                : "No structured rows detected in spreadsheet.",
-          }
-        : isDocxFile
-          ? {
-              lineCount: parsedLines.length,
-              parsedWithManualAmountCount,
-              note:
-                "DOCX uploaded for reference/versioning. Structured extraction is not guaranteed; parsed lines may require review.",
-            }
-          : {
-              lineCount: parsedLines.length,
-              parsedWithManualAmountCount,
-              note:
-                "Excel parsed as structured master source for selectable rates.",
-            };
 
     const quotation = await this.prisma.$transaction(async (tx) => {
       await tx.customerCompanyQuotation.updateMany({
@@ -1021,76 +956,14 @@ export class CustomersService {
           uploadedByUserId: actorUserId ?? null,
           effectiveDate,
           status: QuotationVersionStatus.ACTIVE,
-          parsedSummaryJson,
+          parsedSummaryJson: {
+            note: "Signed quotation uploaded for record keeping only (no parsing).",
+          } as any,
         },
       });
 
-      if (parsedLines.length > 0) {
-        await tx.customerQuotationRateLine.createMany({
-          data: parsedLines.map((line) => ({
-            tenantId,
-            quotationId: q.id,
-            section: line.section ?? null,
-            code: line.code,
-            label: line.label,
-            description: line.description ?? null,
-            unit: line.unit ?? null,
-            rateCents: line.rateCents,
-            requiresManualAmount: !!line.requiresManualAmount,
-            rawRateText: line.rawRateText ?? null,
-            containerSize: line.containerSize ?? null,
-            tripMode: line.tripMode ?? null,
-            areaScope: line.areaScope ?? null,
-            sortOrder: line.sortOrder,
-            sourceType: line.sourceType,
-          })),
-        });
-
-        if (isExcelFile) {
-          await tx.customerRateMasterLine.updateMany({
-            where: { tenantId, customerCompanyId: companyId },
-            data: { active: false },
-          });
-
-          await tx.customerRateMasterLine.createMany({
-            data: parsedLines.map((line) => ({
-              tenantId,
-              customerCompanyId: companyId,
-              sourceQuotationId: q.id,
-              section: line.section ?? null,
-              code: line.code,
-              label: line.label,
-              description: line.description ?? null,
-              category: line.category ?? null,
-              containerSize: line.containerSize ?? null,
-              tripMode: line.tripMode ?? null,
-              areaScope: line.areaScope ?? null,
-              unit: line.unit ?? null,
-              rateCents: line.rateCents,
-              notes: line.notes ?? line.rawRateText ?? null,
-              requiresManualAmount: !!line.requiresManualAmount,
-              rawRateText: line.rawRateText ?? null,
-              isSelectableForJob: line.isSelectableForJob ?? true,
-              isSelectableForTripEarning: line.isSelectableForTripEarning ?? false,
-              active: true,
-              sortOrder: line.sortOrder,
-              sourceType: line.sourceType,
-            })),
-          });
-        }
-      }
-
       return q;
     });
-
-    await this.masterDataService.uploadAndParseMasterFile(
-      tenantId,
-      MasterFileType.CUSTOMER_QUOTATION,
-      file,
-      actorUserId,
-      effectiveDateIso,
-      companyId,
-    );
 
     await this.audit.log(
       tenantId,
@@ -1100,7 +973,6 @@ export class CustomersService {
       {
         quotationId: quotation.id,
         storageKey: key,
-        lineCount: parsedLines.length,
       },
       actorUserId,
     );
@@ -1144,21 +1016,7 @@ export class CustomersService {
   }
 
   async listActiveQuotationRateLines(tenantId: string, companyId: string) {
-    const q = await this.prisma.customerCompanyQuotation.findFirst({
-      where: {
-        tenantId,
-        customerCompanyId: companyId,
-        status: QuotationVersionStatus.ACTIVE,
-      },
-      orderBy: { createdAt: "desc" },
-      select: { id: true },
-    });
-
-    if (!q) return [];
-
-    return this.prisma.customerQuotationRateLine.findMany({
-      where: { tenantId, quotationId: q.id },
-      orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
-    });
+    await this.assertCustomerCompanyExists(tenantId, companyId);
+    return [];
   }
 }

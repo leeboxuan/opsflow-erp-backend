@@ -30,6 +30,7 @@ import {
   DriverTripRateImportSummaryDto,
   UpdateDriverTripRateMasterDto,
 } from "./dto/driver-trip-rate-master.dto";
+import { SaveMasterQuotationItemsDto } from "./dto/master-file-items.dto";
 
 @ApiTags("master-data")
 @Controller("master")
@@ -199,5 +200,22 @@ export class MasterDataController {
   })
   async reprocessMasterFile(@Req() req: any, @Param("id") id: string) {
     return this.master.reprocessMasterFile(req.tenant.tenantId, id);
+  }
+
+  @Patch("files/:id/items")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({
+    summary: "Replace parsed items for a QUOTATION master file version",
+  })
+  async replaceMasterFileItems(
+    @Req() req: any,
+    @Param("id") id: string,
+    @Body() dto: SaveMasterQuotationItemsDto,
+  ) {
+    return this.master.replaceQuotationMasterFileItems(
+      req.tenant.tenantId,
+      id,
+      dto.items ?? [],
+    );
   }
 }

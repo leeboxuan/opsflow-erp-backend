@@ -2,6 +2,41 @@ import { MasterFileStatus, MasterFileType } from "@prisma/client";
 import { MasterDataService } from "./master.service";
 
 describe("MasterDataService getActiveMasterItems", () => {
+  it("rejects deprecated CUSTOMER_QUOTATION master uploads", async () => {
+    const prisma: any = {};
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+
+    await expect(
+      svc.uploadAndParseMasterFile(
+        "t1",
+        MasterFileType.CUSTOMER_QUOTATION,
+        {
+          originalname: "legacy.xlsx",
+          mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          buffer: Buffer.from("x"),
+        } as any,
+        null,
+        null,
+        "comp1",
+      ),
+    ).rejects.toThrow("CUSTOMER_QUOTATION master upload is deprecated. Use QUOTATION.");
+  });
+
+  it("rejects non-excel QUOTATION master uploads", async () => {
+    const prisma: any = {};
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+
+    await expect(
+      (svc as any).parseQuotationItemsFromFile({
+        originalname: "rates.pdf",
+        mimetype: "application/pdf",
+        buffer: Buffer.from("x"),
+      }),
+    ).rejects.toThrow("QUOTATION master upload must be Excel (.xlsx/.xls)");
+  });
+
   it("returns active tenant-wide DRIVER_PAYOUT master and parsed rows", async () => {
     const masterFileFindFirst = jest.fn().mockResolvedValue({
       id: "mf-driver",
@@ -298,6 +333,49 @@ describe("MasterDataService getActiveMasterItems", () => {
       }),
     });
     expect(dhcCreateMany).not.toHaveBeenCalled();
+  });
+
+  it("replaceQuotationMasterFileItems updates QUOTATION parsed rows", async () => {
+    const findFirst = jest
+      .fn()
+      .mockResolvedValueOnce({
+        id: "mf-q",
+        type: MasterFileType.QUOTATION,
+        tenantId: "t1",
+      })
+      .mockResolvedValueOnce({
+        id: "mf-q",
+        tenantId: "t1",
+        type: MasterFileType.QUOTATION,
+        isActive: true,
+        uploadedAt: new Date(),
+      });
+    const prisma: any = {
+      masterFile: {
+        findFirst,
+        update: jest.fn().mockResolvedValue({}),
+      },
+      customerQuotationItem: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([{ id: "i1", code: "A1", label: "Haulage" }]),
+      },
+      driverPayoutItem: { findMany: jest.fn() },
+      dhcReferenceItem: { findMany: jest.fn() },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    const supabase: any = { getClient: jest.fn() };
+    const svc = new MasterDataService(prisma, supabase);
+
+    const result = await svc.replaceQuotationMasterFileItems("t1", "mf-q", [
+      { code: "A1", label: "Haulage", rateCents: 10000 },
+    ]);
+
+    expect(prisma.customerQuotationItem.deleteMany).toHaveBeenCalledWith({
+      where: { tenantId: "t1", masterFileId: "mf-q" },
+    });
+    expect(prisma.customerQuotationItem.createMany).toHaveBeenCalled();
+    expect(result.masterFile?.id).toBe("mf-q");
   });
 
   it("activateMasterFile rejects PARSE_FAILED DHC master", async () => {

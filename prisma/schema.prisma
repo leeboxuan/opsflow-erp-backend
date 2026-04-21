@@ -1156,6 +1156,7 @@ enum CustomerCompanyDocumentStatus {
 }
 
 enum MasterFileType {
+  QUOTATION
   CUSTOMER_QUOTATION
   DRIVER_PAYOUT
   DHC_REFERENCE

@@ -7,7 +7,6 @@ import {
   Prisma,
 } from "@prisma/client";
 import {
-  parseQuotationRateLinesFromDocxBuffer,
   parseQuotationRateLinesFromXlsxBuffer,
 } from "../customers/quotation-parse.helpers";
 import { parseDhcExcelBuffer } from "./parsers/dhc-excel.parser";
@@ -69,20 +68,6 @@ export class MasterDataService {
     return d;
   }
 
-  private async parsePdfTabular(buffer: Buffer): Promise<string[]> {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const pdfParse = require("pdf-parse");
-      const data = await pdfParse(buffer);
-      return String(data?.text ?? "")
-        .split(/\r?\n/)
-        .map((l: string) => l.trim())
-        .filter(Boolean);
-    } catch {
-      return [];
-    }
-  }
-
   private inferMimeFromFileName(fileName: string): string {
     const name = String(fileName ?? "").toLowerCase();
     if (name.endsWith(".pdf")) return "application/pdf";
@@ -118,21 +103,11 @@ export class MasterDataService {
   private async parseQuotationItemsFromFile(file: Express.Multer.File) {
     const mime = String(file.mimetype ?? "").toLowerCase();
     const name = String(file.originalname ?? "").toLowerCase();
-    const isDocx =
-      mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      /\.docx$/i.test(name);
-    const isPdf = mime === "application/pdf" || /\.pdf$/i.test(name);
     const isExcel = /\.xlsx?$/i.test(name);
-
-    if (!isDocx && !isPdf && !isExcel) {
-      throw new BadRequestException("Quotation must be DOCX, PDF, XLSX, or XLS");
+    if (!isExcel) {
+      throw new BadRequestException("QUOTATION master upload must be Excel (.xlsx/.xls)");
     }
-
-    const lines = isDocx
-      ? await parseQuotationRateLinesFromDocxBuffer(file.buffer)
-      : isExcel
-        ? parseQuotationRateLinesFromXlsxBuffer(file.buffer)
-        : [];
+    const lines = parseQuotationRateLinesFromXlsxBuffer(file.buffer);
 
     if (lines.length > 0) {
       const parsedWithManualAmountCount = lines.filter((l) => l.requiresManualAmount).length;
@@ -157,32 +132,15 @@ export class MasterDataService {
         summary: {
           lineCount: lines.length,
           parsedWithManualAmountCount,
-          note: isDocx
-            ? "DOCX parsed on upload (best effort). Structured extraction is not guaranteed."
-            : "Structured quotation rows parsed on upload.",
+          note: "Structured quotation rows parsed from Excel upload.",
         },
         status: MasterFileStatus.PARSED,
       };
     }
 
-    if (isPdf) {
-      const textLines = await this.parsePdfTabular(file.buffer);
-      return {
-        items: [] as any[],
-        summary: {
-          note:
-            textLines.length > 0
-              ? "PDF uploaded. Structured extraction is not guaranteed; no deterministic rows parsed."
-              : "PDF uploaded. Parser unavailable or no parsable text found.",
-          textLineCount: textLines.length,
-        },
-        status: MasterFileStatus.PARSE_FAILED,
-      };
-    }
-
     return {
       items: [] as any[],
-      summary: { note: "No structured quotation rows parsed from uploaded file." },
+      summary: { note: "No structured quotation rows parsed from uploaded Excel file." },
       status: MasterFileStatus.PARSE_FAILED,
     };
   }
@@ -473,12 +431,10 @@ export class MasterDataService {
     if (!file?.buffer?.length) throw new BadRequestException("file is required");
     const effectiveDate = this.parseDate(effectiveDateIso);
     const providedCustomerCompanyId = customerCompanyId?.trim() || null;
-    const scopedCustomerCompanyId =
-      type === MasterFileType.CUSTOMER_QUOTATION ? providedCustomerCompanyId : null;
-
-    if (type === MasterFileType.CUSTOMER_QUOTATION && !scopedCustomerCompanyId) {
+    const scopedCustomerCompanyId = null;
+    if (type === MasterFileType.QUOTATION && providedCustomerCompanyId) {
       throw new BadRequestException(
-        "CUSTOMER_QUOTATION upload requires customerCompanyId",
+        "QUOTATION must be tenant-scoped; customerCompanyId must be null",
       );
     }
     if (
@@ -490,6 +446,11 @@ export class MasterDataService {
         `${type} must be tenant-scoped; customerCompanyId must be null`,
       );
     }
+    if (type === MasterFileType.CUSTOMER_QUOTATION) {
+      throw new BadRequestException(
+        "CUSTOMER_QUOTATION master upload is deprecated. Use QUOTATION.",
+      );
+    }
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
     const key = `${tenantId}/masters/${type.toLowerCase()}/${Date.now()}${ext}`;
     await this.uploadMasterObject(key, file.buffer, file.mimetype ?? "application/octet-stream");
@@ -497,7 +458,7 @@ export class MasterDataService {
     let parsed:
       | { items: any[]; summary: Record<string, unknown>; status?: MasterFileStatus }
       | undefined;
-    if (type === MasterFileType.CUSTOMER_QUOTATION) {
+    if (type === MasterFileType.QUOTATION) {
       parsed = await this.parseQuotationItemsFromFile(file);
     } else if (type === MasterFileType.DRIVER_PAYOUT) {
       parsed = this.parseDriverPayoutItems(file.buffer);
@@ -517,9 +478,7 @@ export class MasterDataService {
             tenantId,
             type,
             isActive: true,
-            ...(type === MasterFileType.CUSTOMER_QUOTATION
-              ? { customerCompanyId: scopedCustomerCompanyId }
-              : { customerCompanyId: null }),
+            customerCompanyId: null,
           },
           data: { isActive: false, status: MasterFileStatus.SUPERSEDED },
         });
@@ -539,7 +498,7 @@ export class MasterDataService {
           isActive: shouldActivateNewFile,
         },
       });
-      if (type === MasterFileType.CUSTOMER_QUOTATION && parsed.items.length) {
+      if (type === MasterFileType.QUOTATION && parsed.items.length) {
         await tx.customerQuotationItem.createMany({
           data: parsed.items.map((r) => ({ tenantId, masterFileId: mf.id, ...r })),
         });
@@ -572,17 +531,12 @@ export class MasterDataService {
     customerCompanyId?: string | null,
   ) {
     let activeWhere: any;
-    if (type === MasterFileType.CUSTOMER_QUOTATION) {
-      if (!customerCompanyId) {
-        throw new BadRequestException(
-          "customerCompanyId is required for CUSTOMER_QUOTATION",
-        );
-      }
+    if (type === MasterFileType.QUOTATION) {
       activeWhere = {
         tenantId,
-        type: MasterFileType.CUSTOMER_QUOTATION,
+        type: MasterFileType.QUOTATION,
         isActive: true,
-        customerCompanyId,
+        customerCompanyId: null,
       };
     } else if (type === MasterFileType.DRIVER_PAYOUT) {
       activeWhere = {
@@ -606,7 +560,7 @@ export class MasterDataService {
       orderBy: { uploadedAt: "desc" },
     });
     if (!active) return { masterFile: null, items: [] };
-    if (type === MasterFileType.CUSTOMER_QUOTATION) {
+    if (type === MasterFileType.QUOTATION) {
       const items = await this.prisma.customerQuotationItem.findMany({
         where: { tenantId, masterFileId: active.id, active: true },
         orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
@@ -678,12 +632,9 @@ export class MasterDataService {
       },
     });
     if (!masterFile) throw new NotFoundException("Master file not found");
-    if (
-      masterFile.type === MasterFileType.CUSTOMER_QUOTATION &&
-      !masterFile.customerCompanyId
-    ) {
+    if (masterFile.type === MasterFileType.CUSTOMER_QUOTATION) {
       throw new BadRequestException(
-        "Invalid CUSTOMER_QUOTATION master scope: customerCompanyId is missing",
+        "Legacy CUSTOMER_QUOTATION reprocess is disabled. Use QUOTATION master files.",
       );
     }
     if (
@@ -713,7 +664,7 @@ export class MasterDataService {
     let parsed:
       | { items: any[]; summary: Record<string, unknown>; status?: MasterFileStatus }
       | undefined;
-    if (masterFile.type === MasterFileType.CUSTOMER_QUOTATION) {
+    if (masterFile.type === MasterFileType.QUOTATION) {
       parsed = await this.parseQuotationItemsFromFile(file);
     } else if (masterFile.type === MasterFileType.DRIVER_PAYOUT) {
       parsed = this.parseDriverPayoutItems(buffer);
@@ -742,7 +693,7 @@ export class MasterDataService {
     };
 
     const counts = await this.prisma.$transaction(async (tx) => {
-      if (masterFile.type === MasterFileType.CUSTOMER_QUOTATION) {
+      if (masterFile.type === MasterFileType.QUOTATION) {
         await tx.customerQuotationItem.deleteMany({
           where: { tenantId, masterFileId: masterFile.id },
         });
@@ -804,6 +755,81 @@ export class MasterDataService {
       parseSummaryJson: nextSummary,
       message: "Reprocess completed from stored source file",
     };
+  }
+
+  async replaceQuotationMasterFileItems(
+    tenantId: string,
+    id: string,
+    items: Array<Record<string, any>>,
+  ) {
+    const masterFile = await this.prisma.masterFile.findFirst({
+      where: { tenantId, id },
+      select: { id: true, type: true, tenantId: true },
+    });
+    if (!masterFile) throw new NotFoundException("Master file not found");
+    if (masterFile.type !== MasterFileType.QUOTATION) {
+      throw new BadRequestException("Only QUOTATION master files support item save");
+    }
+
+    const normalized = (items ?? []).map((r, index) => ({
+      tenantId,
+      masterFileId: masterFile.id,
+      section: r.section ?? null,
+      code: String(r.code ?? "").trim(),
+      label: String(r.label ?? "").trim(),
+      description: r.description ?? null,
+      category: r.category ?? null,
+      containerSize: r.containerSize ?? null,
+      tripMode: r.tripMode ?? null,
+      areaScope: r.areaScope ?? null,
+      unit: r.unit ?? null,
+      rateCents:
+        r.rateCents === null || r.rateCents === undefined
+          ? null
+          : Number.isInteger(Number(r.rateCents))
+            ? Number(r.rateCents)
+            : null,
+      notes: r.notes ?? null,
+      requiresManualAmount: !!r.requiresManualAmount,
+      rawRateText: r.rawRateText ?? null,
+      sortOrder: Number.isInteger(Number(r.sortOrder)) ? Number(r.sortOrder) : index,
+      active: r.active !== false,
+    }));
+
+    for (const row of normalized) {
+      if (!row.code || !row.label) {
+        throw new BadRequestException("Each item requires non-empty code and label");
+      }
+      if (row.rateCents !== null && row.rateCents < 0) {
+        throw new BadRequestException(`Invalid negative rateCents for item ${row.code}`);
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.customerQuotationItem.deleteMany({
+        where: { tenantId, masterFileId: masterFile.id },
+      });
+      if (normalized.length > 0) {
+        await tx.customerQuotationItem.createMany({ data: normalized });
+      }
+      await tx.masterFile.update({
+        where: { id: masterFile.id },
+        data: {
+          status:
+            normalized.length > 0 ? MasterFileStatus.PARSED : MasterFileStatus.PARSE_FAILED,
+          parseSummaryJson: {
+            parserMeta: {
+              source: "MANUAL_EDIT",
+              updatedAt: new Date().toISOString(),
+            },
+            lineCount: normalized.length,
+            note: "Quotation items updated via PATCH /master/files/:id/items",
+          } as Prisma.InputJsonValue,
+        },
+      });
+    });
+
+    return this.getActiveMasterItems(tenantId, MasterFileType.QUOTATION, null);
   }
 
   listDriverTripRateMasters(tenantId: string) {

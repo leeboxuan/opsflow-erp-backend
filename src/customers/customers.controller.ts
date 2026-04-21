@@ -100,7 +100,7 @@ export class CustomersController {
   @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
   @ApiOperation({
     summary:
-      "Upload company quotation (.xlsx/.xls preferred, .docx fallback); supersedes prior ACTIVE",
+      "Upload signed company quotation for record only (no parsing); supersedes prior ACTIVE",
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
@@ -112,7 +112,7 @@ export class CustomersController {
           type: "string",
           format: "binary",
           description:
-            "Accepted file types: .xlsx, .xls, .docx. PDF is not supported.",
+            "Accepted file types: any signed quotation file (pdf, xlsx/xls, docx, etc). Record-only upload.",
         },
         effectiveDate: { type: "string", example: "2026-03-01" },
       },
@@ -164,7 +164,10 @@ export class CustomersController {
   @Get("companies/:companyId/quotation/lines")
   @UseGuards(RoleGuard)
   @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
-  @ApiOperation({ summary: "Structured rate lines for the ACTIVE quotation" })
+  @ApiOperation({
+    summary:
+      "[Deprecated] Customer signed quotation lines endpoint (returns empty; use tenant master QUOTATION active items)",
+  })
   async getActiveQuotationLines(
     @Request() req: any,
     @Param("companyId") companyId: string,

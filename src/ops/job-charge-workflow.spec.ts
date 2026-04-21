@@ -194,6 +194,67 @@ describe("job charge workflow hardening", () => {
     expect(prisma.driverTripRateMaster.findMany).not.toHaveBeenCalled();
   });
 
+  it("billing charge options resolve quotation rows from active tenant QUOTATION master", async () => {
+    const prisma: any = {
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "comp1",
+          status: "Draft",
+          charges: [],
+        }),
+      },
+      masterFile: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({ id: "mf-q" })
+          .mockResolvedValueOnce(null),
+      },
+      customerQuotationItem: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "qi1", code: "Q-1", label: "Haulage", active: true, sortOrder: 0 },
+        ]),
+      },
+      dhcReferenceItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      depotHandlingReference: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    const result = await svc.getBillingChargeOptionsForJob("t1", "job1", {
+      userId: "u1",
+      role: Role.OPS,
+    });
+
+    expect(prisma.masterFile.findFirst).toHaveBeenCalledWith({
+      where: {
+        tenantId: "t1",
+        type: "QUOTATION",
+        customerCompanyId: null,
+        isActive: true,
+      },
+      orderBy: { uploadedAt: "desc" },
+      select: { id: true },
+    });
+    expect(prisma.customerQuotationItem.findMany).toHaveBeenCalledWith({
+      where: { tenantId: "t1", masterFileId: "mf-q", active: true },
+      orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+    });
+    expect(result.quotationLines).toEqual([
+      expect.objectContaining({
+        id: "qi1",
+        code: "Q-1",
+        source: "MASTER_FILE_QUOTATION",
+      }),
+    ]);
+  });
+
   it("create job accepts nested importDetails and maps to import routing fields", async () => {
     const prisma: any = {
       customer_companies: {

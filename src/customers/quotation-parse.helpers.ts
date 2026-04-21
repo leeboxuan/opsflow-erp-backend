@@ -1,10 +1,12 @@
 /**
- * Deterministic extraction of Annex A/B style rows from a controlled quotation XLSX.
- * Looks for a sheet whose name contains "annex" (case-insensitive) or falls back to first sheet.
- * Rows: column A = code/label, column B = description (optional), column C = unit, column D = rate (SGD).
+ * Multi-annex quotation extraction for mixed table shapes.
+ * Supports controlled Excel master sheets and free-form Annex A/B quotation layouts.
  */
 
 export type ParsedQuotationRateLineInput = {
+  annex?: string | null;
+  sectionCode?: string | null;
+  itemNo?: string | null;
   section?: string | null;
   code: string;
   label: string;
@@ -22,6 +24,20 @@ export type ParsedQuotationRateLineInput = {
   isSelectableForTripEarning?: boolean;
   sortOrder: number;
   sourceType: string;
+};
+
+type ParsedQuotationNormalizedRow = {
+  annex: string | null;
+  sectionCode: string | null;
+  itemNo: string | null;
+  section: string | null;
+  code: string;
+  label: string;
+  description: string | null;
+  unit: string | null;
+  variants: Array<{ label: string; amountCents: number | null; currency: string }>;
+  notes: string | null;
+  requiresManualAmount: boolean;
 };
 
 type AnnexContext = {
@@ -114,6 +130,169 @@ function sectionFromContext(context: AnnexContext): string | null {
     return `${context.annex} ${context.section}`;
   }
   return context.annex;
+}
+
+function isLikelyNotesLine(text: string): boolean {
+  return /^(notes?|remarks?)\b/i.test(text.trim());
+}
+
+function extractAmountsWithLabels(
+  row: any[],
+  headerRow: string[],
+): Array<{ label: string; amountCents: number | null; currency: string }> {
+  const variants: Array<{ label: string; amountCents: number | null; currency: string }> = [];
+  for (let i = 0; i < row.length; i++) {
+    const cell = row[i];
+    if (cell == null || String(cell).trim() === "") continue;
+    const parsed = parseRateCell(cell);
+    if (parsed.rateCents == null || parsed.rateCents < 0) continue;
+    const rawLabel = String(headerRow[i] ?? "").trim();
+    const variantLabel = rawLabel || `VARIANT_${i + 1}`;
+    variants.push({ label: variantLabel, amountCents: parsed.rateCents, currency: "SGD" });
+  }
+  return variants;
+}
+
+function parseAnnexLikeRowsFromSheet(rows: any[][]): ParsedQuotationNormalizedRow[] {
+  const out: ParsedQuotationNormalizedRow[] = [];
+  let context: AnnexContext = { annex: null, section: null };
+  let headerRow: string[] = [];
+  let inNotesBlock = false;
+  let autoLine = 1;
+
+  for (const row of rows) {
+    if (!Array.isArray(row)) continue;
+    const cells = row.map((c: any) => String(c ?? "").trim());
+    if (cells.every((c) => !c)) continue;
+
+    for (const cell of cells) {
+      if (!cell) continue;
+      context = updateAnnexContext(cell, context);
+    }
+
+    const joined = cells.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    if (!joined) continue;
+    if (isLikelyNotesLine(joined)) {
+      inNotesBlock = true;
+      continue;
+    }
+    if (inNotesBlock) continue;
+
+    const lowered = cells.map((c) => c.toLowerCase());
+    const looksLikeHeader =
+      lowered.some((c) => /\b(item|code|description|rate|amount|20ft|40ft|unit)\b/.test(c)) &&
+      lowered.filter(Boolean).length >= 2;
+    if (looksLikeHeader) {
+      headerRow = cells;
+      continue;
+    }
+
+    const first = cells[0] ?? "";
+    const second = cells[1] ?? "";
+    const third = cells[2] ?? "";
+
+    const itemNo = /^[a-z]?\d+(?:\.\d+)*[a-z-]*$/i.test(first) ? first : null;
+    const code = itemNo ?? `LINE_${autoLine++}`;
+    const label = (second || first || code).trim();
+    if (!label) continue;
+    const description = third || null;
+
+    const variants = extractAmountsWithLabels(row, headerRow);
+    const rawTexts = cells.filter(Boolean).join(" | ");
+    const backToBack = /\bback[-\s]?to[-\s]?back\b/i.test(rawTexts);
+    let requiresManualAmount = variants.length === 0 && backToBack;
+
+    if (variants.length === 0 && !requiresManualAmount) {
+      const inlineRate = parseRateCell(rawTexts);
+      if (inlineRate.rateCents != null && inlineRate.rateCents >= 0) {
+        variants.push({
+          label: "RATE",
+          amountCents: inlineRate.rateCents,
+          currency: "SGD",
+        });
+      } else if (inlineRate.requiresManualAmount) {
+        requiresManualAmount = true;
+      }
+    }
+
+    if (variants.length === 0 && !requiresManualAmount) continue;
+
+    out.push({
+      annex: context.annex,
+      sectionCode: context.section,
+      itemNo,
+      section: sectionFromContext(context),
+      code,
+      label,
+      description,
+      unit: null,
+      variants,
+      notes: backToBack ? "Back-to-Back" : null,
+      requiresManualAmount,
+    });
+  }
+
+  return out;
+}
+
+function normalizedRowsToParsedLines(
+  rows: ParsedQuotationNormalizedRow[],
+): ParsedQuotationRateLineInput[] {
+  const out: ParsedQuotationRateLineInput[] = [];
+  let sortOrder = 0;
+  for (const row of rows) {
+    if (row.variants.length > 0) {
+      for (const variant of row.variants) {
+        const variantLabel = String(variant.label ?? "").trim();
+        out.push({
+          annex: row.annex,
+          sectionCode: row.sectionCode,
+          itemNo: row.itemNo,
+          section: row.section,
+          code:
+            variantLabel && variantLabel !== "RATE"
+              ? `${row.code}_${variantLabel.replace(/[^a-z0-9]+/gi, "_").toUpperCase()}`
+              : row.code,
+          label:
+            variantLabel && variantLabel !== "RATE"
+              ? `${row.label} (${variantLabel})`
+              : row.label,
+          description: row.description,
+          unit: row.unit,
+          rateCents: variant.amountCents,
+          requiresManualAmount: row.requiresManualAmount,
+          rawRateText: null,
+          containerSize: variantLabel || null,
+          notes: row.notes,
+          sortOrder: sortOrder++,
+          sourceType: "PARSER_ANNEX_MULTI",
+          isSelectableForJob: true,
+          isSelectableForTripEarning: false,
+        });
+      }
+      continue;
+    }
+
+    out.push({
+      annex: row.annex,
+      sectionCode: row.sectionCode,
+      itemNo: row.itemNo,
+      section: row.section,
+      code: row.code,
+      label: row.label,
+      description: row.description,
+      unit: row.unit,
+      rateCents: null,
+      requiresManualAmount: true,
+      rawRateText: row.notes,
+      notes: row.notes,
+      sortOrder: sortOrder++,
+      sourceType: "PARSER_ANNEX_MULTI",
+      isSelectableForJob: true,
+      isSelectableForTripEarning: false,
+    });
+  }
+  return out;
 }
 
 function parseRateLineFromDocxText(
@@ -214,165 +393,122 @@ export function parseQuotationRateLinesFromXlsxBuffer(
   }
 
   const workbook = XLSX.read(buffer, { type: "buffer" });
-  const sheetName =
-    workbook.SheetNames.find((n: string) =>
-      String(n).toLowerCase().includes("annex"),
-    ) ?? workbook.SheetNames[0];
-
-  if (!sheetName) return [];
-
-  const sheet = workbook.Sheets[sheetName];
-  if (!sheet) return [];
-
-  const rows: any[][] = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: "",
-  });
-
+  const annexSheetNames = workbook.SheetNames.filter((n: string) =>
+    String(n).toLowerCase().includes("annex"),
+  );
+  const sheetNames = annexSheetNames.length > 0 ? annexSheetNames : workbook.SheetNames.slice(0, 1);
+  if (!sheetNames.length) return [];
   const out: ParsedQuotationRateLineInput[] = [];
-  let sortOrder = 0;
-  let currentSection: string | null = null;
-
-  const header = (rows[0] ?? []).map((c: any) => String(c ?? "").trim().toLowerCase());
-  const idx = (name: string) => header.findIndex((h: string) => h === name);
-  const controlledHeaderDetected =
-    idx("code") >= 0 &&
-    idx("label") >= 0 &&
-    (idx("ratecents") >= 0 || idx("rate") >= 0);
-
-  if (controlledHeaderDetected) {
-    const idxSection = idx("section");
-    const idxCode = idx("code");
-    const idxLabel = idx("label");
-    const idxDescription = idx("description");
-    const idxCategory = idx("category");
-    const idxContainerSize = idx("containersize");
-    const idxTripMode = idx("tripmode");
-    const idxAreaScope = idx("areascope");
-    const idxUnit = idx("unit");
-    const idxRateCents = idx("ratecents");
-    const idxRate = idx("rate");
-    const idxNotes = idx("notes");
-    const idxSelectableJob = idx("isselectableforjob");
-    const idxSelectableTrip = idx("isselectablefortripearning");
-
-    for (let r = 1; r < rows.length; r++) {
-      const row = rows[r];
-      if (!Array.isArray(row)) continue;
-      const code = String(row[idxCode] ?? "").trim();
-      const label = String(row[idxLabel] ?? "").trim() || code;
-      if (!code || !label) continue;
-
-      const rawRate = idxRateCents >= 0 ? row[idxRateCents] : row[idxRate];
-      const parsedRate =
-        idxRateCents >= 0
-          ? (() => {
-              const rawText = String(rawRate ?? "").trim();
-              const moneyLikeMatches =
-                rawText.match(/-?\$?\s*\d[\d,]*(?:\.\d{1,2})?/g)?.filter(Boolean) ?? [];
-              const hasAmbiguousDelimiter =
-                rawText.includes("/") || /\bto\b/i.test(rawText) || /\bor\b/i.test(rawText);
-              if (moneyLikeMatches.length >= 2 && hasAmbiguousDelimiter) {
-                return {
-                  rateCents: null,
-                  requiresManualAmount: true,
-                  rawRateText: rawText,
-                };
-              }
-              const n = Number(String(rawRate ?? "").replace(/[$,\s]/g, ""));
-              return {
-                rateCents: Number.isNaN(n) ? null : Math.round(n),
-                requiresManualAmount: false,
-                rawRateText: null,
-              };
-            })()
-          : parseRateCell(rawRate);
-      if (
-        (!parsedRate.requiresManualAmount && parsedRate.rateCents == null) ||
-        (parsedRate.rateCents != null && parsedRate.rateCents < 0)
-      ) {
-        continue;
-      }
-
-      out.push({
-        section: idxSection >= 0 ? String(row[idxSection] ?? "").trim() || null : null,
-        code,
-        label,
-        description:
-          idxDescription >= 0 ? String(row[idxDescription] ?? "").trim() || null : null,
-        category: idxCategory >= 0 ? String(row[idxCategory] ?? "").trim() || null : null,
-        containerSize:
-          idxContainerSize >= 0
-            ? String(row[idxContainerSize] ?? "").trim() || null
-            : null,
-        tripMode: idxTripMode >= 0 ? String(row[idxTripMode] ?? "").trim() || null : null,
-        areaScope:
-          idxAreaScope >= 0 ? String(row[idxAreaScope] ?? "").trim() || null : null,
-        unit: idxUnit >= 0 ? String(row[idxUnit] ?? "").trim() || null : null,
-        rateCents:
-          parsedRate.rateCents == null ? null : Math.round(Number(parsedRate.rateCents)),
-        requiresManualAmount: parsedRate.requiresManualAmount,
-        rawRateText: parsedRate.rawRateText,
-        notes:
-          idxNotes >= 0
-            ? String(row[idxNotes] ?? "").trim() || parsedRate.rawRateText
-            : parsedRate.rawRateText,
-        isSelectableForJob:
-          idxSelectableJob >= 0 ? parseBooleanCell(row[idxSelectableJob], true) : true,
-        isSelectableForTripEarning:
-          idxSelectableTrip >= 0
-            ? parseBooleanCell(row[idxSelectableTrip], false)
-            : false,
-        sortOrder: sortOrder++,
-        sourceType: "EXCEL_MASTER_CONTROLLED",
-      });
-    }
-
-    return out;
-  }
-
-  for (const row of rows) {
-    if (!Array.isArray(row)) continue;
-    const a = row[0] != null ? String(row[0]).trim() : "";
-    const b = row[1] != null ? String(row[1]).trim() : "";
-    const c = row[2] != null ? String(row[2]).trim() : "";
-    const d = row[3];
-
-    if (!a && !b && !c && (d == null || String(d).trim() === "")) continue;
-
-    if (/^annex\s+[ab]/i.test(a) || /^section\b/i.test(a)) {
-      currentSection = a;
-      continue;
-    }
-
-    const parsedRate = parseRateCell(d);
-    if (
-      (!parsedRate.requiresManualAmount && parsedRate.rateCents == null) ||
-      (parsedRate.rateCents != null && parsedRate.rateCents < 0)
-    ) {
-      continue;
-    }
-
-    const code = a || `LINE_${sortOrder + 1}`;
-    const label = a || b || code;
-    const description = b && b !== label ? b : null;
-    const unit = c || null;
-
-    out.push({
-      section: currentSection,
-      code,
-      label,
-      description,
-      unit,
-      rateCents: parsedRate.rateCents,
-      requiresManualAmount: parsedRate.requiresManualAmount,
-      rawRateText: parsedRate.rawRateText,
-      notes: parsedRate.rawRateText,
-      sortOrder: sortOrder++,
-      sourceType: "PARSER_ANNEX",
-      isSelectableForJob: true,
-      isSelectableForTripEarning: false,
+  for (const sheetName of sheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    const rows: any[][] = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      defval: "",
     });
+    if (!rows.length) continue;
+
+    const header = (rows[0] ?? []).map((c: any) => String(c ?? "").trim().toLowerCase());
+    const idx = (name: string) => header.findIndex((h: string) => h === name);
+    const controlledHeaderDetected =
+      idx("code") >= 0 &&
+      idx("label") >= 0 &&
+      (idx("ratecents") >= 0 || idx("rate") >= 0);
+
+    if (controlledHeaderDetected) {
+      const idxSection = idx("section");
+      const idxCode = idx("code");
+      const idxLabel = idx("label");
+      const idxDescription = idx("description");
+      const idxCategory = idx("category");
+      const idxContainerSize = idx("containersize");
+      const idxTripMode = idx("tripmode");
+      const idxAreaScope = idx("areascope");
+      const idxUnit = idx("unit");
+      const idxRateCents = idx("ratecents");
+      const idxRate = idx("rate");
+      const idxNotes = idx("notes");
+      const idxSelectableJob = idx("isselectableforjob");
+      const idxSelectableTrip = idx("isselectablefortripearning");
+      let sortOrder = out.length;
+
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r];
+        if (!Array.isArray(row)) continue;
+        const code = String(row[idxCode] ?? "").trim();
+        const label = String(row[idxLabel] ?? "").trim() || code;
+        if (!code || !label) continue;
+
+        const rawRate = idxRateCents >= 0 ? row[idxRateCents] : row[idxRate];
+        const parsedRate =
+          idxRateCents >= 0
+            ? (() => {
+                const rawText = String(rawRate ?? "").trim();
+                const moneyLikeMatches =
+                  rawText.match(/-?\$?\s*\d[\d,]*(?:\.\d{1,2})?/g)?.filter(Boolean) ?? [];
+                const hasAmbiguousDelimiter =
+                  rawText.includes("/") || /\bto\b/i.test(rawText) || /\bor\b/i.test(rawText);
+                if (moneyLikeMatches.length >= 2 && hasAmbiguousDelimiter) {
+                  return { rateCents: null, requiresManualAmount: true, rawRateText: rawText };
+                }
+                const n = Number(String(rawRate ?? "").replace(/[$,\s]/g, ""));
+                return {
+                  rateCents: Number.isNaN(n) ? null : Math.round(n),
+                  requiresManualAmount: false,
+                  rawRateText: null,
+                };
+              })()
+            : parseRateCell(rawRate);
+
+        if (
+          (!parsedRate.requiresManualAmount && parsedRate.rateCents == null) ||
+          (parsedRate.rateCents != null && parsedRate.rateCents < 0)
+        ) {
+          continue;
+        }
+
+        out.push({
+          section: idxSection >= 0 ? String(row[idxSection] ?? "").trim() || null : null,
+          code,
+          label,
+          description:
+            idxDescription >= 0 ? String(row[idxDescription] ?? "").trim() || null : null,
+          category: idxCategory >= 0 ? String(row[idxCategory] ?? "").trim() || null : null,
+          containerSize:
+            idxContainerSize >= 0
+              ? String(row[idxContainerSize] ?? "").trim() || null
+              : null,
+          tripMode: idxTripMode >= 0 ? String(row[idxTripMode] ?? "").trim() || null : null,
+          areaScope:
+            idxAreaScope >= 0 ? String(row[idxAreaScope] ?? "").trim() || null : null,
+          unit: idxUnit >= 0 ? String(row[idxUnit] ?? "").trim() || null : null,
+          rateCents:
+            parsedRate.rateCents == null ? null : Math.round(Number(parsedRate.rateCents)),
+          requiresManualAmount: parsedRate.requiresManualAmount,
+          rawRateText: parsedRate.rawRateText,
+          notes:
+            idxNotes >= 0
+              ? String(row[idxNotes] ?? "").trim() || parsedRate.rawRateText
+              : parsedRate.rawRateText,
+          isSelectableForJob:
+            idxSelectableJob >= 0 ? parseBooleanCell(row[idxSelectableJob], true) : true,
+          isSelectableForTripEarning:
+            idxSelectableTrip >= 0
+              ? parseBooleanCell(row[idxSelectableTrip], false)
+              : false,
+          sortOrder: sortOrder++,
+          sourceType: "EXCEL_MASTER_CONTROLLED",
+        });
+      }
+      continue;
+    }
+
+    const normalized = parseAnnexLikeRowsFromSheet(rows);
+    const parsed = normalizedRowsToParsedLines(normalized);
+    for (const line of parsed) {
+      line.sortOrder = out.length;
+      out.push(line);
+    }
   }
 
   return out;

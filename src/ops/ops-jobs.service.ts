@@ -299,79 +299,28 @@ export class OpsJobsService {
 
   private async resolveQuotationChargeLinesForCustomer(
     tenantId: string,
-    customerCompanyId: string,
+    _customerCompanyId: string,
   ): Promise<{ quotationLines: any[]; masterRateLines: any[] }> {
-    const masterRateLines = await this.prisma.customerRateMasterLine.findMany({
+    const activeFile = await this.prisma.masterFile.findFirst({
       where: {
         tenantId,
-        customerCompanyId,
-        active: true,
-        isSelectableForJob: true,
+        type: MasterFileType.QUOTATION,
+        customerCompanyId: null,
+        isActive: true,
       },
+      orderBy: { uploadedAt: "desc" },
+      select: { id: true },
+    });
+    if (!activeFile) return { quotationLines: [], masterRateLines: [] };
+
+    const rows = await this.prisma.customerQuotationItem.findMany({
+      where: { tenantId, masterFileId: activeFile.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
     });
-
-    const quotationLines = await (async () => {
-      const activeFile = await this.prisma.masterFile.findFirst({
-        where: {
-          tenantId,
-          type: MasterFileType.CUSTOMER_QUOTATION,
-          customerCompanyId,
-          isActive: true,
-        },
-        orderBy: { uploadedAt: "desc" },
-        select: { id: true },
-      });
-      if (activeFile) {
-        const rows = await this.prisma.customerQuotationItem.findMany({
-          where: { tenantId, masterFileId: activeFile.id, active: true },
-          orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
-        });
-        return rows.map((r) => ({
-          ...r,
-          source: "MASTER_FILE_CUSTOMER_QUOTATION",
-        }));
-      }
-      if (masterRateLines.length > 0) {
-        return masterRateLines.map((r) => ({
-          id: r.id,
-          section: r.section,
-          code: r.code,
-          label: r.label,
-          description: r.description,
-          unit: r.unit,
-          rateCents: r.rateCents,
-          containerSize: r.containerSize,
-          tripMode: r.tripMode,
-          areaScope: r.areaScope,
-          sortOrder: r.sortOrder,
-          sourceType: r.sourceType,
-          category: r.category,
-          notes: r.notes,
-          requiresManualAmount: r.requiresManualAmount,
-          rawRateText: r.rawRateText,
-          source: "CUSTOMER_RATE_MASTER",
-        }));
-      }
-      return this.prisma.customerQuotationRateLine.findMany({
-        where: {
-          tenantId,
-          quotation: {
-            tenantId,
-            customerCompanyId,
-          },
-        },
-        orderBy: [
-          { quotation: { createdAt: "desc" } },
-          { sortOrder: "asc" },
-          { code: "asc" },
-          { id: "asc" },
-        ],
-        take: 300,
-      });
-    })();
-
-    return { quotationLines, masterRateLines };
+    return {
+      quotationLines: rows.map((r) => ({ ...r, source: "MASTER_FILE_QUOTATION" })),
+      masterRateLines: [],
+    };
   }
 
   private async persistJobCharges(
