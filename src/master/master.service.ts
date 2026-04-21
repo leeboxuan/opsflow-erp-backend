@@ -1065,26 +1065,37 @@ export class MasterDataService {
       actorUserId,
       file.originalname ?? null,
     );
-    await this.prisma.masterFile.create({
-      data: {
-        tenantId,
-        customerCompanyId: null,
-        type: MasterFileType.QUOTATION,
-        fileName: file.originalname ?? "quotation-import.xlsx",
-        fileUrl: storageKey,
-        uploadedByUserId: actorUserId,
-        uploadedAt: new Date(),
-        effectiveDate: null,
-        status: MasterFileStatus.PARSED,
-        parseSummaryJson: {
-          source: "DATASET_IMPORT_AUDIT",
-          datasetType: "QUOTATION",
-          datasetId: dataset.id,
-          versionNo: dataset.versionNo,
-          lineCount: normalized.length,
-        } as Prisma.InputJsonValue,
-        isActive: false,
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.masterFile.updateMany({
+        where: {
+          tenantId,
+          type: MasterFileType.QUOTATION,
+          isActive: true,
+          customerCompanyId: null,
+        },
+        data: { isActive: false, status: MasterFileStatus.SUPERSEDED },
+      });
+      await tx.masterFile.create({
+        data: {
+          tenantId,
+          customerCompanyId: null,
+          type: MasterFileType.QUOTATION,
+          fileName: file.originalname ?? "quotation-import.xlsx",
+          fileUrl: storageKey,
+          uploadedByUserId: actorUserId,
+          uploadedAt: new Date(),
+          effectiveDate: null,
+          status: MasterFileStatus.PARSED,
+          parseSummaryJson: {
+            source: "DATASET_IMPORT_AUDIT",
+            datasetType: "QUOTATION",
+            datasetId: dataset.id,
+            versionNo: dataset.versionNo,
+            lineCount: normalized.length,
+          } as Prisma.InputJsonValue,
+          isActive: true,
+        },
+      });
     });
 
     return {
@@ -1573,26 +1584,37 @@ export class MasterDataService {
       actorUserId,
       file.originalname ?? null,
     );
-    await this.prisma.masterFile.create({
-      data: {
-        tenantId,
-        customerCompanyId: null,
-        type: MasterFileType.DRIVER_PAYOUT,
-        fileName: file.originalname ?? "trucking-rates-import.xlsx",
-        fileUrl: storageKey,
-        uploadedByUserId: actorUserId,
-        uploadedAt: new Date(),
-        effectiveDate: null,
-        status: MasterFileStatus.PARSED,
-        parseSummaryJson: {
-          source: "DATASET_IMPORT_AUDIT",
-          datasetType: "TRUCKING_RATES",
-          datasetId: dataset.id,
-          versionNo: dataset.versionNo,
-          lineCount: rows.length,
-        } as Prisma.InputJsonValue,
-        isActive: false,
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.masterFile.updateMany({
+        where: {
+          tenantId,
+          type: MasterFileType.DRIVER_PAYOUT,
+          isActive: true,
+          customerCompanyId: null,
+        },
+        data: { isActive: false, status: MasterFileStatus.SUPERSEDED },
+      });
+      await tx.masterFile.create({
+        data: {
+          tenantId,
+          customerCompanyId: null,
+          type: MasterFileType.DRIVER_PAYOUT,
+          fileName: file.originalname ?? "trucking-rates-import.xlsx",
+          fileUrl: storageKey,
+          uploadedByUserId: actorUserId,
+          uploadedAt: new Date(),
+          effectiveDate: null,
+          status: MasterFileStatus.PARSED,
+          parseSummaryJson: {
+            source: "DATASET_IMPORT_AUDIT",
+            datasetType: "TRUCKING_RATES",
+            datasetId: dataset.id,
+            versionNo: dataset.versionNo,
+            lineCount: rows.length,
+          } as Prisma.InputJsonValue,
+          isActive: true,
+        },
+      });
     });
     this.logger.log(
       `Imported trucking dataset tenant=${tenantId} dataset=${dataset.id} insertedRows=${rows.length} sourceFile=${storageKey}`,
@@ -1670,26 +1692,37 @@ export class MasterDataService {
       actorUserId,
       file.originalname ?? null,
     );
-    await this.prisma.masterFile.create({
-      data: {
-        tenantId,
-        customerCompanyId: null,
-        type: MasterFileType.DHC_REFERENCE,
-        fileName: file.originalname ?? "dhc-rates-import.xlsx",
-        fileUrl: storageKey,
-        uploadedByUserId: actorUserId,
-        uploadedAt: new Date(),
-        effectiveDate: null,
-        status: MasterFileStatus.PARSED,
-        parseSummaryJson: {
-          source: "DATASET_IMPORT_AUDIT",
-          datasetType: "DHC_RATES",
-          datasetId: dataset.id,
-          versionNo: dataset.versionNo,
-          lineCount: rows.length,
-        } as Prisma.InputJsonValue,
-        isActive: false,
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.masterFile.updateMany({
+        where: {
+          tenantId,
+          type: MasterFileType.DHC_REFERENCE,
+          isActive: true,
+          customerCompanyId: null,
+        },
+        data: { isActive: false, status: MasterFileStatus.SUPERSEDED },
+      });
+      await tx.masterFile.create({
+        data: {
+          tenantId,
+          customerCompanyId: null,
+          type: MasterFileType.DHC_REFERENCE,
+          fileName: file.originalname ?? "dhc-rates-import.xlsx",
+          fileUrl: storageKey,
+          uploadedByUserId: actorUserId,
+          uploadedAt: new Date(),
+          effectiveDate: null,
+          status: MasterFileStatus.PARSED,
+          parseSummaryJson: {
+            source: "DATASET_IMPORT_AUDIT",
+            datasetType: "DHC_RATES",
+            datasetId: dataset.id,
+            versionNo: dataset.versionNo,
+            lineCount: rows.length,
+          } as Prisma.InputJsonValue,
+          isActive: true,
+        },
+      });
     });
 
     return {
