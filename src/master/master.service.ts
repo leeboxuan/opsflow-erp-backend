@@ -907,22 +907,54 @@ export class MasterDataService {
   }
 
   private async listDatasetRows(tenantId: string, type: MasterRateDatasetType) {
-    const dataset =
-      (await this.prisma.masterRateDataset.findFirst({
-        where: { tenantId, type, status: MasterRateDatasetStatus.ACTIVE },
-        orderBy: { versionNo: "desc" },
-        select: { id: true },
-      })) ??
-      (await this.prisma.masterRateDataset.findFirst({
-        where: { tenantId, type },
-        orderBy: { versionNo: "desc" },
-        select: { id: true },
-      }));
+    const dataset = await this.findPreferredDataset(tenantId, type);
     if (!dataset) return [];
     return this.prisma.masterRateDatasetRow.findMany({
       where: { tenantId, datasetId: dataset.id },
       orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
     });
+  }
+
+  private async findPreferredDataset(tenantId: string, type: MasterRateDatasetType) {
+    return (
+      (await this.prisma.masterRateDataset.findFirst({
+        where: { tenantId, type, status: MasterRateDatasetStatus.ACTIVE },
+        orderBy: { versionNo: "desc" },
+      })) ??
+      (await this.prisma.masterRateDataset.findFirst({
+        where: { tenantId, type },
+        orderBy: { versionNo: "desc" },
+      }))
+    );
+  }
+
+  async getDatasetMetadata(tenantId: string, type: MasterRateDatasetType) {
+    const dataset = await this.findPreferredDataset(tenantId, type);
+    if (!dataset) return { dataset: null };
+    const user = dataset.importedByUserId
+      ? await this.prisma.user.findUnique({
+          where: { id: dataset.importedByUserId },
+          select: { id: true, name: true, email: true },
+        })
+      : null;
+    return {
+      dataset: {
+        id: dataset.id,
+        tenantId: dataset.tenantId,
+        type: dataset.type,
+        versionNo: dataset.versionNo,
+        status: dataset.status,
+        importedAt: dataset.importedAt,
+        importedByUserId: dataset.importedByUserId,
+        importedByName: user?.name ?? null,
+        importedByEmail: user?.email ?? null,
+        sourceFileName: dataset.sourceFileName ?? null,
+        activatedAt: dataset.activatedAt,
+        activatedByUserId: dataset.activatedByUserId,
+        createdAt: dataset.createdAt,
+        updatedAt: dataset.updatedAt,
+      },
+    };
   }
 
   private async replaceDatasetRows(
@@ -991,6 +1023,15 @@ export class MasterDataService {
     if (!isExcel) {
       throw new BadRequestException("Quotation import must be Excel (.xlsx/.xls)");
     }
+    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
+    const storageKey = `${tenantId}/master-datasets/quotation/${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}${ext}`;
+    await this.uploadMasterObject(
+      storageKey,
+      file.buffer,
+      file.mimetype ?? "application/octet-stream",
+    );
 
     const lines = parseQuotationRateLinesFromXlsxBuffer(file.buffer);
     const normalized = lines.map((l, index) => ({
@@ -1031,8 +1072,9 @@ export class MasterDataService {
       summary: {
         datasetId: dataset.id,
         versionNo: dataset.versionNo,
+        sourceFileStorageKey: storageKey,
         lineCount: normalized.length,
-        note: "Quotation dataset imported from Excel (file not stored).",
+        note: "Quotation dataset imported from Excel (source file stored for audit only).",
       },
     };
   }
@@ -1488,6 +1530,15 @@ export class MasterDataService {
     if (!/\.xlsx?$/i.test(name)) {
       throw new BadRequestException("Trucking rates import must be Excel (.xlsx/.xls)");
     }
+    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
+    const storageKey = `${tenantId}/master-datasets/trucking-rates/${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}${ext}`;
+    await this.uploadMasterObject(
+      storageKey,
+      file.buffer,
+      file.mimetype ?? "application/octet-stream",
+    );
     const result = await this.importDriverTripRateMastersFromExcel(tenantId, file.buffer);
     const rows = (result.items ?? []).map((r: any, i: number) => ({
       ...r,
@@ -1502,7 +1553,7 @@ export class MasterDataService {
       file.originalname ?? null,
     );
     this.logger.log(
-      `Imported trucking dataset tenant=${tenantId} dataset=${dataset.id} insertedRows=${rows.length}`,
+      `Imported trucking dataset tenant=${tenantId} dataset=${dataset.id} insertedRows=${rows.length} sourceFile=${storageKey}`,
     );
     return {
       ...result,
@@ -1520,6 +1571,15 @@ export class MasterDataService {
     if (!/\.xlsx?$/i.test(name)) {
       throw new BadRequestException("DHC rates import must be Excel (.xlsx/.xls)");
     }
+    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
+    const storageKey = `${tenantId}/master-datasets/dhc-rates/${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}${ext}`;
+    await this.uploadMasterObject(
+      storageKey,
+      file.buffer,
+      file.mimetype ?? "application/octet-stream",
+    );
     const buffer = file.buffer;
     const parsed = parseDhcExcelBuffer(buffer);
     const rows = parsed.items.map((row, index) => {
@@ -1576,8 +1636,9 @@ export class MasterDataService {
         ...parsed.summary,
         datasetId: dataset.id,
         versionNo: dataset.versionNo,
+        sourceFileStorageKey: storageKey,
         lineCount: rows.length,
-        note: "DHC rates imported into tenant dataset (file not stored).",
+        note: "DHC rates imported into tenant dataset (source file stored for audit only).",
       },
     };
   }

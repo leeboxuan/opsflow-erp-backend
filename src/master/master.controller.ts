@@ -23,7 +23,7 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
 import { MasterDataService } from "./master.service";
-import { MasterFileType, Role } from "@prisma/client";
+import { MasterFileType, MasterRateDatasetType, Role } from "@prisma/client";
 import { RoleGuard, Roles } from "../auth/guards/role.guard";
 import {
   CreateDriverTripRateMasterDto,
@@ -130,7 +130,7 @@ export class MasterDataController {
   @Post("trucking-rates/import")
   @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
   @ApiOperation({
-    summary: "Import tenant trucking rates dataset from Excel only (no file storage)",
+    summary: "Import tenant trucking rates dataset from Excel (source file stored for audit only)",
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
@@ -162,6 +162,16 @@ export class MasterDataController {
     return this.master.listDriverTripRateMasters(req.tenant.tenantId);
   }
 
+  @Get("trucking-rates/metadata")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Get tenant trucking rates dataset metadata (uploader/time)" })
+  getTruckingRateMetadata(@Req() req: any) {
+    return this.master.getDatasetMetadata(
+      req.tenant.tenantId,
+      MasterRateDatasetType.TRUCKING_RATES,
+    );
+  }
+
   @Patch("trucking-rates/items")
   @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
   @ApiOperation({ summary: "Replace tenant trucking rates dataset rows" })
@@ -179,7 +189,7 @@ export class MasterDataController {
   @Post("dhc-rates/import")
   @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
   @ApiOperation({
-    summary: "Import tenant DHC rates dataset from Excel only (no file storage)",
+    summary: "Import tenant DHC rates dataset from Excel (source file stored for audit only)",
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
@@ -206,6 +216,16 @@ export class MasterDataController {
   @ApiOperation({ summary: "List tenant DHC rates dataset rows" })
   listDhcRateItems(@Req() req: any) {
     return this.master.listDhcRateDatasetItems(req.tenant.tenantId);
+  }
+
+  @Get("dhc-rates/metadata")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Get tenant DHC rates dataset metadata (uploader/time)" })
+  getDhcRateMetadata(@Req() req: any) {
+    return this.master.getDatasetMetadata(
+      req.tenant.tenantId,
+      MasterRateDatasetType.DHC_RATES,
+    );
   }
 
   @Patch("dhc-rates/items")
@@ -258,7 +278,7 @@ export class MasterDataController {
   @Post("quotation/import")
   @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
   @ApiOperation({
-    summary: "Import tenant quotation dataset from Excel only (no file storage)",
+    summary: "Import tenant quotation dataset from Excel (source file stored for audit only)",
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
@@ -288,6 +308,13 @@ export class MasterDataController {
   @ApiOperation({ summary: "List tenant quotation dataset rows" })
   getQuotationItems(@Req() req: any) {
     return this.master.listQuotationDatasetItems(req.tenant.tenantId);
+  }
+
+  @Get("quotation/metadata")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @ApiOperation({ summary: "Get tenant quotation dataset metadata (uploader/time)" })
+  getQuotationMetadata(@Req() req: any) {
+    return this.master.getDatasetMetadata(req.tenant.tenantId, MasterRateDatasetType.QUOTATION);
   }
 
   @Patch("quotation/items")
