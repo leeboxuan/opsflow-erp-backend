@@ -2087,10 +2087,12 @@ export class OpsJobsService {
         if (!master) {
           throw new BadRequestException("Driver trip rate master not found");
         }
+        const resolvedAmountCents =
+          master.rateCents != null ? master.rateCents : master.amountCents ?? null;
         if (
           (master.hasMultipleRates && master.defaultRateOptionIndex == null) ||
           master.requiresManualAmount ||
-          master.amountCents == null
+          resolvedAmountCents == null
         ) {
           throw new BadRequestException(
             `Selected trucking rate "${master.label}" requires manual/default rate selection before assignment`,
@@ -2098,7 +2100,7 @@ export class OpsJobsService {
         }
         data.payoutItemId = null;
         data.earningRateMasterId = master.id;
-        data.driverEarningCents = master.amountCents;
+        data.driverEarningCents = resolvedAmountCents;
         data.earningLabelSnapshot = master.label;
       }
     }

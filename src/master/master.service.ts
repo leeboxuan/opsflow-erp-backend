@@ -118,8 +118,10 @@ export class MasterDataService {
     const hasWfSections =
       Object.keys(reconciliation.counts).some((k) => ["A/A", "A/B", "B/C"].includes(k));
     if (!reconciliation.isMatch && hasWfSections) {
-      this.logger.warn(
-        `Quotation reconciliation warnings: ${reconciliation.warnings.join("; ")}`,
+      throw new BadRequestException(
+        `Quotation workbook failed structural reconciliation for OpsFlow WF reference layout: ${reconciliation.warnings.join(
+          "; ",
+        )}`,
       );
     }
 
@@ -1051,8 +1053,10 @@ export class MasterDataService {
     const hasWfSections =
       Object.keys(reconciliation.counts).some((k) => ["A/A", "A/B", "B/C"].includes(k));
     if (!reconciliation.isMatch && hasWfSections) {
-      this.logger.warn(
-        `Quotation reconciliation warnings: ${reconciliation.warnings.join("; ")}`,
+      throw new BadRequestException(
+        `Quotation workbook failed structural reconciliation for OpsFlow WF reference layout: ${reconciliation.warnings.join(
+          "; ",
+        )}`,
       );
     }
     const normalized = lines.map((l, index) => ({
@@ -1073,19 +1077,24 @@ export class MasterDataService {
       sortOrder: Number.isInteger(l.sortOrder) ? l.sortOrder : index,
       active: true,
       sourceType: l.sourceType ?? "EXCEL_IMPORT",
-      metadataJson: {
-        annex: (l as any).annex ?? null,
-        sectionCode: (l as any).sectionCode ?? null,
-        groupTitle: (l as any).groupTitle ?? null,
-        sectionDisplay: (l as any).sectionDisplay ?? null,
-        baseCode: (l as any).baseCode ?? null,
-        baseLabel: (l as any).baseLabel ?? null,
-        variantType: (l as any).variantType ?? null,
-        variantLabel: (l as any).variantLabel ?? null,
-        additionalRuleText: (l as any).additionalRuleText ?? null,
-        itemNo: (l as any).itemNo ?? null,
-        parserSourceType: (l as any).sourceType ?? null,
-      } as Prisma.InputJsonValue,
+      metadataJson: ({
+        ...(l.metadataJson ?? {}),
+        annex: l.annex ?? (l.metadataJson as any)?.annex ?? null,
+        sectionCode: l.sectionCode ?? (l.metadataJson as any)?.sectionCode ?? null,
+        groupTitle: l.groupTitle ?? (l.metadataJson as any)?.groupTitle ?? null,
+        sectionDisplay: l.sectionDisplay ?? (l.metadataJson as any)?.sectionDisplay ?? null,
+        baseCode: l.baseCode ?? (l.metadataJson as any)?.baseCode ?? null,
+        baseLabel: l.baseLabel ?? (l.metadataJson as any)?.baseLabel ?? null,
+        variantType: l.variantType ?? (l.metadataJson as any)?.variantType ?? null,
+        variantLabel: l.variantLabel ?? (l.metadataJson as any)?.variantLabel ?? null,
+        containerSize: l.containerSize ?? (l.metadataJson as any)?.containerSize ?? null,
+        equipmentType: l.equipmentType ?? (l.metadataJson as any)?.equipmentType ?? null,
+        areaScope: l.areaScope ?? (l.metadataJson as any)?.areaScope ?? null,
+        itemNo: l.itemNo ?? (l.metadataJson as any)?.itemNo ?? null,
+        additionalRuleText: l.additionalRuleText ?? (l.metadataJson as any)?.additionalRuleText ?? null,
+        rawValueText: l.rawRateText ?? (l.metadataJson as any)?.rawValueText ?? null,
+        parserSourceType: (l.metadataJson as any)?.parserSourceType ?? "PARSER_ANNEX_MATRIX",
+      } as Prisma.InputJsonValue),
     }));
 
     const dataset = await this.createDatasetVersionWithRows(

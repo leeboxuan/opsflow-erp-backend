@@ -157,15 +157,18 @@ describe("job charge workflow hardening", () => {
 
   it("driver trip rate options for ops come from trucking dataset rows", async () => {
     const prisma: any = {
-      driverTripRateMaster: {
+      masterRateDataset: {
+        findFirst: jest.fn().mockResolvedValue({ id: "ds-trucking" }),
+      },
+      masterRateDatasetRow: {
         findMany: jest.fn().mockResolvedValue([
           {
             id: "tm1",
             code: "TRIP-A",
             label: "Trip A",
-            amountCents: 8000,
+            rateCents: 8000,
             currency: "SGD",
-            active: true,
+            isActive: true,
             hasMultipleRates: false,
             requiresManualAmount: false,
           },
@@ -183,14 +186,14 @@ describe("job charge workflow hardening", () => {
         id: "tm1",
         code: "TRIP-A",
         label: "Trip A",
-        amountCents: 8000,
+        rateCents: 8000,
         currency: "SGD",
-        active: true,
+        isActive: true,
         hasMultipleRates: false,
         requiresManualAmount: false,
       },
     ]);
-    expect(prisma.driverTripRateMaster.findMany).toHaveBeenCalled();
+    expect(prisma.masterRateDatasetRow.findMany).toHaveBeenCalled();
   });
 
   it("billing charge options resolve quotation rows from tenant quotation dataset", async () => {
@@ -204,19 +207,19 @@ describe("job charge workflow hardening", () => {
           charges: [],
         }),
       },
-      tenantQuotationItem: {
-        findMany: jest.fn().mockResolvedValue([
-          { id: "qi1", code: "Q-1", label: "Haulage", active: true, sortOrder: 0 },
-        ]),
+      masterRateDataset: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({ id: "ds-quote" })
+          .mockResolvedValueOnce(null),
       },
-      masterFile: {
-        findFirst: jest.fn().mockResolvedValue(null),
-      },
-      dhcReferenceItem: {
-        findMany: jest.fn().mockResolvedValue([]),
-      },
-      depotHandlingReference: {
-        findMany: jest.fn().mockResolvedValue([]),
+      masterRateDatasetRow: {
+        findMany: jest
+          .fn()
+          .mockResolvedValueOnce([
+            { id: "qi1", code: "Q-1", label: "Haulage", isActive: true, sortOrder: 0 },
+          ])
+          .mockResolvedValueOnce([]),
       },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
@@ -228,8 +231,8 @@ describe("job charge workflow hardening", () => {
       role: Role.OPS,
     });
 
-    expect(prisma.tenantQuotationItem.findMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", active: true },
+    expect(prisma.masterRateDatasetRow.findMany).toHaveBeenCalledWith({
+      where: { tenantId: "t1", datasetId: "ds-quote", isActive: true },
       orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
     });
     expect(result.quotationLines).toEqual([
@@ -252,15 +255,46 @@ describe("job charge workflow hardening", () => {
           charges: [],
         }),
       },
-      tenantQuotationItem: {
-        findMany: jest.fn().mockResolvedValue([]),
+      masterRateDataset: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({ id: "ds-quote" })
+          .mockResolvedValueOnce({ id: "ds-dhc" }),
       },
-      depotHandlingReference: {
-        findMany: jest.fn().mockResolvedValue([
-          { id: "d-fixed", code: "D1", label: "Fixed", amountCents: 8000, hasMultipleRates: false, requiresManualAmount: false },
-          { id: "d-multi", code: "D2", label: "Multi", amountCents: null, hasMultipleRates: true, rateOptionsJson: [{ label: "Old", amountCents: 7000 }, { label: "New", amountCents: 9000 }], requiresManualAmount: false },
-          { id: "d-manual", code: "D3", label: "Manual", amountCents: null, hasMultipleRates: false, requiresManualAmount: true },
-        ]),
+      masterRateDatasetRow: {
+        findMany: jest
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([
+            {
+              id: "d-fixed",
+              code: "D1",
+              label: "Fixed",
+              rateCents: 8000,
+              hasMultipleRates: false,
+              requiresManualAmount: false,
+            },
+            {
+              id: "d-multi",
+              code: "D2",
+              label: "Multi",
+              rateCents: null,
+              hasMultipleRates: true,
+              rateOptionsJson: [
+                { label: "Old", amountCents: 7000 },
+                { label: "New", amountCents: 9000 },
+              ],
+              requiresManualAmount: false,
+            },
+            {
+              id: "d-manual",
+              code: "D3",
+              label: "Manual",
+              rateCents: null,
+              hasMultipleRates: false,
+              requiresManualAmount: true,
+            },
+          ]),
       },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
@@ -272,15 +306,15 @@ describe("job charge workflow hardening", () => {
       role: Role.OPS,
     });
 
-    expect(prisma.depotHandlingReference.findMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", active: true },
+    expect(prisma.masterRateDatasetRow.findMany).toHaveBeenCalledWith({
+      where: { tenantId: "t1", datasetId: "ds-dhc", isActive: true },
       orderBy: { code: "asc" },
     });
     expect(result.dhcReferences).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: "d-fixed", amountCents: 8000, hasMultipleRates: false }),
-        expect.objectContaining({ id: "d-multi", amountCents: null, hasMultipleRates: true }),
-        expect.objectContaining({ id: "d-manual", amountCents: null, requiresManualAmount: true }),
+        expect.objectContaining({ id: "d-fixed", rateCents: 8000, hasMultipleRates: false }),
+        expect.objectContaining({ id: "d-multi", rateCents: null, hasMultipleRates: true }),
+        expect.objectContaining({ id: "d-manual", rateCents: null, requiresManualAmount: true }),
       ]),
     );
   });
@@ -728,7 +762,6 @@ describe("job charge workflow hardening", () => {
             { id: "t2", status: "Closed" },
           ]),
       },
-      tenantQuotationItem: { findMany: jest.fn() },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
@@ -746,7 +779,6 @@ describe("job charge workflow hardening", () => {
     await svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS });
 
     expect(prisma.job.update).toHaveBeenCalled();
-    expect(prisma.tenantQuotationItem.findMany).not.toHaveBeenCalled();
   });
 
   it("requires manual amount when quotation source row is marked requiresManualAmount", async () => {
@@ -764,7 +796,7 @@ describe("job charge workflow hardening", () => {
       $transaction: jest.fn(async (input: any) => {
         if (typeof input === "function") {
           return input({
-            tenantQuotationItem: {
+            masterRateDatasetRow: {
               findMany: jest.fn().mockResolvedValue([
                 {
                   id: "ql-manual",
@@ -823,14 +855,14 @@ describe("job charge workflow hardening", () => {
       .mockResolvedValueOnce({
         id: "m-fixed",
         label: "Fixed",
-        amountCents: 9000,
+        rateCents: 9000,
         hasMultipleRates: false,
         requiresManualAmount: false,
       })
       .mockResolvedValueOnce({
         id: "m-multi",
         label: "Multi",
-        amountCents: null,
+        rateCents: null,
         hasMultipleRates: true,
         defaultRateOptionIndex: null,
         requiresManualAmount: false,
@@ -838,7 +870,7 @@ describe("job charge workflow hardening", () => {
       .mockResolvedValueOnce({
         id: "m-manual",
         label: "Manual",
-        amountCents: null,
+        rateCents: null,
         hasMultipleRates: false,
         requiresManualAmount: true,
       });
@@ -847,7 +879,7 @@ describe("job charge workflow hardening", () => {
         findFirst: tripFindFirst,
         update: tripUpdate,
       },
-      driverTripRateMaster: {
+      masterRateDatasetRow: {
         findFirst: driverTripRateFindFirst,
       },
     };
