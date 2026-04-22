@@ -18,6 +18,7 @@ import { OpsModule } from './ops/ops.module';
 import { VehiclesModule } from './vehicles/vehicles.module';
 import { MasterModule } from './master/master.module';
 import { FleetVehiclesModule } from "./fleet-vehicles/fleet-vehicles.module";
+import { PlacesModule } from './places/places.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { FleetVehiclesModule } from "./fleet-vehicles/fleet-vehicles.module";
     VehiclesModule,
     FleetVehiclesModule,
     MasterModule,
+    PlacesModule,
   ],
   controllers: [AppController],
 })
