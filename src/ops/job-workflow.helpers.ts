@@ -209,6 +209,12 @@ export function tripCreateManyForJob(
   jobId: string,
   jobType: JobType,
   pickupDate: Date | null,
+  routeSnapshots?: Partial<
+    Record<
+      JobTripTemplate,
+      Partial<Prisma.TripCreateManyInput>
+    >
+  >,
 ): Prisma.TripCreateManyInput[] {
   return buildDefaultTripSeeds(jobType, pickupDate).map((s) => ({
     tenantId,
@@ -219,5 +225,6 @@ export function tripCreateManyForJob(
     plannedStartAt: s.plannedStartAt,
     status: TripStatus.Draft,
     completionRuleJson: completionRuleForTemplate(s.jobTripTemplate),
+    ...(routeSnapshots?.[s.jobTripTemplate] ?? {}),
   }));
 }

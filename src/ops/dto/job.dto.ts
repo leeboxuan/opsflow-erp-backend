@@ -36,6 +36,18 @@ export class JobDocumentDto {
 
   @ApiPropertyOptional()
   previewUrl?: string | null;
+
+  @ApiPropertyOptional()
+  requiresSignature?: boolean | null;
+
+  @ApiPropertyOptional()
+  isSigned?: boolean | null;
+
+  @ApiPropertyOptional()
+  signedAt?: Date | null;
+
+  @ApiPropertyOptional()
+  signedByName?: string | null;
 }
 
 export class JobTripLocationDto {

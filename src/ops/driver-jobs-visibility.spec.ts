@@ -63,3 +63,54 @@ describe("driver jobs published-trip visibility", () => {
     expect(args.include.trips.where).toEqual({ status: { not: "Draft" } });
   });
 });
+
+describe("driver trip completion requirements", () => {
+  it("fails completion when required trip document is missing", async () => {
+    const prisma: any = {
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "c1",
+          assignedDriverId: "u1",
+          jobType: "IMPORT",
+          status: "InProgress",
+          documents: [{ type: "DO" }, { type: "SIGNATURE" }],
+        }),
+      },
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          status: "InTransit",
+          completionRuleJson: null,
+        }),
+        update: jest.fn(),
+        count: jest.fn(),
+      },
+      tripDocumentRequirement: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "r1",
+            tripId: "trip1",
+            type: "DELIVERY_DO",
+            label: "Delivery DO",
+            isRequired: true,
+            requiresSignature: false,
+            minCount: 1,
+          },
+        ]),
+      },
+      tripDocument: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new DriverJobsService(prisma, audit, supabaseService);
+    await expect(svc.completeTrip("t1", "job1", "trip1", "u1")).rejects.toThrow(
+      "Delivery DO: requires min 1 upload(s), got 0",
+    );
+  });
+});

@@ -41,6 +41,23 @@ describe("workflow helpers", () => {
     expect(rows[1].status).toBe("Draft");
   });
 
+  it("tripCreateManyForJob accepts route snapshot overrides", () => {
+    const rows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.IMPORT,
+      new Date("2026-03-15"),
+      {
+        [JobTripTemplate.PICKUP_TO_DELIVERY]: {
+          originLabel: "BRANI — Brani Terminal",
+          destinationLabel: "Delivery Address",
+        },
+      },
+    );
+    expect(rows[0].originLabel).toBe("BRANI — Brani Terminal");
+    expect(rows[0].destinationLabel).toBe("Delivery Address");
+  });
+
   it("tripCreateManyForJob creates two EXPORT legs", () => {
     const rows = tripCreateManyForJob(
       "t1",

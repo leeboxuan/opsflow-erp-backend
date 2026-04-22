@@ -202,6 +202,7 @@ export class DriverJobsController {
       required: ["file", "type"],
       properties: {
         type: { type: "string", example: "OFFLOADING" },
+        requiresSignature: { type: "boolean" },
         file: { type: "string", format: "binary" },
       },
     },
@@ -223,6 +224,7 @@ export class DriverJobsController {
       throw new BadRequestException("type must be a valid TripDocumentType");
     }
     const type = typeRaw as TripDocumentType;
+    const requiresSignature = String(body?.requiresSignature ?? "").toLowerCase() === "true";
     return this.driverJobs.uploadTripDocumentForDriver(
       tenantId,
       jobId,
@@ -230,6 +232,28 @@ export class DriverJobsController {
       userId,
       type,
       file,
+      requiresSignature,
+    );
+  }
+
+  @Post(":jobId/trips/:tripId/documents/:documentId/sign")
+  @ApiOperation({ summary: "Mark trip document as signed" })
+  async signTripDocument(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Param("documentId") documentId: string,
+    @Body() body: { signedByName?: string },
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.signTripDocumentForDriver(
+      tenantId,
+      jobId,
+      tripId,
+      documentId,
+      userId,
+      body?.signedByName,
     );
   }
 

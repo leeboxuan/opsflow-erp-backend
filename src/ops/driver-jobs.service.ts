@@ -35,6 +35,13 @@ function toDocDto(d: any): JobDocumentDto {
     sizeBytes: d.sizeBytes ?? null,
     createdAt: d.createdAt,
     url: d.url ?? null,
+    uploadedByUserId: d.uploadedByUserId ?? null,
+    downloadUrl: d.downloadUrl ?? d.url ?? null,
+    previewUrl: d.previewUrl ?? d.url ?? null,
+    requiresSignature: d.requiresSignature ?? false,
+    isSigned: d.isSigned ?? false,
+    signedAt: d.signedAt ?? null,
+    signedByName: d.signedByName ?? null,
   };
 }
 
@@ -211,6 +218,8 @@ export class DriverJobsService {
     return {
       ...base,
       url: data?.signedUrl ?? null,
+      downloadUrl: data?.signedUrl ?? null,
+      previewUrl: data?.signedUrl ?? null,
     };
   }
 
@@ -222,13 +231,23 @@ export class DriverJobsService {
       mimeType: doc.mimeType,
       sizeBytes: doc.sizeBytes ?? null,
       createdAt: doc.createdAt,
+      uploadedByUserId: doc.uploadedByUserId ?? null,
+      requiresSignature: doc.requiresSignature ?? false,
+      isSigned: doc.isSigned ?? false,
+      signedAt: doc.signedAt ?? null,
+      signedByName: doc.signedByName ?? null,
       url: null as string | null,
     };
     const supabase = this.supabaseService.getClient();
     const { data } = await supabase.storage
       .from(JOB_DOCUMENTS_BUCKET)
       .createSignedUrl(doc.storageKey, 60 * 60);
-    return { ...base, url: data?.signedUrl ?? null };
+    return {
+      ...base,
+      url: data?.signedUrl ?? null,
+      downloadUrl: data?.signedUrl ?? null,
+      previewUrl: data?.signedUrl ?? null,
+    };
   }
 
   private async findAssignedJobOrThrow(
@@ -1120,10 +1139,34 @@ export class DriverJobsService {
       throw new BadRequestException("Trip must be InTransit to complete");
     }
 
-    const rule = resolveTripCompletionRule(trip.completionRuleJson);
     const missing: string[] = [];
-
-    if (rule.requireGeneratedDoSigned) {
+    const requirements = await this.prisma.tripDocumentRequirement.findMany({
+      where: { tenantId, tripId },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+    if (requirements.length > 0) {
+      const tripDocs = await this.prisma.tripDocument.findMany({
+        where: { tenantId, tripId },
+        select: { type: true, isSigned: true },
+      });
+      for (const req of requirements) {
+        if (!req.isRequired) continue;
+        const docsForType = tripDocs.filter((d) => d.type === req.type);
+        if (docsForType.length < req.minCount) {
+          missing.push(
+            `${req.label || req.type}: requires min ${req.minCount} upload(s), got ${docsForType.length}`,
+          );
+        }
+        if (req.requiresSignature) {
+          const hasSigned = docsForType.some((d) => d.isSigned);
+          if (!hasSigned) {
+            missing.push(`${req.label || req.type}: signed document required`);
+          }
+        }
+      }
+    } else {
+      const rule = resolveTripCompletionRule(trip.completionRuleJson);
+      if (rule.requireGeneratedDoSigned) {
       const hasGeneratedDo = job.documents.some(
         (d: { type: JobDocumentType }) => d.type === JobDocumentType.DO,
       );
@@ -1133,9 +1176,8 @@ export class DriverJobsService {
       if (!hasGeneratedDo || !hasSig) {
         missing.push("generated receiver DO with signature");
       }
-    }
-
-    if (rule.allowedUploadTypes.length > 0) {
+      }
+      if (rule.allowedUploadTypes.length > 0) {
       const tripDocs = await this.prisma.tripDocument.findMany({
         where: {
           tenantId,
@@ -1162,6 +1204,7 @@ export class DriverJobsService {
           );
         }
       }
+    }
     }
 
     if (missing.length > 0) {
@@ -1274,6 +1317,7 @@ export class DriverJobsService {
     driverUserId: string,
     type: TripDocumentType,
     file: Express.Multer.File,
+    requiresSignature = false,
   ): Promise<JobDocumentDto> {
     await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
     await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
@@ -1307,6 +1351,7 @@ export class DriverJobsService {
         mimeType: file.mimetype ?? "application/octet-stream",
         sizeBytes: file.size ?? null,
         uploadedByUserId: driverUserId,
+        requiresSignature: !!requiresSignature,
       },
     });
 
@@ -1320,5 +1365,38 @@ export class DriverJobsService {
     );
 
     return this.attachTripDocumentSignedUrl(doc);
+  }
+
+  async signTripDocumentForDriver(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    documentId: string,
+    driverUserId: string,
+    signedByName?: string,
+  ): Promise<JobDocumentDto> {
+    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
+    await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
+    const doc = await this.prisma.tripDocument.findFirst({
+      where: { id: documentId, tenantId, tripId },
+    });
+    if (!doc) throw new NotFoundException("Trip document not found");
+    const updated = await this.prisma.tripDocument.update({
+      where: { id: documentId },
+      data: {
+        isSigned: true,
+        signedAt: new Date(),
+        signedByName: signedByName?.trim() || null,
+      },
+    });
+    await this.audit.log(
+      tenantId,
+      "TRIP_DOC_SIGN",
+      "TRIP",
+      tripId,
+      { jobId, documentId },
+      driverUserId,
+    );
+    return this.attachTripDocumentSignedUrl(updated);
   }
 }

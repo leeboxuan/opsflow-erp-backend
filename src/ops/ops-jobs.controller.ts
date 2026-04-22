@@ -647,6 +647,7 @@ export class OpsJobsController {
       required: ["type", "file"],
       properties: {
         type: { type: "string" },
+        requiresSignature: { type: "boolean" },
         file: { type: "string", format: "binary" },
       },
     },
@@ -671,6 +672,32 @@ export class OpsJobsController {
       tripId,
       String(req.body?.type ?? ""),
       file,
+      String(req.body?.requiresSignature ?? "").toLowerCase() === "true",
+      accessUser,
+    );
+  }
+
+  @Post(":jobId/trips/:tripId/documents/:documentId/sign")
+  @ApiOperation({ summary: "Mark trip document as signed (ops/admin)" })
+  async signTripDocument(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Param("documentId") documentId: string,
+    @Body() body: { signedByName?: string },
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.signTripDocument(
+      tenantId,
+      jobId,
+      tripId,
+      documentId,
+      body?.signedByName,
       accessUser,
     );
   }

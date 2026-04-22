@@ -58,6 +58,7 @@ model Tenant {
   driverTripRateMasters        DriverTripRateMaster[]
   tripDocuments                TripDocument[]
   tripPayoutLines              TripPayoutLine[]
+  tripDocumentRequirements     TripDocumentRequirement[]
 
   @@map("tenants")
 }
@@ -302,6 +303,7 @@ model Trip {
   payoutItem           DriverPayoutItem?         @relation(fields: [payoutItemId], references: [id], onDelete: SetNull)
   documents            TripDocument[]
   payoutLines          TripPayoutLine[]
+  documentRequirements TripDocumentRequirement[]
 
   @@index([tenantId, status])
   @@index([tenantId, plannedStartAt])
@@ -1097,6 +1099,10 @@ model TripDocument {
   mimeType         String
   sizeBytes        Int?
   uploadedByUserId String?
+  requiresSignature Boolean          @default(false)
+  isSigned          Boolean          @default(false)
+  signedAt          DateTime?
+  signedByName      String?
   createdAt        DateTime         @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1132,6 +1138,26 @@ model TripPayoutLine {
   @@index([tenantId, payoutItemId])
   @@index([tenantId, earningRateMasterId])
   @@map("trip_payout_lines")
+}
+
+model TripDocumentRequirement {
+  id                String           @id @default(cuid())
+  tenantId          String
+  tripId            String
+  type              TripDocumentType
+  label             String
+  isRequired        Boolean          @default(true)
+  requiresSignature Boolean          @default(false)
+  minCount          Int              @default(1)
+  sortOrder         Int              @default(0)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, tripId])
+  @@map("trip_document_requirements")
 }
 
 /// Global Singapore ports list (not tenant-scoped; extend via migrations or admin later).
@@ -1365,6 +1391,7 @@ enum TripDocumentType {
   POD_PHOTO
   SIGNATURE
   OFFLOADING
+  OFFLOADING_PHOTO
   TRAILER_PARKING_PHOTO
   PICKUP_DO
   DELIVERY_DO

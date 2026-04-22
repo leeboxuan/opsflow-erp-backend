@@ -131,6 +131,10 @@ function toDocDto(d: any): JobDocumentDto {
     uploadedByUserId: d.uploadedByUserId ?? null,
     downloadUrl: d.downloadUrl ?? d.url ?? null,
     previewUrl: d.previewUrl ?? d.url ?? null,
+    requiresSignature: d.requiresSignature ?? false,
+    isSigned: d.isSigned ?? false,
+    signedAt: d.signedAt ?? null,
+    signedByName: d.signedByName ?? null,
   };
 }
 
@@ -855,28 +859,34 @@ export class OpsJobsService {
   }
 
   private async syncTripRouteSnapshotForJob(tenantId: string, jobId: string): Promise<void> {
+    if (
+      !(this.prisma as any).job?.findFirst ||
+      !(this.prisma as any).trip?.update
+    ) {
+      return;
+    }
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
       include: { trips: { orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }] } },
     });
     if (!job) return;
     const [pickupPort, returnDepot, exportPort, exportOriginDepot] = await Promise.all([
-      job.pickupPortCode
+      (this.prisma as any).masterLogisticsLocation && job.pickupPortCode
         ? this.prisma.masterLogisticsLocation.findFirst({
             where: { isActive: true, type: LogisticsLocationType.PORT, code: job.pickupPortCode },
           })
         : Promise.resolve(null),
-      job.returningDepotCode
+      (this.prisma as any).masterLogisticsLocation && job.returningDepotCode
         ? this.prisma.masterLogisticsLocation.findFirst({
             where: { isActive: true, type: LogisticsLocationType.DEPOT, code: job.returningDepotCode },
           })
         : Promise.resolve(null),
-      job.exportPortCode
+      (this.prisma as any).masterLogisticsLocation && job.exportPortCode
         ? this.prisma.masterLogisticsLocation.findFirst({
             where: { isActive: true, type: LogisticsLocationType.PORT, code: job.exportPortCode },
           })
         : Promise.resolve(null),
-      job.exportOriginDepotCode
+      (this.prisma as any).masterLogisticsLocation && job.exportOriginDepotCode
         ? this.prisma.masterLogisticsLocation.findFirst({
             where: {
               isActive: true,
@@ -1324,7 +1334,9 @@ export class OpsJobsService {
         pickupDateParsed,
       ),
     });
-    await this.syncTripRouteSnapshotForJob(tenantId, job.id);
+    if ((this.prisma as any).masterLogisticsLocation) {
+      await this.syncTripRouteSnapshotForJob(tenantId, job.id);
+    }
 
     // Best-effort auto-generate DO after job creation.
     // We do not fail the whole job creation if document generation/storage fails.
@@ -2536,10 +2548,13 @@ export class OpsJobsService {
         "Trip is already published or cannot be published from current status",
       );
     }
-    const payoutLines = await this.prisma.tripPayoutLine.findMany({
-      where: { tenantId, tripId },
-      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-    });
+    const payoutLines =
+      (this.prisma as any).tripPayoutLine?.findMany
+        ? await this.prisma.tripPayoutLine.findMany({
+            where: { tenantId, tripId },
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          })
+        : [];
     if (payoutLines.length > 0) {
       const selectable = payoutLines.filter((l) => l.isSelectableForTripEarning);
       if (!selectable.length) {
@@ -2761,7 +2776,7 @@ export class OpsJobsService {
       where: { tenantId, jobId },
       orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }],
       include: {
-        vehicle: { select: { id: true, plateNo: true } },
+        vehicles: { select: { id: true, plateNo: true } },
         fleetVehicle: { select: { id: true, plateNo: true } },
         documents: { orderBy: { createdAt: "desc" } },
         payoutLines: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
@@ -2842,7 +2857,7 @@ export class OpsJobsService {
       origin,
       destination,
       assignedVehicleId: t.fleetVehicleId ?? t.vehicleId ?? null,
-      assignedVehiclePlateNo: t.fleetVehicle?.plateNo ?? t.vehicle?.plateNo ?? null,
+      assignedVehiclePlateNo: t.fleetVehicle?.plateNo ?? t.vehicles?.plateNo ?? null,
       payoutLines,
       driverEarningCentsTotal,
       liveTracking: {
@@ -2881,6 +2896,7 @@ export class OpsJobsService {
     tripId: string,
     typeRaw: string,
     file: Express.Multer.File,
+    requiresSignature: boolean,
     user: any,
   ) {
     this.assertCustomerCanOnlyRead(user);
@@ -2908,10 +2924,99 @@ export class OpsJobsService {
         mimeType: file.mimetype ?? "application/octet-stream",
         sizeBytes: file.size ?? null,
         uploadedByUserId: actorUserId ?? null,
+        requiresSignature: !!requiresSignature,
       },
     });
     await this.audit.log(tenantId, "TRIP_DOC_UPLOAD", "TRIP", tripId, { type, documentId: doc.id }, actorUserId);
     return this.attachSignedUrl(doc);
+  }
+
+  async signTripDocument(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    documentId: string,
+    signedByName: string | undefined,
+    user: any,
+  ) {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const trip = await this.prisma.trip.findFirst({ where: { id: tripId, tenantId, jobId } });
+    if (!trip) throw new NotFoundException("Trip not found");
+    const doc = await this.prisma.tripDocument.findFirst({
+      where: { id: documentId, tenantId, tripId },
+    });
+    if (!doc) throw new NotFoundException("Trip document not found");
+    const updated = await this.prisma.tripDocument.update({
+      where: { id: documentId },
+      data: {
+        isSigned: true,
+        signedAt: new Date(),
+        signedByName: signedByName?.trim() || null,
+      },
+    });
+    await this.audit.log(
+      tenantId,
+      "TRIP_DOC_SIGN",
+      "TRIP",
+      tripId,
+      { jobId, documentId },
+      actorUserId,
+    );
+    return this.attachSignedUrl(updated);
+  }
+
+  async getTripDetail(tenantId: string, tripId: string, user: any) {
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId },
+      include: {
+        job: { select: { id: true, customerCompanyId: true } },
+        vehicles: { select: { id: true, plateNo: true } },
+        fleetVehicle: { select: { id: true, plateNo: true } },
+        documents: { orderBy: { createdAt: "desc" } },
+        payoutLines: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        documentRequirements: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+    if (trip.job) this.assertCanAccessJob(trip.job, user);
+    const driverLoc = trip.assignedDriverUserId
+      ? await this.prisma.driverLocationLatest.findUnique({
+          where: {
+            tenantId_driverUserId: {
+              tenantId,
+              driverUserId: trip.assignedDriverUserId,
+            },
+          },
+        })
+      : null;
+    const docs = await Promise.all((trip.documents ?? []).map((d) => this.attachSignedUrl(d)));
+    return {
+      id: trip.id,
+      jobId: trip.jobId ?? null,
+      jobSequence: trip.jobSequence ?? null,
+      title: trip.title ?? null,
+      status: trip.status,
+      plannedStartAt: trip.plannedStartAt ?? null,
+      startedAt: trip.startedAt ?? null,
+      closedAt: trip.closedAt ?? null,
+      route: {
+        origin: toTripLocationDto("origin", trip),
+        destination: toTripLocationDto("destination", trip),
+      },
+      payoutLines: trip.payoutLines ?? [],
+      documents: docs,
+      documentRequirements: trip.documentRequirements ?? [],
+      trackingSummary: {
+        driverLat: driverLoc?.lat ?? null,
+        driverLng: driverLoc?.lng ?? null,
+        lastSeenAt: driverLoc?.capturedAt ?? null,
+        isTrackable: !!trip.assignedDriverUserId,
+      },
+      completionRuleJson: trip.completionRuleJson ?? null,
+      driverEarningCents: trip.driverEarningCents ?? null,
+      earningRateMasterId: trip.earningRateMasterId ?? null,
+    };
   }
 
   async listTripPayoutLines(tenantId: string, jobId: string, tripId: string, user: any) {
@@ -2979,7 +3084,7 @@ export class OpsJobsService {
       },
       include: {
         job: { select: { id: true, customerCompanyId: true } },
-        vehicle: { select: { plateNo: true } },
+        vehicles: { select: { plateNo: true } },
         fleetVehicle: { select: { plateNo: true } },
       },
       orderBy: [{ updatedAt: "desc" }],
@@ -3006,7 +3111,7 @@ export class OpsJobsService {
         driverId: trip.assignedDriverUserId,
         driverName:
           (trip.assignedDriverUserId && nameMap.get(trip.assignedDriverUserId)) || null,
-        vehiclePlateNo: trip.fleetVehicle?.plateNo ?? trip.vehicle?.plateNo ?? null,
+        vehiclePlateNo: trip.fleetVehicle?.plateNo ?? trip.vehicles?.plateNo ?? null,
         status: trip.status,
         driverLat: loc?.lat ?? null,
         driverLng: loc?.lng ?? null,
