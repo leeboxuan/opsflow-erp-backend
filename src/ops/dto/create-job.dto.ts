@@ -35,6 +35,14 @@ export class CreateJobItemDto {
 }
 
 export class CreateJobImportDetailsDto {
+  @ApiPropertyOptional({
+    description:
+      "Legacy/FE alias: logistics location id for import pickup port; converted to pickupPortCode server-side",
+  })
+  @IsOptional()
+  @IsString()
+  pickupPortId?: string;
+
   @ApiPropertyOptional({ description: "Required for IMPORT; must match master_singapore_ports.code" })
   @IsOptional()
   @IsString()
@@ -79,6 +87,14 @@ export class CreateJobImportDetailsDto {
   @IsOptional()
   @IsString()
   returningDepotCode?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Legacy/FE alias: logistics location id for return depot; converted to returningDepotCode server-side",
+  })
+  @IsOptional()
+  @IsString()
+  returningDepotId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

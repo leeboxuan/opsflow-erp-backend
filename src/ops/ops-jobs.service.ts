@@ -827,6 +827,18 @@ export class OpsJobsService {
     });
   }
 
+  private async resolveLogisticsCodeFromId(
+    locationId: string | null | undefined,
+    type: LogisticsLocationType,
+  ): Promise<string | null> {
+    if (!locationId) return null;
+    const row = await this.prisma.masterLogisticsLocation.findFirst({
+      where: { id: locationId, type, isActive: true },
+      select: { code: true },
+    });
+    return row?.code ?? null;
+  }
+
   private locationSnapshotFromMaster(master: any) {
     if (!master) return null;
     return {
@@ -1164,9 +1176,17 @@ export class OpsJobsService {
 
     const importDetails = (dto as any).importDetails ?? {};
     const exportDetails = (dto as any).exportDetails ?? {};
-    const pickupPortCode = (
+    const pickupPortId = importDetails.pickupPortId?.trim();
+    const returningDepotId = importDetails.returningDepotId?.trim();
+    const pickupPortCodeInput = (
       dto.pickupPortCode ?? importDetails.pickupPortCode
     )?.trim();
+    const pickupPortCode =
+      pickupPortCodeInput ??
+      (await this.resolveLogisticsCodeFromId(
+        pickupPortId,
+        LogisticsLocationType.PORT,
+      ));
     const portTerminalCode = (
       dto.portTerminalCode ?? importDetails.portTerminalCode
     )?.trim();
@@ -1178,11 +1198,17 @@ export class OpsJobsService {
     const portnetReady =
       dto.portnetReady ?? importDetails.portnetReady ?? false;
     const permitReady = dto.permitReady ?? importDetails.permitReady ?? false;
-    const returningDepotCode = (
+    const returningDepotCodeInput = (
       dto.returningDepotCode ??
       importDetails.returningDepotCode ??
       exportDetails.returnDepotCode
     )?.trim();
+    const returningDepotCode =
+      returningDepotCodeInput ??
+      (await this.resolveLogisticsCodeFromId(
+        returningDepotId,
+        LogisticsLocationType.DEPOT,
+      ));
     const returnLastDay =
       dto.returnLastDay ??
       importDetails.returnLastDay ??
