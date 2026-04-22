@@ -16,6 +16,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConsumes,
+  ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from "@nestjs/swagger";
@@ -39,6 +40,7 @@ import { SaveMasterQuotationItemsDto } from "./dto/master-file-items.dto";
 import { SaveQuotationDatasetDto } from "./dto/quotation-dataset.dto";
 import { SaveTruckingRatesDatasetDto } from "./dto/trucking-rate-dataset.dto";
 import { SaveDhcRatesDatasetDto } from "./dto/dhc-rate-dataset.dto";
+import { SingaporeLocationDto } from "./dto/singapore-location.dto";
 
 @ApiTags("master-data")
 @Controller("master")
@@ -49,12 +51,14 @@ export class MasterDataController {
 
   @Get("singapore-ports")
   @ApiOperation({ summary: "Singapore port terminal codes (controlled list)" })
+  @ApiOkResponse({ type: SingaporeLocationDto, isArray: true })
   singaporePorts() {
     return this.master.listSingaporePorts();
   }
 
   @Get("singapore-depots")
   @ApiOperation({ summary: "Singapore depot codes (controlled list)" })
+  @ApiOkResponse({ type: SingaporeLocationDto, isArray: true })
   singaporeDepots() {
     return this.master.listSingaporeDepots();
   }

@@ -55,42 +55,146 @@ const USERS = {
 };
 
 const SG_PORTS = [
-  { id: "msp_ppap", code: "PPAP", name: "Pasir Panjang Terminal" },
-  { id: "msp_tuas", code: "TUAS", name: "Tuas Port" },
-  { id: "msp_brani", code: "BRANI", name: "Brani Terminal" },
-  { id: "msp_kt", code: "KEPPEL", name: "Keppel Terminal" },
-  { id: "msp_jurong", code: "JURONG", name: "Jurong Port" },
-  { id: "msp_sem", code: "SEMBAWANG", name: "Sembawang Wharves" },
+  {
+    id: "msp_ppap",
+    code: "PPAP",
+    name: "Pasir Panjang Terminal",
+    addressLine1: "Pasir Panjang Terminal Building 3",
+    addressLine2: "25 Harbour Drive",
+    postalCode: "117612",
+    country: "SG",
+    lat: 1.27526,
+    lng: 103.76456,
+    placeId: null,
+  },
+  {
+    id: "msp_tuas",
+    code: "TUAS",
+    name: "Tuas Port",
+    addressLine1: "Tuas Port",
+    addressLine2: "Tuas South Boulevard",
+    postalCode: "637236",
+    country: "SG",
+    lat: 1.23974,
+    lng: 103.62582,
+    placeId: null,
+  },
+  {
+    id: "msp_brani",
+    code: "BRANI",
+    name: "Brani Terminal",
+    addressLine1: "Brani Terminal",
+    addressLine2: null,
+    postalCode: "098947",
+    country: "SG",
+    lat: 1.2629,
+    lng: 103.8458,
+    placeId: null,
+  },
+  {
+    id: "msp_kt",
+    code: "KEPPEL",
+    name: "Keppel Terminal",
+    addressLine1: "Keppel Distripark",
+    addressLine2: "511 Kampong Bahru Road",
+    postalCode: "099447",
+    country: "SG",
+    lat: 1.27354,
+    lng: 103.84129,
+    placeId: null,
+  },
+  {
+    id: "msp_jurong",
+    code: "JURONG",
+    name: "Jurong Port",
+    addressLine1: "37 Jurong Port Road",
+    addressLine2: null,
+    postalCode: "619110",
+    country: "SG",
+    lat: 1.30841,
+    lng: 103.70813,
+    placeId: null,
+  },
+  {
+    id: "msp_sem",
+    code: "SEMBAWANG",
+    name: "Sembawang Wharves",
+    addressLine1: "Sembawang Wharves",
+    addressLine2: null,
+    postalCode: "757700",
+    country: "SG",
+    lat: 1.46295,
+    lng: 103.81237,
+    placeId: null,
+  },
 ];
 
 const SG_DEPOTS = [
-  { id: "msd_gul7", code: "GUL7", name: "7 Gul Circle warehouse / yard" },
+  {
+    id: "msd_gul7",
+    code: "GUL7",
+    name: "7 Gul Circle warehouse / yard",
+    addressLine1: "7 Gul Circle",
+    addressLine2: null,
+    postalCode: "629563",
+    country: "SG",
+    lat: 1.30995,
+    lng: 103.65573,
+    placeId: null,
+  },
   {
     id: "msd_gul_default",
     code: "GUL_DEFAULT",
     name: "7 Gul Circle - default return",
+    addressLine1: "7 Gul Circle",
+    addressLine2: null,
+    postalCode: "629563",
+    country: "SG",
+    lat: 1.30995,
+    lng: 103.65573,
+    placeId: null,
   },
   {
     id: "msd_tuas",
     code: "TUAS_DEPOT",
     name: "Tuas logistics depot (placeholder)",
+    addressLine1: "15 Tuas Avenue 18",
+    addressLine2: null,
+    postalCode: "638898",
+    country: "SG",
+    lat: 1.32545,
+    lng: 103.64648,
+    placeId: null,
   },
   {
     id: "msd_pasir",
     code: "PASIR_DEPOT",
     name: "Pasir Panjang area depot (placeholder)",
+    addressLine1: "30 Pasir Panjang Road",
+    addressLine2: null,
+    postalCode: "118503",
+    country: "SG",
+    lat: 1.28124,
+    lng: 103.78309,
+    placeId: null,
   },
 ];
 
 async function seedSingaporeMasters() {
-  await prisma.masterSingaporePort.createMany({
-    data: SG_PORTS,
-    skipDuplicates: true,
-  });
-  await prisma.masterSingaporeDepot.createMany({
-    data: SG_DEPOTS,
-    skipDuplicates: true,
-  });
+  for (const row of SG_PORTS) {
+    await prisma.masterSingaporePort.upsert({
+      where: { code: row.code },
+      update: row,
+      create: row,
+    });
+  }
+  for (const row of SG_DEPOTS) {
+    await prisma.masterSingaporeDepot.upsert({
+      where: { code: row.code },
+      update: row,
+      create: row,
+    });
+  }
   await seedMasterLogisticsLocations(prisma);
   console.log("✅ Singapore ports/depots seeded");
 }

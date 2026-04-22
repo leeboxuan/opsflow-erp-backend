@@ -1164,17 +1164,31 @@ model TripDocumentRequirement {
 
 /// Global Singapore ports list (not tenant-scoped; extend via migrations or admin later).
 model MasterSingaporePort {
-  id   String @id @default(cuid())
-  code String @unique
-  name String
+  id           String  @id @default(cuid())
+  code         String  @unique
+  name         String
+  addressLine1 String?
+  addressLine2 String?
+  postalCode   String?
+  country      String? @default("SG")
+  lat          Float?
+  lng          Float?
+  placeId      String?
 
   @@map("master_singapore_ports")
 }
 
 model MasterSingaporeDepot {
-  id   String @id @default(cuid())
-  code String @unique
-  name String
+  id           String  @id @default(cuid())
+  code         String  @unique
+  name         String
+  addressLine1 String?
+  addressLine2 String?
+  postalCode   String?
+  country      String? @default("SG")
+  lat          Float?
+  lng          Float?
+  placeId      String?
 
   @@map("master_singapore_depots")
 }

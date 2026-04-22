@@ -31,15 +31,53 @@ export class MasterDataService {
   private readonly MASTER_BUCKET = "job-documents";
 
   listSingaporePorts() {
-    return this.prisma.masterSingaporePort.findMany({
-      orderBy: { code: "asc" },
-    });
+    return this.prisma.masterSingaporePort
+      .findMany({
+        orderBy: { code: "asc" },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          addressLine1: true,
+          addressLine2: true,
+          postalCode: true,
+          country: true,
+          lat: true,
+          lng: true,
+          placeId: true,
+        },
+      })
+      .then((rows) =>
+        rows.map((row) => ({
+          ...row,
+          label: `${row.code} — ${row.name}`,
+        })),
+      );
   }
 
   listSingaporeDepots() {
-    return this.prisma.masterSingaporeDepot.findMany({
-      orderBy: { code: "asc" },
-    });
+    return this.prisma.masterSingaporeDepot
+      .findMany({
+        orderBy: { code: "asc" },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          addressLine1: true,
+          addressLine2: true,
+          postalCode: true,
+          country: true,
+          lat: true,
+          lng: true,
+          placeId: true,
+        },
+      })
+      .then((rows) =>
+        rows.map((row) => ({
+          ...row,
+          label: `${row.code} — ${row.name}`,
+        })),
+      );
   }
 
   listTrailerLocations() {
