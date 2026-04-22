@@ -187,8 +187,8 @@ export function buildDefaultTripSeeds(
       },
       {
         jobSequence: 2,
-        jobTripTemplate: JobTripTemplate.DELIVERY_TO_DEPOT,
-        title: "Stuffing destination to return depot",
+        jobTripTemplate: JobTripTemplate.DELIVERY_TO_PORT,
+        title: "Stuffing destination to port",
         plannedStartAt: planned,
       },
     ];

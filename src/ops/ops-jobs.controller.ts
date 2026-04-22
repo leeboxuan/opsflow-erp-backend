@@ -41,6 +41,7 @@ import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
 import {
   AppendJobTripDto,
   PatchJobTripDto,
+  PutTripPayoutLinesDto,
   ReorderJobTripsDto,
 } from "./dto/job-trip.dto";
 import { JobDto, JobTripResponseDto } from "./dto/job.dto";
@@ -267,6 +268,19 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.lclImportConfirm(tenantId, dto, accessUser);
+  }
+
+  @Get("tracking/live")
+  @ApiOperation({ summary: "List live trip tracking rows for active/published trips" })
+  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  async listLiveTracking(@Req() req: any) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.listLiveTripTracking(tenantId, accessUser);
   }
 
   @Get(":jobId")
@@ -605,6 +619,99 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.publishTrip(tenantId, jobId, tripId, accessUser);
+  }
+
+  @Get(":jobId/trips/:tripId/documents")
+  @ApiOperation({ summary: "List trip documents with signed URLs" })
+  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  async listTripDocuments(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.listTripDocuments(tenantId, jobId, tripId, accessUser);
+  }
+
+  @Post(":jobId/trips/:tripId/documents")
+  @ApiOperation({ summary: "Upload trip document (ops/admin)" })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["type", "file"],
+      properties: {
+        type: { type: "string" },
+        file: { type: "string", format: "binary" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  async uploadTripDocument(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.uploadTripDocument(
+      tenantId,
+      jobId,
+      tripId,
+      String(req.body?.type ?? ""),
+      file,
+      accessUser,
+    );
+  }
+
+  @Get(":jobId/trips/:tripId/payout-lines")
+  @ApiOperation({ summary: "List payout lines for a trip" })
+  async listTripPayoutLines(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.listTripPayoutLines(tenantId, jobId, tripId, accessUser);
+  }
+
+  @Put(":jobId/trips/:tripId/payout-lines")
+  @ApiOperation({ summary: "Replace payout lines for a trip" })
+  async putTripPayoutLines(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Body() dto: PutTripPayoutLinesDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.replaceTripPayoutLines(
+      tenantId,
+      jobId,
+      tripId,
+      dto.lines ?? [],
+      accessUser,
+    );
   }
 
   @Post(":jobId/send-to-invoice")

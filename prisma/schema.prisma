@@ -57,6 +57,7 @@ model Tenant {
   depotHandlingReferences      DepotHandlingReference[]
   driverTripRateMasters        DriverTripRateMaster[]
   tripDocuments                TripDocument[]
+  tripPayoutLines              TripPayoutLine[]
 
   @@map("tenants")
 }
@@ -271,6 +272,24 @@ model Trip {
   trailerLastLocationCode String?
   /// e.g. { "requireJobDoSigned": true, "requiredTripUploadTypes": ["OFFLOADING"] }
   completionRuleJson      Json?
+  originLocationId        String?
+  originLabel             String?
+  originAddressLine1      String?
+  originAddressLine2      String?
+  originPostalCode        String?
+  originCountry           String?
+  originLat               Float?
+  originLng               Float?
+  originPlaceId           String?
+  destinationLocationId   String?
+  destinationLabel        String?
+  destinationAddressLine1 String?
+  destinationAddressLine2 String?
+  destinationPostalCode   String?
+  destinationCountry      String?
+  destinationLat          Float?
+  destinationLng          Float?
+  destinationPlaceId      String?
   walletTransactions   DriverWalletTransaction[]
   stops                Stop[]
   inventory_units      inventory_units[]
@@ -282,6 +301,7 @@ model Trip {
   earningRateMaster    DriverTripRateMaster?     @relation(fields: [earningRateMasterId], references: [id], onDelete: SetNull)
   payoutItem           DriverPayoutItem?         @relation(fields: [payoutItemId], references: [id], onDelete: SetNull)
   documents            TripDocument[]
+  payoutLines          TripPayoutLine[]
 
   @@index([tenantId, status])
   @@index([tenantId, plannedStartAt])
@@ -293,6 +313,28 @@ model Trip {
   @@index([tenantId, jobId])
   @@index([tenantId, jobId, jobSequence])
   @@map("trips")
+}
+
+model MasterLogisticsLocation {
+  id           String                @id @default(cuid())
+  code         String
+  name         String
+  type         LogisticsLocationType
+  addressLine1 String
+  addressLine2 String?
+  postalCode   String?
+  country      String                @default("SG")
+  lat          Float?
+  lng          Float?
+  placeId      String?
+  isActive     Boolean               @default(true)
+  sortOrder    Int                   @default(0)
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  @@unique([type, code])
+  @@index([type, isActive])
+  @@map("master_logistics_locations")
 }
 
 model MasterFile {
@@ -437,6 +479,7 @@ model MasterRateDatasetRow {
 
   dataset MasterRateDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
   tenant  Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tripPayoutLines TripPayoutLine[]
 
   @@index([tenantId, datasetId])
   @@index([tenantId, code])
@@ -470,6 +513,7 @@ model DriverPayoutItem {
   tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   masterFile MasterFile @relation(fields: [masterFileId], references: [id], onDelete: Cascade)
   trips      Trip[]
+  tripPayoutLines TripPayoutLine[]
 
   @@index([tenantId, masterFileId])
   @@index([tenantId, active, code])
@@ -1063,6 +1107,33 @@ model TripDocument {
   @@map("trip_documents")
 }
 
+model TripPayoutLine {
+  id                        String             @id @default(cuid())
+  tenantId                  String
+  tripId                    String
+  sourceType                JobChargeSourceType
+  payoutItemId              String?
+  earningRateMasterId       String?
+  code                      String?
+  label                     String
+  amountCents               Int?
+  requiresManualAmount      Boolean            @default(false)
+  isSelectableForTripEarning Boolean           @default(true)
+  sortOrder                 Int                @default(0)
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+
+  tenant            Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip              Trip                 @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  payoutItem        DriverPayoutItem?    @relation(fields: [payoutItemId], references: [id], onDelete: SetNull)
+  earningRateMaster MasterRateDatasetRow? @relation(fields: [earningRateMasterId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, tripId])
+  @@index([tenantId, payoutItemId])
+  @@index([tenantId, earningRateMasterId])
+  @@map("trip_payout_lines")
+}
+
 /// Global Singapore ports list (not tenant-scoped; extend via migrations or admin later).
 model MasterSingaporePort {
   id   String @id @default(cuid())
@@ -1296,7 +1367,13 @@ enum TripDocumentType {
   OFFLOADING
   TRAILER_PARKING_PHOTO
   PICKUP_DO
+  DELIVERY_DO
   OTHER
+}
+
+enum LogisticsLocationType {
+  PORT
+  DEPOT
 }
 
 enum VehicleType {

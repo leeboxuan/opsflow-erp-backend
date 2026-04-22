@@ -81,6 +81,74 @@ const SG_DEPOTS = [
   },
 ];
 
+const LOGISTICS_LOCATIONS = [
+  {
+    code: "BRANI",
+    name: "Brani Terminal",
+    type: "PORT",
+    addressLine1: "Brani Terminal",
+    addressLine2: null,
+    postalCode: null,
+    country: "SG",
+    lat: 1.2629,
+    lng: 103.8458,
+    placeId: null,
+    sortOrder: 10,
+  },
+  {
+    code: "PPAP",
+    name: "Pasir Panjang Terminal",
+    type: "PORT",
+    addressLine1: "Pasir Panjang Terminal",
+    addressLine2: null,
+    postalCode: null,
+    country: "SG",
+    lat: null,
+    lng: null,
+    placeId: null,
+    sortOrder: 20,
+  },
+  {
+    code: "TUAS",
+    name: "Tuas Port",
+    type: "PORT",
+    addressLine1: "Tuas Port",
+    addressLine2: null,
+    postalCode: null,
+    country: "SG",
+    lat: null,
+    lng: null,
+    placeId: null,
+    sortOrder: 30,
+  },
+  {
+    code: "GUL7",
+    name: "7 Gul Circle warehouse / yard",
+    type: "DEPOT",
+    addressLine1: "7 Gul Circle",
+    addressLine2: null,
+    postalCode: "629563",
+    country: "SG",
+    lat: null,
+    lng: null,
+    placeId: null,
+    sortOrder: 10,
+  },
+  {
+    code: "TUAS_DEPOT",
+    name: "Tuas logistics depot (placeholder)",
+    type: "DEPOT",
+    addressLine1: "Tuas",
+    addressLine2: null,
+    postalCode: null,
+    country: "SG",
+    lat: null,
+    lng: null,
+    placeId: null,
+    sortOrder: 20,
+  },
+];
+
 async function seedSingaporeMasters() {
   await prisma.masterSingaporePort.createMany({
     data: SG_PORTS,
@@ -90,6 +158,13 @@ async function seedSingaporeMasters() {
     data: SG_DEPOTS,
     skipDuplicates: true,
   });
+  for (const row of LOGISTICS_LOCATIONS) {
+    await prisma.masterLogisticsLocation.upsert({
+      where: { type_code: { type: row.type as any, code: row.code } },
+      update: { ...row, isActive: true },
+      create: { ...row, isActive: true },
+    });
+  }
   console.log("✅ Singapore ports/depots seeded");
 }
 

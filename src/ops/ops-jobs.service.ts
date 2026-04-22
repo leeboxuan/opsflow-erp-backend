@@ -9,14 +9,18 @@ import {
 } from "@nestjs/common";
 import {
   JobStatus,
+  JobTripTemplate,
   JobChargeSourceType,
   JobType,
   JobDocumentType,
+  LogisticsLocationType,
   MasterFileType,
   MasterRateDatasetStatus,
   MasterRateDatasetType,
+  MembershipStatus,
   Prisma,
   Role,
+  TripDocumentType,
   TripStatus,
 } from "@prisma/client";
 import {
@@ -56,6 +60,7 @@ import {
   AppendJobTripDto,
   PatchJobTripDto,
   ReorderJobTripsDto,
+  TripPayoutLineInputDto,
 } from "./dto/job-trip.dto";
 import {
   tripCreateManyForJob,
@@ -123,8 +128,13 @@ function toDocDto(d: any): JobDocumentDto {
     sizeBytes: d.sizeBytes ?? null,
     createdAt: d.createdAt,
     url: d.url ?? null,
+    uploadedByUserId: d.uploadedByUserId ?? null,
+    downloadUrl: d.downloadUrl ?? d.url ?? null,
+    previewUrl: d.previewUrl ?? d.url ?? null,
   };
 }
+
+const TRIP_DOC_ALLOWED_TYPES = new Set<string>(Object.values(TripDocumentType));
 
 function normalizeExternalRef(value: unknown): string | null {
   if (value == null) return null;
@@ -220,10 +230,19 @@ function toJobDto(j: any): JobDto {
 
     trips:
       j.trips?.map((t: any) => ({
+        ...deriveTripRouteSummaryFromJobAndTemplate(j, t),
         id: t.id,
+        jobId: j.id,
         jobSequence: t.jobSequence ?? null,
         jobTripTemplate: t.jobTripTemplate ?? null,
         title: t.title ?? null,
+        createdAt: t.createdAt ?? null,
+        assignedDriverUserId: t.assignedDriverUserId ?? null,
+        assignedDriverName: null,
+        originSummary: null,
+        destinationSummary: null,
+        origin: null,
+        destination: null,
         status: t.status,
         isPublished: t.status !== TripStatus.Draft,
         isCompleted:
@@ -237,6 +256,21 @@ function toJobDto(j: any): JobDto {
         hasDriverPayout: Number.isInteger(t.driverEarningCents),
         earningLabelSnapshot: t.earningLabelSnapshot ?? null,
         earningRateMasterId: t.earningRateMasterId ?? null,
+        assignedVehicleId: t.fleetVehicleId ?? t.vehicleId ?? null,
+        assignedVehiclePlateNo: null,
+        liveTracking: {
+          isTrackable: false,
+          hasStarted: false,
+          driverLat: null,
+          driverLng: null,
+          lastSeenAt: null,
+          isStale: false,
+          destinationLat: null,
+          destinationLng: null,
+        },
+        payoutLines: [],
+        driverEarningCentsTotal: t.driverEarningCents ?? null,
+        documents: [],
         completionRuleJson: t.completionRuleJson ?? null,
       })) ?? [],
 
@@ -259,6 +293,139 @@ function toJobDto(j: any): JobDto {
         sortOrder: c.sortOrder,
         metadataJson: (c.metadataJson as Record<string, unknown> | null) ?? null,
       })) ?? [],
+  };
+}
+
+function firstNonEmptyText(...values: Array<unknown>): string | null {
+  for (const v of values) {
+    const s = String(v ?? "").trim();
+    if (s) return s;
+  }
+  return null;
+}
+
+function deriveTripRouteSummaryFromJobAndTemplate(job: any, trip: any): {
+  fromLabel: string | null;
+  toLabel: string | null;
+  fromAddress: string | null;
+  toAddress: string | null;
+  fromType: string | null;
+  toType: string | null;
+} {
+  const snapshotOriginLabel = firstNonEmptyText(
+    trip?.originLabel,
+    trip?.originAddressLine1,
+    trip?.originAddressLine2,
+    trip?.originPostalCode,
+  );
+  const snapshotDestinationLabel = firstNonEmptyText(
+    trip?.destinationLabel,
+    trip?.destinationAddressLine1,
+    trip?.destinationAddressLine2,
+    trip?.destinationPostalCode,
+  );
+  if (snapshotOriginLabel || snapshotDestinationLabel) {
+    return {
+      fromLabel: snapshotOriginLabel,
+      toLabel: snapshotDestinationLabel,
+      fromAddress: firstNonEmptyText(
+        trip?.originAddressLine1,
+        trip?.originAddressLine2,
+        trip?.originPostalCode,
+      ),
+      toAddress: firstNonEmptyText(
+        trip?.destinationAddressLine1,
+        trip?.destinationAddressLine2,
+        trip?.destinationPostalCode,
+      ),
+      fromType: trip?.originLocationId ? "MASTER" : null,
+      toType: trip?.destinationLocationId ? "MASTER" : null,
+    };
+  }
+
+  const pickupAddress = firstNonEmptyText(job?.pickupAddress1, job?.pickupAddress2, job?.pickupPostal);
+  const deliveryAddress = firstNonEmptyText(
+    job?.deliveryAddress1,
+    job?.deliveryAddress2,
+    job?.deliveryPostal,
+  );
+  const portLabel = firstNonEmptyText(job?.portName, job?.pickupPortCode, job?.exportPortCode);
+  const exportDepotLabel = firstNonEmptyText(job?.exportOriginDepotCode);
+  const returnDepotLabel = firstNonEmptyText(job?.returningDepotCode);
+
+  const t = trip?.jobTripTemplate as JobTripTemplate | null | undefined;
+  switch (t) {
+    case JobTripTemplate.PICKUP_TO_DELIVERY:
+      return {
+        fromLabel: pickupAddress ?? "Pickup location",
+        toLabel: deliveryAddress ?? "Delivery location",
+        fromAddress: pickupAddress,
+        toAddress: deliveryAddress,
+        fromType: "PICKUP",
+        toType: "DELIVERY",
+      };
+    case JobTripTemplate.DELIVERY_TO_DEPOT:
+      return {
+        fromLabel: deliveryAddress ?? "Delivery location",
+        toLabel: returnDepotLabel ?? "Return depot",
+        fromAddress: deliveryAddress,
+        toAddress: returnDepotLabel,
+        fromType: "DELIVERY",
+        toType: "DEPOT",
+      };
+    case JobTripTemplate.DEPOT_TO_DELIVERY:
+      return {
+        fromLabel: exportDepotLabel ?? "Origin depot",
+        toLabel: deliveryAddress ?? "Delivery location",
+        fromAddress: exportDepotLabel,
+        toAddress: deliveryAddress,
+        fromType: "DEPOT",
+        toType: "DELIVERY",
+      };
+    case JobTripTemplate.DELIVERY_TO_PORT:
+      return {
+        fromLabel: deliveryAddress ?? "Delivery location",
+        toLabel: portLabel ?? "Port",
+        fromAddress: deliveryAddress,
+        toAddress: portLabel,
+        fromType: "DELIVERY",
+        toType: "PORT",
+      };
+    default:
+      return {
+        fromLabel: pickupAddress,
+        toLabel: deliveryAddress,
+        fromAddress: pickupAddress,
+        toAddress: deliveryAddress,
+        fromType: pickupAddress ? "PICKUP" : null,
+        toType: deliveryAddress ? "DELIVERY" : null,
+      };
+  }
+}
+
+function toTripLocationDto(prefix: "origin" | "destination", trip: any) {
+  const label = trip?.[`${prefix}Label`] ?? null;
+  const addressLine1 = trip?.[`${prefix}AddressLine1`] ?? null;
+  const addressLine2 = trip?.[`${prefix}AddressLine2`] ?? null;
+  const postalCode = trip?.[`${prefix}PostalCode`] ?? null;
+  const country = trip?.[`${prefix}Country`] ?? null;
+  const lat = trip?.[`${prefix}Lat`] ?? null;
+  const lng = trip?.[`${prefix}Lng`] ?? null;
+  const placeId = trip?.[`${prefix}PlaceId`] ?? null;
+  const locationId = trip?.[`${prefix}LocationId`] ?? null;
+  if (!label && !addressLine1 && !postalCode && lat == null && lng == null && !locationId) {
+    return null;
+  }
+  return {
+    label,
+    addressLine1,
+    addressLine2,
+    postalCode,
+    country,
+    lat,
+    lng,
+    placeId,
+    locationId,
   };
 }
 
@@ -296,6 +463,44 @@ export class OpsJobsService {
     const customerCompanyId = this.getCustomerCompanyIdOrThrow(user);
     if (job?.customerCompanyId !== customerCompanyId) {
       throw new ForbiddenException("Not allowed to access this job");
+    }
+  }
+
+  private async buildUserNameMapByIds(
+    tenantId: string,
+    userIds: string[],
+  ): Promise<Map<string, string>> {
+    const ids = Array.from(new Set(userIds.filter(Boolean)));
+    if (!ids.length) return new Map<string, string>();
+    const members = await this.prisma.tenantMembership.findMany({
+      where: { tenantId, userId: { in: ids }, status: MembershipStatus.Active },
+      include: { user: { select: { id: true, name: true, email: true } } },
+    });
+    const map = new Map<string, string>();
+    for (const m of members) {
+      const name = m.user?.name?.trim() || m.user?.email || null;
+      if (!name) continue;
+      map.set(m.userId, name);
+    }
+    return map;
+  }
+
+  private async attachTripAssignedDriverNamesForJobs(
+    tenantId: string,
+    jobs: JobDto[],
+  ): Promise<void> {
+    const ids: string[] = [];
+    for (const job of jobs) {
+      for (const trip of job.trips ?? []) {
+        if (trip.assignedDriverUserId) ids.push(trip.assignedDriverUserId);
+      }
+    }
+    const nameMap = await this.buildUserNameMapByIds(tenantId, ids);
+    for (const job of jobs) {
+      for (const trip of job.trips ?? []) {
+        trip.assignedDriverName =
+          (trip.assignedDriverUserId && nameMap.get(trip.assignedDriverUserId)) || null;
+      }
     }
   }
 
@@ -498,6 +703,7 @@ export class OpsJobsService {
       .from(JOB_DOCUMENTS_BUCKET)
       .createSignedUrl(doc.storageKey, 60 * 60);
 
+    const signedUrl = error ? null : (data?.signedUrl ?? null);
     return {
       id: doc.id,
       type: doc.type,
@@ -505,8 +711,18 @@ export class OpsJobsService {
       mimeType: doc.mimeType,
       sizeBytes: doc.sizeBytes ?? null,
       createdAt: doc.createdAt,
-      url: error ? null : (data?.signedUrl ?? null),
+      uploadedByUserId: doc.uploadedByUserId ?? null,
+      url: signedUrl,
+      downloadUrl: signedUrl,
+      previewUrl: signedUrl,
     };
+  }
+
+  private isAllowedTripDocument(file: Express.Multer.File): boolean {
+    if (!file) return false;
+    const name = String(file.originalname ?? "");
+    const mime = String(file.mimetype ?? "").toLowerCase();
+    return OTHER_JOB_DOC_EXT.test(name) || OTHER_JOB_DOC_MIMES.has(mime);
   }
 
   /** Upload bytes to the job-documents bucket (shared by quotation / OTHER / etc.). */
@@ -596,6 +812,121 @@ export class OpsJobsService {
     });
 
     return existingDocs[0] ?? null;
+  }
+
+  private async getActiveLogisticsLocationById(
+    locationId: string | null | undefined,
+  ) {
+    if (!locationId) return null;
+    return this.prisma.masterLogisticsLocation.findFirst({
+      where: { id: locationId, isActive: true },
+    });
+  }
+
+  private locationSnapshotFromMaster(master: any) {
+    if (!master) return null;
+    return {
+      locationId: master.id,
+      label: `${master.code} — ${master.name}`,
+      addressLine1: master.addressLine1 ?? null,
+      addressLine2: master.addressLine2 ?? null,
+      postalCode: master.postalCode ?? null,
+      country: master.country ?? "SG",
+      lat: master.lat ?? null,
+      lng: master.lng ?? null,
+      placeId: master.placeId ?? null,
+      locationType: master.type ?? null,
+    };
+  }
+
+  private buildAddressSnapshot(label: string | null, job: any, prefix: "pickup" | "delivery") {
+    return {
+      locationId: null,
+      label,
+      addressLine1: job?.[`${prefix}Address1`] ?? null,
+      addressLine2: job?.[`${prefix}Address2`] ?? null,
+      postalCode: job?.[`${prefix}Postal`] ?? null,
+      country: "SG",
+      lat: null,
+      lng: null,
+      placeId: null,
+      locationType: prefix === "pickup" ? "PICKUP" : "DELIVERY",
+    };
+  }
+
+  private async syncTripRouteSnapshotForJob(tenantId: string, jobId: string): Promise<void> {
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+      include: { trips: { orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }] } },
+    });
+    if (!job) return;
+    const [pickupPort, returnDepot, exportPort, exportOriginDepot] = await Promise.all([
+      job.pickupPortCode
+        ? this.prisma.masterLogisticsLocation.findFirst({
+            where: { isActive: true, type: LogisticsLocationType.PORT, code: job.pickupPortCode },
+          })
+        : Promise.resolve(null),
+      job.returningDepotCode
+        ? this.prisma.masterLogisticsLocation.findFirst({
+            where: { isActive: true, type: LogisticsLocationType.DEPOT, code: job.returningDepotCode },
+          })
+        : Promise.resolve(null),
+      job.exportPortCode
+        ? this.prisma.masterLogisticsLocation.findFirst({
+            where: { isActive: true, type: LogisticsLocationType.PORT, code: job.exportPortCode },
+          })
+        : Promise.resolve(null),
+      job.exportOriginDepotCode
+        ? this.prisma.masterLogisticsLocation.findFirst({
+            where: {
+              isActive: true,
+              type: LogisticsLocationType.DEPOT,
+              code: job.exportOriginDepotCode,
+            },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    for (const trip of job.trips ?? []) {
+      let origin: any = null;
+      let destination: any = null;
+      if (trip.jobTripTemplate === JobTripTemplate.PICKUP_TO_DELIVERY) {
+        origin = this.locationSnapshotFromMaster(pickupPort);
+        destination = this.buildAddressSnapshot(job.deliveryAddress1 ?? "Delivery location", job, "delivery");
+      } else if (trip.jobTripTemplate === JobTripTemplate.DELIVERY_TO_DEPOT) {
+        origin = this.buildAddressSnapshot(job.deliveryAddress1 ?? "Delivery location", job, "delivery");
+        destination = this.locationSnapshotFromMaster(returnDepot);
+      } else if (trip.jobTripTemplate === JobTripTemplate.DEPOT_TO_DELIVERY) {
+        origin = this.locationSnapshotFromMaster(exportOriginDepot);
+        destination = this.buildAddressSnapshot(job.deliveryAddress1 ?? "Stuffing destination", job, "delivery");
+      } else if (trip.jobTripTemplate === JobTripTemplate.DELIVERY_TO_PORT) {
+        origin = this.buildAddressSnapshot(job.deliveryAddress1 ?? "Stuffing destination", job, "delivery");
+        destination = this.locationSnapshotFromMaster(exportPort);
+      }
+      await this.prisma.trip.update({
+        where: { id: trip.id },
+        data: {
+          originLocationId: origin?.locationId ?? null,
+          originLabel: origin?.label ?? null,
+          originAddressLine1: origin?.addressLine1 ?? null,
+          originAddressLine2: origin?.addressLine2 ?? null,
+          originPostalCode: origin?.postalCode ?? null,
+          originCountry: origin?.country ?? null,
+          originLat: origin?.lat ?? null,
+          originLng: origin?.lng ?? null,
+          originPlaceId: origin?.placeId ?? null,
+          destinationLocationId: destination?.locationId ?? null,
+          destinationLabel: destination?.label ?? null,
+          destinationAddressLine1: destination?.addressLine1 ?? null,
+          destinationAddressLine2: destination?.addressLine2 ?? null,
+          destinationPostalCode: destination?.postalCode ?? null,
+          destinationCountry: destination?.country ?? null,
+          destinationLat: destination?.lat ?? null,
+          destinationLng: destination?.lng ?? null,
+          destinationPlaceId: destination?.placeId ?? null,
+        },
+      });
+    }
   }
 
   async list(
@@ -714,6 +1045,8 @@ export class OpsJobsService {
             orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }],
             select: {
               id: true,
+              createdAt: true,
+              assignedDriverUserId: true,
               jobSequence: true,
               jobTripTemplate: true,
               title: true,
@@ -732,8 +1065,11 @@ export class OpsJobsService {
       }),
     ]);
 
+    const jobDtos = jobs.map(toJobDto);
+    await this.attachTripAssignedDriverNamesForJobs(tenantId, jobDtos);
+
     return {
-      data: jobs.map(toJobDto),
+      data: jobDtos,
       meta: buildPaginationMeta(page, pageSize, total),
     };
   }
@@ -988,6 +1324,7 @@ export class OpsJobsService {
         pickupDateParsed,
       ),
     });
+    await this.syncTripRouteSnapshotForJob(tenantId, job.id);
 
     // Best-effort auto-generate DO after job creation.
     // We do not fail the whole job creation if document generation/storage fails.
@@ -1032,6 +1369,7 @@ export class OpsJobsService {
     }
 
     const jobDto = toJobDto(freshJob);
+    await this.attachTripAssignedDriverNamesForJobs(tenantId, [jobDto]);
 
     if (freshJob.documents?.length) {
       jobDto.documents = await Promise.all(
@@ -1077,6 +1415,7 @@ export class OpsJobsService {
     this.assertCanAccessJob(job, user);
 
     const dto = toJobDto(job);
+    await this.attachTripAssignedDriverNamesForJobs(tenantId, [dto]);
 
     // Best-effort: attach assigned plate number from either vehicle source.
     if (job.assignedVehicleId || job.assignedFleetVehicleId) {
@@ -2065,6 +2404,46 @@ export class OpsJobsService {
         ? new Date(dto.plannedDate + "T00:00:00.000Z")
         : null;
     }
+    if (dto.originLocationId !== undefined) {
+      if (!dto.originLocationId) {
+        data.originLocationId = null;
+      } else {
+        const master = await this.getActiveLogisticsLocationById(dto.originLocationId);
+        if (!master) throw new BadRequestException("originLocationId not found");
+        data.originLocationId = master.id;
+        data.originLabel = `${master.code} — ${master.name}`;
+        data.originAddressLine1 = master.addressLine1;
+        data.originAddressLine2 = master.addressLine2 ?? null;
+        data.originPostalCode = master.postalCode ?? null;
+        data.originCountry = master.country ?? "SG";
+        data.originLat = master.lat ?? null;
+        data.originLng = master.lng ?? null;
+        data.originPlaceId = master.placeId ?? null;
+      }
+    }
+    if (dto.destinationLocationId !== undefined) {
+      if (!dto.destinationLocationId) {
+        data.destinationLocationId = null;
+      } else {
+        const master = await this.getActiveLogisticsLocationById(dto.destinationLocationId);
+        if (!master) throw new BadRequestException("destinationLocationId not found");
+        data.destinationLocationId = master.id;
+        data.destinationLabel = `${master.code} — ${master.name}`;
+        data.destinationAddressLine1 = master.addressLine1;
+        data.destinationAddressLine2 = master.addressLine2 ?? null;
+        data.destinationPostalCode = master.postalCode ?? null;
+        data.destinationCountry = master.country ?? "SG";
+        data.destinationLat = master.lat ?? null;
+        data.destinationLng = master.lng ?? null;
+        data.destinationPlaceId = master.placeId ?? null;
+      }
+    }
+    if (dto.originSummary !== undefined && !data.originLocationId) {
+      data.originLabel = dto.originSummary?.trim() || null;
+    }
+    if (dto.destinationSummary !== undefined && !data.destinationLocationId) {
+      data.destinationLabel = dto.destinationSummary?.trim() || null;
+    }
 
     if (dto.earningRateMasterId !== undefined) {
       if (dto.earningRateMasterId === null) {
@@ -2157,10 +2536,36 @@ export class OpsJobsService {
         "Trip is already published or cannot be published from current status",
       );
     }
-    if (!Number.isInteger(trip.driverEarningCents) || trip.driverEarningCents <= 0) {
-      throw new BadRequestException(
-        "Driver payout is required before publishing a trip",
+    const payoutLines = await this.prisma.tripPayoutLine.findMany({
+      where: { tenantId, tripId },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+    if (payoutLines.length > 0) {
+      const selectable = payoutLines.filter((l) => l.isSelectableForTripEarning);
+      if (!selectable.length) {
+        throw new BadRequestException("At least one selectable payout line is required before publish");
+      }
+      const invalid = selectable.find(
+        (l) => l.requiresManualAmount || l.amountCents == null,
       );
+      if (invalid) {
+        throw new BadRequestException(
+          `Payout line "${invalid.label}" requires manual amount before publish`,
+        );
+      }
+      const total = selectable.reduce((sum, l) => sum + (l.amountCents ?? 0), 0);
+      if (total <= 0) {
+        throw new BadRequestException("Driver payout total must be greater than 0 before publish");
+      }
+      await this.prisma.trip.update({
+        where: { id: tripId },
+        data: {
+          driverEarningCents: total,
+          earningLabelSnapshot: `${selectable.length} payout items`,
+        },
+      });
+    } else if (!Number.isInteger(trip.driverEarningCents) || trip.driverEarningCents <= 0) {
+      throw new BadRequestException("Driver payout is required before publishing a trip");
     }
 
     await this.prisma.trip.update({
@@ -2333,7 +2738,21 @@ export class OpsJobsService {
   ): Promise<JobTripResponseDto[]> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
-      select: { id: true, customerCompanyId: true },
+      select: {
+        id: true,
+        customerCompanyId: true,
+        pickupAddress1: true,
+        pickupAddress2: true,
+        pickupPostal: true,
+        deliveryAddress1: true,
+        deliveryAddress2: true,
+        deliveryPostal: true,
+        portName: true,
+        pickupPortCode: true,
+        exportPortCode: true,
+        exportOriginDepotCode: true,
+        returningDepotCode: true,
+      },
     });
     if (!job) throw new NotFoundException("Job not found");
     this.assertCanAccessJob(job, user);
@@ -2341,26 +2760,67 @@ export class OpsJobsService {
     const trips = await this.prisma.trip.findMany({
       where: { tenantId, jobId },
       orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }],
-      select: {
-        id: true,
-        jobSequence: true,
-        jobTripTemplate: true,
-        title: true,
-        status: true,
-        plannedStartAt: true,
-        startedAt: true,
-        closedAt: true,
-        trailerNumber: true,
-        trailerLastLocationCode: true,
-        driverEarningCents: true,
-        earningLabelSnapshot: true,
-        earningRateMasterId: true,
-        completionRuleJson: true,
+      include: {
+        vehicle: { select: { id: true, plateNo: true } },
+        fleetVehicle: { select: { id: true, plateNo: true } },
+        documents: { orderBy: { createdAt: "desc" } },
+        payoutLines: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       },
     });
 
-    return trips.map((t) => ({
+    const nameMap = await this.buildUserNameMapByIds(
+      tenantId,
+      trips.map((t) => t.assignedDriverUserId).filter(Boolean) as string[],
+    );
+
+    const driverLocations = await this.prisma.driverLocationLatest.findMany({
+      where: {
+        tenantId,
+        driverUserId: {
+          in: Array.from(new Set(trips.map((t) => t.assignedDriverUserId).filter(Boolean) as string[])),
+        },
+      },
+    });
+    const locationByDriver = new Map<string, any>(
+      driverLocations.map((d) => [d.driverUserId, d] as [string, any]),
+    );
+
+    return await Promise.all(trips.map(async (t) => {
+      const route = deriveTripRouteSummaryFromJobAndTemplate(job, t);
+      const origin = toTripLocationDto("origin", t);
+      const destination = toTripLocationDto("destination", t);
+      const loc = t.assignedDriverUserId ? locationByDriver.get(t.assignedDriverUserId) : null;
+      const hasStarted = !!t.startedAt || t.status === TripStatus.InTransit || t.status === TripStatus.Delivered || t.status === TripStatus.Closed;
+      const lastSeenAt = loc?.capturedAt ?? null;
+      const isStale =
+        !!lastSeenAt &&
+        hasStarted &&
+        Date.now() - new Date(lastSeenAt).getTime() > 15 * 60 * 1000;
+      const payoutLines = (t.payoutLines ?? []).map((line) => ({
+        id: line.id,
+        label: line.label,
+        code: line.code ?? null,
+        amountCents: line.amountCents ?? null,
+        requiresManualAmount: line.requiresManualAmount,
+        isSelectableForTripEarning: line.isSelectableForTripEarning,
+        sortOrder: line.sortOrder ?? 0,
+        payoutItemId: line.payoutItemId ?? null,
+        earningRateMasterId: line.earningRateMasterId ?? null,
+      }));
+      const driverEarningCentsTotal = payoutLines.length
+        ? payoutLines
+            .filter((line) => line.isSelectableForTripEarning)
+            .reduce((sum, line) => sum + (line.amountCents ?? 0), 0)
+        : (t.driverEarningCents ?? null);
+      const signedDocs = await Promise.all((t.documents ?? []).map((d) => this.attachSignedUrl(d)));
+      return {
+      ...route,
       id: t.id,
+      jobId: job.id,
+      createdAt: t.createdAt ?? null,
+      assignedDriverUserId: t.assignedDriverUserId ?? null,
+      assignedDriverName:
+        (t.assignedDriverUserId && nameMap.get(t.assignedDriverUserId)) || null,
       jobSequence: t.jobSequence ?? null,
       jobTripTemplate: t.jobTripTemplate ?? null,
       title: t.title ?? null,
@@ -2374,12 +2834,188 @@ export class OpsJobsService {
       trailerNumber: t.trailerNumber ?? null,
       trailerLastLocationCode: t.trailerLastLocationCode ?? null,
       driverEarningCents: t.driverEarningCents ?? null,
-      hasDriverPayout: Number.isInteger(t.driverEarningCents),
+      hasDriverPayout: Number.isInteger(driverEarningCentsTotal) && (driverEarningCentsTotal ?? 0) > 0,
       earningLabelSnapshot: t.earningLabelSnapshot ?? null,
       earningRateMasterId: t.earningRateMasterId ?? null,
+      originSummary: route.fromLabel ?? null,
+      destinationSummary: route.toLabel ?? null,
+      origin,
+      destination,
+      assignedVehicleId: t.fleetVehicleId ?? t.vehicleId ?? null,
+      assignedVehiclePlateNo: t.fleetVehicle?.plateNo ?? t.vehicle?.plateNo ?? null,
+      payoutLines,
+      driverEarningCentsTotal,
+      liveTracking: {
+        isTrackable: !!t.assignedDriverUserId,
+        hasStarted,
+        driverLat: loc?.lat ?? null,
+        driverLng: loc?.lng ?? null,
+        lastSeenAt,
+        isStale: !!isStale,
+        destinationLat: destination?.lat ?? null,
+        destinationLng: destination?.lng ?? null,
+      },
+      documents: signedDocs,
       completionRuleJson:
         (t.completionRuleJson as Record<string, unknown> | null) ?? null,
+      };
     }));
+  }
+
+  async listTripDocuments(tenantId: string, jobId: string, tripId: string, user: any) {
+    const job = await this.prisma.job.findFirst({ where: { id: jobId, tenantId } });
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job, user);
+    const trip = await this.prisma.trip.findFirst({ where: { id: tripId, tenantId, jobId } });
+    if (!trip) throw new NotFoundException("Trip not found");
+    const docs = await this.prisma.tripDocument.findMany({
+      where: { tenantId, tripId },
+      orderBy: { createdAt: "desc" },
+    });
+    return Promise.all(docs.map((d) => this.attachSignedUrl(d)));
+  }
+
+  async uploadTripDocument(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    typeRaw: string,
+    file: Express.Multer.File,
+    user: any,
+  ) {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const type = String(typeRaw ?? "").trim() as TripDocumentType;
+    if (!TRIP_DOC_ALLOWED_TYPES.has(type)) {
+      throw new BadRequestException(`Unsupported trip document type: ${typeRaw}`);
+    }
+    if (!this.isAllowedTripDocument(file)) {
+      throw new BadRequestException("Unsupported file type for trip document");
+    }
+    const trip = await this.prisma.trip.findFirst({ where: { id: tripId, tenantId, jobId } });
+    if (!trip) throw new NotFoundException("Trip not found");
+    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? "";
+    const base = this.safeFileName((file.originalname ?? "trip-doc").replace(/\.[a-z0-9]+$/i, "")) || "trip-doc";
+    const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/${type.toLowerCase()}/${Date.now()}-${base}${ext}`;
+    await this.putJobDocumentObject(key, file.buffer, file.mimetype ?? "application/octet-stream");
+    const doc = await this.prisma.tripDocument.create({
+      data: {
+        tenantId,
+        tripId,
+        type,
+        storageKey: key,
+        originalName: file.originalname ?? "trip-doc",
+        mimeType: file.mimetype ?? "application/octet-stream",
+        sizeBytes: file.size ?? null,
+        uploadedByUserId: actorUserId ?? null,
+      },
+    });
+    await this.audit.log(tenantId, "TRIP_DOC_UPLOAD", "TRIP", tripId, { type, documentId: doc.id }, actorUserId);
+    return this.attachSignedUrl(doc);
+  }
+
+  async listTripPayoutLines(tenantId: string, jobId: string, tripId: string, user: any) {
+    const job = await this.prisma.job.findFirst({ where: { id: jobId, tenantId } });
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job, user);
+    const trip = await this.prisma.trip.findFirst({ where: { id: tripId, tenantId, jobId } });
+    if (!trip) throw new NotFoundException("Trip not found");
+    return this.prisma.tripPayoutLine.findMany({
+      where: { tenantId, tripId },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+  }
+
+  async replaceTripPayoutLines(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    lines: TripPayoutLineInputDto[],
+    user: any,
+  ) {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const trip = await this.prisma.trip.findFirst({ where: { id: tripId, tenantId, jobId } });
+    if (!trip) throw new NotFoundException("Trip not found");
+    const normalized = (lines ?? []).map((line, idx) => ({
+      tenantId,
+      tripId,
+      sourceType: JobChargeSourceType.DRIVER_RATE_MASTER,
+      payoutItemId: line.payoutItemId ?? null,
+      earningRateMasterId: line.earningRateMasterId ?? null,
+      code: line.code ?? null,
+      label: String(line.label ?? "").trim(),
+      amountCents: line.amountCents ?? null,
+      requiresManualAmount: !!line.requiresManualAmount,
+      isSelectableForTripEarning: line.isSelectableForTripEarning !== false,
+      sortOrder: Number.isFinite(Number(line.sortOrder)) ? Number(line.sortOrder) : idx + 1,
+    }));
+    await this.prisma.$transaction(async (tx) => {
+      await tx.tripPayoutLine.deleteMany({ where: { tenantId, tripId } });
+      if (normalized.length) await tx.tripPayoutLine.createMany({ data: normalized });
+      const selectable = normalized.filter((line) => line.isSelectableForTripEarning);
+      const total = selectable.reduce((sum, line) => sum + (line.amountCents ?? 0), 0);
+      await tx.trip.update({
+        where: { id: tripId },
+        data: {
+          driverEarningCents: selectable.length ? total : null,
+          earningLabelSnapshot: normalized.length ? `${normalized.length} payout items` : null,
+        },
+      });
+    });
+    await this.audit.log(tenantId, "TRIP_PAYOUT_LINES_REPLACE", "TRIP", tripId, { lineCount: normalized.length }, actorUserId);
+    return this.listTripPayoutLines(tenantId, jobId, tripId, user);
+  }
+
+  async listLiveTripTracking(tenantId: string, user: any) {
+    const whereJob = this.applyJobAccessFilter(tenantId, user);
+    const trips = await this.prisma.trip.findMany({
+      where: {
+        tenantId,
+        assignedDriverUserId: { not: null },
+        status: { in: [TripStatus.Planned, TripStatus.Dispatched, TripStatus.InTransit] },
+        jobId: { not: null },
+        job: whereJob,
+      },
+      include: {
+        job: { select: { id: true, customerCompanyId: true } },
+        vehicle: { select: { plateNo: true } },
+        fleetVehicle: { select: { plateNo: true } },
+      },
+      orderBy: [{ updatedAt: "desc" }],
+    });
+    const nameMap = await this.buildUserNameMapByIds(
+      tenantId,
+      trips.map((t) => t.assignedDriverUserId).filter(Boolean) as string[],
+    );
+    const locs = await this.prisma.driverLocationLatest.findMany({
+      where: {
+        tenantId,
+        driverUserId: { in: trips.map((t) => t.assignedDriverUserId!).filter(Boolean) },
+      },
+    });
+    const locMap = new Map<string, any>(
+      locs.map((l) => [l.driverUserId, l] as [string, any]),
+    );
+    return trips.map((trip) => {
+      const loc = trip.assignedDriverUserId ? locMap.get(trip.assignedDriverUserId) : null;
+      return {
+        jobId: trip.jobId,
+        tripId: trip.id,
+        tripTitle: trip.title ?? null,
+        driverId: trip.assignedDriverUserId,
+        driverName:
+          (trip.assignedDriverUserId && nameMap.get(trip.assignedDriverUserId)) || null,
+        vehiclePlateNo: trip.fleetVehicle?.plateNo ?? trip.vehicle?.plateNo ?? null,
+        status: trip.status,
+        driverLat: loc?.lat ?? null,
+        driverLng: loc?.lng ?? null,
+        lastSeenAt: loc?.capturedAt ?? null,
+        destinationLabel: trip.destinationLabel ?? null,
+        destinationLat: trip.destinationLat ?? null,
+        destinationLng: trip.destinationLng ?? null,
+      };
+    });
   }
 
   /**

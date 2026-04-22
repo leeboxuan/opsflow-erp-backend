@@ -3,12 +3,17 @@ import {
   IsDateString,
   IsEnum,
   IsInt,
+  IsBoolean,
   IsOptional,
+  IsArray,
+  ValidateNested,
   IsString,
   Min,
   MinLength,
+  IsNumber,
 } from "class-validator";
 import { JobTripTemplate } from "@prisma/client";
+import { Type } from "class-transformer";
 
 export class AppendJobTripDto {
   @ApiProperty({ enum: JobTripTemplate })
@@ -59,4 +64,79 @@ export class PatchJobTripDto {
   @IsOptional()
   @IsString()
   earningRateMasterId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  originLocationId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  destinationLocationId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  originSummary?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  destinationSummary?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  notes?: string | null;
+}
+
+export class TripPayoutLineInputDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  earningRateMasterId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  payoutItemId?: string | null;
+
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  label!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  code?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  amountCents?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  requiresManualAmount?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isSelectableForTripEarning?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  sortOrder?: number;
+}
+
+export class PutTripPayoutLinesDto {
+  @ApiProperty({ type: [TripPayoutLineInputDto] })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => TripPayoutLineInputDto)
+  lines!: TripPayoutLineInputDto[];
 }

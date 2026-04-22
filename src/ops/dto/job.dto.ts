@@ -27,13 +27,71 @@ export class JobDocumentDto {
 
   @ApiPropertyOptional()
   url?: string | null;
+
+  @ApiPropertyOptional()
+  uploadedByUserId?: string | null;
+
+  @ApiPropertyOptional()
+  downloadUrl?: string | null;
+
+  @ApiPropertyOptional()
+  previewUrl?: string | null;
+}
+
+export class JobTripLocationDto {
+  label!: string | null;
+  addressLine1!: string | null;
+  addressLine2!: string | null;
+  postalCode!: string | null;
+  country!: string | null;
+  lat!: number | null;
+  lng!: number | null;
+  placeId!: string | null;
+  locationId!: string | null;
+}
+
+export class JobTripLiveTrackingDto {
+  isTrackable!: boolean;
+  hasStarted!: boolean;
+  driverLat!: number | null;
+  driverLng!: number | null;
+  lastSeenAt!: Date | null;
+  isStale!: boolean;
+  destinationLat!: number | null;
+  destinationLng!: number | null;
+}
+
+export class JobTripPayoutLineDto {
+  id!: string;
+  label!: string;
+  code!: string | null;
+  amountCents!: number | null;
+  requiresManualAmount!: boolean;
+  isSelectableForTripEarning!: boolean;
+  sortOrder!: number;
+  payoutItemId?: string | null;
+  earningRateMasterId?: string | null;
 }
 
 export class JobTripResponseDto {
   id!: string;
+  jobId!: string | null;
   jobSequence!: number | null;
   jobTripTemplate!: JobTripTemplate | null;
   title!: string | null;
+  createdAt!: Date | null;
+  assignedDriverUserId!: string | null;
+  assignedDriverName!: string | null;
+  fromLabel!: string | null;
+  toLabel!: string | null;
+  fromAddress!: string | null;
+  toAddress!: string | null;
+  fromType!: string | null;
+  toType!: string | null;
+  originSummary!: string | null;
+  destinationSummary!: string | null;
+  origin!: JobTripLocationDto | null;
+  destination!: JobTripLocationDto | null;
   status!: string;
   isPublished!: boolean;
   isCompleted!: boolean;
@@ -46,6 +104,11 @@ export class JobTripResponseDto {
   hasDriverPayout!: boolean;
   earningLabelSnapshot!: string | null;
   earningRateMasterId!: string | null;
+  assignedVehicleId!: string | null;
+  assignedVehiclePlateNo!: string | null;
+  liveTracking!: JobTripLiveTrackingDto;
+  payoutLines!: JobTripPayoutLineDto[];
+  driverEarningCentsTotal!: number | null;
   /** Populated on driver detail when trip documents are loaded */
   documents?: JobDocumentDto[];
   completionRuleJson?: Record<string, unknown> | null;

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from "@nes
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
 import {
+  LogisticsLocationType,
   MasterFileStatus,
   MasterFileType,
   MasterRateDatasetStatus,
@@ -45,6 +46,36 @@ export class MasterDataService {
     return this.prisma.masterTrailerLocation.findMany({
       orderBy: { code: "asc" },
     });
+  }
+
+  listLogisticsLocations(type?: LogisticsLocationType) {
+    return this.prisma.masterLogisticsLocation
+      .findMany({
+        where: {
+          ...(type ? { type } : {}),
+          isActive: true,
+        },
+        orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
+      })
+      .then((rows) =>
+        rows.map((row) => ({
+          ...row,
+          label: `${row.code} — ${row.name}`,
+        })),
+      );
+  }
+
+  async getLogisticsLocationById(id: string) {
+    const row = await this.prisma.masterLogisticsLocation.findUnique({
+      where: { id },
+    });
+    if (!row || !row.isActive) {
+      throw new NotFoundException("Logistics location not found");
+    }
+    return {
+      ...row,
+      label: `${row.code} — ${row.name}`,
+    };
   }
 
   private async uploadMasterObject(

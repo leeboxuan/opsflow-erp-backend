@@ -23,7 +23,12 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
 import { MasterDataService } from "./master.service";
-import { MasterFileType, MasterRateDatasetType, Role } from "@prisma/client";
+import {
+  LogisticsLocationType,
+  MasterFileType,
+  MasterRateDatasetType,
+  Role,
+} from "@prisma/client";
 import { RoleGuard, Roles } from "../auth/guards/role.guard";
 import {
   CreateDriverTripRateMasterDto,
@@ -60,6 +65,18 @@ export class MasterDataController {
   })
   trailerLocations() {
     return this.master.listTrailerLocations();
+  }
+
+  @Get("logistics-locations")
+  @ApiOperation({ summary: "List map-ready logistics location masters (port/depot)" })
+  logisticsLocations(@Query("type") type?: LogisticsLocationType) {
+    return this.master.listLogisticsLocations(type);
+  }
+
+  @Get("logistics-locations/:id")
+  @ApiOperation({ summary: "Get map-ready logistics location by id" })
+  logisticsLocationById(@Param("id") id: string) {
+    return this.master.getLogisticsLocationById(id);
   }
 
   @Get("driver-trip-rates")
