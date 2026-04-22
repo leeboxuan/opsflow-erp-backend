@@ -843,7 +843,12 @@ export class OpsJobsService {
     };
   }
 
-  private buildAddressSnapshot(label: string | null, job: any, prefix: "pickup" | "delivery") {
+  private buildAddressSnapshot(
+    label: string | null,
+    job: any,
+    prefix: "pickup" | "delivery",
+    geo?: { lat?: number | null; lng?: number | null; placeId?: string | null },
+  ) {
     return {
       locationId: null,
       label,
@@ -851,14 +856,18 @@ export class OpsJobsService {
       addressLine2: job?.[`${prefix}Address2`] ?? null,
       postalCode: job?.[`${prefix}Postal`] ?? null,
       country: "SG",
-      lat: null,
-      lng: null,
-      placeId: null,
+      lat: geo?.lat ?? null,
+      lng: geo?.lng ?? null,
+      placeId: geo?.placeId ?? null,
       locationType: prefix === "pickup" ? "PICKUP" : "DELIVERY",
     };
   }
 
-  private async syncTripRouteSnapshotForJob(tenantId: string, jobId: string): Promise<void> {
+  private async syncTripRouteSnapshotForJob(
+    tenantId: string,
+    jobId: string,
+    options?: { deliveryLat?: number | null; deliveryLng?: number | null; deliveryPlaceId?: string | null },
+  ): Promise<void> {
     if (
       !(this.prisma as any).job?.findFirst ||
       !(this.prisma as any).trip?.update
@@ -902,15 +911,51 @@ export class OpsJobsService {
       let destination: any = null;
       if (trip.jobTripTemplate === JobTripTemplate.PICKUP_TO_DELIVERY) {
         origin = this.locationSnapshotFromMaster(pickupPort);
-        destination = this.buildAddressSnapshot(job.deliveryAddress1 ?? "Delivery location", job, "delivery");
+        destination = this.buildAddressSnapshot(
+          job.deliveryAddress1 ?? "Delivery location",
+          job,
+          "delivery",
+          {
+            lat: options?.deliveryLat ?? null,
+            lng: options?.deliveryLng ?? null,
+            placeId: options?.deliveryPlaceId ?? null,
+          },
+        );
       } else if (trip.jobTripTemplate === JobTripTemplate.DELIVERY_TO_DEPOT) {
-        origin = this.buildAddressSnapshot(job.deliveryAddress1 ?? "Delivery location", job, "delivery");
+        origin = this.buildAddressSnapshot(
+          job.deliveryAddress1 ?? "Delivery location",
+          job,
+          "delivery",
+          {
+            lat: options?.deliveryLat ?? null,
+            lng: options?.deliveryLng ?? null,
+            placeId: options?.deliveryPlaceId ?? null,
+          },
+        );
         destination = this.locationSnapshotFromMaster(returnDepot);
       } else if (trip.jobTripTemplate === JobTripTemplate.DEPOT_TO_DELIVERY) {
         origin = this.locationSnapshotFromMaster(exportOriginDepot);
-        destination = this.buildAddressSnapshot(job.deliveryAddress1 ?? "Stuffing destination", job, "delivery");
+        destination = this.buildAddressSnapshot(
+          job.deliveryAddress1 ?? "Stuffing destination",
+          job,
+          "delivery",
+          {
+            lat: options?.deliveryLat ?? null,
+            lng: options?.deliveryLng ?? null,
+            placeId: options?.deliveryPlaceId ?? null,
+          },
+        );
       } else if (trip.jobTripTemplate === JobTripTemplate.DELIVERY_TO_PORT) {
-        origin = this.buildAddressSnapshot(job.deliveryAddress1 ?? "Stuffing destination", job, "delivery");
+        origin = this.buildAddressSnapshot(
+          job.deliveryAddress1 ?? "Stuffing destination",
+          job,
+          "delivery",
+          {
+            lat: options?.deliveryLat ?? null,
+            lng: options?.deliveryLng ?? null,
+            placeId: options?.deliveryPlaceId ?? null,
+          },
+        );
         destination = this.locationSnapshotFromMaster(exportPort);
       }
       await this.prisma.trip.update({
@@ -1182,11 +1227,28 @@ export class OpsJobsService {
           "pickupPortCode is required for IMPORT jobs (Singapore port master code)",
         );
       }
-      const port = await this.prisma.masterSingaporePort.findFirst({
-        where: { code: portCode },
+      if (!returningDepotCode) {
+        throw new BadRequestException(
+          "returningDepotCode is required for IMPORT jobs",
+        );
+      }
+      const port = await this.prisma.masterLogisticsLocation.findFirst({
+        where: { code: portCode, type: LogisticsLocationType.PORT, isActive: true },
       });
       if (!port) {
         throw new BadRequestException(`Unknown pickupPortCode: ${portCode}`);
+      }
+      const returnDepotForImport = await this.prisma.masterLogisticsLocation.findFirst({
+        where: {
+          code: returningDepotCode ?? "",
+          type: LogisticsLocationType.DEPOT,
+          isActive: true,
+        },
+      });
+      if (!returnDepotForImport) {
+        throw new BadRequestException(
+          `Unknown returningDepotCode: ${returningDepotCode}`,
+        );
       }
     }
 
@@ -1208,11 +1270,19 @@ export class OpsJobsService {
       }
 
       const [pickupDepot, returnDepot] = await Promise.all([
-        this.prisma.masterSingaporeDepot.findFirst({
-          where: { code: exportOriginDepotCode },
+        this.prisma.masterLogisticsLocation.findFirst({
+          where: {
+            code: exportOriginDepotCode,
+            type: LogisticsLocationType.DEPOT,
+            isActive: true,
+          },
         }),
-        this.prisma.masterSingaporeDepot.findFirst({
-          where: { code: returningDepotCode },
+        this.prisma.masterLogisticsLocation.findFirst({
+          where: {
+            code: returningDepotCode,
+            type: LogisticsLocationType.DEPOT,
+            isActive: true,
+          },
         }),
       ]);
 
@@ -1335,7 +1405,11 @@ export class OpsJobsService {
       ),
     });
     if ((this.prisma as any).masterLogisticsLocation) {
-      await this.syncTripRouteSnapshotForJob(tenantId, job.id);
+      await this.syncTripRouteSnapshotForJob(tenantId, job.id, {
+        deliveryLat: dto.deliveryLat ?? null,
+        deliveryLng: dto.deliveryLng ?? null,
+        deliveryPlaceId: dto.deliveryPlaceId ?? null,
+      });
     }
 
     // Best-effort auto-generate DO after job creation.

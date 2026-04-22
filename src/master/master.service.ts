@@ -56,11 +56,25 @@ export class MasterDataService {
           isActive: true,
         },
         orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          label: true,
+          type: true,
+          addressLine1: true,
+          addressLine2: true,
+          postalCode: true,
+          country: true,
+          lat: true,
+          lng: true,
+          placeId: true,
+        },
       })
       .then((rows) =>
         rows.map((row) => ({
           ...row,
-          label: `${row.code} — ${row.name}`,
+          label: row.label ?? `${row.code} — ${row.name}`,
         })),
       );
   }
@@ -68,13 +82,28 @@ export class MasterDataService {
   async getLogisticsLocationById(id: string) {
     const row = await this.prisma.masterLogisticsLocation.findUnique({
       where: { id },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        label: true,
+        type: true,
+        addressLine1: true,
+        addressLine2: true,
+        postalCode: true,
+        country: true,
+        lat: true,
+        lng: true,
+        placeId: true,
+        isActive: true,
+      },
     });
     if (!row || !row.isActive) {
       throw new NotFoundException("Logistics location not found");
     }
     return {
       ...row,
-      label: `${row.code} — ${row.name}`,
+      label: row.label ?? `${row.code} — ${row.name}`,
     };
   }
 

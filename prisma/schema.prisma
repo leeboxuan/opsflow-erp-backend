@@ -321,6 +321,7 @@ model MasterLogisticsLocation {
   id           String                @id @default(cuid())
   code         String
   name         String
+  label        String?
   type         LogisticsLocationType
   addressLine1 String
   addressLine2 String?
@@ -334,6 +335,7 @@ model MasterLogisticsLocation {
   createdAt    DateTime              @default(now())
   updatedAt    DateTime              @updatedAt
 
+  @@unique([code])
   @@unique([type, code])
   @@index([type, isActive])
   @@map("master_logistics_locations")

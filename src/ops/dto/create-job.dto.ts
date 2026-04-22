@@ -249,6 +249,21 @@ export class CreateJobDto {
   @IsString()
   deliveryPostal?: string;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  deliveryPlaceId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  deliveryLat?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  deliveryLng?: number;
+
   @ApiProperty()
   @IsString()
   @MinLength(1)
