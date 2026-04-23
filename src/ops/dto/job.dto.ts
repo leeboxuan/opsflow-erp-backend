@@ -133,6 +133,9 @@ export class JobTripResponseDto {
   status!: string;
   isPublished!: boolean;
   isCompleted!: boolean;
+  pendingState!: string | null;
+  canPublish!: boolean;
+  canMarkDone!: boolean;
   plannedStartAt!: Date | null;
   startedAt!: Date | null;
   closedAt!: Date | null;

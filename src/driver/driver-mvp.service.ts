@@ -8,6 +8,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { EventLogService } from "../transport/event-log.service";
 import {
   TripStatus,
+  TripPendingState,
   StopStatus,
   OrderStatus,
   InventoryUnitStatus,
@@ -114,7 +115,7 @@ export class DriverMvpService {
     await tx.trip.update({
       where: { id: tripId },
       data: {
-        status: TripStatus.Planned,
+        status: TripStatus.PUBLISHED,
         // Only set if missing (so you don’t overwrite admin scheduling later)
         plannedStartAt: plannedStartAt,
         plannedEndAt: plannedEndAt,
@@ -248,7 +249,7 @@ export class DriverMvpService {
       const createdTrip = await tx.trip.create({
         data: {
           tenantId,
-          status: TripStatus.Draft, // will be flipped to Planned below
+          status: TripStatus.DRAFT, // will be flipped to PUBLISHED below
           assignedDriverUserId: driverUserId,
           routeVersion: 1,
         },
@@ -296,9 +297,9 @@ export class DriverMvpService {
     });
     if (!trip) throw new NotFoundException("Trip not found");
 
-    if (![TripStatus.Draft, TripStatus.Planned].includes(trip.status)) {
+    if (![TripStatus.DRAFT, TripStatus.PUBLISHED].includes(trip.status)) {
       throw new BadRequestException(
-        "Can only add orders to Draft/Planned trips",
+        "Can only add orders to DRAFT/PUBLISHED trips",
       );
     }
 
@@ -366,7 +367,7 @@ export class DriverMvpService {
       where: {
         tenantId,
         assignedDriverUserId: driverUserId,
-        status: { not: TripStatus.Draft },
+        status: { not: TripStatus.DRAFT },
         plannedStartAt: { gte: dayStart, lt: dayEnd },
       },
       orderBy: { plannedStartAt: "asc" },
@@ -421,7 +422,7 @@ export class DriverMvpService {
       nextStop?.status === StopStatus.Pending ? nextStop.id : null;
 
     const canStartTrip =
-      tripStatus === TripStatus.Dispatched &&
+      tripStatus === TripStatus.PUBLISHED &&
       sorted.length > 0 &&
       sorted.every((s) => s.status === StopStatus.Pending);
 
@@ -486,7 +487,7 @@ export class DriverMvpService {
       throw new NotFoundException("Trip not found or not assigned to you");
 
     if (
-      ![TripStatus.Dispatched, TripStatus.Planned, TripStatus.Draft].includes(
+      ![TripStatus.PUBLISHED, TripStatus.DRAFT].includes(
         trip.status,
       )
     ) {
@@ -508,7 +509,7 @@ export class DriverMvpService {
     const updated = await this.prisma.trip.update({
       where: { id: tripId },
       data: {
-        status: TripStatus.Dispatched,
+        status: TripStatus.PUBLISHED,
         vehicleId: vehicleId ?? undefined,
         acceptedVehicleNo: dto.vehicleNo ?? trip.acceptedVehicleNo ?? undefined,
         acceptedTrailerNo: dto.trailerNo ?? trip.acceptedTrailerNo ?? undefined,
@@ -570,9 +571,9 @@ export class DriverMvpService {
     });
     if (!trip)
       throw new NotFoundException("Trip not found or not assigned to you");
-    if (trip.status !== TripStatus.Dispatched) {
+    if (trip.status !== TripStatus.PUBLISHED) {
       throw new BadRequestException(
-        `Trip can only be started when status is Dispatched (current: ${trip.status})`,
+        `Trip can only be started when status is PUBLISHED (current: ${trip.status})`,
       );
     }
     const allPending = trip.stops.every((s) => s.status === StopStatus.Pending);
@@ -581,7 +582,7 @@ export class DriverMvpService {
 
     const updated = await this.prisma.trip.update({
       where: { id: tripId },
-      data: { status: TripStatus.InTransit, startedAt: new Date() },
+      data: { status: TripStatus.ONGOING, startedAt: new Date() },
       include: {
         stops: {
           orderBy: { sequence: "asc" },
@@ -822,7 +823,7 @@ export class DriverMvpService {
       if (isFinalStop) {
         await tx.trip.update({
           where: { id: stop.tripId! },
-          data: { status: TripStatus.Delivered, closedAt: new Date() },
+          data: { status: TripStatus.COMPLETED, pendingState: TripPendingState.NONE, closedAt: new Date() },
         });
 
         const driver = await tx.drivers.findFirst({
@@ -946,8 +947,8 @@ export class DriverMvpService {
     });
     if (!trip) throw new NotFoundException("Trip not found");
 
-    if (![TripStatus.Draft, TripStatus.Planned].includes(trip.status)) {
-      throw new BadRequestException("Trip must be Draft/Planned to dispatch");
+    if (![TripStatus.DRAFT, TripStatus.PUBLISHED].includes(trip.status)) {
+      throw new BadRequestException("Trip must be DRAFT/PUBLISHED to dispatch");
     }
 
     if (unitSkus.length > 0) {
@@ -966,7 +967,7 @@ export class DriverMvpService {
 
     await (this.prisma as any).trip.update({
       where: { id: trip.id },
-      data: { status: TripStatus.Dispatched },
+      data: { status: TripStatus.PUBLISHED },
     });
 
     await (this.prisma as any).transportOrder.updateMany({

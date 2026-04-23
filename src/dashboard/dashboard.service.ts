@@ -71,7 +71,7 @@ export class DashboardService {
     const tripsActiveToday = await this.prisma.trip.count({
       where: {
         tenantId,
-        status: { in: [TripStatus.Dispatched, TripStatus.InTransit] },
+        status: { in: [TripStatus.PUBLISHED, TripStatus.ONGOING] },
         OR: [{ startedAt: { gte: last24h } }, { updatedAt: { gte: last24h } }],
       },
     });
@@ -102,7 +102,7 @@ export class DashboardService {
     const activeTrips = await this.prisma.trip.findMany({
       where: {
         tenantId,
-        status: { in: [TripStatus.Dispatched, TripStatus.InTransit] },
+        status: { in: [TripStatus.PUBLISHED, TripStatus.ONGOING] },
       },
       select: { driverId: true },
       take: 500,

@@ -246,7 +246,7 @@ export function tripCreateManyForJob(
     jobTripTemplate: s.jobTripTemplate,
     title: s.title,
     plannedStartAt: s.plannedStartAt,
-    status: TripStatus.Draft,
+    status: TripStatus.DRAFT,
     completionRuleJson: completionRuleForTemplate(s.jobTripTemplate),
     ...(routeSnapshots?.[s.jobTripTemplate] ?? {}),
   }));

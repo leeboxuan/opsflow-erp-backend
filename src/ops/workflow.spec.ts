@@ -38,8 +38,8 @@ describe("workflow helpers", () => {
         requiredUploadTypesExact: [TripDocumentType.PICKUP_DO],
       },
     });
-    expect(rows[0].status).toBe("Draft");
-    expect(rows[1].status).toBe("Draft");
+    expect(rows[0].status).toBe("DRAFT");
+    expect(rows[1].status).toBe("DRAFT");
   });
 
   it("tripCreateManyForJob accepts route snapshot overrides", () => {
@@ -85,8 +85,8 @@ describe("workflow helpers", () => {
         requiredUploadTypesExact: [TripDocumentType.POD_SIGNATURE],
       },
     });
-    expect(rows[0].status).toBe("Draft");
-    expect(rows[1].status).toBe("Draft");
+    expect(rows[0].status).toBe("DRAFT");
+    expect(rows[1].status).toBe("DRAFT");
   });
 
   it("tripCreateManyForJob creates one LCL leg with expected completion rule", () => {
@@ -106,7 +106,7 @@ describe("workflow helpers", () => {
         requiredUploadTypesExact: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
       },
     });
-    expect(rows[0].status).toBe("Draft");
+    expect(rows[0].status).toBe("DRAFT");
   });
 
   it("completionRuleForTemplate uses explicit per-template rule map", () => {

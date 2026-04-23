@@ -27,7 +27,7 @@ import { AuthGuard } from "../auth/guards/auth.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
 import { RoleGuard } from "../auth/guards/role.guard";
 import { Roles } from "../auth/guards/role.guard";
-import { Role, JobType } from "@prisma/client";
+import { Role, JobType, TripPendingState } from "@prisma/client";
 import { OpsJobsService } from "./ops-jobs.service";
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
@@ -702,6 +702,54 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.publishTrip(tenantId, jobId, tripId, accessUser);
+  }
+
+  @Post(":jobId/trips/:tripId/mark-done")
+  @ApiOperation({ summary: "Mark completed trip as done (admin/ops)" })
+  async markTripDone(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.markTripDone(tenantId, jobId, tripId, accessUser);
+  }
+
+  @Patch(":jobId/trips/:tripId/pending-state")
+  @ApiOperation({ summary: "Update trip pending state (admin/ops)" })
+  async updateTripPendingState(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Body()
+    body: {
+      pendingState: "NONE" | "PENDING_AT_PORT" | "PENDING_AT_DEPOT";
+    },
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    const pendingState = String(body?.pendingState ?? "").trim() as TripPendingState;
+    if (!Object.values(TripPendingState).includes(pendingState)) {
+      throw new BadRequestException(
+        "pendingState must be one of NONE, PENDING_AT_PORT, PENDING_AT_DEPOT",
+      );
+    }
+    return this.jobs.updateTripPendingState(
+      tenantId,
+      jobId,
+      tripId,
+      pendingState,
+      accessUser,
+    );
   }
 
   @Get(":jobId/trips/:tripId/documents")

@@ -8,7 +8,7 @@ import { parsePaginationFromQuery, buildPaginationMeta } from '../common/paginat
 import { applyMappedFilter } from '../common/listing/listing.filters';
 import { buildOrderBy } from '../common/listing/listing.sort';
 import { applyQSearch } from '../common/listing/listing.search';
-import { TripStatus, StopType } from '@prisma/client';
+import { TripPendingState, TripStatus, StopType } from '@prisma/client';
 import { CreateTripDto } from './dto/create-trip.dto';
 import {
   TripDto,
@@ -52,7 +52,8 @@ export class TripService {
       const trip = await tx.trip.create({
         data: {
           tenantId,
-          status: TripStatus.Draft,
+          status: TripStatus.DRAFT,
+          pendingState: TripPendingState.NONE,
           plannedStartAt: dto.plannedStartAt
             ? new Date(dto.plannedStartAt)
             : null,
@@ -128,13 +129,19 @@ export class TripService {
 
     applyQSearch(where, query.q?.trim(), []);
     applyMappedFilter(where, query.filter, {
-      Draft: { status: TripStatus.Draft },
-      Planned: { status: TripStatus.Planned },
-      Dispatched: { status: TripStatus.Dispatched },
-      InTransit: { status: TripStatus.InTransit },
-      Delivered: { status: TripStatus.Delivered },
-      Closed: { status: TripStatus.Closed },
-      Cancelled: { status: TripStatus.Cancelled },
+      Draft: { status: TripStatus.DRAFT },
+      DRAFT: { status: TripStatus.DRAFT },
+      Planned: { status: TripStatus.PUBLISHED },
+      Dispatched: { status: TripStatus.PUBLISHED },
+      PUBLISHED: { status: TripStatus.PUBLISHED },
+      InTransit: { status: TripStatus.ONGOING },
+      ONGOING: { status: TripStatus.ONGOING },
+      Delivered: { status: TripStatus.COMPLETED },
+      COMPLETED: { status: TripStatus.COMPLETED },
+      Closed: { status: TripStatus.DONE },
+      DONE: { status: TripStatus.DONE },
+      Cancelled: { status: TripStatus.CANCELLED },
+      CANCELLED: { status: TripStatus.CANCELLED },
     });
 
     const orderBy = buildOrderBy(
@@ -285,6 +292,7 @@ export class TripService {
     return {
       id: trip.id,
       status: trip.status,
+      pendingState: trip.pendingState ?? TripPendingState.NONE,
       plannedStartAt: trip.plannedStartAt,
       plannedEndAt: trip.plannedEndAt,
       assignedDriverId: trip.assignedDriverUserId,
@@ -335,12 +343,17 @@ export class TripService {
   ): Promise<TripDto> {
     // Map string status to enum
     const statusMap: Record<string, TripStatus> = {
-      Planned: TripStatus.Planned,
-      Dispatched: TripStatus.Dispatched,
-      InTransit: TripStatus.InTransit,
-      Delivered: TripStatus.Delivered,
-      Closed: TripStatus.Closed,
-      Cancelled: TripStatus.Cancelled,
+      Planned: TripStatus.PUBLISHED,
+      Dispatched: TripStatus.PUBLISHED,
+      InTransit: TripStatus.ONGOING,
+      Delivered: TripStatus.COMPLETED,
+      Closed: TripStatus.DONE,
+      Cancelled: TripStatus.CANCELLED,
+      PUBLISHED: TripStatus.PUBLISHED,
+      ONGOING: TripStatus.ONGOING,
+      COMPLETED: TripStatus.COMPLETED,
+      DONE: TripStatus.DONE,
+      CANCELLED: TripStatus.CANCELLED,
     };
 
     const targetStatus = statusMap[newStatus];
@@ -377,13 +390,12 @@ export class TripService {
 
     // Validate status transition
     const validTransitions: Record<TripStatus, TripStatus[]> = {
-      [TripStatus.Draft]: [TripStatus.Planned, TripStatus.Cancelled],
-      [TripStatus.Planned]: [TripStatus.Dispatched, TripStatus.Cancelled],
-      [TripStatus.Dispatched]: [TripStatus.InTransit, TripStatus.Cancelled],
-      [TripStatus.InTransit]: [TripStatus.Delivered, TripStatus.Cancelled],
-      [TripStatus.Delivered]: [TripStatus.Closed],
-      [TripStatus.Closed]: [],
-      [TripStatus.Cancelled]: [],
+      [TripStatus.DRAFT]: [TripStatus.PUBLISHED, TripStatus.CANCELLED],
+      [TripStatus.PUBLISHED]: [TripStatus.ONGOING, TripStatus.CANCELLED],
+      [TripStatus.ONGOING]: [TripStatus.COMPLETED, TripStatus.CANCELLED],
+      [TripStatus.COMPLETED]: [TripStatus.DONE],
+      [TripStatus.DONE]: [],
+      [TripStatus.CANCELLED]: [],
     };
 
     const allowedStatuses = validTransitions[trip.status];
@@ -396,7 +408,16 @@ export class TripService {
     // Update trip status
     const updatedTrip = await this.prisma.trip.update({
       where: { id: tripId },
-      data: { status: targetStatus },
+      data: {
+        status: targetStatus,
+        pendingState:
+          targetStatus === TripStatus.COMPLETED ||
+          targetStatus === TripStatus.DONE ||
+          targetStatus === TripStatus.DRAFT ||
+          targetStatus === TripStatus.CANCELLED
+            ? TripPendingState.NONE
+            : undefined,
+      },
       include: {
         stops: {
           orderBy: {

@@ -58,9 +58,9 @@ describe("driver jobs published-trip visibility", () => {
     const args = prisma.job.findFirst.mock.calls[0][0];
     expect(args.where.OR).toEqual([
       { trips: { none: {} } },
-      { trips: { some: { status: { not: "Draft" } } } },
+      { trips: { some: { status: { not: "DRAFT" } } } },
     ]);
-    expect(args.include.trips.where).toEqual({ status: { not: "Draft" } });
+    expect(args.include.trips.where).toEqual({ status: { not: "DRAFT" } });
   });
 });
 
@@ -83,7 +83,7 @@ describe("driver trip completion requirements", () => {
           id: "trip1",
           tenantId: "t1",
           jobId: "job1",
-          status: "InTransit",
+          status: "ONGOING",
           completionRuleJson: null,
         }),
         update: jest.fn(),

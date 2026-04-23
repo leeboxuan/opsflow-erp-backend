@@ -20,6 +20,7 @@ import {
   MembershipStatus,
   Prisma,
   Role,
+  TripPendingState,
   TripDocumentType,
   TripStatus,
 } from "@prisma/client";
@@ -264,9 +265,12 @@ function toJobDto(j: any): JobDto {
         origin: null,
         destination: null,
         status: t.status,
-        isPublished: t.status !== TripStatus.Draft,
+        isPublished: t.status !== TripStatus.DRAFT,
         isCompleted:
-          t.status === TripStatus.Delivered || t.status === TripStatus.Closed,
+          t.status === TripStatus.COMPLETED || t.status === TripStatus.DONE,
+        pendingState: t.pendingState ?? TripPendingState.NONE,
+        canPublish: t.status === TripStatus.DRAFT,
+        canMarkDone: t.status === TripStatus.COMPLETED,
         plannedStartAt: t.plannedStartAt ?? null,
         startedAt: t.startedAt ?? null,
         closedAt: t.closedAt ?? null,
@@ -2648,7 +2652,8 @@ export class OpsJobsService {
         title: dto.title?.trim() || dto.jobTripTemplate,
         displayTitle: dto.title?.trim() || dto.jobTripTemplate,
         plannedStartAt,
-        status: TripStatus.Draft,
+        status: TripStatus.DRAFT,
+        pendingState: TripPendingState.NONE,
         completionRuleJson: completionRuleForTemplate(dto.jobTripTemplate),
       },
     });
@@ -2860,7 +2865,7 @@ export class OpsJobsService {
     });
     if (!trip) throw new NotFoundException("Trip not found");
 
-    if (trip.status !== TripStatus.Draft) {
+    if (trip.status !== TripStatus.DRAFT) {
       throw new BadRequestException(
         "Trip is already published or cannot be published from current status",
       );
@@ -2902,7 +2907,7 @@ export class OpsJobsService {
 
     await this.prisma.trip.update({
       where: { id: tripId },
-      data: { status: TripStatus.Planned },
+      data: { status: TripStatus.PUBLISHED, pendingState: TripPendingState.NONE },
     });
 
     await this.audit.log(
@@ -2914,6 +2919,78 @@ export class OpsJobsService {
       actorUserId,
     );
 
+    return this.getOne(tenantId, jobId, user);
+  }
+
+  async markTripDone(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    user: any,
+  ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+      select: { id: true, status: true },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+    if (trip.status !== TripStatus.COMPLETED) {
+      throw new BadRequestException("Only COMPLETED trips can be marked DONE");
+    }
+
+    await this.prisma.trip.update({
+      where: { id: tripId },
+      data: { status: TripStatus.DONE, pendingState: TripPendingState.NONE },
+    });
+    await this.audit.log(
+      tenantId,
+      "TRIP_MARK_DONE",
+      "TRIP",
+      tripId,
+      { jobId },
+      actorUserId,
+    );
+    return this.getOne(tenantId, jobId, user);
+  }
+
+  async updateTripPendingState(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    pendingState: TripPendingState,
+    user: any,
+  ): Promise<JobDto> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+      select: { id: true, status: true },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    const allowedStatuses = [TripStatus.PUBLISHED, TripStatus.ONGOING];
+    if (
+      pendingState !== TripPendingState.NONE &&
+      !allowedStatuses.includes(trip.status)
+    ) {
+      throw new BadRequestException(
+        `pendingState "${pendingState}" is invalid when trip status is ${trip.status}. Allowed only for PUBLISHED or ONGOING`,
+      );
+    }
+
+    await this.prisma.trip.update({
+      where: { id: tripId },
+      data: { pendingState },
+    });
+    await this.audit.log(
+      tenantId,
+      "TRIP_PENDING_STATE_UPDATE",
+      "TRIP",
+      tripId,
+      { jobId, pendingState },
+      actorUserId,
+    );
     return this.getOne(tenantId, jobId, user);
   }
 
@@ -2948,7 +3025,7 @@ export class OpsJobsService {
     }
 
     const nonCompleted = trips.filter(
-      (t) => t.status !== TripStatus.Delivered && t.status !== TripStatus.Closed,
+      (t) => t.status !== TripStatus.COMPLETED && t.status !== TripStatus.DONE,
     );
     if (nonCompleted.length > 0) {
       throw new BadRequestException(
@@ -3067,7 +3144,7 @@ export class OpsJobsService {
       const origin = toTripLocationDto("origin", t);
       const destination = toTripLocationDto("destination", t);
       const loc = t.assignedDriverUserId ? locationByDriver.get(t.assignedDriverUserId) : null;
-      const hasStarted = !!t.startedAt || t.status === TripStatus.InTransit || t.status === TripStatus.Delivered || t.status === TripStatus.Closed;
+      const hasStarted = !!t.startedAt || t.status === TripStatus.ONGOING || t.status === TripStatus.COMPLETED || t.status === TripStatus.DONE;
       const lastSeenAt = loc?.capturedAt ?? null;
       const isStale =
         !!lastSeenAt &&
@@ -3104,9 +3181,12 @@ export class OpsJobsService {
       title: t.title ?? null,
       displayTitle: t.displayTitle ?? t.title ?? null,
       status: t.status,
-      isPublished: t.status !== TripStatus.Draft,
+      isPublished: t.status !== TripStatus.DRAFT,
       isCompleted:
-        t.status === TripStatus.Delivered || t.status === TripStatus.Closed,
+        t.status === TripStatus.COMPLETED || t.status === TripStatus.DONE,
+      pendingState: t.pendingState ?? TripPendingState.NONE,
+      canPublish: t.status === TripStatus.DRAFT,
+      canMarkDone: t.status === TripStatus.COMPLETED,
       plannedStartAt: t.plannedStartAt ?? null,
       startedAt: t.startedAt ?? null,
       closedAt: t.closedAt ?? null,
@@ -3389,7 +3469,7 @@ export class OpsJobsService {
       where: {
         tenantId,
         assignedDriverUserId: { not: null },
-        status: { in: [TripStatus.Planned, TripStatus.Dispatched, TripStatus.InTransit] },
+        status: { in: [TripStatus.PUBLISHED, TripStatus.ONGOING] },
         jobId: { not: null },
         job: whereJob,
       },

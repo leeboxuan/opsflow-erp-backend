@@ -6,6 +6,7 @@ import {
 import {
   JobStatus,
   JobType,
+  TripPendingState,
   TripStatus,
   TripDocumentType,
 } from "@prisma/client";
@@ -126,9 +127,12 @@ function toJobDto(j: any): JobDto {
         jobTripTemplate: t.jobTripTemplate ?? null,
         title: t.title ?? null,
         status: t.status,
-        isPublished: t.status !== TripStatus.Draft,
+        isPublished: t.status !== TripStatus.DRAFT,
         isCompleted:
-          t.status === TripStatus.Delivered || t.status === TripStatus.Closed,
+          t.status === TripStatus.COMPLETED || t.status === TripStatus.DONE,
+        pendingState: t.pendingState ?? TripPendingState.NONE,
+        canPublish: false,
+        canMarkDone: false,
         plannedStartAt: t.plannedStartAt ?? null,
         startedAt: t.startedAt ?? null,
         closedAt: t.closedAt ?? null,
@@ -158,7 +162,7 @@ export class DriverJobsService {
     return {
       OR: [
         { trips: { none: {} } },
-        { trips: { some: { status: { not: TripStatus.Draft } } } },
+        { trips: { some: { status: { not: TripStatus.DRAFT } } } },
       ],
     };
   }
@@ -173,7 +177,7 @@ export class DriverJobsService {
         id: tripId,
         tenantId,
         jobId,
-        status: { not: TripStatus.Draft },
+        status: { not: TripStatus.DRAFT },
       },
     });
     if (!trip) {
@@ -677,7 +681,7 @@ export class DriverJobsService {
         },
       },
       trips: {
-        where: { status: { not: TripStatus.Draft } },
+        where: { status: { not: TripStatus.DRAFT } },
         orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
         include: {
           documents: {
@@ -754,7 +758,7 @@ export class DriverJobsService {
     const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
 
     const tripCount = await this.prisma.trip.count({
-      where: { tenantId, jobId, status: { not: TripStatus.Draft } },
+      where: { tenantId, jobId, status: { not: TripStatus.DRAFT } },
     });
     if (tripCount > 0) {
       throw new BadRequestException(
@@ -802,7 +806,7 @@ export class DriverJobsService {
     });
 
     const tripCount = await this.prisma.trip.count({
-      where: { tenantId, jobId, status: { not: TripStatus.Draft } },
+      where: { tenantId, jobId, status: { not: TripStatus.DRAFT } },
     });
     if (tripCount === 0) {
       throw new BadRequestException("This job has no trips; use POST .../start");
@@ -838,7 +842,7 @@ export class DriverJobsService {
     }
 
     const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
-    if (trip.status !== TripStatus.Planned && trip.status !== TripStatus.Dispatched) {
+    if (trip.status !== TripStatus.PUBLISHED) {
       throw new BadRequestException("Trip must be published and ready to start");
     }
     if (trip.startedAt) {
@@ -882,7 +886,7 @@ export class DriverJobsService {
           trailerLastLocationCode: locCode,
           startedAt: now,
           startedByDriverUserId: driverUserId,
-          status: TripStatus.InTransit,
+          status: TripStatus.ONGOING,
         },
       });
 
@@ -948,7 +952,7 @@ export class DriverJobsService {
     });
 
     const tripCount = await this.prisma.trip.count({
-      where: { tenantId, jobId, status: { not: TripStatus.Draft } },
+      where: { tenantId, jobId, status: { not: TripStatus.DRAFT } },
     });
     if (tripCount > 0) {
       throw new BadRequestException(
@@ -1007,8 +1011,8 @@ export class DriverJobsService {
 
     const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
 
-    if (trip.status !== TripStatus.InTransit) {
-      throw new BadRequestException("Trip must be InTransit to complete");
+    if (trip.status !== TripStatus.ONGOING) {
+      throw new BadRequestException("Trip must be ONGOING to complete");
     }
 
     const missing: string[] = [];
@@ -1040,7 +1044,8 @@ export class DriverJobsService {
     await this.prisma.trip.update({
       where: { id: tripId },
       data: {
-        status: TripStatus.Delivered,
+        status: TripStatus.COMPLETED,
+        pendingState: TripPendingState.NONE,
         closedAt: now,
         completedByDriverUserId: driverUserId,
       },
@@ -1061,9 +1066,9 @@ export class DriverJobsService {
         jobId,
         status: {
           notIn: [
-            TripStatus.Delivered,
-            TripStatus.Closed,
-            TripStatus.Cancelled,
+            TripStatus.COMPLETED,
+            TripStatus.DONE,
+            TripStatus.CANCELLED,
           ],
         },
       },

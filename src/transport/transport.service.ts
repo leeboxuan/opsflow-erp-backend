@@ -501,7 +501,7 @@ export class TransportService {
       const trip = await tx.trip.create({
         data: {
           tenantId,
-          status: TripStatus.Draft,
+          status: TripStatus.DRAFT,
           plannedStartAt: order.pickupWindowStart,
           plannedEndAt: order.deliveryWindowEnd,
         },
@@ -883,7 +883,7 @@ export class TransportService {
       where: {
         tenantId,
         transportOrderId: orderId,
-        trip: { status: { in: [TripStatus.Dispatched, TripStatus.InTransit] } },
+        trip: { status: { in: [TripStatus.PUBLISHED, TripStatus.ONGOING] } },
       },
       select: { id: true },
     });
@@ -1123,6 +1123,7 @@ export class TransportService {
     return {
       id: trip.id,
       status: trip.status,
+      pendingState: trip.pendingState ?? "NONE",
       plannedStartAt: trip.plannedStartAt,
       plannedEndAt: trip.plannedEndAt,
       assignedDriverId: trip.assignedDriverUserId ?? null,

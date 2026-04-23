@@ -74,7 +74,7 @@ export class TripController {
     @Param('id') id: string,
   ): Promise<TripDto> {
     const tenantId = req.tenant.tenantId;
-    return this.tripService.transitionStatus(tenantId, id, 'Dispatched');
+    return this.tripService.transitionStatus(tenantId, id, 'PUBLISHED');
   }
 
   @Post(':id/start')
@@ -86,7 +86,7 @@ export class TripController {
     @Param('id') id: string,
   ): Promise<TripDto> {
     const tenantId = req.tenant.tenantId;
-    return this.tripService.transitionStatus(tenantId, id, 'InTransit');
+    return this.tripService.transitionStatus(tenantId, id, 'ONGOING');
   }
 
   @Post(':id/complete')
@@ -98,7 +98,7 @@ export class TripController {
     @Param('id') id: string,
   ): Promise<TripDto> {
     const tenantId = req.tenant.tenantId;
-    return this.tripService.transitionStatus(tenantId, id, 'Delivered');
+    return this.tripService.transitionStatus(tenantId, id, 'COMPLETED');
   }
 
   @Get(':id/events')

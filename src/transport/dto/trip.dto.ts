@@ -1,4 +1,4 @@
-import { TripStatus, StopType, PodStatus } from '@prisma/client';
+import { TripPendingState, TripStatus, StopType, PodStatus } from '@prisma/client';
 
 export interface StopDto {
   id: string;
@@ -42,6 +42,7 @@ export interface DriverInfoDto {
 export interface TripDto {
   id: string;
   status: TripStatus;
+  pendingState: TripPendingState;
   plannedStartAt: Date | null;
   plannedEndAt: Date | null;
   assignedDriverId: string | null;

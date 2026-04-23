@@ -242,7 +242,8 @@ model TransportOrder {
 model Trip {
   id                   String                    @id @default(cuid())
   tenantId             String
-  status               TripStatus                @default(Draft)
+  status               TripStatus                @default(DRAFT)
+  pendingState         TripPendingState          @default(NONE)
   plannedStartAt       DateTime?
   plannedEndAt         DateTime?
   createdAt            DateTime                  @default(now())
@@ -1298,13 +1299,18 @@ enum OrderStatus {
 }
 
 enum TripStatus {
-  Draft
-  Planned
-  Dispatched
-  InTransit
-  Delivered
-  Closed
-  Cancelled
+  DRAFT
+  PUBLISHED
+  ONGOING
+  COMPLETED
+  DONE
+  CANCELLED
+}
+
+enum TripPendingState {
+  NONE
+  PENDING_AT_PORT
+  PENDING_AT_DEPOT
 }
 
 enum StopType {

@@ -103,7 +103,10 @@ describe("job charge workflow hardening", () => {
             documents: [],
           }),
       },
-      trip: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
+      trip: {
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       $transaction: jest.fn(async (input: any) => {
         if (typeof input === "function") {
           return input({
@@ -117,7 +120,7 @@ describe("job charge workflow hardening", () => {
     const supabaseService = { getClient: jest.fn() } as any;
 
     const svc = new OpsJobsService(prisma, audit, supabaseService);
-    jest.spyOn(svc as any, "generateDoDocument").mockResolvedValue({});
+    jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
 
     await svc.create(
       "t1",
@@ -324,6 +327,17 @@ describe("job charge workflow hardening", () => {
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
       },
+      masterLogisticsLocation: {
+        findFirst: jest.fn().mockImplementation(({ where }: any) => {
+          if (where?.code === "JURONG" && where?.type === "PORT") {
+            return Promise.resolve({ code: "JURONG", name: "Jurong Port", type: "PORT" });
+          }
+          if (where?.code === "GUL_DEFAULT" && where?.type === "DEPOT") {
+            return Promise.resolve({ code: "GUL_DEFAULT", name: "Gul Depot", type: "DEPOT" });
+          }
+          return Promise.resolve(null);
+        }),
+      },
       masterSingaporePort: {
         findFirst: jest.fn().mockResolvedValue({ code: "JURONG" }),
       },
@@ -420,12 +434,15 @@ describe("job charge workflow hardening", () => {
           documents: [],
         }),
       },
-      trip: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
+      trip: {
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new OpsJobsService(prisma, audit, supabaseService);
-    jest.spyOn(svc as any, "generateDoDocument").mockResolvedValue({});
+    jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
 
     await svc.create(
       "t1",
@@ -457,6 +474,17 @@ describe("job charge workflow hardening", () => {
     const prisma: any = {
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
+      },
+      masterLogisticsLocation: {
+        findFirst: jest.fn().mockImplementation(({ where }: any) => {
+          if (where?.code === "PSA_DEPOT_A" && where?.type === "DEPOT") {
+            return Promise.resolve({ code: "PSA_DEPOT_A", name: "PSA Depot A", type: "DEPOT" });
+          }
+          if (where?.code === "PSA_DEPOT_B" && where?.type === "DEPOT") {
+            return Promise.resolve({ code: "PSA_DEPOT_B", name: "PSA Depot B", type: "DEPOT" });
+          }
+          return Promise.resolve(null);
+        }),
       },
       masterSingaporeDepot: {
         findFirst: jest
@@ -545,12 +573,15 @@ describe("job charge workflow hardening", () => {
           documents: [],
         }),
       },
-      trip: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
+      trip: {
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new OpsJobsService(prisma, audit, supabaseService);
-    jest.spyOn(svc as any, "generateDoDocument").mockResolvedValue({});
+    jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
 
     await svc.create(
       "t1",
@@ -697,12 +728,12 @@ describe("job charge workflow hardening", () => {
     );
   });
 
-  it("publishTrip fails when draft trip has no payout assigned", async () => {
+  it("publishTrip fails when DRAFT trip has no payout assigned", async () => {
     const prisma: any = {
       trip: {
         findFirst: jest.fn().mockResolvedValue({
           id: "trip1",
-          status: "Draft",
+          status: "DRAFT",
           driverEarningCents: null,
         }),
         update: jest.fn(),
@@ -718,12 +749,12 @@ describe("job charge workflow hardening", () => {
     expect(prisma.trip.update).not.toHaveBeenCalled();
   });
 
-  it("publishTrip moves draft trip to Planned when payout exists", async () => {
+  it("publishTrip moves DRAFT trip to PUBLISHED when payout exists", async () => {
     const prisma: any = {
       trip: {
         findFirst: jest.fn().mockResolvedValue({
           id: "trip1",
-          status: "Draft",
+          status: "DRAFT",
           driverEarningCents: 7500,
         }),
         update: jest.fn().mockResolvedValue({ id: "trip1" }),
@@ -738,7 +769,7 @@ describe("job charge workflow hardening", () => {
 
     expect(prisma.trip.update).toHaveBeenCalledWith({
       where: { id: "trip1" },
-      data: { status: "Planned" },
+      data: { status: "PUBLISHED", pendingState: "NONE" },
     });
   });
 
@@ -747,7 +778,7 @@ describe("job charge workflow hardening", () => {
       trip: {
         findFirst: jest.fn().mockResolvedValue({
           id: "trip1",
-          status: "Draft",
+          status: "DRAFT",
           driverEarningCents: 7500,
         }),
         update: jest.fn(),
@@ -777,7 +808,7 @@ describe("job charge workflow hardening", () => {
       trip: {
         findFirst: jest.fn().mockResolvedValue({
           id: "trip1",
-          status: "Draft",
+          status: "DRAFT",
           driverEarningCents: null,
         }),
         update: jest.fn().mockResolvedValue({ id: "trip1" }),
@@ -808,7 +839,7 @@ describe("job charge workflow hardening", () => {
     await svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS });
     expect(prisma.trip.update).toHaveBeenCalledWith({
       where: { id: "trip1" },
-      data: expect.objectContaining({ status: "Planned" }),
+      data: expect.objectContaining({ status: "PUBLISHED" }),
     });
   });
 
@@ -826,10 +857,10 @@ describe("job charge workflow hardening", () => {
         findMany: jest
           .fn()
           .mockResolvedValueOnce([])
-          .mockResolvedValueOnce([{ id: "t1", status: "InTransit" }])
+          .mockResolvedValueOnce([{ id: "t1", status: "ONGOING" }])
           .mockResolvedValueOnce([
-            { id: "t1", status: "Delivered" },
-            { id: "t2", status: "Closed" },
+            { id: "t1", status: "COMPLETED" },
+            { id: "t2", status: "DONE" },
           ]),
       },
     };
@@ -992,5 +1023,100 @@ describe("job charge workflow hardening", () => {
         { userId: "u1", role: Role.OPS },
       ),
     ).rejects.toThrow("requires manual/default rate selection");
+  });
+
+  it("rejects non-NONE pending state when trip is COMPLETED", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip1", status: "COMPLETED" }),
+        update: jest.fn(),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    await expect(
+      svc.updateTripPendingState(
+        "t1",
+        "job1",
+        "trip1",
+        "PENDING_AT_PORT" as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow(
+      'pendingState "PENDING_AT_PORT" is invalid when trip status is COMPLETED. Allowed only for PUBLISHED or ONGOING',
+    );
+    expect(prisma.trip.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-NONE pending state when trip is DRAFT", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip1", status: "DRAFT" }),
+        update: jest.fn(),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    await expect(
+      svc.updateTripPendingState(
+        "t1",
+        "job1",
+        "trip1",
+        "PENDING_AT_DEPOT" as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow(
+      'pendingState "PENDING_AT_DEPOT" is invalid when trip status is DRAFT. Allowed only for PUBLISHED or ONGOING',
+    );
+    expect(prisma.trip.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-NONE pending state when trip is DONE", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip1", status: "DONE" }),
+        update: jest.fn(),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    await expect(
+      svc.updateTripPendingState(
+        "t1",
+        "job1",
+        "trip1",
+        "PENDING_AT_PORT" as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow(
+      'pendingState "PENDING_AT_PORT" is invalid when trip status is DONE. Allowed only for PUBLISHED or ONGOING',
+    );
+    expect(prisma.trip.update).not.toHaveBeenCalled();
+  });
+
+  it("markTripDone auto-clears pendingState to NONE", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip1", status: "COMPLETED" }),
+        update: jest.fn().mockResolvedValue({ id: "trip1" }),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+
+    await svc.markTripDone("t1", "job1", "trip1", { userId: "u1", role: Role.OPS });
+
+    expect(prisma.trip.update).toHaveBeenCalledWith({
+      where: { id: "trip1" },
+      data: { status: "DONE", pendingState: "NONE" },
+    });
   });
 });
