@@ -23,13 +23,37 @@ export class JobDocumentDto {
   sizeBytes?: number | null;
 
   @ApiPropertyOptional()
+  isActive?: boolean | null;
+
+  @ApiPropertyOptional()
   createdAt: Date;
+
+  @ApiPropertyOptional()
+  updatedAt?: Date | null;
 
   @ApiPropertyOptional()
   url?: string | null;
 
   @ApiPropertyOptional()
   uploadedByUserId?: string | null;
+
+  @ApiPropertyOptional()
+  uploadedByName?: string | null;
+
+  @ApiPropertyOptional()
+  generatedBySystem?: boolean | null;
+
+  @ApiPropertyOptional()
+  generatedSource?: string | null;
+
+  @ApiPropertyOptional()
+  jobId?: string | null;
+
+  @ApiPropertyOptional()
+  tripId?: string | null;
+
+  @ApiPropertyOptional()
+  signedByUserId?: string | null;
 
   @ApiPropertyOptional()
   downloadUrl?: string | null;
@@ -89,8 +113,10 @@ export class JobTripResponseDto {
   id!: string;
   jobId!: string | null;
   jobSequence!: number | null;
+  tripSequence!: number | null;
   jobTripTemplate!: JobTripTemplate | null;
   title!: string | null;
+  displayTitle!: string | null;
   createdAt!: Date | null;
   assignedDriverUserId!: string | null;
   assignedDriverName!: string | null;

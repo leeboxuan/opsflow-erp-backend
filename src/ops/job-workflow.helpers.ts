@@ -22,8 +22,12 @@ export const TRIP_COMPLETION_RULES: Record<JobTripTemplate, TripCompletionRule> 
   [JobTripTemplate.PICKUP_TO_DELIVERY]: {
     requireGeneratedDoSigned: true,
     tripUploads: {
-      minUploadCount: 1,
-      allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
+      minUploadCount: 2,
+      allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
+      requiredUploadTypesExact: [
+        TripDocumentType.PICKUP_DO,
+        TripDocumentType.POD_SIGNATURE,
+      ],
     },
   },
   [JobTripTemplate.DELIVERY_TO_DEPOT]: {
@@ -38,23 +42,26 @@ export const TRIP_COMPLETION_RULES: Record<JobTripTemplate, TripCompletionRule> 
     requireGeneratedDoSigned: true,
     tripUploads: {
       minUploadCount: 2,
-      allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
-      requiredUploadTypesExact: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
+      allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
+      requiredUploadTypesExact: [
+        TripDocumentType.PICKUP_DO,
+        TripDocumentType.POD_SIGNATURE,
+      ],
     },
   },
   [JobTripTemplate.DELIVERY_TO_PORT]: {
     requireGeneratedDoSigned: true,
     tripUploads: {
       minUploadCount: 1,
-      allowedUploadTypes: [TripDocumentType.OFFLOADING],
-      requiredUploadTypesExact: [TripDocumentType.OFFLOADING],
+      allowedUploadTypes: [TripDocumentType.POD_SIGNATURE],
+      requiredUploadTypesExact: [TripDocumentType.POD_SIGNATURE],
     },
   },
   [JobTripTemplate.CUSTOM]: {
     requireGeneratedDoSigned: true,
     tripUploads: {
       minUploadCount: 1,
-      allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
+      allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
     },
   },
 };
@@ -138,6 +145,8 @@ export function resolveTripCompletionRule(raw: unknown): ResolvedTripCompletionR
 
 export type DefaultTripSeed = {
   jobSequence: number;
+  tripSequence: number;
+  displayTitle: string;
   jobTripTemplate: JobTripTemplate;
   title: string;
   plannedStartAt: Date | null;
@@ -153,8 +162,10 @@ export function buildDefaultTripSeeds(
     return [
       {
         jobSequence: 1,
+        tripSequence: 1,
+        displayTitle: "Delivery",
         jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
-        title: "Pickup to delivery",
+        title: "Delivery",
         plannedStartAt: planned,
       },
     ];
@@ -164,14 +175,18 @@ export function buildDefaultTripSeeds(
     return [
       {
         jobSequence: 1,
+        tripSequence: 1,
+        displayTitle: "Port to Delivery Point",
         jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
-        title: "Port pickup to delivery",
+        title: "Port to Delivery Point",
         plannedStartAt: planned,
       },
       {
         jobSequence: 2,
+        tripSequence: 2,
+        displayTitle: "Delivery Point to Return",
         jobTripTemplate: JobTripTemplate.DELIVERY_TO_DEPOT,
-        title: "Delivery to return depot",
+        title: "Delivery Point to Return",
         plannedStartAt: planned,
       },
     ];
@@ -181,14 +196,18 @@ export function buildDefaultTripSeeds(
     return [
       {
         jobSequence: 1,
+        tripSequence: 1,
+        displayTitle: "Pickup Point to Port",
         jobTripTemplate: JobTripTemplate.DEPOT_TO_DELIVERY,
-        title: "Container pickup to stuffing destination",
+        title: "Pickup Point to Port",
         plannedStartAt: planned,
       },
       {
         jobSequence: 2,
+        tripSequence: 2,
+        displayTitle: "Return Leg",
         jobTripTemplate: JobTripTemplate.DELIVERY_TO_PORT,
-        title: "Stuffing destination to port",
+        title: "Return Leg",
         plannedStartAt: planned,
       },
     ];
@@ -197,6 +216,8 @@ export function buildDefaultTripSeeds(
   return [
     {
       jobSequence: 1,
+      tripSequence: 1,
+      displayTitle: "Main leg",
       jobTripTemplate: JobTripTemplate.CUSTOM,
       title: "Main leg",
       plannedStartAt: planned,
@@ -220,6 +241,8 @@ export function tripCreateManyForJob(
     tenantId,
     jobId,
     jobSequence: s.jobSequence,
+    tripSequence: s.tripSequence,
+    displayTitle: s.displayTitle,
     jobTripTemplate: s.jobTripTemplate,
     title: s.title,
     plannedStartAt: s.plannedStartAt,

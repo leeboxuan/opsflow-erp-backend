@@ -49,14 +49,14 @@ import { JobDto, JobTripResponseDto } from "./dto/job.dto";
 @ApiTags("ops-jobs")
 @Controller("jobs")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+@Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
 @ApiBearerAuth("JWT-auth")
 export class OpsJobsController {
   constructor(private readonly jobs: OpsJobsService) {}
 
   @Get()
   @ApiOperation({ summary: "List jobs with filters" })
-  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
   async list(@Req() req: any, @Query() query: JobListQueryDto) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -272,7 +272,7 @@ export class OpsJobsController {
 
   @Get("tracking/live")
   @ApiOperation({ summary: "List live trip tracking rows for active/published trips" })
-  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
   async listLiveTracking(@Req() req: any) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -285,7 +285,7 @@ export class OpsJobsController {
 
   @Get(":jobId")
   @ApiOperation({ summary: "Get job by id" })
-  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
   async getOne(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -426,21 +426,39 @@ export class OpsJobsController {
     return this.jobs.uploadOtherDocument(tenantId, jobId, file, accessUser);
   }
 
-  @Post(":jobId/documents/do/generate")
-  @ApiOperation({ summary: "Generate DO PDF for job" })
-  async generateDo(@Req() req: any, @Param("jobId") jobId: string) {
-    const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
-    return this.jobs.generateDoDocument(tenantId, jobId, accessUser);
-  }
-
   @Get(":jobId/documents")
   @ApiOperation({ summary: "List job documents" })
-  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  @ApiOkResponse({
+    description:
+      "Returns only active job-level documents. Inactive/legacy versions are excluded from primary UI lists.",
+    schema: {
+      type: "array",
+      example: [
+        {
+          id: "jobdoc_active_quotation_01",
+          type: "QUOTATION",
+          originalName: "signed-quotation-v2.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 245112,
+          isActive: true,
+          createdAt: "2026-04-24T10:15:00.000Z",
+          updatedAt: "2026-04-24T10:15:00.000Z",
+          uploadedByUserId: "usr_ops_01",
+          uploadedByName: "Ops Admin",
+          generatedBySystem: false,
+          generatedSource: null,
+          signedAt: null,
+          signedByUserId: null,
+          signedByName: null,
+          jobId: "job_001",
+          tripId: null,
+          previewUrl: "https://signed.example/preview/jobdoc_active_quotation_01",
+          downloadUrl: "https://signed.example/download/jobdoc_active_quotation_01",
+        },
+      ],
+    },
+  })
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
   async listDocuments(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -451,9 +469,74 @@ export class OpsJobsController {
     return this.jobs.listDocuments(tenantId, jobId, accessUser);
   }
 
+  @Get(":jobId/activity")
+  @ApiOperation({ summary: "Get normalized job activity feed" })
+  @ApiOkResponse({
+    description:
+      "Newest-first activity feed with trip context (tripSequence/displayTitle) and document lifecycle events.",
+    schema: {
+      type: "array",
+      example: [
+        {
+          id: "audit_1001",
+          scope: "TRIP",
+          scopeId: "trip_001",
+          tripId: "trip_001",
+          tripSequence: 1,
+          type: "DOC_GENERATED",
+          label: "Delivery DO generated",
+          documentType: "DELIVERY_DO",
+          documentId: "tripdoc_delivery_do_01",
+          fileName: "WF-2026-04-001-IMP_delivery-do.pdf",
+          actorUserId: null,
+          actorName: null,
+          isSystem: true,
+          metadata: {
+            generatedBySystem: true,
+            generatedSource: "AUTO_CREATE_JOB",
+            displayTitle: "Port to Delivery Point",
+          },
+          createdAt: "2026-04-24T10:00:00.000Z",
+        },
+        {
+          id: "audit_1002",
+          scope: "TRIP",
+          scopeId: "trip_001",
+          tripId: "trip_001",
+          tripSequence: 1,
+          type: "DOC_REGENERATED",
+          label: "Delivery DO regenerated",
+          documentType: "DELIVERY_DO",
+          documentId: "tripdoc_delivery_do_02",
+          fileName: "WF-2026-04-001-IMP_delivery-do-v2.pdf",
+          actorUserId: "usr_ops_01",
+          actorName: "Ops Admin",
+          isSystem: false,
+          metadata: {
+            generatedBySystem: true,
+            generatedSource: "MANUAL_REGENERATE",
+            previousDocumentId: "tripdoc_delivery_do_01",
+            displayTitle: "Port to Delivery Point",
+          },
+          createdAt: "2026-04-24T10:20:00.000Z",
+        },
+      ],
+    },
+  })
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+  async getActivity(@Req() req: any, @Param("jobId") jobId: string) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.getActivity(tenantId, jobId, accessUser);
+  }
+
   @Get(":jobId/audit")
   @ApiOperation({ summary: "Get audit log for job" })
-  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
   async getAudit(
     @Req() req: any,
     @Param("jobId") jobId: string,
@@ -475,7 +558,7 @@ export class OpsJobsController {
 
   @Get(":jobId/tracking")
   @ApiOperation({ summary: "Get job tracking (last location, driver, vehicle)" })
-  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
   async getTracking(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -623,6 +706,36 @@ export class OpsJobsController {
 
   @Get(":jobId/trips/:tripId/documents")
   @ApiOperation({ summary: "List trip documents with signed URLs" })
+  @ApiOkResponse({
+    description:
+      "Returns only active trip-level documents. Replaced/inactive versions are omitted from primary document cards.",
+    schema: {
+      type: "array",
+      example: [
+        {
+          id: "tripdoc_delivery_do_active_01",
+          type: "DELIVERY_DO",
+          originalName: "WF-2026-04-001-IMP_delivery-do.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 184553,
+          isActive: true,
+          createdAt: "2026-04-24T10:00:00.000Z",
+          updatedAt: "2026-04-24T10:00:00.000Z",
+          uploadedByUserId: null,
+          uploadedByName: null,
+          generatedBySystem: true,
+          generatedSource: "AUTO_CREATE_JOB",
+          signedAt: null,
+          signedByUserId: null,
+          signedByName: null,
+          jobId: "job_001",
+          tripId: "trip_001",
+          previewUrl: "https://signed.example/preview/tripdoc_delivery_do_active_01",
+          downloadUrl: "https://signed.example/download/tripdoc_delivery_do_active_01",
+        },
+      ],
+    },
+  })
   @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
   async listTripDocuments(
     @Req() req: any,
@@ -646,7 +759,10 @@ export class OpsJobsController {
       type: "object",
       required: ["type", "file"],
       properties: {
-        type: { type: "string" },
+        type: {
+          type: "string",
+          enum: ["PICKUP_DO", "DELIVERY_DO", "POD_PHOTO", "POD_SIGNATURE", "OTHER"],
+        },
         requiresSignature: { type: "boolean" },
         file: { type: "string", format: "binary" },
       },
@@ -674,6 +790,58 @@ export class OpsJobsController {
       file,
       String(req.body?.requiresSignature ?? "").toLowerCase() === "true",
       accessUser,
+    );
+  }
+
+  @Post(":jobId/trips/:tripId/documents/delivery-do/generate")
+  @ApiOperation({ summary: "Generate or regenerate trip delivery DO PDF" })
+  @ApiOkResponse({
+    description:
+      "Generates an active trip DELIVERY_DO document. Previous active DELIVERY_DO is deactivated automatically.",
+    schema: {
+      type: "object",
+      example: {
+        id: "tripdoc_delivery_do_active_02",
+        type: "DELIVERY_DO",
+        originalName: "WF-2026-04-001-IMP_delivery-do-v2.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 186101,
+        isActive: true,
+        createdAt: "2026-04-24T10:20:00.000Z",
+        updatedAt: "2026-04-24T10:20:00.000Z",
+        uploadedByUserId: "usr_ops_01",
+        uploadedByName: "Ops Admin",
+        generatedBySystem: true,
+        generatedSource: "MANUAL_REGENERATE",
+        signedAt: null,
+        signedByUserId: null,
+        signedByName: null,
+        jobId: "job_001",
+        tripId: "trip_001",
+        previewUrl: "https://signed.example/preview/tripdoc_delivery_do_active_02",
+        downloadUrl: "https://signed.example/download/tripdoc_delivery_do_active_02",
+        tripSequence: 1,
+        displayTitle: "Port to Delivery Point",
+      },
+    },
+  })
+  async generateTripDeliveryDo(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.generateTripDeliveryDoDocument(
+      tenantId,
+      jobId,
+      tripId,
+      accessUser,
+      "MANUAL_REGENERATE",
     );
   }
 
@@ -757,28 +925,4 @@ export class OpsJobsController {
     return this.jobs.sendJobToInvoice(tenantId, jobId, accessUser);
   }
 
-  @Post(":jobId/documents/pickup-do")
-  @ApiOperation({ summary: "Upload pickup DO (admin/ops)" })
-  @ApiConsumes("multipart/form-data")
-  @ApiBody({
-    schema: {
-      type: "object",
-      properties: { file: { type: "string", format: "binary" } },
-    },
-  })
-  @UseInterceptors(FileInterceptor("file"))
-  async uploadPickupDo(
-    @Req() req: any,
-    @Param("jobId") jobId: string,
-    @UploadedFile() file: Express.Multer.File,
-  ) {
-    if (!file) throw new BadRequestException("file is required");
-    const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
-    return this.jobs.uploadPickupDo(tenantId, jobId, file, accessUser);
-  }
 }

@@ -75,7 +75,7 @@ describe("driver trip completion requirements", () => {
           assignedDriverId: "u1",
           jobType: "IMPORT",
           status: "InProgress",
-          documents: [{ type: "DO" }, { type: "SIGNATURE" }],
+          documents: [],
         }),
       },
       trip: {
@@ -110,7 +110,7 @@ describe("driver trip completion requirements", () => {
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new DriverJobsService(prisma, audit, supabaseService);
     await expect(svc.completeTrip("t1", "job1", "trip1", "u1")).rejects.toThrow(
-      "Delivery DO: requires min 1 upload(s), got 0",
+      "Missing required trip documents: DELIVERY_DO, POD_SIGNATURE",
     );
   });
 });

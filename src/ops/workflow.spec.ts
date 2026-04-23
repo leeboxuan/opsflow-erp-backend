@@ -24,8 +24,9 @@ describe("workflow helpers", () => {
     expect(rows[0].completionRuleJson).toEqual({
       requireGeneratedDoSigned: true,
       tripUploads: {
-        minUploadCount: 1,
-        allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
+        minUploadCount: 2,
+        allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
+        requiredUploadTypesExact: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
       },
     });
     expect(rows[1].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_DEPOT);
@@ -71,8 +72,8 @@ describe("workflow helpers", () => {
       requireGeneratedDoSigned: true,
       tripUploads: {
         minUploadCount: 2,
-        allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
-        requiredUploadTypesExact: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
+        allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
+        requiredUploadTypesExact: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
       },
     });
     expect(rows[1].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_PORT);
@@ -80,8 +81,8 @@ describe("workflow helpers", () => {
       requireGeneratedDoSigned: true,
       tripUploads: {
         minUploadCount: 1,
-        allowedUploadTypes: [TripDocumentType.OFFLOADING],
-        requiredUploadTypesExact: [TripDocumentType.OFFLOADING],
+        allowedUploadTypes: [TripDocumentType.POD_SIGNATURE],
+        requiredUploadTypesExact: [TripDocumentType.POD_SIGNATURE],
       },
     });
     expect(rows[0].status).toBe("Draft");
@@ -100,8 +101,9 @@ describe("workflow helpers", () => {
     expect(rows[0].completionRuleJson).toEqual({
       requireGeneratedDoSigned: true,
       tripUploads: {
-        minUploadCount: 1,
-        allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.OFFLOADING],
+        minUploadCount: 2,
+        allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
+        requiredUploadTypesExact: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
       },
     });
     expect(rows[0].status).toBe("Draft");
@@ -123,6 +125,16 @@ describe("workflow helpers", () => {
     expect(completionRuleForTemplate(JobTripTemplate.CUSTOM)).toEqual(
       TRIP_COMPLETION_RULES[JobTripTemplate.CUSTOM],
     );
+  });
+
+  it("LCL completion rule requires POD signature at trip level", () => {
+    const lclRule = completionRuleForTemplate(
+      JobTripTemplate.PICKUP_TO_DELIVERY,
+    ) as any;
+    expect(lclRule.tripUploads.requiredUploadTypesExact).toContain(
+      TripDocumentType.POD_SIGNATURE,
+    );
+    expect(lclRule.requireGeneratedDoSigned).toBe(true);
   });
 
   it("parseQuotationRateLinesFromXlsxBuffer returns empty for invalid buffer", () => {

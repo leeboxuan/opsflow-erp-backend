@@ -168,14 +168,6 @@ export class DriverJobsController {
     return this.driverJobs.listJobDocumentsForDriver(tenantId, jobId, userId);
   }
 
-  @Get(":jobId/documents/generated-do")
-  @ApiOperation({ summary: "List generated receiver DO PDFs (JobDocumentType.DO)" })
-  async listGeneratedDos(@Req() req: any, @Param("jobId") jobId: string) {
-    const tenantId = req.tenant.tenantId;
-    const userId = req.user.userId;
-    return this.driverJobs.listGeneratedDosForDriver(tenantId, jobId, userId);
-  }
-
   @Get(":jobId/trips/:tripId/documents")
   @ApiOperation({ summary: "List trip-level documents with signed URLs" })
   async listTripDocuments(
@@ -201,7 +193,11 @@ export class DriverJobsController {
       type: "object",
       required: ["file", "type"],
       properties: {
-        type: { type: "string", example: "OFFLOADING" },
+        type: {
+          type: "string",
+          example: "POD_PHOTO",
+          enum: ["PICKUP_DO", "DELIVERY_DO", "POD_PHOTO", "POD_SIGNATURE", "OTHER"],
+        },
         requiresSignature: { type: "boolean" },
         file: { type: "string", format: "binary" },
       },
@@ -267,61 +263,6 @@ export class DriverJobsController {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
     await this.driverJobs.updateLocation(tenantId, jobId, userId, dto);
-  }
-
-  @Post(":jobId/pod/photos")
-  @ApiOperation({ summary: "Upload POD photo(s)" })
-  @ApiConsumes("multipart/form-data")
-  @ApiBody({
-    schema: {
-      type: "object",
-      properties: {
-        files: { type: "array", items: { type: "string", format: "binary" } },
-        file: { type: "string", format: "binary" },
-      },
-    },
-  })
-  @UseInterceptors(
-    FileFieldsInterceptor([
-      { name: "files", maxCount: 10 },
-      { name: "file", maxCount: 1 },
-    ]),
-  )
-  async uploadPodPhotos(
-    @Req() req: any,
-    @Param("jobId") jobId: string,
-    @UploadedFiles() files: { files?: Express.Multer.File[]; file?: Express.Multer.File[] },
-  ) {
-    const tenantId = req.tenant.tenantId;
-    const userId = req.user.userId;
-    const list: Express.Multer.File[] = [];
-    if (files?.files?.length) list.push(...files.files);
-    if (files?.file?.length) list.push(...files.file);
-    if (!list.length) throw new BadRequestException("At least one file required");
-    return this.driverJobs.uploadPodPhotos(tenantId, jobId, userId, list);
-  }
-
-  @Post(":jobId/pod/signature")
-  @ApiOperation({ summary: "Upload POD signature image" })
-  @ApiConsumes("multipart/form-data")
-  @ApiBody({
-    schema: {
-      type: "object",
-      properties: {
-        file: { type: "string", format: "binary" },
-      },
-    },
-  })
-  @UseInterceptors(FileInterceptor("file"))
-  async uploadPodSignature(
-    @Req() req: any,
-    @Param("jobId") jobId: string,
-    @UploadedFile() file: Express.Multer.File,
-  ) {
-    if (!file) throw new BadRequestException("file is required");
-    const tenantId = req.tenant.tenantId;
-    const userId = req.user.userId;
-    return this.driverJobs.uploadPodSignature(tenantId, jobId, userId, file);
   }
 
   @Post(":jobId/complete")

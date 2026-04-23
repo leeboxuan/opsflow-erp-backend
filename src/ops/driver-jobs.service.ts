@@ -6,7 +6,6 @@ import {
 import {
   JobStatus,
   JobType,
-  JobDocumentType,
   TripStatus,
   TripDocumentType,
 } from "@prisma/client";
@@ -17,7 +16,6 @@ import { AuditService } from "../audit/audit.service";
 import { SupabaseService } from "../auth/supabase.service";
 import { JobLocationDto } from "./dto/location.dto";
 import { JobDto, JobDocumentDto } from "./dto/job.dto";
-import { resolveTripCompletionRule } from "./job-workflow.helpers";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
 
@@ -27,21 +25,30 @@ function normalizeText(value?: string | null): string | null {
 }
 
 function toDocDto(d: any): JobDocumentDto {
+  const isPodSignature = d.type === TripDocumentType.POD_SIGNATURE;
   return {
     id: d.id,
     type: d.type,
     originalName: d.originalName,
     mimeType: d.mimeType,
     sizeBytes: d.sizeBytes ?? null,
+    isActive: d.isActive ?? true,
     createdAt: d.createdAt,
+    updatedAt: d.updatedAt ?? null,
     url: d.url ?? null,
     uploadedByUserId: d.uploadedByUserId ?? null,
+    uploadedByName: d.uploadedByName ?? d.uploadedByNameSnapshot ?? null,
+    generatedBySystem: d.generatedBySystem ?? false,
+    generatedSource: d.generatedSource ?? null,
+    jobId: d.jobId ?? null,
+    tripId: d.tripId ?? null,
     downloadUrl: d.downloadUrl ?? d.url ?? null,
     previewUrl: d.previewUrl ?? d.url ?? null,
-    requiresSignature: d.requiresSignature ?? false,
-    isSigned: d.isSigned ?? false,
-    signedAt: d.signedAt ?? null,
-    signedByName: d.signedByName ?? null,
+    requiresSignature: isPodSignature ? false : (d.requiresSignature ?? false),
+    isSigned: isPodSignature ? false : (d.isSigned ?? false),
+    signedAt: isPodSignature ? null : (d.signedAt ?? null),
+    signedByUserId: isPodSignature ? null : (d.signedByUserId ?? null),
+    signedByName: isPodSignature ? null : (d.signedByName ?? null),
   };
 }
 
@@ -224,18 +231,27 @@ export class DriverJobsService {
   }
 
   private async attachTripDocumentSignedUrl(doc: any): Promise<JobDocumentDto> {
+    const isPodSignature = doc.type === TripDocumentType.POD_SIGNATURE;
     const base = {
       id: doc.id,
       type: doc.type,
       originalName: doc.originalName,
       mimeType: doc.mimeType,
       sizeBytes: doc.sizeBytes ?? null,
+      isActive: doc.isActive ?? true,
       createdAt: doc.createdAt,
+      updatedAt: doc.updatedAt ?? null,
       uploadedByUserId: doc.uploadedByUserId ?? null,
-      requiresSignature: doc.requiresSignature ?? false,
-      isSigned: doc.isSigned ?? false,
-      signedAt: doc.signedAt ?? null,
-      signedByName: doc.signedByName ?? null,
+      uploadedByName: doc.uploadedByNameSnapshot ?? null,
+      generatedBySystem: doc.generatedBySystem ?? false,
+      generatedSource: doc.generatedSource ?? null,
+      jobId: doc.jobId ?? null,
+      tripId: doc.tripId ?? null,
+      requiresSignature: isPodSignature ? false : (doc.requiresSignature ?? false),
+      isSigned: isPodSignature ? false : (doc.isSigned ?? false),
+      signedAt: isPodSignature ? null : (doc.signedAt ?? null),
+      signedByUserId: isPodSignature ? null : (doc.signedByUserId ?? null),
+      signedByName: isPodSignature ? null : (doc.signedByName ?? null),
       url: null as string | null,
     };
     const supabase = this.supabaseService.getClient();
@@ -350,11 +366,7 @@ export class DriverJobsService {
             orderBy: { createdAt: "asc" },
           },
           documents: {
-            where: {
-              type: {
-                in: [JobDocumentType.POD_PHOTO, JobDocumentType.SIGNATURE],
-              },
-            },
+            where: { isActive: true, type: { in: ["QUOTATION", "OTHER"] } },
             orderBy: { createdAt: "desc" },
           },
         },
@@ -390,7 +402,7 @@ export class DriverJobsService {
       ...fleetVehicles.map((v) => [v.id, v.plateNo] as const),
     ]);
 
-    const data = jobs.map((job: any) => {
+    const data = await Promise.all(jobs.map(async (job: any) => {
       const dto = toJobDto({
         ...job,
         assignedVehiclePlateNo:
@@ -401,9 +413,11 @@ export class DriverJobsService {
 
       return {
         ...dto,
-        documents: dto.documents ?? [],
+        documents: await Promise.all(
+          (job.documents ?? []).map((doc: any) => this.attachSignedUrl(doc)),
+        ),
       };
-    });
+    }));
 
     return {
       data,
@@ -495,9 +509,7 @@ export class DriverJobsService {
           assignedDriver: { select: { id: true, name: true } },
           items: { orderBy: { createdAt: "asc" } },
           documents: {
-            where: {
-              type: { in: [JobDocumentType.POD_PHOTO, JobDocumentType.SIGNATURE] },
-            },
+            where: { isActive: true, type: { in: ["QUOTATION", "OTHER"] } },
             orderBy: { createdAt: "desc" },
           },
         },
@@ -527,7 +539,7 @@ export class DriverJobsService {
       ...fleetVehicles.map((v) => [v.id, v.plateNo] as const),
     ]);
 
-    const data = jobs.map((job: any) => {
+    const data = await Promise.all(jobs.map(async (job: any) => {
       const dto = toJobDto({
         ...job,
         assignedVehiclePlateNo:
@@ -537,8 +549,13 @@ export class DriverJobsService {
           null,
       });
 
-      return { ...dto, documents: dto.documents ?? [] };
-    });
+      return {
+        ...dto,
+        documents: await Promise.all(
+          (job.documents ?? []).map((doc: any) => this.attachSignedUrl(doc)),
+        ),
+      };
+    }));
 
     return {
       data,
@@ -654,15 +671,17 @@ export class DriverJobsService {
         },
       },
       documents: {
+        where: { isActive: true },
         orderBy: {
           createdAt: "desc",
         },
       },
       trips: {
         where: { status: { not: TripStatus.Draft } },
-        orderBy: [{ jobSequence: "asc" }, { createdAt: "asc" }],
+        orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
         include: {
           documents: {
+            where: { isActive: true },
             orderBy: { createdAt: "desc" },
           },
         },
@@ -919,142 +938,6 @@ export class DriverJobsService {
     });
   }
 
-  private async uploadDocument(
-    tenantId: string,
-    jobId: string,
-    driverUserId: string,
-    file: Express.Multer.File,
-    type: JobDocumentType,
-    allowedMimes: string[],
-  ): Promise<JobDocumentDto> {
-    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
-
-    const mime = String(file.mimetype ?? "").toLowerCase();
-    if (!allowedMimes.some((m) => mime.startsWith(m))) {
-      throw new BadRequestException(`Invalid file type. Allowed: ${allowedMimes.join(", ")}`);
-    }
-
-    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
-    const folder = type === JobDocumentType.POD_PHOTO ? "pod-photos" : "signatures";
-    const key = `${tenantId}/jobs/${jobId}/${folder}/${Date.now()}${ext}`;
-
-    const supabase = this.supabaseService.getClient();
-    const { error } = await supabase.storage
-      .from(JOB_DOCUMENTS_BUCKET)
-      .upload(key, file.buffer, {
-        contentType: file.mimetype ?? "image/jpeg",
-        upsert: true,
-      });
-
-    if (error) {
-      throw new BadRequestException(`Storage upload failed: ${error.message}`);
-    }
-
-    if (type === JobDocumentType.SIGNATURE) {
-      const existingSignature = await this.prisma.jobDocument.findFirst({
-        where: {
-          tenantId,
-          jobId,
-          type: JobDocumentType.SIGNATURE,
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-      });
-
-      if (existingSignature) {
-        const updated = await this.prisma.jobDocument.update({
-          where: { id: existingSignature.id },
-          data: {
-            storageKey: key,
-            originalName: file.originalname ?? "upload",
-            mimeType: file.mimetype ?? "image/jpeg",
-            sizeBytes: file.size ?? null,
-            uploadedByUserId: driverUserId,
-          },
-        });
-
-        await this.audit.log(
-          tenantId,
-          "UPLOAD_DOC",
-          "JOB",
-          jobId,
-          { documentId: updated.id, type },
-          driverUserId,
-        );
-
-        return this.attachSignedUrl(updated);
-      }
-    }
-
-    const doc = await this.prisma.jobDocument.create({
-      data: {
-        tenantId,
-        jobId,
-        type,
-        storageKey: key,
-        originalName: file.originalname ?? "upload",
-        mimeType: file.mimetype ?? "image/jpeg",
-        sizeBytes: file.size ?? null,
-        uploadedByUserId: driverUserId,
-      },
-    });
-
-    await this.audit.log(
-      tenantId,
-      "UPLOAD_DOC",
-      "JOB",
-      jobId,
-      { documentId: doc.id, type },
-      driverUserId,
-    );
-
-    return this.attachSignedUrl(doc);
-  }
-
-  async uploadPodPhotos(
-    tenantId: string,
-    jobId: string,
-    driverUserId: string,
-    files: Express.Multer.File[],
-  ): Promise<JobDocumentDto[]> {
-    if (!files?.length) {
-      throw new BadRequestException("At least one file required");
-    }
-
-    const results: JobDocumentDto[] = [];
-
-    for (const file of files) {
-      const doc = await this.uploadDocument(
-        tenantId,
-        jobId,
-        driverUserId,
-        file,
-        JobDocumentType.POD_PHOTO,
-        ["image/"],
-      );
-      results.push(doc);
-    }
-
-    return results;
-  }
-
-  async uploadPodSignature(
-    tenantId: string,
-    jobId: string,
-    driverUserId: string,
-    file: Express.Multer.File,
-  ): Promise<JobDocumentDto> {
-    return this.uploadDocument(
-      tenantId,
-      jobId,
-      driverUserId,
-      file,
-      JobDocumentType.SIGNATURE,
-      ["image/"],
-    );
-  }
-
   async complete(
     tenantId: string,
     jobId: string,
@@ -1075,17 +958,6 @@ export class DriverJobsService {
 
     if (job.status !== JobStatus.InProgress) {
       throw new BadRequestException("Job must be InProgress to complete");
-    }
-
-    const hasPodPhoto = job.documents.some((d: any) => d.type === JobDocumentType.POD_PHOTO);
-    const hasSignature = job.documents.some((d: any) => d.type === JobDocumentType.SIGNATURE);
-
-    if (!hasSignature) {
-      throw new BadRequestException("A signature is required to complete this job");
-    }
-
-    if (!hasPodPhoto) {
-      throw new BadRequestException("At least one POD photo is required to complete this job");
     }
 
     const now = new Date();
@@ -1140,76 +1012,26 @@ export class DriverJobsService {
     }
 
     const missing: string[] = [];
-    const requirements = await this.prisma.tripDocumentRequirement.findMany({
-      where: { tenantId, tripId },
-      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    const requiredTripDocs = await this.prisma.tripDocument.findMany({
+      where: {
+        tenantId,
+        tripId,
+        isActive: true,
+        type: { in: [TripDocumentType.DELIVERY_DO, TripDocumentType.POD_SIGNATURE] },
+      },
+      select: { type: true },
     });
-    if (requirements.length > 0) {
-      const tripDocs = await this.prisma.tripDocument.findMany({
-        where: { tenantId, tripId },
-        select: { type: true, isSigned: true },
-      });
-      for (const req of requirements) {
-        if (!req.isRequired) continue;
-        const docsForType = tripDocs.filter((d) => d.type === req.type);
-        if (docsForType.length < req.minCount) {
-          missing.push(
-            `${req.label || req.type}: requires min ${req.minCount} upload(s), got ${docsForType.length}`,
-          );
-        }
-        if (req.requiresSignature) {
-          const hasSigned = docsForType.some((d) => d.isSigned);
-          if (!hasSigned) {
-            missing.push(`${req.label || req.type}: signed document required`);
-          }
-        }
-      }
-    } else {
-      const rule = resolveTripCompletionRule(trip.completionRuleJson);
-      if (rule.requireGeneratedDoSigned) {
-      const hasGeneratedDo = job.documents.some(
-        (d: { type: JobDocumentType }) => d.type === JobDocumentType.DO,
-      );
-      const hasSig = job.documents.some(
-        (d: { type: JobDocumentType }) => d.type === JobDocumentType.SIGNATURE,
-      );
-      if (!hasGeneratedDo || !hasSig) {
-        missing.push("generated receiver DO with signature");
-      }
-      }
-      if (rule.allowedUploadTypes.length > 0) {
-      const tripDocs = await this.prisma.tripDocument.findMany({
-        where: {
-          tenantId,
-          tripId,
-          type: { in: rule.allowedUploadTypes },
-        },
-        select: { type: true },
-      });
-
-      if (rule.minUploadCount > 0 && tripDocs.length < rule.minUploadCount) {
-        missing.push(
-          `at least ${rule.minUploadCount} trip upload(s) from allowed types [${rule.allowedUploadTypes.join(", ")}] (${tripDocs.length}/${rule.minUploadCount} uploaded)`,
-        );
-      }
-
-      if (rule.requiredUploadTypesExact.length > 0) {
-        const uploadedTypes = new Set(tripDocs.map((d) => d.type));
-        const missingExact = rule.requiredUploadTypesExact.filter(
-          (t) => !uploadedTypes.has(t),
-        );
-        if (missingExact.length > 0) {
-          missing.push(
-            `required trip upload type(s) missing: ${missingExact.join(", ")}`,
-          );
-        }
-      }
+    const uploadedTypes = new Set(requiredTripDocs.map((d) => d.type));
+    if (!uploadedTypes.has(TripDocumentType.DELIVERY_DO)) {
+      missing.push("DELIVERY_DO");
     }
+    if (!uploadedTypes.has(TripDocumentType.POD_SIGNATURE)) {
+      missing.push("POD_SIGNATURE");
     }
 
     if (missing.length > 0) {
       throw new BadRequestException(
-        `Trip cannot be completed yet. Missing: ${missing.join("; ")}`,
+        `Trip cannot be completed yet. Missing required trip documents: ${missing.join(", ")}`,
       );
     }
 
@@ -1276,7 +1098,7 @@ export class DriverJobsService {
   ): Promise<JobDocumentDto[]> {
     await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
     const docs = await this.prisma.jobDocument.findMany({
-      where: { tenantId, jobId },
+      where: { tenantId, jobId, isActive: true, type: { in: ["QUOTATION", "OTHER"] } },
       orderBy: { createdAt: "desc" },
     });
     return Promise.all(docs.map((d) => this.attachSignedUrl(d)));
@@ -1291,23 +1113,23 @@ export class DriverJobsService {
     await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
     await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
     const docs = await this.prisma.tripDocument.findMany({
-      where: { tenantId, tripId },
+      where: {
+        tenantId,
+        tripId,
+        isActive: true,
+        type: {
+          in: [
+            TripDocumentType.PICKUP_DO,
+            TripDocumentType.DELIVERY_DO,
+            TripDocumentType.POD_PHOTO,
+            TripDocumentType.POD_SIGNATURE,
+            TripDocumentType.OTHER,
+          ],
+        },
+      },
       orderBy: { createdAt: "desc" },
     });
     return Promise.all(docs.map((d) => this.attachTripDocumentSignedUrl(d)));
-  }
-
-  async listGeneratedDosForDriver(
-    tenantId: string,
-    jobId: string,
-    driverUserId: string,
-  ): Promise<JobDocumentDto[]> {
-    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
-    const docs = await this.prisma.jobDocument.findMany({
-      where: { tenantId, jobId, type: JobDocumentType.DO },
-      orderBy: { createdAt: "desc" },
-    });
-    return Promise.all(docs.map((d) => this.attachSignedUrl(d)));
   }
 
   async uploadTripDocumentForDriver(
@@ -1322,8 +1144,29 @@ export class DriverJobsService {
     await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
     await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
 
+    const allowedTypes = new Set<TripDocumentType>([
+      TripDocumentType.PICKUP_DO,
+      TripDocumentType.DELIVERY_DO,
+      TripDocumentType.POD_PHOTO,
+      TripDocumentType.POD_SIGNATURE,
+      TripDocumentType.OTHER,
+    ]);
+    if (!allowedTypes.has(type)) {
+      throw new BadRequestException("Unsupported trip document type");
+    }
+    const singleActiveTripTypes = new Set<TripDocumentType>([
+      TripDocumentType.PICKUP_DO,
+      TripDocumentType.DELIVERY_DO,
+      TripDocumentType.POD_SIGNATURE,
+    ]);
+
     const mime = String(file.mimetype ?? "").toLowerCase();
-    if (!mime.startsWith("image/") && type !== TripDocumentType.PICKUP_DO) {
+    if (
+      !mime.startsWith("image/") &&
+      type !== TripDocumentType.PICKUP_DO &&
+      type !== TripDocumentType.DELIVERY_DO &&
+      type !== TripDocumentType.OTHER
+    ) {
       throw new BadRequestException("Unsupported file type for this trip document");
     }
 
@@ -1340,18 +1183,29 @@ export class DriverJobsService {
     if (error) {
       throw new BadRequestException(`Storage upload failed: ${error.message}`);
     }
+    if (singleActiveTripTypes.has(type)) {
+      await this.prisma.tripDocument.updateMany({
+        where: { tenantId, tripId, type, isActive: true },
+        data: { isActive: false },
+      });
+    }
 
     const doc = await this.prisma.tripDocument.create({
       data: {
         tenantId,
         tripId,
         type,
+        isActive: true,
         storageKey: key,
         originalName: file.originalname ?? "upload",
         mimeType: file.mimetype ?? "application/octet-stream",
         sizeBytes: file.size ?? null,
         uploadedByUserId: driverUserId,
-        requiresSignature: !!requiresSignature,
+        uploadedByNameSnapshot: null,
+        requiresSignature:
+          type === TripDocumentType.POD_SIGNATURE
+            ? false
+            : !!requiresSignature,
       },
     });
 
@@ -1378,14 +1232,20 @@ export class DriverJobsService {
     await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
     await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
     const doc = await this.prisma.tripDocument.findFirst({
-      where: { id: documentId, tenantId, tripId },
+      where: { id: documentId, tenantId, tripId, isActive: true },
     });
     if (!doc) throw new NotFoundException("Trip document not found");
+    if (doc.type === TripDocumentType.POD_SIGNATURE) {
+      throw new BadRequestException(
+        "POD_SIGNATURE is the canonical signature artifact and cannot be signed separately",
+      );
+    }
     const updated = await this.prisma.tripDocument.update({
       where: { id: documentId },
       data: {
         isSigned: true,
         signedAt: new Date(),
+        signedByUserId: driverUserId,
         signedByName: signedByName?.trim() || null,
       },
     });

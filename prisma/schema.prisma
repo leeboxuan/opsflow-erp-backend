@@ -260,6 +260,8 @@ model Trip {
   jobId                String?
   /// Sequence within the job (1-based). Null for legacy transport-only trips.
   jobSequence          Int?
+  tripSequence         Int?
+  displayTitle         String?
   jobTripTemplate      JobTripTemplate?
   title                String?
   startedByDriverUserId   String?
@@ -881,7 +883,10 @@ model JobDocument {
   mimeType         String
   sizeBytes        Int?
   uploadedByUserId String?
+  isActive         Boolean         @default(true)
+  uploadedByNameSnapshot String?
   createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 
   job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1101,11 +1106,17 @@ model TripDocument {
   mimeType         String
   sizeBytes        Int?
   uploadedByUserId String?
+  isActive         Boolean          @default(true)
+  uploadedByNameSnapshot String?
+  generatedBySystem Boolean          @default(false)
+  generatedSource   String?
   requiresSignature Boolean          @default(false)
   isSigned          Boolean          @default(false)
   signedAt          DateTime?
+  signedByUserId    String?
   signedByName      String?
   createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
@@ -1340,13 +1351,6 @@ enum JobStatus {
 
 enum JobDocumentType {
   QUOTATION
-  /// Generated receiver delivery order PDF (admin/driver UI may label this "Receiver DO").
-  DO
-  PICKUP_DO
-  POD_PHOTO
-  SIGNATURE
-  OFFLOADING
-  TRAILER_PARKING_PHOTO
   OTHER
 }
 
@@ -1404,14 +1408,16 @@ enum JobChargeSourceType {
 }
 
 enum TripDocumentType {
+  PICKUP_DO
+  DELIVERY_DO
   POD_PHOTO
+  POD_SIGNATURE
+  OTHER
+  /// legacy values kept for backward compatibility with existing rows
   SIGNATURE
   OFFLOADING
   OFFLOADING_PHOTO
   TRAILER_PARKING_PHOTO
-  PICKUP_DO
-  DELIVERY_DO
-  OTHER
 }
 
 enum LogisticsLocationType {
