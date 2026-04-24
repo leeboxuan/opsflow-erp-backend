@@ -38,7 +38,28 @@ export class ReorderJobTripsDto {
     description: "Trip ids in desired sequence (all trips for the job)",
   })
   @IsString({ each: true })
-  tripIdsInOrder!: string[];
+  @IsOptional()
+  tripIdsInOrder?: string[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: "Trip ids in desired sequence (alias for tripIdsInOrder)",
+  })
+  @IsOptional()
+  @IsString({ each: true })
+  tripIds?: string[];
+}
+
+export class AssignJobTripDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  driverId!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  vehicleType?: string;
 }
 
 export class PatchJobTripDto {
@@ -102,6 +123,11 @@ export class TripPayoutLineInputDto {
   @IsString()
   payoutItemId?: string | null;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sourceRateMasterItemId?: string | null;
+
   @ApiProperty()
   @IsString()
   @MinLength(1)
@@ -116,6 +142,37 @@ export class TripPayoutLineInputDto {
   @IsOptional()
   @IsInt()
   amountCents?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  description?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  unit?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  quantity?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  totalCents?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  notes?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isManual?: boolean;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -139,4 +196,17 @@ export class PutTripPayoutLinesDto {
   @ValidateNested({ each: true })
   @Type(() => TripPayoutLineInputDto)
   lines!: TripPayoutLineInputDto[];
+}
+
+export class PatchTripPayoutDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  earningRateMasterId?: string | null;
+
+  @ApiProperty({ type: [TripPayoutLineInputDto] })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => TripPayoutLineInputDto)
+  payoutLines!: TripPayoutLineInputDto[];
 }

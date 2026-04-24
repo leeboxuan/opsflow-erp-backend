@@ -40,6 +40,8 @@ import { JobBatchImportConfirmRequestDto } from "./dto/job-batch-import.dto";
 import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
 import {
   AppendJobTripDto,
+  AssignJobTripDto,
+  PatchTripPayoutDto,
   PatchJobTripDto,
   PutTripPayoutLinesDto,
   ReorderJobTripsDto,
@@ -684,6 +686,23 @@ export class OpsJobsController {
     return this.jobs.patchTrip(tenantId, jobId, tripId, dto, accessUser);
   }
 
+  @Patch(":jobId/trips/:tripId/assign")
+  @ApiOperation({ summary: "Assign driver and optional vehicle type to trip" })
+  async assignTrip(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Body() dto: AssignJobTripDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.assignTrip(tenantId, jobId, tripId, dto, accessUser);
+  }
+
   @Post(":jobId/trips/:tripId/publish")
   @ApiOperation({
     summary:
@@ -953,6 +972,29 @@ export class OpsJobsController {
       jobId,
       tripId,
       dto.lines ?? [],
+      accessUser,
+    );
+  }
+
+  @Patch(":jobId/trips/:tripId/payout")
+  @ApiOperation({ summary: "Save trip payout draft (master rate + payout lines)" })
+  async patchTripPayout(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Body() dto: PatchTripPayoutDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.saveTripPayoutDraft(
+      tenantId,
+      jobId,
+      tripId,
+      dto,
       accessUser,
     );
   }

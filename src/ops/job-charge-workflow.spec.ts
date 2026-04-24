@@ -735,8 +735,12 @@ describe("job charge workflow hardening", () => {
           id: "trip1",
           status: "DRAFT",
           driverEarningCents: null,
+          assignedDriverUserId: "u1",
         }),
         update: jest.fn(),
+      },
+      tripDocument: {
+        findFirst: jest.fn().mockResolvedValue({ id: "doc1" }),
       },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
@@ -756,8 +760,12 @@ describe("job charge workflow hardening", () => {
           id: "trip1",
           status: "DRAFT",
           driverEarningCents: 7500,
+          assignedDriverUserId: "u1",
         }),
         update: jest.fn().mockResolvedValue({ id: "trip1" }),
+      },
+      tripDocument: {
+        findFirst: jest.fn().mockResolvedValue({ id: "doc1" }),
       },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
@@ -769,7 +777,7 @@ describe("job charge workflow hardening", () => {
 
     expect(prisma.trip.update).toHaveBeenCalledWith({
       where: { id: "trip1" },
-      data: { status: "PUBLISHED", pendingState: "NONE" },
+      data: expect.objectContaining({ status: "PUBLISHED", pendingState: "NONE" }),
     });
   });
 
@@ -780,8 +788,12 @@ describe("job charge workflow hardening", () => {
           id: "trip1",
           status: "DRAFT",
           driverEarningCents: 7500,
+          assignedDriverUserId: "u1",
         }),
         update: jest.fn(),
+      },
+      tripDocument: {
+        findFirst: jest.fn().mockResolvedValue({ id: "doc1" }),
       },
       tripPayoutLine: {
         findMany: jest.fn().mockResolvedValue([
@@ -810,8 +822,12 @@ describe("job charge workflow hardening", () => {
           id: "trip1",
           status: "DRAFT",
           driverEarningCents: null,
+          assignedDriverUserId: "u1",
         }),
         update: jest.fn().mockResolvedValue({ id: "trip1" }),
+      },
+      tripDocument: {
+        findFirst: jest.fn().mockResolvedValue({ id: "doc1" }),
       },
       tripPayoutLine: {
         findMany: jest.fn().mockResolvedValue([
@@ -944,44 +960,25 @@ describe("job charge workflow hardening", () => {
     expect(jobChargeCreateMany).not.toHaveBeenCalled();
   });
 
-  it("patchTrip resolves trucking rate behavior for fixed/multiple/manual rows", async () => {
+  it("patchTrip accepts valid selectable DRIVER_PAYOUT item id and updates earning", async () => {
     const tripFindFirst = jest.fn().mockResolvedValue({
       id: "trip1",
       tenantId: "t1",
       jobId: "job1",
     });
     const tripUpdate = jest.fn().mockResolvedValue({});
-    const driverTripRateFindFirst = jest
-      .fn()
-      .mockResolvedValueOnce({
-        id: "m-fixed",
-        label: "Fixed",
-        rateCents: 9000,
-        hasMultipleRates: false,
-        requiresManualAmount: false,
-      })
-      .mockResolvedValueOnce({
-        id: "m-multi",
-        label: "Multi",
-        rateCents: null,
-        hasMultipleRates: true,
-        defaultRateOptionIndex: null,
-        requiresManualAmount: false,
-      })
-      .mockResolvedValueOnce({
-        id: "m-manual",
-        label: "Manual",
-        rateCents: null,
-        hasMultipleRates: false,
-        requiresManualAmount: true,
-      });
     const prisma: any = {
       trip: {
         findFirst: tripFindFirst,
         update: tripUpdate,
       },
-      masterRateDatasetRow: {
-        findFirst: driverTripRateFindFirst,
+      driverPayoutItem: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "cmo946tmb0001ku5ekac6in1g",
+          label: "Normal full trip (20FT and 40FT)",
+          rateCents: 9000,
+          requiresManualAmount: false,
+        }),
       },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
@@ -993,36 +990,108 @@ describe("job charge workflow hardening", () => {
       "t1",
       "job1",
       "trip1",
-      { earningRateMasterId: "m-fixed" } as any,
+      { earningRateMasterId: "cmo946tmb0001ku5ekac6in1g" } as any,
       { userId: "u1", role: Role.OPS },
     );
     expect(tripUpdate).toHaveBeenCalledWith({
       where: { id: "trip1" },
       data: expect.objectContaining({
-        earningRateMasterId: "m-fixed",
+        payoutItemId: "cmo946tmb0001ku5ekac6in1g",
+        earningRateMasterId: "cmo946tmb0001ku5ekac6in1g",
         driverEarningCents: 9000,
       }),
     });
+  });
 
+  it("patchTrip fails when earningRateMasterId is a masterFile id", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+        }),
+        update: jest.fn(),
+      },
+      driverPayoutItem: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
     await expect(
       svc.patchTrip(
         "t1",
         "job1",
         "trip1",
-        { earningRateMasterId: "m-multi" } as any,
+        { earningRateMasterId: "master_file_id_123" } as any,
         { userId: "u1", role: Role.OPS },
       ),
-    ).rejects.toThrow("requires manual/default rate selection");
+    ).rejects.toThrow("Driver trip rate master not found");
+  });
 
+  it("patchTrip fails for inactive or non-selectable payout item", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+        }),
+        update: jest.fn(),
+      },
+      driverPayoutItem: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
     await expect(
       svc.patchTrip(
         "t1",
         "job1",
         "trip1",
-        { earningRateMasterId: "m-manual" } as any,
+        { earningRateMasterId: "inactive_or_nonselectable_item" } as any,
         { userId: "u1", role: Role.OPS },
       ),
-    ).rejects.toThrow("requires manual/default rate selection");
+    ).rejects.toThrow("Driver trip rate master not found");
+  });
+
+  it("patchTrip rejects selectable payout item requiring manual amount", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+        }),
+        update: jest.fn(),
+      },
+      driverPayoutItem: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "item-manual",
+          label: "Manual",
+          rateCents: null,
+          requiresManualAmount: true,
+        }),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    await expect(
+      svc.patchTrip(
+        "t1",
+        "job1",
+        "trip1",
+        { earningRateMasterId: "item-manual" } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow(
+      'Selected payout item "Manual" requires manual amount before assignment',
+    );
   });
 
   it("rejects non-NONE pending state when trip is COMPLETED", async () => {
@@ -1118,5 +1187,365 @@ describe("job charge workflow hardening", () => {
       where: { id: "trip1" },
       data: { status: "DONE", pendingState: "NONE" },
     });
+  });
+
+  it("getTripDetail maps IMPORT cargo as CONTAINER with containerCode", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          jobSequence: 1,
+          tripSequence: 1,
+          title: "Trip A",
+          displayTitle: "Trip A",
+          status: "PUBLISHED",
+          pendingState: "NONE",
+          plannedStartAt: null,
+          startedAt: null,
+          closedAt: null,
+          createdAt: new Date(),
+          createdByUserId: "u1",
+          publishedAt: new Date(),
+          publishedByUserId: "u1",
+          assignedDriverUserId: "u1",
+          vehicleId: null,
+          fleetVehicleId: null,
+          vehicles: null,
+          fleetVehicle: null,
+          documents: [],
+          payoutLines: [],
+          documentRequirements: [],
+          completionRuleJson: null,
+          driverEarningCents: null,
+          earningRateMasterId: null,
+          originLabel: "Port",
+          destinationLabel: "Destination",
+          job: {
+            id: "job1",
+            customerCompanyId: "c1",
+            internalRef: "WF-001",
+            externalRef: null,
+            jobType: "IMPORT",
+            status: "Assigned",
+            receiverName: "Receiver",
+            receiverPhone: "123",
+            createdAt: new Date(),
+            createdByUserId: "u1",
+            createdBy: { id: "u1", name: "Ops", email: "ops@example.com" },
+            customerCompany: { name: "Customer A" },
+            items: [{ id: "it1", itemCode: "CONT-001", description: "20FT", qty: 1 }],
+          },
+        }),
+      },
+      tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
+      driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
+    expect(result.cargo.mode).toBe("CONTAINER");
+    expect(result.cargo.containers[0].containerCode).toBe("CONT-001");
+    expect(result.job.customerCompanyName).toBe("Customer A");
+  });
+
+  it("getTripDetail maps EXPORT cargo as CONTAINER with containerCode", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          status: "PUBLISHED",
+          pendingState: "NONE",
+          createdAt: new Date(),
+          documents: [],
+          payoutLines: [],
+          documentRequirements: [],
+          job: {
+            id: "job1",
+            customerCompanyId: "c1",
+            internalRef: "WF-002",
+            externalRef: null,
+            jobType: "EXPORT",
+            status: "Assigned",
+            receiverName: "Receiver",
+            receiverPhone: "123",
+            createdAt: new Date(),
+            createdByUserId: "u1",
+            createdBy: { id: "u1", name: "Ops", email: "ops@example.com" },
+            customerCompany: { name: "Customer B" },
+            items: [{ id: "it1", itemCode: "CONT-EXP-01", description: null, qty: 1 }],
+          },
+        }),
+      },
+      tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
+      driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
+    expect(result.cargo.mode).toBe("CONTAINER");
+    expect(result.cargo.containers[0].containerCode).toBe("CONT-EXP-01");
+  });
+
+  it("getTripDetail maps LCL cargo as ITEMS with itemCode and publish metadata", async () => {
+    const now = new Date();
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          status: "PUBLISHED",
+          pendingState: "NONE",
+          createdAt: now,
+          createdByUserId: "u1",
+          publishedAt: now,
+          publishedByUserId: "u2",
+          documents: [],
+          payoutLines: [],
+          documentRequirements: [],
+          assignedDriverUserId: null,
+          job: {
+            id: "job1",
+            customerCompanyId: "c1",
+            internalRef: "WF-003",
+            externalRef: null,
+            jobType: "LCL",
+            status: "Assigned",
+            receiverName: "Receiver",
+            receiverPhone: "123",
+            createdAt: now,
+            createdByUserId: "u1",
+            createdBy: { id: "u1", name: "Ops User", email: "ops@example.com" },
+            customerCompany: { name: "Customer C" },
+            items: [{ id: "it1", itemCode: "ITEM-001", description: "Box", qty: 3 }],
+          },
+        }),
+      },
+      tenantMembership: {
+        findMany: jest.fn().mockResolvedValue([
+          { userId: "u1", user: { id: "u1", name: "Ops User", email: "ops@example.com" } },
+          { userId: "u2", user: { id: "u2", name: "Publisher", email: "pub@example.com" } },
+        ]),
+      },
+      driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
+    expect(result.cargo.mode).toBe("ITEMS");
+    expect(result.cargo.items[0].itemCode).toBe("ITEM-001");
+    expect(result.createdByName).toBe("Ops User");
+    expect(result.publishedByName).toBe("Publisher");
+    expect(result.publishedAt).toEqual(now);
+  });
+
+  it("saveTripPayoutDraft saves one selected master payout line", async () => {
+    const tripUpdate = jest.fn().mockResolvedValue({});
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip1", tenantId: "t1", jobId: "job1" }),
+        update: tripUpdate,
+      },
+      tripPayoutLine: {
+        deleteMany: jest.fn().mockResolvedValue({}),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      driverPayoutItem: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "cmo946tmb0001ku5ekac6in1g",
+          label: "Normal full trip (20FT and 40FT)",
+          rateCents: 5000,
+          requiresManualAmount: false,
+        }),
+      },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+    await svc.saveTripPayoutDraft(
+      "t1",
+      "job1",
+      "trip1",
+      {
+        earningRateMasterId: "cmo946tmb0001ku5ekac6in1g",
+        payoutLines: [
+          {
+            sourceRateMasterItemId: "cmo946tmb0001ku5ekac6in1g",
+            label: "Line 1",
+            quantity: 1,
+            amountCents: 5000,
+            totalCents: 5000,
+            isManual: false,
+          } as any,
+        ],
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+    expect(tripUpdate).toHaveBeenCalledWith({
+      where: { id: "trip1" },
+      data: expect.objectContaining({
+        earningRateMasterId: "cmo946tmb0001ku5ekac6in1g",
+        driverEarningCents: 5000,
+      }),
+    });
+  });
+
+  it("saveTripPayoutDraft supports multiple lines and sums total", async () => {
+    const tripUpdate = jest.fn().mockResolvedValue({});
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip1", tenantId: "t1", jobId: "job1" }),
+        update: tripUpdate,
+      },
+      tripPayoutLine: {
+        deleteMany: jest.fn().mockResolvedValue({}),
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+      },
+      driverPayoutItem: { findFirst: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+    await svc.saveTripPayoutDraft(
+      "t1",
+      "job1",
+      "trip1",
+      {
+        earningRateMasterId: null,
+        payoutLines: [
+          { label: "L1", quantity: 1, amountCents: 1000, totalCents: 1000, isManual: true } as any,
+          { label: "L2", quantity: 2, amountCents: 2000, totalCents: 4000, isManual: true } as any,
+        ],
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+    expect(tripUpdate).toHaveBeenCalledWith({
+      where: { id: "trip1" },
+      data: expect.objectContaining({ driverEarningCents: 5000 }),
+    });
+  });
+
+  it("saveTripPayoutDraft supports manual line save", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip1", tenantId: "t1", jobId: "job1" }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      tripPayoutLine: {
+        deleteMany: jest.fn().mockResolvedValue({}),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      driverPayoutItem: { findFirst: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+    await expect(
+      svc.saveTripPayoutDraft(
+        "t1",
+        "job1",
+        "trip1",
+        {
+          earningRateMasterId: null,
+          payoutLines: [{ label: "Manual", quantity: 1, amountCents: 1500, totalCents: 1500, isManual: true }] as any,
+        } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).resolves.toBeTruthy();
+  });
+
+  it("saveTripPayoutDraft fails invalid sourceRateMasterItemId", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip1", tenantId: "t1", jobId: "job1" }),
+      },
+      driverPayoutItem: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    await expect(
+      svc.saveTripPayoutDraft(
+        "t1",
+        "job1",
+        "trip1",
+        {
+          earningRateMasterId: null,
+          payoutLines: [{ sourceRateMasterItemId: "bad", label: "Bad", quantity: 1, amountCents: 1, totalCents: 1 }] as any,
+        } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow("Invalid sourceRateMasterItemId");
+  });
+
+  it("saveTripPayoutDraft fails for non-selectable source item", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip1", tenantId: "t1", jobId: "job1" }),
+      },
+      driverPayoutItem: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    await expect(
+      svc.saveTripPayoutDraft(
+        "t1",
+        "job1",
+        "trip1",
+        {
+          earningRateMasterId: null,
+          payoutLines: [{ sourceRateMasterItemId: "non-selectable", label: "Bad", quantity: 1, amountCents: 1, totalCents: 1 }] as any,
+        } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow("Invalid sourceRateMasterItemId");
+  });
+
+  it("saveTripPayoutDraft requires amountCents for requiresManualAmount source item", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip1", tenantId: "t1", jobId: "job1" }),
+      },
+      driverPayoutItem: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "manual-source",
+          label: "Manual source",
+          rateCents: null,
+          requiresManualAmount: true,
+        }),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    await expect(
+      svc.saveTripPayoutDraft(
+        "t1",
+        "job1",
+        "trip1",
+        {
+          earningRateMasterId: null,
+          payoutLines: [{ sourceRateMasterItemId: "manual-source", label: "Manual", quantity: 1, totalCents: 10 }] as any,
+        } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow("requires amountCents");
   });
 });

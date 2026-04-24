@@ -1,0 +1,4 @@
+ALTER TABLE "trips"
+  ADD COLUMN IF NOT EXISTS "createdByUserId" TEXT,
+  ADD COLUMN IF NOT EXISTS "publishedAt" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "publishedByUserId" TEXT;

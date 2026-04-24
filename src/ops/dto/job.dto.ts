@@ -118,8 +118,17 @@ export class JobTripResponseDto {
   title!: string | null;
   displayTitle!: string | null;
   createdAt!: Date | null;
+  createdByUserId!: string | null;
+  publishedAt!: Date | null;
+  publishedByUserId!: string | null;
   assignedDriverUserId!: string | null;
   assignedDriverName!: string | null;
+  driverId!: string | null;
+  driverName!: string | null;
+  vehicleType!: string | null;
+  customerCompanyName!: string | null;
+  contactName!: string | null;
+  contactPhone!: string | null;
   fromLabel!: string | null;
   toLabel!: string | null;
   fromAddress!: string | null;
@@ -152,6 +161,12 @@ export class JobTripResponseDto {
   driverEarningCentsTotal!: number | null;
   /** Populated on driver detail when trip documents are loaded */
   documents?: JobDocumentDto[];
+  documentStatus?: {
+    pickupDo: "PENDING" | "UPLOADED";
+    deliveryDo: "GENERATED" | "UPLOADED";
+    podSignature: "PENDING" | "UPLOADED";
+    receiverDo: "PENDING" | "UPLOADED";
+  };
   completionRuleJson?: Record<string, unknown> | null;
 }
 

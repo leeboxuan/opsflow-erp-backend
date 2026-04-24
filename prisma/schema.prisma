@@ -248,6 +248,9 @@ model Trip {
   plannedEndAt         DateTime?
   createdAt            DateTime                  @default(now())
   updatedAt            DateTime                  @updatedAt
+  createdByUserId      String?
+  publishedAt          DateTime?
+  publishedByUserId    String?
   closedAt             DateTime?
   startedAt            DateTime?
   acceptedTrailerNo    String?
@@ -1136,7 +1139,13 @@ model TripPayoutLine {
   earningRateMasterId       String?
   code                      String?
   label                     String
+  description               String?
+  unit                      String?
+  quantity                  Int                @default(1)
   amountCents               Int?
+  totalCents                Int?
+  notes                     String?
+  isManual                  Boolean            @default(false)
   requiresManualAmount      Boolean            @default(false)
   isSelectableForTripEarning Boolean           @default(true)
   sortOrder                 Int                @default(0)
