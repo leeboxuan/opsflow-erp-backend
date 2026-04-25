@@ -291,7 +291,7 @@ function toJobDto(j: any): JobDto {
         driverEarningCents: t.driverEarningCents ?? null,
         hasDriverPayout: Number.isInteger(t.driverEarningCents),
         earningLabelSnapshot: t.earningLabelSnapshot ?? null,
-        earningRateMasterId: t.earningRateMasterId ?? null,
+        earningRateMasterId: t.payoutItemId ?? t.earningRateMasterId ?? null,
         assignedVehicleId: t.fleetVehicleId ?? t.vehicleId ?? null,
         assignedVehiclePlateNo: null,
         liveTracking: {
@@ -2935,7 +2935,7 @@ export class OpsJobsService {
           );
         }
         data.payoutItemId = master.id;
-        data.earningRateMasterId = master.id;
+        data.earningRateMasterId = null;
         data.driverEarningCents = resolvedAmountCents;
         data.earningLabelSnapshot = master.label;
       }
@@ -3430,7 +3430,7 @@ export class OpsJobsService {
       driverEarningCents: t.driverEarningCents ?? null,
       hasDriverPayout: Number.isInteger(driverEarningCentsTotal) && (driverEarningCentsTotal ?? 0) > 0,
       earningLabelSnapshot: t.earningLabelSnapshot ?? null,
-      earningRateMasterId: t.earningRateMasterId ?? null,
+      earningRateMasterId: t.payoutItemId ?? t.earningRateMasterId ?? null,
       originSummary: route.fromLabel ?? null,
       destinationSummary: route.toLabel ?? null,
       origin,
@@ -3779,7 +3779,7 @@ export class OpsJobsService {
         vehicleType: trip.vehicles?.type ?? trip.fleetVehicle?.type ?? null,
       },
       payout: {
-        earningRateMasterId: trip.earningRateMasterId ?? null,
+        earningRateMasterId: trip.payoutItemId ?? trip.earningRateMasterId ?? null,
         driverEarningCents: trip.driverEarningCents ?? null,
         lines: payoutLines,
       },
@@ -3795,7 +3795,7 @@ export class OpsJobsService {
       },
       completionRuleJson: trip.completionRuleJson ?? null,
       driverEarningCents: trip.driverEarningCents ?? null,
-      earningRateMasterId: trip.earningRateMasterId ?? null,
+      earningRateMasterId: trip.payoutItemId ?? trip.earningRateMasterId ?? null,
     };
   }
 
@@ -3973,7 +3973,7 @@ export class OpsJobsService {
       await tx.trip.update({
         where: { id: tripId },
         data: {
-          earningRateMasterId: dto.earningRateMasterId ?? null,
+          earningRateMasterId: null,
           payoutItemId: selectedMaster?.id ?? null,
           driverEarningCents: totalDriverEarningCents,
           earningLabelSnapshot: normalized.length
@@ -3990,7 +3990,7 @@ export class OpsJobsService {
       tripId,
       {
         jobId,
-        earningRateMasterId: dto.earningRateMasterId ?? null,
+        earningRateMasterId: selectedMaster?.id ?? null,
         lineCount: normalized.length,
         totalDriverEarningCents,
       },

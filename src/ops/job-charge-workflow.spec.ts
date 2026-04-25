@@ -997,7 +997,7 @@ describe("job charge workflow hardening", () => {
       where: { id: "trip1" },
       data: expect.objectContaining({
         payoutItemId: "cmo946tmb0001ku5ekac6in1g",
-        earningRateMasterId: "cmo946tmb0001ku5ekac6in1g",
+        earningRateMasterId: null,
         driverEarningCents: 9000,
       }),
     });
@@ -1308,6 +1308,8 @@ describe("job charge workflow hardening", () => {
           createdByUserId: "u1",
           publishedAt: now,
           publishedByUserId: "u2",
+          payoutItemId: "cmo946tmb0001ku5ekac6in1g",
+          earningRateMasterId: null,
           documents: [],
           payoutLines: [],
           documentRequirements: [],
@@ -1347,6 +1349,7 @@ describe("job charge workflow hardening", () => {
     expect(result.createdByName).toBe("Ops User");
     expect(result.publishedByName).toBe("Publisher");
     expect(result.publishedAt).toEqual(now);
+    expect(result.payout.earningRateMasterId).toBe("cmo946tmb0001ku5ekac6in1g");
   });
 
   it("saveTripPayoutDraft saves one selected master payout line", async () => {
@@ -1396,7 +1399,8 @@ describe("job charge workflow hardening", () => {
     expect(tripUpdate).toHaveBeenCalledWith({
       where: { id: "trip1" },
       data: expect.objectContaining({
-        earningRateMasterId: "cmo946tmb0001ku5ekac6in1g",
+        payoutItemId: "cmo946tmb0001ku5ekac6in1g",
+        earningRateMasterId: null,
         driverEarningCents: 5000,
       }),
     });
