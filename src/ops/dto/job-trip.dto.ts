@@ -116,6 +116,11 @@ export class TripPayoutLineInputDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  id?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
   earningRateMasterId?: string | null;
 
   @ApiPropertyOptional()
