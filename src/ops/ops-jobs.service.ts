@@ -281,7 +281,15 @@ function toJobDto(j: any): JobDto {
         isCompleted:
           t.status === TripStatus.COMPLETED || t.status === TripStatus.DONE,
         pendingState: t.pendingState ?? TripPendingState.NONE,
-        canPublish: t.status === TripStatus.DRAFT,
+        canPublish: evaluateTripPublishReadiness({
+          status: t.status,
+          assignedDriverUserId: t.assignedDriverUserId ?? null,
+          driverId: t.driverId ?? null,
+          vehicleId: t.vehicleId ?? null,
+          fleetVehicleId: t.fleetVehicleId ?? null,
+          driverEarningCents: t.driverEarningCents ?? null,
+          payoutLines: t.payoutLines ?? [],
+        }).canPublish,
         canMarkDone: t.status === TripStatus.COMPLETED,
         plannedStartAt: t.plannedStartAt ?? null,
         startedAt: t.startedAt ?? null,
@@ -357,6 +365,161 @@ function deriveTripDocumentStatus(documents: Array<any> | null | undefined): {
     deliveryDo: hasDeliveryDoGenerated || !hasDeliveryDo ? "GENERATED" : "UPLOADED",
     podSignature: hasPodSignature ? "UPLOADED" : "PENDING",
     receiverDo: hasReceiverDo ? "UPLOADED" : "PENDING",
+  };
+}
+
+type TripPublishReadinessInput = {
+  status: TripStatus;
+  assignedDriverUserId?: string | null;
+  driverId?: string | null;
+  vehicleId?: string | null;
+  fleetVehicleId?: string | null;
+  driverEarningCents?: number | null;
+  payoutLines?: Array<any> | null;
+};
+
+type TripPublishReadinessResult = {
+  canPublish: boolean;
+  errorMessage: string | null;
+  totalPayoutCents: number;
+  payoutLineCount: number;
+};
+
+function payoutLineLabel(line: any): string {
+  const label = String(line?.label ?? "").trim();
+  return label.length > 0 ? label : "Manual line";
+}
+
+function payoutLineQuantity(line: any): number {
+  const raw = Number(line?.quantity ?? 1);
+  if (!Number.isFinite(raw)) return 0;
+  return Math.floor(raw);
+}
+
+function computePublishPayoutTotal(payoutLines: Array<any>): number {
+  return payoutLines.reduce((sum, line) => {
+    const quantity = payoutLineQuantity(line);
+    const amount = Number(line?.amountCents);
+    const totalCents = Number(line?.totalCents);
+    if (Number.isFinite(totalCents) && totalCents > 0) {
+      return sum + totalCents;
+    }
+    if (Number.isFinite(amount) && amount > 0 && quantity > 0) {
+      return sum + amount * quantity;
+    }
+    return sum;
+  }, 0);
+}
+
+function evaluateTripPublishReadiness(input: TripPublishReadinessInput): TripPublishReadinessResult {
+  if (input.status !== TripStatus.DRAFT) {
+    return {
+      canPublish: false,
+      errorMessage: "Trip is already published or cannot be published from current status",
+      totalPayoutCents: 0,
+      payoutLineCount: 0,
+    };
+  }
+
+  if (
+    (!input.assignedDriverUserId && !input.driverId) ||
+    (!input.vehicleId && !input.fleetVehicleId)
+  ) {
+    return {
+      canPublish: false,
+      errorMessage: "Assign driver before publishing trip.",
+      totalPayoutCents: 0,
+      payoutLineCount: 0,
+    };
+  }
+
+  const payoutLines = Array.isArray(input.payoutLines) ? input.payoutLines : [];
+  if (payoutLines.length > 0) {
+    const invalidManualAmount = payoutLines.find((line) => {
+      const amount = Number(line?.amountCents);
+      return !Number.isFinite(amount) || amount <= 0;
+    });
+    if (invalidManualAmount) {
+      return {
+        canPublish: false,
+        errorMessage: `Payout line "${payoutLineLabel(invalidManualAmount)}" requires manual amount before publish`,
+        totalPayoutCents: 0,
+        payoutLineCount: payoutLines.length,
+      };
+    }
+
+    const invalidManualLabel = payoutLines.find((line) => {
+      const isManual = line?.isManual === true;
+      return isManual && String(line?.label ?? "").trim().length === 0;
+    });
+    if (invalidManualLabel) {
+      return {
+        canPublish: false,
+        errorMessage: "Manual payout line label is required before publish",
+        totalPayoutCents: 0,
+        payoutLineCount: payoutLines.length,
+      };
+    }
+
+    const invalidManualQuantity = payoutLines.find((line) => {
+      const isManual = line?.isManual === true;
+      return isManual && payoutLineQuantity(line) <= 0;
+    });
+    if (invalidManualQuantity) {
+      return {
+        canPublish: false,
+        errorMessage: `Payout line "${payoutLineLabel(invalidManualQuantity)}" quantity must be greater than 0 before publish`,
+        totalPayoutCents: 0,
+        payoutLineCount: payoutLines.length,
+      };
+    }
+
+    const invalidManualTotal = payoutLines.find((line) => {
+      const isManual = line?.isManual === true;
+      const total = Number(line?.totalCents);
+      return isManual && (!Number.isFinite(total) || total <= 0);
+    });
+    if (invalidManualTotal) {
+      return {
+        canPublish: false,
+        errorMessage: `Payout line "${payoutLineLabel(invalidManualTotal)}" total must be greater than 0 before publish`,
+        totalPayoutCents: 0,
+        payoutLineCount: payoutLines.length,
+      };
+    }
+
+    const total = computePublishPayoutTotal(payoutLines);
+    if (total <= 0) {
+      return {
+        canPublish: false,
+        errorMessage: "Driver payout total must be greater than 0 before publish",
+        totalPayoutCents: 0,
+        payoutLineCount: payoutLines.length,
+      };
+    }
+
+    return {
+      canPublish: true,
+      errorMessage: null,
+      totalPayoutCents: total,
+      payoutLineCount: payoutLines.length,
+    };
+  }
+
+  if (!Number.isInteger(input.driverEarningCents) || (input.driverEarningCents ?? 0) <= 0) {
+    return {
+      canPublish: false,
+      errorMessage: "Set driver payout before publishing trip.",
+      totalPayoutCents: 0,
+      payoutLineCount: 0,
+    };
+  }
+
+  return {
+    canPublish: true,
+    errorMessage: null,
+    totalPayoutCents: input.driverEarningCents ?? 0,
+    payoutLineCount: 0,
   };
 }
 
@@ -1652,6 +1815,11 @@ export class OpsJobsService {
         },
         trips: {
           orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
+          include: {
+            payoutLines: {
+              orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+            },
+          },
         },
         charges: {
           orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -3069,17 +3237,6 @@ export class OpsJobsService {
     });
     if (!trip) throw new NotFoundException("Trip not found");
 
-    if (trip.status !== TripStatus.DRAFT) {
-      throw new BadRequestException(
-        "Trip is already published or cannot be published from current status",
-      );
-    }
-    if (
-      (!trip.assignedDriverUserId && !trip.driverId) ||
-      (!trip.vehicleId && !trip.fleetVehicleId)
-    ) {
-      throw new BadRequestException("Assign driver before publishing trip.");
-    }
     const payoutLines =
       (this.prisma as any).tripPayoutLine?.findMany
         ? await this.prisma.tripPayoutLine.findMany({
@@ -3087,32 +3244,26 @@ export class OpsJobsService {
             orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
           })
         : [];
+    const readiness = evaluateTripPublishReadiness({
+      status: trip.status,
+      assignedDriverUserId: trip.assignedDriverUserId ?? null,
+      driverId: trip.driverId ?? null,
+      vehicleId: trip.vehicleId ?? null,
+      fleetVehicleId: trip.fleetVehicleId ?? null,
+      driverEarningCents: trip.driverEarningCents ?? null,
+      payoutLines,
+    });
+    if (!readiness.canPublish) {
+      throw new BadRequestException(readiness.errorMessage ?? "Trip is not ready to publish");
+    }
     if (payoutLines.length > 0) {
-      const selectable = payoutLines.filter((l) => l.isSelectableForTripEarning);
-      if (!selectable.length) {
-        throw new BadRequestException("At least one selectable payout line is required before publish");
-      }
-      const invalid = selectable.find(
-        (l) => l.requiresManualAmount || l.amountCents == null,
-      );
-      if (invalid) {
-        throw new BadRequestException(
-          `Payout line "${invalid.label}" requires manual amount before publish`,
-        );
-      }
-      const total = selectable.reduce((sum, l) => sum + (l.amountCents ?? 0), 0);
-      if (total <= 0) {
-        throw new BadRequestException("Driver payout total must be greater than 0 before publish");
-      }
       await this.prisma.trip.update({
         where: { id: tripId },
         data: {
-          driverEarningCents: total,
-          earningLabelSnapshot: `${selectable.length} payout items`,
+          driverEarningCents: readiness.totalPayoutCents,
+          earningLabelSnapshot: `${readiness.payoutLineCount} payout items`,
         },
       });
-    } else if (!Number.isInteger(trip.driverEarningCents) || trip.driverEarningCents <= 0) {
-      throw new BadRequestException("Set driver payout before publishing trip.");
     }
 
     await this.prisma.trip.update({
@@ -3379,6 +3530,15 @@ export class OpsJobsService {
         payoutItemId: line.payoutItemId ?? null,
         earningRateMasterId: line.earningRateMasterId ?? null,
       }));
+      const publishReadiness = evaluateTripPublishReadiness({
+        status: t.status,
+        assignedDriverUserId: t.assignedDriverUserId ?? null,
+        driverId: t.driverId ?? null,
+        vehicleId: t.vehicleId ?? null,
+        fleetVehicleId: t.fleetVehicleId ?? null,
+        driverEarningCents: t.driverEarningCents ?? null,
+        payoutLines: t.payoutLines ?? [],
+      });
       const driverEarningCentsTotal = payoutLines.length
         ? payoutLines
             .filter((line) => line.isSelectableForTripEarning)
@@ -3413,7 +3573,7 @@ export class OpsJobsService {
       isCompleted:
         t.status === TripStatus.COMPLETED || t.status === TripStatus.DONE,
       pendingState: t.pendingState ?? TripPendingState.NONE,
-      canPublish: t.status === TripStatus.DRAFT,
+      canPublish: publishReadiness.canPublish,
       canMarkDone: t.status === TripStatus.COMPLETED,
       plannedStartAt: t.plannedStartAt ?? null,
       startedAt: t.startedAt ?? null,
@@ -3665,6 +3825,15 @@ export class OpsJobsService {
       notes: line.notes ?? null,
       isManual: line.isManual ?? false,
     }));
+    const publishReadiness = evaluateTripPublishReadiness({
+      status: trip.status,
+      assignedDriverUserId: trip.assignedDriverUserId ?? null,
+      driverId: trip.driverId ?? null,
+      vehicleId: trip.vehicleId ?? null,
+      fleetVehicleId: trip.fleetVehicleId ?? null,
+      driverEarningCents: trip.driverEarningCents ?? null,
+      payoutLines: trip.payoutLines ?? [],
+    });
     const routeOriginLabel =
       firstNonEmptyText(
         trip.originLabel,
@@ -3726,7 +3895,7 @@ export class OpsJobsService {
       publishedAt: trip.publishedAt ?? null,
       publishedByUserId: trip.publishedByUserId ?? null,
       publishedByName,
-      canPublish: trip.status === TripStatus.DRAFT,
+      canPublish: publishReadiness.canPublish,
       canMarkDone: trip.status === TripStatus.COMPLETED,
       driverId: trip.assignedDriverUserId ?? null,
       driverName,
