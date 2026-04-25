@@ -380,7 +380,7 @@ export class DriverJobsService {
     const vehicleIds = [...new Set(jobs.map((j) => j.assignedVehicleId).filter(Boolean))] as string[];
     const fleetVehicleIds = [...new Set(jobs.map((j) => j.assignedFleetVehicleId).filter(Boolean))] as string[];
 
-    const [vehicles, fleetVehicles] = await this.prisma.$transaction([
+    const [vehicles, fleetVehicles] = await Promise.all([
       vehicleIds.length
         ? this.prisma.vehicle.findMany({
             where: {
@@ -392,13 +392,13 @@ export class DriverJobsService {
               plateNo: true,
             },
           })
-        : Promise.resolve([] as Array<{ id: string; plateNo: string }>),
+        : ([] as Array<{ id: string; plateNo: string }>),
       fleetVehicleIds.length
         ? this.prisma.fleetVehicle.findMany({
             where: { tenantId, id: { in: fleetVehicleIds } },
             select: { id: true, plateNo: true },
           })
-        : Promise.resolve([] as Array<{ id: string; plateNo: string }>),
+        : ([] as Array<{ id: string; plateNo: string }>),
     ]);
 
     const vehicleMap = new Map([
@@ -523,19 +523,19 @@ export class DriverJobsService {
     const vehicleIds = [...new Set(jobs.map((j) => j.assignedVehicleId).filter(Boolean))] as string[];
     const fleetVehicleIds = [...new Set(jobs.map((j) => j.assignedFleetVehicleId).filter(Boolean))] as string[];
 
-    const [vehicles, fleetVehicles] = await this.prisma.$transaction([
+    const [vehicles, fleetVehicles] = await Promise.all([
       vehicleIds.length
         ? this.prisma.vehicle.findMany({
             where: { tenantId, id: { in: vehicleIds } },
             select: { id: true, plateNo: true },
           })
-        : Promise.resolve([] as Array<{ id: string; plateNo: string }>),
+        : ([] as Array<{ id: string; plateNo: string }>),
       fleetVehicleIds.length
         ? this.prisma.fleetVehicle.findMany({
             where: { tenantId, id: { in: fleetVehicleIds } },
             select: { id: true, plateNo: true },
           })
-        : Promise.resolve([] as Array<{ id: string; plateNo: string }>),
+        : ([] as Array<{ id: string; plateNo: string }>),
     ]);
 
     const vehicleMap = new Map([
@@ -695,7 +695,7 @@ export class DriverJobsService {
     let assignedVehiclePlateNo: string | null = null;
 
     if (job.assignedVehicleId || job.assignedFleetVehicleId) {
-      const [vehicle, fleetVehicle] = await this.prisma.$transaction([
+      const [vehicle, fleetVehicle] = await Promise.all([
         job.assignedVehicleId
           ? this.prisma.vehicle.findFirst({
               where: {
@@ -706,7 +706,7 @@ export class DriverJobsService {
                 plateNo: true,
               },
             })
-          : Promise.resolve(null),
+          : null,
         job.assignedFleetVehicleId
           ? this.prisma.fleetVehicle.findFirst({
               where: {
@@ -717,7 +717,7 @@ export class DriverJobsService {
                 plateNo: true,
               },
             })
-          : Promise.resolve(null),
+          : null,
       ]);
 
       assignedVehiclePlateNo = vehicle?.plateNo ?? fleetVehicle?.plateNo ?? null;
@@ -1148,6 +1148,9 @@ export class DriverJobsService {
   ): Promise<JobDocumentDto> {
     await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
     await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
+    if (!file?.buffer?.length) {
+      throw new BadRequestException("Trip document file is required");
+    }
 
     const allowedTypes = new Set<TripDocumentType>([
       TripDocumentType.PICKUP_DO,
@@ -1245,13 +1248,14 @@ export class DriverJobsService {
         "POD_SIGNATURE is the canonical signature artifact and cannot be signed separately",
       );
     }
+    const normalizedSignedByName = signedByName?.trim() || null;
     const updated = await this.prisma.tripDocument.update({
       where: { id: documentId },
       data: {
         isSigned: true,
         signedAt: new Date(),
         signedByUserId: driverUserId,
-        signedByName: signedByName?.trim() || null,
+        signedByName: normalizedSignedByName,
       },
     });
     await this.audit.log(
