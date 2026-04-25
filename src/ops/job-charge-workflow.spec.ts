@@ -736,6 +736,8 @@ describe("job charge workflow hardening", () => {
           status: "DRAFT",
           driverEarningCents: null,
           assignedDriverUserId: "u1",
+          vehicleId: "v1",
+          fleetVehicleId: null,
         }),
         update: jest.fn(),
       },
@@ -749,7 +751,7 @@ describe("job charge workflow hardening", () => {
 
     await expect(
       svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS }),
-    ).rejects.toThrow("Driver payout is required before publishing a trip");
+    ).rejects.toThrow("Set driver payout before publishing trip.");
     expect(prisma.trip.update).not.toHaveBeenCalled();
   });
 
@@ -761,6 +763,8 @@ describe("job charge workflow hardening", () => {
           status: "DRAFT",
           driverEarningCents: 7500,
           assignedDriverUserId: "u1",
+          vehicleId: "v1",
+          fleetVehicleId: null,
         }),
         update: jest.fn().mockResolvedValue({ id: "trip1" }),
       },
@@ -789,6 +793,8 @@ describe("job charge workflow hardening", () => {
           status: "DRAFT",
           driverEarningCents: 7500,
           assignedDriverUserId: "u1",
+          vehicleId: "v1",
+          fleetVehicleId: null,
         }),
         update: jest.fn(),
       },
@@ -823,6 +829,8 @@ describe("job charge workflow hardening", () => {
           status: "DRAFT",
           driverEarningCents: null,
           assignedDriverUserId: "u1",
+          vehicleId: "v1",
+          fleetVehicleId: null,
         }),
         update: jest.fn().mockResolvedValue({ id: "trip1" }),
       },
@@ -857,6 +865,56 @@ describe("job charge workflow hardening", () => {
       where: { id: "trip1" },
       data: expect.objectContaining({ status: "PUBLISHED" }),
     });
+  });
+
+  it("publishTrip fails without driver assignment", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          status: "DRAFT",
+          driverEarningCents: 7500,
+          assignedDriverUserId: null,
+          driverId: null,
+          vehicleId: null,
+          fleetVehicleId: null,
+        }),
+        update: jest.fn(),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    await expect(
+      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS }),
+    ).rejects.toThrow("Assign driver before publishing trip.");
+  });
+
+  it("publishTrip succeeds without Collection Docs when assignment and earning exist", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          status: "DRAFT",
+          driverEarningCents: 7500,
+          assignedDriverUserId: "u1",
+          driverId: "d1",
+          vehicleId: "v1",
+          fleetVehicleId: null,
+        }),
+        update: jest.fn().mockResolvedValue({ id: "trip1" }),
+      },
+      tripPayoutLine: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+
+    await expect(
+      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS }),
+    ).resolves.toBeTruthy();
   });
 
   it("sendJobToInvoice validates trip completion gate", async () => {

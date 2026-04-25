@@ -2571,7 +2571,7 @@ export class OpsJobsService {
         null;
 
       const humanLabelByType: Record<string, string> = {
-        PICKUP_DO: "Pickup DO",
+        PICKUP_DO: "Collection Docs",
         DELIVERY_DO: "Delivery DO",
         POD_SIGNATURE: "POD signature",
         POD_PHOTO: "POD photo",
@@ -3063,6 +3063,8 @@ export class OpsJobsService {
         driverEarningCents: true,
         assignedDriverUserId: true,
         driverId: true,
+        vehicleId: true,
+        fleetVehicleId: true,
       },
     });
     if (!trip) throw new NotFoundException("Trip not found");
@@ -3072,20 +3074,11 @@ export class OpsJobsService {
         "Trip is already published or cannot be published from current status",
       );
     }
-    if (!trip.assignedDriverUserId && !trip.driverId) {
-      throw new BadRequestException("Driver assignment is required before publishing a trip");
-    }
-    const pickupDo = await this.prisma.tripDocument.findFirst({
-      where: {
-        tenantId,
-        tripId,
-        isActive: true,
-        type: TripDocumentType.PICKUP_DO,
-      },
-      select: { id: true },
-    });
-    if (!pickupDo) {
-      throw new BadRequestException("Pickup DO is required before publishing a trip");
+    if (
+      (!trip.assignedDriverUserId && !trip.driverId) ||
+      (!trip.vehicleId && !trip.fleetVehicleId)
+    ) {
+      throw new BadRequestException("Assign driver before publishing trip.");
     }
     const payoutLines =
       (this.prisma as any).tripPayoutLine?.findMany
@@ -3119,7 +3112,7 @@ export class OpsJobsService {
         },
       });
     } else if (!Number.isInteger(trip.driverEarningCents) || trip.driverEarningCents <= 0) {
-      throw new BadRequestException("Driver payout is required before publishing a trip");
+      throw new BadRequestException("Set driver payout before publishing trip.");
     }
 
     await this.prisma.trip.update({
