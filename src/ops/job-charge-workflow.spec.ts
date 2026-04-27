@@ -1262,6 +1262,163 @@ describe("job charge workflow hardening", () => {
     );
   });
 
+  it("patchTrip accepts plannedStartAt and records updatedByUserId with changedFields", async () => {
+    const tripUpdate = jest.fn().mockResolvedValue({});
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+        }),
+        update: tripUpdate,
+      },
+    };
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+
+    await svc.patchTrip(
+      "t1",
+      "job1",
+      "trip1",
+      { plannedStartAt: "2026-04-27T09:00:00.000Z" } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    expect(tripUpdate).toHaveBeenCalledWith({
+      where: { id: "trip1" },
+      data: expect.objectContaining({
+        plannedStartAt: new Date("2026-04-27T09:00:00.000Z"),
+        updatedByUserId: "u1",
+      }),
+    });
+    expect(audit.log).toHaveBeenCalledWith(
+      "t1",
+      "TRIP_UPDATE",
+      "JOB",
+      "job1",
+      expect.objectContaining({
+        tripId: "trip1",
+        changedFields: expect.arrayContaining(["plannedStartAt"]),
+      }),
+      "u1",
+    );
+  });
+
+  it("patchTrip accepts origin and destination object snapshots", async () => {
+    const tripUpdate = jest.fn().mockResolvedValue({});
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+        }),
+        update: tripUpdate,
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+
+    await svc.patchTrip(
+      "t1",
+      "job1",
+      "trip1",
+      {
+        origin: {
+          label: "Origin A",
+          addressLine1: "Addr 1",
+          addressLine2: "Addr 2",
+          postalCode: "123456",
+          country: "SG",
+          lat: 1.23,
+          lng: 103.45,
+          placeId: "place-origin",
+          locationId: "loc-origin",
+        },
+        destination: {
+          label: "Destination B",
+          addressLine1: "D Addr 1",
+          addressLine2: null,
+          postalCode: "654321",
+          country: "SG",
+          lat: 1.67,
+          lng: 103.89,
+          placeId: "place-destination",
+          locationId: "loc-destination",
+        },
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    expect(tripUpdate).toHaveBeenCalledWith({
+      where: { id: "trip1" },
+      data: expect.objectContaining({
+        originLabel: "Origin A",
+        originAddressLine1: "Addr 1",
+        originAddressLine2: "Addr 2",
+        originPostalCode: "123456",
+        originCountry: "SG",
+        originLat: 1.23,
+        originLng: 103.45,
+        originPlaceId: "place-origin",
+        originLocationId: "loc-origin",
+        destinationLabel: "Destination B",
+        destinationAddressLine1: "D Addr 1",
+        destinationAddressLine2: null,
+        destinationPostalCode: "654321",
+        destinationCountry: "SG",
+        destinationLat: 1.67,
+        destinationLng: 103.89,
+        destinationPlaceId: "place-destination",
+        destinationLocationId: "loc-destination",
+      }),
+    });
+  });
+
+  it("patchTrip keeps plannedDate and summary aliases supported", async () => {
+    const tripUpdate = jest.fn().mockResolvedValue({});
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+        }),
+        update: tripUpdate,
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+
+    await svc.patchTrip(
+      "t1",
+      "job1",
+      "trip1",
+      {
+        plannedDate: "2026-05-01",
+        originSummary: "Origin Summary",
+        destinationSummary: "Destination Summary",
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    expect(tripUpdate).toHaveBeenCalledWith({
+      where: { id: "trip1" },
+      data: expect.objectContaining({
+        plannedStartAt: new Date("2026-05-01T00:00:00.000Z"),
+        originLabel: "Origin Summary",
+        destinationLabel: "Destination Summary",
+      }),
+    });
+  });
+
   it("patchTrip rejects lifecycle status mutation via generic edit endpoint", async () => {
     const prisma: any = {
       trip: {

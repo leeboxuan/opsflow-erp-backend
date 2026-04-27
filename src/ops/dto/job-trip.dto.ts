@@ -76,8 +76,30 @@ export class PatchJobTripDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @IsString()
+  displayTitle?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  plannedStartAt?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsDateString()
   plannedDate?: string;
+
+  @ApiPropertyOptional({ type: () => TripLocationPatchDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TripLocationPatchDto)
+  origin?: TripLocationPatchDto | null;
+
+  @ApiPropertyOptional({ type: () => TripLocationPatchDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TripLocationPatchDto)
+  destination?: TripLocationPatchDto | null;
 
   @ApiPropertyOptional({
     description: "Assign driver trip rate master; snapshots earning on trip",
@@ -110,6 +132,63 @@ export class PatchJobTripDto {
   @IsOptional()
   @IsString()
   notes?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  trailerNumber?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  trailerLastLocationCode?: string | null;
+}
+
+export class TripLocationPatchDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  label?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  addressLine1?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  addressLine2?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  postalCode?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  country?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  lat?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  lng?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  placeId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  locationId?: string | null;
 }
 
 export class TripPayoutLineInputDto {

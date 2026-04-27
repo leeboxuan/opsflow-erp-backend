@@ -3051,14 +3051,110 @@ export class OpsJobsService {
     if (!trip) throw new NotFoundException("Trip not found");
 
     const data: any = {};
-    if (dto.title !== undefined) data.title = dto.title;
+    if (dto.title !== undefined) {
+      data.title = dto.title?.trim() || null;
+      if (dto.displayTitle === undefined) {
+        data.displayTitle = dto.title?.trim() || null;
+      }
+    }
+    if (dto.displayTitle !== undefined) {
+      data.displayTitle = dto.displayTitle?.trim() || null;
+      if (dto.title === undefined) {
+        data.title = dto.displayTitle?.trim() || null;
+      }
+    }
     if (dto.jobSequence !== undefined) data.jobSequence = dto.jobSequence;
     if (dto.jobSequence !== undefined) data.tripSequence = dto.jobSequence;
-    if (dto.title !== undefined) data.displayTitle = dto.title;
-    if (dto.plannedDate !== undefined) {
+    if (dto.plannedStartAt !== undefined) {
+      data.plannedStartAt = dto.plannedStartAt
+        ? new Date(dto.plannedStartAt)
+        : null;
+    } else if (dto.plannedDate !== undefined) {
       data.plannedStartAt = dto.plannedDate
         ? new Date(dto.plannedDate + "T00:00:00.000Z")
         : null;
+    }
+    if (dto.origin !== undefined) {
+      if (dto.origin === null) {
+        data.originLocationId = null;
+        data.originLabel = null;
+        data.originAddressLine1 = null;
+        data.originAddressLine2 = null;
+        data.originPostalCode = null;
+        data.originCountry = null;
+        data.originLat = null;
+        data.originLng = null;
+        data.originPlaceId = null;
+      } else {
+        if (dto.origin.locationId !== undefined) {
+          data.originLocationId = dto.origin.locationId?.trim() || null;
+        }
+        if (dto.origin.label !== undefined) {
+          data.originLabel = dto.origin.label?.trim() || null;
+        }
+        if (dto.origin.addressLine1 !== undefined) {
+          data.originAddressLine1 = dto.origin.addressLine1?.trim() || null;
+        }
+        if (dto.origin.addressLine2 !== undefined) {
+          data.originAddressLine2 = dto.origin.addressLine2?.trim() || null;
+        }
+        if (dto.origin.postalCode !== undefined) {
+          data.originPostalCode = dto.origin.postalCode?.trim() || null;
+        }
+        if (dto.origin.country !== undefined) {
+          data.originCountry = dto.origin.country?.trim() || null;
+        }
+        if (dto.origin.lat !== undefined) {
+          data.originLat = dto.origin.lat ?? null;
+        }
+        if (dto.origin.lng !== undefined) {
+          data.originLng = dto.origin.lng ?? null;
+        }
+        if (dto.origin.placeId !== undefined) {
+          data.originPlaceId = dto.origin.placeId?.trim() || null;
+        }
+      }
+    }
+    if (dto.destination !== undefined) {
+      if (dto.destination === null) {
+        data.destinationLocationId = null;
+        data.destinationLabel = null;
+        data.destinationAddressLine1 = null;
+        data.destinationAddressLine2 = null;
+        data.destinationPostalCode = null;
+        data.destinationCountry = null;
+        data.destinationLat = null;
+        data.destinationLng = null;
+        data.destinationPlaceId = null;
+      } else {
+        if (dto.destination.locationId !== undefined) {
+          data.destinationLocationId = dto.destination.locationId?.trim() || null;
+        }
+        if (dto.destination.label !== undefined) {
+          data.destinationLabel = dto.destination.label?.trim() || null;
+        }
+        if (dto.destination.addressLine1 !== undefined) {
+          data.destinationAddressLine1 = dto.destination.addressLine1?.trim() || null;
+        }
+        if (dto.destination.addressLine2 !== undefined) {
+          data.destinationAddressLine2 = dto.destination.addressLine2?.trim() || null;
+        }
+        if (dto.destination.postalCode !== undefined) {
+          data.destinationPostalCode = dto.destination.postalCode?.trim() || null;
+        }
+        if (dto.destination.country !== undefined) {
+          data.destinationCountry = dto.destination.country?.trim() || null;
+        }
+        if (dto.destination.lat !== undefined) {
+          data.destinationLat = dto.destination.lat ?? null;
+        }
+        if (dto.destination.lng !== undefined) {
+          data.destinationLng = dto.destination.lng ?? null;
+        }
+        if (dto.destination.placeId !== undefined) {
+          data.destinationPlaceId = dto.destination.placeId?.trim() || null;
+        }
+      }
     }
     if (dto.originLocationId !== undefined) {
       if (!dto.originLocationId) {
@@ -3099,6 +3195,12 @@ export class OpsJobsService {
     }
     if (dto.destinationSummary !== undefined && !data.destinationLocationId) {
       data.destinationLabel = dto.destinationSummary?.trim() || null;
+    }
+    if (dto.trailerNumber !== undefined) {
+      data.trailerNumber = dto.trailerNumber?.trim() || null;
+    }
+    if (dto.trailerLastLocationCode !== undefined) {
+      data.trailerLastLocationCode = dto.trailerLastLocationCode?.trim() || null;
     }
 
     if (dto.earningRateMasterId !== undefined) {
