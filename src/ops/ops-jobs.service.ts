@@ -262,8 +262,12 @@ function toJobDto(j: any): JobDto {
         displayTitle: t.displayTitle ?? t.title ?? null,
         createdAt: t.createdAt ?? null,
         createdByUserId: t.createdByUserId ?? null,
+        updatedByUserId: t.updatedByUserId ?? null,
+        updatedByName: null,
         publishedAt: t.publishedAt ?? null,
         publishedByUserId: t.publishedByUserId ?? null,
+        assignedAt: t.assignedAt ?? null,
+        assignedByUserId: t.assignedByUserId ?? null,
         assignedDriverUserId: t.assignedDriverUserId ?? null,
         assignedDriverName: null,
         driverId: t.driverId ?? null,
@@ -735,6 +739,8 @@ export class OpsJobsService {
     for (const job of jobs) {
       for (const trip of job.trips ?? []) {
         if (trip.assignedDriverUserId) ids.push(trip.assignedDriverUserId);
+        if (trip.updatedByUserId) ids.push(trip.updatedByUserId);
+        if (trip.assignedByUserId) ids.push(trip.assignedByUserId);
         if (trip.id) tripIds.push(trip.id);
       }
     }
@@ -747,8 +753,11 @@ export class OpsJobsService {
             id: true,
             driverId: true,
             createdByUserId: true,
+            updatedByUserId: true,
             publishedAt: true,
             publishedByUserId: true,
+            assignedAt: true,
+            assignedByUserId: true,
             vehicleId: true,
             fleetVehicleId: true,
             documents: {
@@ -783,9 +792,14 @@ export class OpsJobsService {
         trip.vehicleType =
           tripMeta?.vehicles?.type ?? tripMeta?.fleetVehicle?.type ?? null;
         trip.createdByUserId = tripMeta?.createdByUserId ?? trip.createdByUserId ?? null;
+        trip.updatedByUserId = tripMeta?.updatedByUserId ?? trip.updatedByUserId ?? null;
+        trip.updatedByName =
+          (trip.updatedByUserId && nameMap.get(trip.updatedByUserId)) || null;
         trip.publishedAt = tripMeta?.publishedAt ?? trip.publishedAt ?? null;
         trip.publishedByUserId =
           tripMeta?.publishedByUserId ?? trip.publishedByUserId ?? null;
+        trip.assignedAt = tripMeta?.assignedAt ?? trip.assignedAt ?? null;
+        trip.assignedByUserId = tripMeta?.assignedByUserId ?? trip.assignedByUserId ?? null;
         trip.customerCompanyName = job.companyName ?? null;
         trip.contactName = job.receiverName ?? null;
         trip.contactPhone = job.receiverPhone ?? null;
@@ -3026,6 +3040,11 @@ export class OpsJobsService {
   ): Promise<JobDto> {
     this.assertCustomerCanOnlyRead(user);
     const actorUserId: string | null = user?.userId ?? null;
+    if ("status" in (dto as Record<string, unknown>)) {
+      throw new BadRequestException(
+        "Trip status cannot be changed from PATCH /jobs/:jobId/trips/:tripId",
+      );
+    }
     const trip = await this.prisma.trip.findFirst({
       where: { id: tripId, tenantId, jobId },
     });
@@ -3109,17 +3128,19 @@ export class OpsJobsService {
       }
     }
 
+    data.updatedByUserId = actorUserId;
     await this.prisma.trip.update({
       where: { id: tripId },
       data,
     });
+    const changedFields = Object.keys(data).filter((k) => k !== "updatedByUserId");
 
     await this.audit.log(
       tenantId,
       "TRIP_UPDATE",
       "JOB",
       jobId,
-      { tripId, ...data },
+      { tripId, changedFields },
       actorUserId,
     );
 
@@ -3194,6 +3215,7 @@ export class OpsJobsService {
       );
     }
 
+    const oldDriverUserId = trip.assignedDriverUserId ?? null;
     await this.prisma.trip.update({
       where: { id: tripId },
       data: {
@@ -3201,14 +3223,33 @@ export class OpsJobsService {
         driverId: driverRow?.id ?? null,
         vehicleId: vehicle?.id ?? null,
         fleetVehicleId: fleetVehicle?.id ?? null,
+        assignedAt: new Date(),
+        assignedByUserId: actorUserId,
+        updatedByUserId: actorUserId,
       },
     });
+    const assignmentAction =
+      oldDriverUserId && oldDriverUserId !== dto.driverId
+        ? "TRIP_DRIVER_REASSIGNED"
+        : "TRIP_DRIVER_ASSIGNED";
+    const actorNameMap = await this.buildUserNameMapByIds(
+      tenantId,
+      [oldDriverUserId ?? "", dto.driverId].filter(Boolean) as string[],
+    );
     await this.audit.log(
       tenantId,
-      "TRIP_ASSIGN",
+      assignmentAction,
       "TRIP",
       tripId,
-      { jobId, driverId: dto.driverId, vehicleType: resolvedVehicleType },
+      {
+        jobId,
+        oldDriverUserId,
+        oldDriverName:
+          (oldDriverUserId && actorNameMap.get(oldDriverUserId)) || null,
+        newDriverUserId: dto.driverId,
+        newDriverName: actorNameMap.get(dto.driverId) ?? null,
+        vehicleType: resolvedVehicleType,
+      },
       actorUserId,
     );
     return this.getOne(tenantId, jobId, user);
@@ -3347,7 +3388,7 @@ export class OpsJobsService {
 
     await this.prisma.trip.update({
       where: { id: tripId },
-      data: { pendingState },
+      data: { pendingState, updatedByUserId: actorUserId },
     });
     await this.audit.log(
       tenantId,
@@ -3493,7 +3534,15 @@ export class OpsJobsService {
 
     const nameMap = await this.buildUserNameMapByIds(
       tenantId,
-      trips.map((t) => t.assignedDriverUserId).filter(Boolean) as string[],
+      Array.from(
+        new Set(
+          trips.flatMap((t) =>
+            [t.assignedDriverUserId, t.updatedByUserId, t.assignedByUserId].filter(
+              Boolean,
+            ) as string[],
+          ),
+        ),
+      ),
     );
 
     const driverLocations = await this.prisma.driverLocationLatest.findMany({
@@ -3551,8 +3600,13 @@ export class OpsJobsService {
       jobId: job.id,
       createdAt: t.createdAt ?? null,
       createdByUserId: t.createdByUserId ?? null,
+      updatedByUserId: t.updatedByUserId ?? null,
+      updatedByName:
+        (t.updatedByUserId && nameMap.get(t.updatedByUserId)) || null,
       publishedAt: t.publishedAt ?? null,
       publishedByUserId: t.publishedByUserId ?? null,
+      assignedAt: t.assignedAt ?? null,
+      assignedByUserId: t.assignedByUserId ?? null,
       assignedDriverUserId: t.assignedDriverUserId ?? null,
       assignedDriverName:
         (t.assignedDriverUserId && nameMap.get(t.assignedDriverUserId)) || null,
@@ -3796,6 +3850,8 @@ export class OpsJobsService {
         trip.assignedDriverUserId,
         trip.createdByUserId,
         trip.publishedByUserId,
+        trip.updatedByUserId,
+        trip.assignedByUserId,
       ].filter(Boolean) as string[],
     );
     const driverName = trip.assignedDriverUserId
@@ -3806,6 +3862,9 @@ export class OpsJobsService {
       : null;
     const publishedByName = trip.publishedByUserId
       ? (driverNameMap.get(trip.publishedByUserId) ?? null)
+      : null;
+    const updatedByName = trip.updatedByUserId
+      ? (driverNameMap.get(trip.updatedByUserId) ?? null)
       : null;
     const documentStatus = deriveTripDocumentStatus(trip.documents ?? []);
     const payoutLines = (trip.payoutLines ?? []).map((line: any) => ({
@@ -3891,10 +3950,14 @@ export class OpsJobsService {
       pendingState: trip.pendingState ?? TripPendingState.NONE,
       createdByUserId: trip.createdByUserId ?? null,
       createdByName,
+      updatedByUserId: trip.updatedByUserId ?? null,
+      updatedByName,
       createdAt: trip.createdAt ?? null,
       publishedAt: trip.publishedAt ?? null,
       publishedByUserId: trip.publishedByUserId ?? null,
       publishedByName,
+      assignedAt: trip.assignedAt ?? null,
+      assignedByUserId: trip.assignedByUserId ?? null,
       canPublish: publishReadiness.canPublish,
       canMarkDone: trip.status === TripStatus.COMPLETED,
       driverId: trip.assignedDriverUserId ?? null,
@@ -4019,6 +4082,7 @@ export class OpsJobsService {
         data: {
           driverEarningCents: selectable.length ? total : null,
           earningLabelSnapshot: normalized.length ? `${normalized.length} payout items` : null,
+          updatedByUserId: actorUserId,
         },
       });
     });
@@ -4141,6 +4205,7 @@ export class OpsJobsService {
           earningLabelSnapshot: normalized.length
             ? `${normalized.length} payout items`
             : null,
+          updatedByUserId: actorUserId,
         },
       });
     });

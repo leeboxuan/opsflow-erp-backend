@@ -119,8 +119,12 @@ export class JobTripResponseDto {
   displayTitle!: string | null;
   createdAt!: Date | null;
   createdByUserId!: string | null;
+  updatedByUserId!: string | null;
+  updatedByName!: string | null;
   publishedAt!: Date | null;
   publishedByUserId!: string | null;
+  assignedAt!: Date | null;
+  assignedByUserId!: string | null;
   assignedDriverUserId!: string | null;
   assignedDriverName!: string | null;
   driverId!: string | null;

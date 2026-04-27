@@ -1262,6 +1262,99 @@ describe("job charge workflow hardening", () => {
     );
   });
 
+  it("patchTrip rejects lifecycle status mutation via generic edit endpoint", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip1", tenantId: "t1", jobId: "job1" }),
+        update: jest.fn(),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    await expect(
+      svc.patchTrip(
+        "t1",
+        "job1",
+        "trip1",
+        { status: "DONE" } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow("Trip status cannot be changed from PATCH /jobs/:jobId/trips/:tripId");
+  });
+
+  it.each(["DRAFT", "PUBLISHED", "ONGOING", "COMPLETED", "DONE"])(
+    "assignTrip allows reassignment at %s status",
+    async (status) => {
+      const prisma: any = {
+        trip: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "trip1",
+            tenantId: "t1",
+            jobId: "job1",
+            status,
+            assignedDriverUserId: "old-driver",
+          }),
+          update: jest.fn().mockResolvedValue({ id: "trip1" }),
+        },
+        tenantMembership: {
+          findFirst: jest.fn().mockResolvedValue({ userId: "new-driver" }),
+          findMany: jest.fn().mockResolvedValue([
+            { userId: "old-driver", user: { id: "old-driver", name: "Old Driver", email: "old@example.com" } },
+            { userId: "new-driver", user: { id: "new-driver", name: "New Driver", email: "new@example.com" } },
+          ]),
+        },
+        drivers: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "driver-row",
+            assignedVehicleId: "vehicle-1",
+            assignedFleetVehicleId: null,
+          }),
+        },
+        vehicle: {
+          findFirst: jest.fn().mockResolvedValue({ id: "vehicle-1", type: "TRAILER" }),
+        },
+        fleetVehicle: {
+          findFirst: jest.fn().mockResolvedValue(null),
+        },
+      };
+      const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+      const supabaseService = { getClient: jest.fn() } as any;
+      const svc = new OpsJobsService(prisma, audit, supabaseService);
+      jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+
+      await expect(
+        svc.assignTrip(
+          "t1",
+          "job1",
+          "trip1",
+          { driverId: "new-driver", vehicleType: "TRAILER" } as any,
+          { userId: "ops-1", role: Role.OPS },
+        ),
+      ).resolves.toBeTruthy();
+      expect(prisma.trip.update).toHaveBeenCalledWith({
+        where: { id: "trip1" },
+        data: expect.objectContaining({
+          assignedDriverUserId: "new-driver",
+          updatedByUserId: "ops-1",
+          assignedByUserId: "ops-1",
+        }),
+      });
+      expect(audit.log).toHaveBeenCalledWith(
+        "t1",
+        "TRIP_DRIVER_REASSIGNED",
+        "TRIP",
+        "trip1",
+        expect.objectContaining({
+          oldDriverUserId: "old-driver",
+          newDriverUserId: "new-driver",
+        }),
+        "ops-1",
+      );
+    },
+  );
+
   it("rejects non-NONE pending state when trip is COMPLETED", async () => {
     const prisma: any = {
       trip: {
@@ -1474,8 +1567,11 @@ describe("job charge workflow hardening", () => {
           pendingState: "NONE",
           createdAt: now,
           createdByUserId: "u1",
+          updatedByUserId: "u3",
           publishedAt: now,
           publishedByUserId: "u2",
+          assignedAt: now,
+          assignedByUserId: "u2",
           payoutItemId: "cmo946tmb0001ku5ekac6in1g",
           earningRateMasterId: null,
           documents: [],
@@ -1503,6 +1599,7 @@ describe("job charge workflow hardening", () => {
         findMany: jest.fn().mockResolvedValue([
           { userId: "u1", user: { id: "u1", name: "Ops User", email: "ops@example.com" } },
           { userId: "u2", user: { id: "u2", name: "Publisher", email: "pub@example.com" } },
+          { userId: "u3", user: { id: "u3", name: "Updater", email: "update@example.com" } },
         ]),
       },
       driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
@@ -1516,6 +1613,7 @@ describe("job charge workflow hardening", () => {
     expect(result.cargo.items[0].itemCode).toBe("ITEM-001");
     expect(result.createdByName).toBe("Ops User");
     expect(result.publishedByName).toBe("Publisher");
+    expect(result.updatedByName).toBe("Updater");
     expect(result.publishedAt).toEqual(now);
     expect(result.payout.earningRateMasterId).toBe("cmo946tmb0001ku5ekac6in1g");
   });

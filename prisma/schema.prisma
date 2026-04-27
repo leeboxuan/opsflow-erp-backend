@@ -251,6 +251,9 @@ model Trip {
   createdByUserId      String?
   publishedAt          DateTime?
   publishedByUserId    String?
+  assignedAt           DateTime?
+  assignedByUserId     String?
+  updatedByUserId      String?
   closedAt             DateTime?
   startedAt            DateTime?
   acceptedTrailerNo    String?
