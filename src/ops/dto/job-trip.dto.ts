@@ -62,6 +62,53 @@ export class AssignJobTripDto {
   vehicleType?: string;
 }
 
+export class TripLocationPatchDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  label?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  addressLine1?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  addressLine2?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  postalCode?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  country?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  lat?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  lng?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  placeId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  locationId?: string | null;
+}
+
 export class PatchJobTripDto {
   @ApiPropertyOptional()
   @IsOptional()
@@ -142,53 +189,6 @@ export class PatchJobTripDto {
   @IsOptional()
   @IsString()
   trailerLastLocationCode?: string | null;
-}
-
-export class TripLocationPatchDto {
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  label?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  addressLine1?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  addressLine2?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  postalCode?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  country?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsNumber()
-  lat?: number | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsNumber()
-  lng?: number | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  placeId?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  locationId?: string | null;
 }
 
 export class TripPayoutLineInputDto {
