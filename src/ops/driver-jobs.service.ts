@@ -226,10 +226,7 @@ export class DriverJobsService {
           trips: {
             some: {
               status: { not: TripStatus.DRAFT },
-              OR: [
-                { plannedStartAt: { gte: range.gte, lt: range.lt } },
-                { plannedDate: { gte: range.gte, lt: range.lt } },
-              ],
+              plannedStartAt: { gte: range.gte, lt: range.lt },
             },
           },
         },
@@ -239,7 +236,7 @@ export class DriverJobsService {
               trips: {
                 none: {
                   status: { not: TripStatus.DRAFT },
-                  OR: [{ plannedStartAt: { not: null } }, { plannedDate: { not: null } }],
+                  plannedStartAt: { not: null },
                 },
               },
             },
@@ -418,11 +415,8 @@ export class DriverJobsService {
               FROM trips t
               WHERE t."jobId" = j.id
                 AND t."status" <> ${TripStatus.DRAFT}
-                AND (
-                  (t."plannedStartAt" >= ${range.gte} AND t."plannedStartAt" < ${range.lt})
-                  OR
-                  (t."plannedDate" >= ${range.gte} AND t."plannedDate" < ${range.lt})
-                )
+                AND t."plannedStartAt" >= ${range.gte}
+                AND t."plannedStartAt" < ${range.lt}
             )
             OR (
               NOT EXISTS (
@@ -430,7 +424,7 @@ export class DriverJobsService {
                 FROM trips tp
                 WHERE tp."jobId" = j.id
                   AND tp."status" <> ${TripStatus.DRAFT}
-                  AND (tp."plannedStartAt" IS NOT NULL OR tp."plannedDate" IS NOT NULL)
+                  AND tp."plannedStartAt" IS NOT NULL
               )
               AND j."pickupDate" >= ${range.gte}
               AND j."pickupDate" < ${range.lt}
@@ -446,11 +440,8 @@ export class DriverJobsService {
               FROM trips t
               WHERE t."jobId" = j.id
                 AND t."status" <> ${TripStatus.DRAFT}
-                AND (
-                  (t."plannedStartAt" >= ${range.gte} AND t."plannedStartAt" < ${range.lt})
-                  OR
-                  (t."plannedDate" >= ${range.gte} AND t."plannedDate" < ${range.lt})
-                )
+                AND t."plannedStartAt" >= ${range.gte}
+                AND t."plannedStartAt" < ${range.lt}
             )
             OR (
               NOT EXISTS (
@@ -458,7 +449,7 @@ export class DriverJobsService {
                 FROM trips tp
                 WHERE tp."jobId" = j.id
                   AND tp."status" <> ${TripStatus.DRAFT}
-                  AND (tp."plannedStartAt" IS NOT NULL OR tp."plannedDate" IS NOT NULL)
+                  AND tp."plannedStartAt" IS NOT NULL
               )
               AND j."pickupDate" >= ${range.gte}
               AND j."pickupDate" < ${range.lt}
@@ -496,13 +487,6 @@ export class DriverJobsService {
               WHERE t1."jobId" = j.id
                 AND t1."status" <> ${TripStatus.DRAFT}
                 AND t1."plannedStartAt" IS NOT NULL
-            ),
-            (
-              SELECT MIN(t2."plannedDate")
-              FROM trips t2
-              WHERE t2."jobId" = j.id
-                AND t2."status" <> ${TripStatus.DRAFT}
-                AND t2."plannedDate" IS NOT NULL
             ),
             j."pickupDate"
           ) ${dirSql} NULLS LAST,
