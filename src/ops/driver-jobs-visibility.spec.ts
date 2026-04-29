@@ -114,3 +114,159 @@ describe("driver trip completion requirements", () => {
     );
   });
 });
+
+describe("DriverJobsService.listActiveByDriver date visibility", () => {
+  const tenantId = "t1";
+  const driverUserId = "u1";
+  const today = "2026-04-29";
+
+  function makeJob(overrides: Record<string, any> = {}) {
+    return {
+      id: "job1",
+      tenantId,
+      customerCompanyId: "c1",
+      internalRef: "JOB-1",
+      externalRef: null,
+      jobType: "LCL",
+      status: "Assigned",
+      invoiceReadyAt: null,
+      notes: null,
+      pickupDate: new Date("2026-04-28T00:00:00.000Z"),
+      pickupAddress1: "A",
+      pickupAddress2: null,
+      pickupPostal: null,
+      pickupContactName: null,
+      pickupContactPhone: null,
+      deliveryAddress1: "B",
+      deliveryAddress2: null,
+      deliveryPostal: null,
+      receiverName: "Receiver",
+      receiverPhone: "123",
+      assignedDriverId: driverUserId,
+      assignedDriver: { id: driverUserId, name: "Driver A" },
+      assignedVehicleId: null,
+      assignedFleetVehicleId: null,
+      assignedAt: null,
+      startedAt: null,
+      completedAt: null,
+      deliveredAt: null,
+      podRecipientName: null,
+      cancelledReason: null,
+      cancelledAt: null,
+      cancelledByUserId: null,
+      lastLat: null,
+      lastLng: null,
+      lastLocationAt: null,
+      createdAt: new Date("2026-04-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-04-01T00:00:00.000Z"),
+      items: [],
+      documents: [],
+      trips: [],
+      customerCompany: { id: "c1", name: "Customer A" },
+      ...overrides,
+    };
+  }
+
+  it("returns job when non-draft trip plannedStartAt is within requested day", async () => {
+    const prisma: any = {
+      job: {
+        count: jest.fn().mockResolvedValue(1),
+        findMany: jest.fn().mockResolvedValue([
+          makeJob({
+            pickupDate: new Date("2026-04-28T00:00:00.000Z"),
+            trips: [
+              {
+                id: "trip1",
+                status: "PUBLISHED",
+                plannedStartAt: new Date("2026-04-29T09:00:00.000Z"),
+                pendingState: "NONE",
+                driverEarningCents: 12500,
+              },
+            ],
+          }),
+        ]),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([{ id: "job1" }]),
+      vehicle: { findMany: jest.fn() },
+      fleetVehicle: { findMany: jest.fn() },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new DriverJobsService(prisma, audit, supabaseService);
+
+    const result = await svc.listActiveByDriver(tenantId, driverUserId, { date: today });
+
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0].id).toBe("job1");
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    expect(prisma.job.count).toHaveBeenCalled();
+
+    const countWhere = prisma.job.count.mock.calls[0][0].where;
+    expect(countWhere.AND?.[0]?.OR?.[0]?.trips?.some).toEqual({
+      status: { not: "DRAFT" },
+      plannedStartAt: {
+        gte: new Date("2026-04-29T00:00:00.000Z"),
+        lt: new Date("2026-04-30T00:00:00.000Z"),
+      },
+    });
+  });
+
+  it("uses pickupDate fallback when no non-draft trip has plannedStartAt", async () => {
+    const prisma: any = {
+      job: {
+        count: jest.fn().mockResolvedValue(1),
+        findMany: jest.fn().mockResolvedValue([makeJob({
+          pickupDate: new Date("2026-04-29T08:00:00.000Z"),
+          trips: [
+            {
+              id: "trip1",
+              status: "PUBLISHED",
+              plannedStartAt: null,
+              pendingState: "NONE",
+              driverEarningCents: 1000,
+            },
+          ],
+        })]),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([{ id: "job1" }]),
+      vehicle: { findMany: jest.fn() },
+      fleetVehicle: { findMany: jest.fn() },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new DriverJobsService(prisma, audit, supabaseService);
+
+    await svc.listActiveByDriver(tenantId, driverUserId, { date: today });
+
+    const countWhere = prisma.job.count.mock.calls[0][0].where;
+    expect(countWhere.AND?.[0]?.OR?.[1]?.AND?.[0]?.trips?.none).toEqual({
+      status: { not: "DRAFT" },
+      plannedStartAt: { not: null },
+    });
+    expect(countWhere.AND?.[0]?.OR?.[1]?.AND?.[1]?.pickupDate).toEqual({
+      gte: new Date("2026-04-29T00:00:00.000Z"),
+      lt: new Date("2026-04-30T00:00:00.000Z"),
+    });
+  });
+
+  it("does not treat DRAFT trips as visible execution trips", async () => {
+    const prisma: any = {
+      job: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      vehicle: { findMany: jest.fn() },
+      fleetVehicle: { findMany: jest.fn() },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new DriverJobsService(prisma, audit, supabaseService);
+
+    const result = await svc.listActiveByDriver(tenantId, driverUserId, { date: today });
+
+    expect(result.data).toHaveLength(0);
+    const countWhere = prisma.job.count.mock.calls[0][0].where;
+    expect(countWhere.AND?.[0]?.OR?.[0]?.trips?.some?.status).toEqual({ not: "DRAFT" });
+  });
+});

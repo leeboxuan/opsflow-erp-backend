@@ -388,6 +388,10 @@ export class DriverJobsService {
       assignedDriver: {
         select: { id: true, name: true },
       },
+      trips: {
+        where: { status: { not: TripStatus.DRAFT } },
+        orderBy: [{ plannedStartAt: "asc" as const }, { createdAt: "asc" as const }],
+      },
       items: {
         orderBy: { createdAt: "asc" as const },
       },
@@ -414,7 +418,7 @@ export class DriverJobsService {
               SELECT 1
               FROM trips t
               WHERE t."jobId" = j.id
-                AND t."status" <> ${TripStatus.DRAFT}
+                AND t."status"::text <> ${TripStatus.DRAFT}
                 AND t."plannedStartAt" >= ${range.gte}
                 AND t."plannedStartAt" < ${range.lt}
             )
@@ -423,7 +427,7 @@ export class DriverJobsService {
                 SELECT 1
                 FROM trips tp
                 WHERE tp."jobId" = j.id
-                  AND tp."status" <> ${TripStatus.DRAFT}
+                  AND tp."status"::text <> ${TripStatus.DRAFT}
                   AND tp."plannedStartAt" IS NOT NULL
               )
               AND j."pickupDate" >= ${range.gte}
@@ -439,7 +443,7 @@ export class DriverJobsService {
               SELECT 1
               FROM trips t
               WHERE t."jobId" = j.id
-                AND t."status" <> ${TripStatus.DRAFT}
+                AND t."status"::text <> ${TripStatus.DRAFT}
                 AND t."plannedStartAt" >= ${range.gte}
                 AND t."plannedStartAt" < ${range.lt}
             )
@@ -448,7 +452,7 @@ export class DriverJobsService {
                 SELECT 1
                 FROM trips tp
                 WHERE tp."jobId" = j.id
-                  AND tp."status" <> ${TripStatus.DRAFT}
+                  AND tp."status"::text <> ${TripStatus.DRAFT}
                   AND tp."plannedStartAt" IS NOT NULL
               )
               AND j."pickupDate" >= ${range.gte}
@@ -464,7 +468,7 @@ export class DriverJobsService {
         WHERE
           j."tenantId" = ${tenantId}
           AND j."assignedDriverId" = ${driverUserId}
-          AND j."status" IN (${Prisma.join([
+          AND j."status"::text IN (${Prisma.join([
             JobStatus.Assigned,
             JobStatus.InProgress,
             JobStatus.PendingDepot,
@@ -475,7 +479,7 @@ export class DriverJobsService {
               SELECT 1
               FROM trips tv
               WHERE tv."jobId" = j.id
-                AND tv."status" <> ${TripStatus.DRAFT}
+                AND tv."status"::text <> ${TripStatus.DRAFT}
             )
           )
           ${rangeSql}
@@ -485,7 +489,7 @@ export class DriverJobsService {
               SELECT MIN(t1."plannedStartAt")
               FROM trips t1
               WHERE t1."jobId" = j.id
-                AND t1."status" <> ${TripStatus.DRAFT}
+                AND t1."status"::text <> ${TripStatus.DRAFT}
                 AND t1."plannedStartAt" IS NOT NULL
             ),
             j."pickupDate"
@@ -729,7 +733,7 @@ export class DriverJobsService {
       WHERE
         "tenantId" = ${tenantId}
         AND "assignedDriverId" = ${driverUserId}
-        AND "status" IN ('Completed', 'Cancelled')
+        AND "status"::text IN ('Completed', 'Cancelled')
         AND "pickupDate" IS NOT NULL
       GROUP BY 1, 2, 3
       ORDER BY 1 DESC, 3 DESC
