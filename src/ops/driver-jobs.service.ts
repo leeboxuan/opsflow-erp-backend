@@ -6,6 +6,7 @@ import {
 import {
   JobStatus,
   JobType,
+  Prisma,
   TripPendingState,
   TripStatus,
   TripDocumentType,
@@ -218,6 +219,39 @@ export class DriverJobsService {
     return { gte: start, lt: end };
   }
 
+  private buildActiveTripExecutionRangeWhere(range: { gte: Date; lt: Date }) {
+    return {
+      OR: [
+        {
+          trips: {
+            some: {
+              status: { not: TripStatus.DRAFT },
+              OR: [
+                { plannedStartAt: { gte: range.gte, lt: range.lt } },
+                { plannedDate: { gte: range.gte, lt: range.lt } },
+              ],
+            },
+          },
+        },
+        {
+          AND: [
+            {
+              trips: {
+                none: {
+                  status: { not: TripStatus.DRAFT },
+                  OR: [{ plannedStartAt: { not: null } }, { plannedDate: { not: null } }],
+                },
+              },
+            },
+            {
+              pickupDate: { gte: range.gte, lt: range.lt },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
   private async attachSignedUrl(doc: any): Promise<JobDocumentDto> {
     const base = toDocDto(doc);
 
@@ -330,14 +364,12 @@ export class DriverJobsService {
     const dateStr = query?.date?.trim();
 
     if (month) {
-      where.pickupDate = this.parseMonthToRange(month);
+      where.AND = [...(where.AND ?? []), this.buildActiveTripExecutionRangeWhere(this.parseMonthToRange(month))];
     } else if (dateStr) {
-      where.pickupDate = this.parseDateToRange(dateStr);
-    } else {
-      // Keep sorting stable (avoid NULL pickupDate entries)
-      where.pickupDate = { not: null };
+      where.AND = [...(where.AND ?? []), this.buildActiveTripExecutionRangeWhere(this.parseDateToRange(dateStr))];
     }
 
+    const sortBy = query?.sortBy ?? "pickupDate";
     const orderBy = buildOrderBy(
       query?.sortBy,
       query?.sortDir,
@@ -352,30 +384,154 @@ export class DriverJobsService {
 
     const orderByFinal = [orderBy as any, tieBreaker];
 
-    const [total, jobs] = await this.prisma.$transaction([
-      this.prisma.job.count({ where }),
-      this.prisma.job.findMany({
+    const includeActiveJobRelations = {
+      customerCompany: {
+        select: { id: true, name: true },
+      },
+      assignedDriver: {
+        select: { id: true, name: true },
+      },
+      items: {
+        orderBy: { createdAt: "asc" as const },
+      },
+      documents: {
+        where: { isActive: true, type: { in: ["QUOTATION", "OTHER"] } },
+        orderBy: { createdAt: "desc" as const },
+      },
+    };
+
+    const total = await this.prisma.job.count({ where });
+    let jobs: any[] = [];
+
+    if (sortBy === "pickupDate") {
+      const dirSql = (query?.sortDir ?? "asc").toLowerCase() === "desc"
+        ? Prisma.sql`DESC`
+        : Prisma.sql`ASC`;
+
+      let rangeSql = Prisma.empty;
+      if (month) {
+        const range = this.parseMonthToRange(month);
+        rangeSql = Prisma.sql`
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM trips t
+              WHERE t."jobId" = j.id
+                AND t."status" <> ${TripStatus.DRAFT}
+                AND (
+                  (t."plannedStartAt" >= ${range.gte} AND t."plannedStartAt" < ${range.lt})
+                  OR
+                  (t."plannedDate" >= ${range.gte} AND t."plannedDate" < ${range.lt})
+                )
+            )
+            OR (
+              NOT EXISTS (
+                SELECT 1
+                FROM trips tp
+                WHERE tp."jobId" = j.id
+                  AND tp."status" <> ${TripStatus.DRAFT}
+                  AND (tp."plannedStartAt" IS NOT NULL OR tp."plannedDate" IS NOT NULL)
+              )
+              AND j."pickupDate" >= ${range.gte}
+              AND j."pickupDate" < ${range.lt}
+            )
+          )
+        `;
+      } else if (dateStr) {
+        const range = this.parseDateToRange(dateStr);
+        rangeSql = Prisma.sql`
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM trips t
+              WHERE t."jobId" = j.id
+                AND t."status" <> ${TripStatus.DRAFT}
+                AND (
+                  (t."plannedStartAt" >= ${range.gte} AND t."plannedStartAt" < ${range.lt})
+                  OR
+                  (t."plannedDate" >= ${range.gte} AND t."plannedDate" < ${range.lt})
+                )
+            )
+            OR (
+              NOT EXISTS (
+                SELECT 1
+                FROM trips tp
+                WHERE tp."jobId" = j.id
+                  AND tp."status" <> ${TripStatus.DRAFT}
+                  AND (tp."plannedStartAt" IS NOT NULL OR tp."plannedDate" IS NOT NULL)
+              )
+              AND j."pickupDate" >= ${range.gte}
+              AND j."pickupDate" < ${range.lt}
+            )
+          )
+        `;
+      }
+
+      const sortedJobIds = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT j.id
+        FROM jobs j
+        WHERE
+          j."tenantId" = ${tenantId}
+          AND j."assignedDriverId" = ${driverUserId}
+          AND j."status" IN (${Prisma.join([
+            JobStatus.Assigned,
+            JobStatus.InProgress,
+            JobStatus.PendingDepot,
+          ])})
+          AND (
+            NOT EXISTS (SELECT 1 FROM trips tv WHERE tv."jobId" = j.id)
+            OR EXISTS (
+              SELECT 1
+              FROM trips tv
+              WHERE tv."jobId" = j.id
+                AND tv."status" <> ${TripStatus.DRAFT}
+            )
+          )
+          ${rangeSql}
+        ORDER BY
+          COALESCE(
+            (
+              SELECT MIN(t1."plannedStartAt")
+              FROM trips t1
+              WHERE t1."jobId" = j.id
+                AND t1."status" <> ${TripStatus.DRAFT}
+                AND t1."plannedStartAt" IS NOT NULL
+            ),
+            (
+              SELECT MIN(t2."plannedDate")
+              FROM trips t2
+              WHERE t2."jobId" = j.id
+                AND t2."status" <> ${TripStatus.DRAFT}
+                AND t2."plannedDate" IS NOT NULL
+            ),
+            j."pickupDate"
+          ) ${dirSql} NULLS LAST,
+          j."createdAt" ASC
+        OFFSET ${skip}
+        LIMIT ${take}
+      `);
+
+      const ids = sortedJobIds.map((row) => row.id);
+      if (ids.length) {
+        const fetchedJobs = await this.prisma.job.findMany({
+          where: { id: { in: ids } },
+          include: includeActiveJobRelations,
+        });
+        const orderMap = new Map(ids.map((id, idx) => [id, idx] as const));
+        jobs = fetchedJobs.sort(
+          (a, b) => (orderMap.get(a.id) ?? Number.MAX_SAFE_INTEGER)
+            - (orderMap.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+        );
+      }
+    } else {
+      jobs = await this.prisma.job.findMany({
         where,
         orderBy: orderByFinal as any,
         skip,
         take,
-        include: {
-          customerCompany: {
-            select: { id: true, name: true },
-          },
-          assignedDriver: {
-            select: { id: true, name: true },
-          },
-          items: {
-            orderBy: { createdAt: "asc" },
-          },
-          documents: {
-            where: { isActive: true, type: { in: ["QUOTATION", "OTHER"] } },
-            orderBy: { createdAt: "desc" },
-          },
-        },
-      }),
-    ]);
+        include: includeActiveJobRelations,
+      });
+    }
 
     const vehicleIds = [...new Set(jobs.map((j) => j.assignedVehicleId).filter(Boolean))] as string[];
     const fleetVehicleIds = [...new Set(jobs.map((j) => j.assignedFleetVehicleId).filter(Boolean))] as string[];
