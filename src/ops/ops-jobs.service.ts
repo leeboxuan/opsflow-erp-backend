@@ -1409,12 +1409,10 @@ export class OpsJobsService {
     ]);
 
     applyMappedFilter(where, query.filter, {
-      Draft: { status: JobStatus.Draft },
-      Assigned: { status: JobStatus.Assigned },
-      InProgress: { status: JobStatus.InProgress },
-      PendingDepot: { status: JobStatus.PendingDepot },
-      Completed: { status: JobStatus.Completed },
-      Cancelled: { status: JobStatus.Cancelled },
+      ONGOING: { status: JobStatus.ONGOING },
+      READY_FOR_INVOICE: { status: JobStatus.READY_FOR_INVOICE },
+      COMPLETED: { status: JobStatus.COMPLETED },
+      CANCELLED: { status: JobStatus.CANCELLED },
     });
 
     if (query.status) {
@@ -1683,7 +1681,7 @@ export class OpsJobsService {
         internalRef,
         externalRef: normalizeExternalRef(dto.externalRef),
         jobType: dto.jobType,
-        status: JobStatus.Draft,
+        status: JobStatus.ONGOING,
         notes: dto.notes ?? null,
         createdByUserId: actorUserId,
         pickupDate: pickupDateParsed,
@@ -1942,11 +1940,11 @@ export class OpsJobsService {
     if (!job) throw new NotFoundException("Job not found");
 
     if (
-      job.status === JobStatus.Completed ||
-      job.status === JobStatus.Cancelled
+      job.status === JobStatus.COMPLETED ||
+      job.status === JobStatus.CANCELLED
     ) {
       throw new BadRequestException(
-        "Cannot edit job in Completed or Cancelled status",
+        "Cannot edit job in COMPLETED or CANCELLED status",
       );
     }
 
@@ -2113,8 +2111,8 @@ export class OpsJobsService {
 
     if (!job) throw new NotFoundException("Job not found");
 
-    if (job.status !== JobStatus.Draft && job.status !== JobStatus.Assigned) {
-      throw new BadRequestException("Job must be Draft or Assigned to assign");
+    if (job.status !== JobStatus.ONGOING) {
+      throw new BadRequestException("Job must be ONGOING to assign");
     }
 
     if (job.startedAt) {
@@ -2224,7 +2222,7 @@ export class OpsJobsService {
         assignedVehicleId: vehicleId,
         assignedFleetVehicleId: fleetVehicleId,
         assignedAt: new Date(),
-        status: JobStatus.Assigned,
+        status: JobStatus.ONGOING,
       },
       include: {
         customerCompany: {
@@ -2265,14 +2263,14 @@ export class OpsJobsService {
 
     if (!job) throw new NotFoundException("Job not found");
 
-    if (job.status === JobStatus.Completed) {
-      throw new BadRequestException("Cannot cancel a Completed job");
+    if (job.status === JobStatus.COMPLETED) {
+      throw new BadRequestException("Cannot cancel a COMPLETED job");
     }
 
     const updated = await this.prisma.job.update({
       where: { id: jobId },
       data: {
-        status: JobStatus.Cancelled,
+        status: JobStatus.CANCELLED,
         cancelledAt: new Date(),
         cancelledReason: dto.reason,
         cancelledByUserId: actorUserId ?? null,
@@ -2312,10 +2310,9 @@ export class OpsJobsService {
     if (!job) throw new NotFoundException("Job not found");
 
     const canDelete =
-      job.status === JobStatus.Draft ||
-      (job.status === JobStatus.Assigned &&
-        !job.startedAt &&
-        !job.assignedDriverId);
+      job.status === JobStatus.ONGOING &&
+      !job.startedAt &&
+      !job.assignedDriverId;
 
     if (!canDelete) {
       throw new BadRequestException(
@@ -2349,14 +2346,14 @@ export class OpsJobsService {
       );
     }
 
-    if (job.status !== JobStatus.PendingDepot) {
-      throw new BadRequestException("Job must be in PendingDepot status");
+    if (job.status !== JobStatus.READY_FOR_INVOICE) {
+      throw new BadRequestException("Job must be in READY_FOR_INVOICE status");
     }
 
     const updated = await this.prisma.job.update({
       where: { id: jobId },
       data: {
-        status: JobStatus.Completed,
+        status: JobStatus.COMPLETED,
         completedAt: job.completedAt ?? new Date(),
       },
       include: {
@@ -2806,10 +2803,10 @@ export class OpsJobsService {
     });
     if (!job) throw new NotFoundException("Job not found");
     if (
-      job.status === JobStatus.Completed ||
-      job.status === JobStatus.Cancelled
+      job.status === JobStatus.COMPLETED ||
+      job.status === JobStatus.CANCELLED
     ) {
-      throw new BadRequestException("Cannot edit charges on Completed/Cancelled job");
+      throw new BadRequestException("Cannot edit charges on COMPLETED/CANCELLED job");
     }
 
     await this.persistJobCharges(tenantId, jobId, dto, actorUserId);
@@ -2935,10 +2932,10 @@ export class OpsJobsService {
     });
     if (!job) throw new NotFoundException("Job not found");
     if (
-      job.status === JobStatus.Completed ||
-      job.status === JobStatus.Cancelled
+      job.status === JobStatus.COMPLETED ||
+      job.status === JobStatus.CANCELLED
     ) {
-      throw new BadRequestException("Cannot add trips to Completed/Cancelled job");
+      throw new BadRequestException("Cannot add trips to COMPLETED/CANCELLED job");
     }
 
     const maxSeq = Math.max(
@@ -3431,6 +3428,34 @@ export class OpsJobsService {
     return this.getOne(tenantId, jobId, user);
   }
 
+  private async recalculateJobStatusFromTrips(tenantId: string, jobId: string): Promise<void> {
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+      select: { id: true, status: true },
+    });
+    if (!job || job.status === JobStatus.CANCELLED || job.status === JobStatus.COMPLETED) {
+      return;
+    }
+
+    const trips = await this.prisma.trip.findMany({
+      where: { tenantId, jobId },
+      select: { status: true },
+    });
+    if (!trips.length) return;
+
+    const nonCancelledTrips = trips.filter((t) => t.status !== TripStatus.CANCELLED);
+    if (!nonCancelledTrips.length) return;
+
+    const allDone = nonCancelledTrips.every((t) => t.status === TripStatus.DONE);
+    const nextStatus = allDone ? JobStatus.READY_FOR_INVOICE : JobStatus.ONGOING;
+    if (job.status !== nextStatus) {
+      await this.prisma.job.update({
+        where: { id: jobId },
+        data: { status: nextStatus },
+      });
+    }
+  }
+
   async markTripDone(
     tenantId: string,
     jobId: string,
@@ -3452,6 +3477,7 @@ export class OpsJobsService {
       where: { id: tripId },
       data: { status: TripStatus.DONE, pendingState: TripPendingState.NONE },
     });
+    await this.recalculateJobStatusFromTrips(tenantId, jobId);
     await this.audit.log(
       tenantId,
       "TRIP_MARK_DONE",
@@ -3515,10 +3541,13 @@ export class OpsJobsService {
       select: { id: true, status: true, invoiceReadyAt: true },
     });
     if (!job) throw new NotFoundException("Job not found");
-    if (job.status === JobStatus.Cancelled) {
-      throw new BadRequestException("Cancelled jobs cannot be sent to invoice");
+    if (job.status === JobStatus.CANCELLED) {
+      throw new BadRequestException("CANCELLED jobs cannot be sent to invoice");
     }
-    if (job.invoiceReadyAt) {
+    if (job.status === JobStatus.COMPLETED) {
+      throw new BadRequestException("COMPLETED jobs cannot be sent to invoice");
+    }
+    if (job.status === JobStatus.READY_FOR_INVOICE && job.invoiceReadyAt) {
       throw new BadRequestException("Job is already marked as invoice-ready");
     }
 
@@ -3533,13 +3562,30 @@ export class OpsJobsService {
       );
     }
 
-    const nonCompleted = trips.filter(
-      (t) => t.status !== TripStatus.COMPLETED && t.status !== TripStatus.DONE,
+    const nonDoneNonCancelled = trips.filter(
+      (t) => t.status !== TripStatus.DONE && t.status !== TripStatus.CANCELLED,
     );
-    if (nonCompleted.length > 0) {
+    if (nonDoneNonCancelled.length > 0) {
       throw new BadRequestException(
-        "All trips must be completed before sending job to invoice",
+        "All non-cancelled trips must be done before invoicing.",
       );
+    }
+
+    // Ensure lifecycle status is derived by centralized recalculation.
+    await this.recalculateJobStatusFromTrips(tenantId, jobId);
+    const refreshedJob = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+      select: { id: true, status: true, invoiceReadyAt: true },
+    });
+    if (!refreshedJob) throw new NotFoundException("Job not found");
+    if (refreshedJob.status !== JobStatus.READY_FOR_INVOICE) {
+      throw new BadRequestException(
+        "Job is not READY_FOR_INVOICE yet. Please recheck trip completion.",
+      );
+    }
+
+    if (refreshedJob.invoiceReadyAt) {
+      throw new BadRequestException("Job is already marked as invoice-ready");
     }
 
     const now = new Date();
@@ -4641,7 +4687,7 @@ export class OpsJobsService {
             customerCompanyId,
             internalRef,
             jobType,
-            status: driverId ? JobStatus.Assigned : JobStatus.Draft,
+            status: JobStatus.ONGOING,
             createdByUserId: actorUserId,
             pickupDate: pickupDateParsed,
             pickupAddress1: row.pickupAddress,
@@ -4782,7 +4828,7 @@ export class OpsJobsService {
             customerCompanyId: dto.customerCompanyId,
             jobType: dto.jobType,
             internalRef,
-            status: JobStatus.Draft,
+            status: JobStatus.ONGOING,
             row,
             createdByUserId: actorUserId,
           }),
@@ -5286,7 +5332,7 @@ export class OpsJobsService {
             internalRef,
             externalRef: row.externalRef || null,
             jobType: JobType.LCL,
-            status: JobStatus.Draft,
+            status: JobStatus.ONGOING,
             notes,
             createdByUserId: actorUserId,
             pickupDate,

@@ -792,7 +792,7 @@ model Job {
   internalRef        String
   externalRef        String?
   jobType            JobType
-  status             JobStatus @default(Draft)
+  status             JobStatus @default(ONGOING)
   notes              String?
   pickupDate         DateTime?
   pickupAddress1     String
@@ -1359,12 +1359,10 @@ enum JobType {
 }
 
 enum JobStatus {
-  Draft
-  Assigned
-  InProgress
-  PendingDepot
-  Completed
-  Cancelled
+  ONGOING
+  READY_FOR_INVOICE
+  COMPLETED
+  CANCELLED
 }
 
 enum JobDocumentType {

@@ -5,7 +5,6 @@ import {
 } from "@nestjs/common";
 import {
   JobStatus,
-  JobType,
   Prisma,
   TripPendingState,
   TripStatus,
@@ -128,7 +127,7 @@ function toJobDto(j: any): JobDto {
         jobTripTemplate: t.jobTripTemplate ?? null,
         title: t.title ?? null,
         status: t.status,
-        isPublished: t.status !== TripStatus.DRAFT,
+        isPublished: t.status !== TripStatus.DRAFT && t.status !== TripStatus.CANCELLED,
         isCompleted:
           t.status === TripStatus.COMPLETED || t.status === TripStatus.DONE,
         pendingState: t.pendingState ?? TripPendingState.NONE,
@@ -163,7 +162,7 @@ export class DriverJobsService {
     return {
       OR: [
         { trips: { none: {} } },
-        { trips: { some: { status: { not: TripStatus.DRAFT } } } },
+        { trips: { some: { status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] } } } },
       ],
     };
   }
@@ -178,7 +177,7 @@ export class DriverJobsService {
         id: tripId,
         tenantId,
         jobId,
-        status: { not: TripStatus.DRAFT },
+        status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] },
       },
     });
     if (!trip) {
@@ -225,7 +224,7 @@ export class DriverJobsService {
         {
           trips: {
             some: {
-              status: { not: TripStatus.DRAFT },
+              status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] },
               plannedStartAt: { gte: range.gte, lt: range.lt },
             },
           },
@@ -235,7 +234,7 @@ export class DriverJobsService {
             {
               trips: {
                 none: {
-                  status: { not: TripStatus.DRAFT },
+                  status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] },
                   plannedStartAt: { not: null },
                 },
               },
@@ -339,11 +338,7 @@ export class DriverJobsService {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
 
     const statusFilter = {
-      in: [
-        JobStatus.Assigned,
-        JobStatus.InProgress,
-        JobStatus.PendingDepot,
-      ],
+      in: [JobStatus.ONGOING],
     };
 
     const where: any = {
@@ -389,7 +384,7 @@ export class DriverJobsService {
         select: { id: true, name: true },
       },
       trips: {
-        where: { status: { not: TripStatus.DRAFT } },
+        where: { status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] } },
         orderBy: [{ plannedStartAt: "asc" as const }, { createdAt: "asc" as const }],
       },
       items: {
@@ -419,6 +414,7 @@ export class DriverJobsService {
               FROM trips t
               WHERE t."jobId" = j.id
                 AND t."status"::text <> ${TripStatus.DRAFT}
+                AND t."status"::text <> ${TripStatus.CANCELLED}
                 AND t."plannedStartAt" >= ${range.gte}
                 AND t."plannedStartAt" < ${range.lt}
             )
@@ -428,6 +424,7 @@ export class DriverJobsService {
                 FROM trips tp
                 WHERE tp."jobId" = j.id
                   AND tp."status"::text <> ${TripStatus.DRAFT}
+                  AND tp."status"::text <> ${TripStatus.CANCELLED}
                   AND tp."plannedStartAt" IS NOT NULL
               )
               AND j."pickupDate" >= ${range.gte}
@@ -444,6 +441,7 @@ export class DriverJobsService {
               FROM trips t
               WHERE t."jobId" = j.id
                 AND t."status"::text <> ${TripStatus.DRAFT}
+                AND t."status"::text <> ${TripStatus.CANCELLED}
                 AND t."plannedStartAt" >= ${range.gte}
                 AND t."plannedStartAt" < ${range.lt}
             )
@@ -453,6 +451,7 @@ export class DriverJobsService {
                 FROM trips tp
                 WHERE tp."jobId" = j.id
                   AND tp."status"::text <> ${TripStatus.DRAFT}
+                  AND tp."status"::text <> ${TripStatus.CANCELLED}
                   AND tp."plannedStartAt" IS NOT NULL
               )
               AND j."pickupDate" >= ${range.gte}
@@ -468,11 +467,7 @@ export class DriverJobsService {
         WHERE
           j."tenantId" = ${tenantId}
           AND j."assignedDriverId" = ${driverUserId}
-          AND j."status"::text IN (${Prisma.join([
-            JobStatus.Assigned,
-            JobStatus.InProgress,
-            JobStatus.PendingDepot,
-          ])})
+          AND j."status"::text IN (${Prisma.join([JobStatus.ONGOING])})
           AND (
             NOT EXISTS (SELECT 1 FROM trips tv WHERE tv."jobId" = j.id)
             OR EXISTS (
@@ -480,6 +475,7 @@ export class DriverJobsService {
               FROM trips tv
               WHERE tv."jobId" = j.id
                 AND tv."status"::text <> ${TripStatus.DRAFT}
+                AND tv."status"::text <> ${TripStatus.CANCELLED}
             )
           )
           ${rangeSql}
@@ -490,6 +486,7 @@ export class DriverJobsService {
               FROM trips t1
               WHERE t1."jobId" = j.id
                 AND t1."status"::text <> ${TripStatus.DRAFT}
+                AND t1."status"::text <> ${TripStatus.CANCELLED}
                 AND t1."plannedStartAt" IS NOT NULL
             ),
             j."pickupDate"
@@ -610,7 +607,7 @@ export class DriverJobsService {
     const where: any = {
       tenantId,
       assignedDriverId: driverUserId,
-      status: { in: [JobStatus.Completed, JobStatus.Cancelled] },
+      status: JobStatus.COMPLETED,
       ...this.publishedTripVisibilityWhere(),
       // Practical stable rule: filter history by pickupDate range.
       pickupDate: range,
@@ -733,7 +730,7 @@ export class DriverJobsService {
       WHERE
         "tenantId" = ${tenantId}
         AND "assignedDriverId" = ${driverUserId}
-        AND "status"::text IN ('Completed', 'Cancelled')
+        AND "status"::text = 'COMPLETED'
         AND "pickupDate" IS NOT NULL
       GROUP BY 1, 2, 3
       ORDER BY 1 DESC, 3 DESC
@@ -825,7 +822,7 @@ export class DriverJobsService {
         },
       },
       trips: {
-        where: { status: { not: TripStatus.DRAFT } },
+        where: { status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] } },
         orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
         include: {
           documents: {
@@ -902,7 +899,7 @@ export class DriverJobsService {
     const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
 
     const tripCount = await this.prisma.trip.count({
-      where: { tenantId, jobId, status: { not: TripStatus.DRAFT } },
+      where: { tenantId, jobId, status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] } },
     });
     if (tripCount > 0) {
       throw new BadRequestException(
@@ -910,14 +907,14 @@ export class DriverJobsService {
       );
     }
 
-    if (job.status !== JobStatus.Assigned) {
-      throw new BadRequestException("Job must be Assigned to start");
+    if (job.status !== JobStatus.ONGOING) {
+      throw new BadRequestException("Job must be ONGOING to start");
     }
 
     const updated = await this.prisma.job.update({
       where: { id: jobId },
       data: {
-        status: JobStatus.InProgress,
+        status: JobStatus.ONGOING,
         startedAt: new Date(),
       },
     });
@@ -950,14 +947,14 @@ export class DriverJobsService {
     });
 
     const tripCount = await this.prisma.trip.count({
-      where: { tenantId, jobId, status: { not: TripStatus.DRAFT } },
+      where: { tenantId, jobId, status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] } },
     });
     if (tripCount === 0) {
       throw new BadRequestException("This job has no trips; use POST .../start");
     }
 
-    if (job.status !== JobStatus.Assigned && job.status !== JobStatus.InProgress) {
-      throw new BadRequestException("Job must be Assigned or InProgress to start a trip");
+    if (job.status !== JobStatus.ONGOING) {
+      throw new BadRequestException("Job must be ONGOING to start a trip");
     }
 
     const trailerNumber = payload.trailerNumber?.trim();
@@ -1037,7 +1034,7 @@ export class DriverJobsService {
       await tx.job.update({
         where: { id: jobId },
         data: {
-          status: JobStatus.InProgress,
+          status: JobStatus.ONGOING,
           ...(job.startedAt ? {} : { startedAt: now }),
         },
       });
@@ -1096,7 +1093,7 @@ export class DriverJobsService {
     });
 
     const tripCount = await this.prisma.trip.count({
-      where: { tenantId, jobId, status: { not: TripStatus.DRAFT } },
+      where: { tenantId, jobId, status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] } },
     });
     if (tripCount > 0) {
       throw new BadRequestException(
@@ -1104,20 +1101,13 @@ export class DriverJobsService {
       );
     }
 
-    if (job.status !== JobStatus.InProgress) {
-      throw new BadRequestException("Job must be InProgress to complete");
+    if (job.status !== JobStatus.ONGOING) {
+      throw new BadRequestException("Job must be ONGOING to complete");
     }
 
     const now = new Date();
-    let newStatus: JobStatus;
-    let completedAt: Date | null = null;
-
-    if (job.jobType === JobType.LCL) {
-      newStatus = JobStatus.Completed;
-      completedAt = now;
-    } else {
-      newStatus = JobStatus.PendingDepot;
-    }
+    const newStatus: JobStatus = JobStatus.READY_FOR_INVOICE;
+    const completedAt: Date | null = null;
 
     const updated = await this.prisma.job.update({
       where: { id: jobId },
@@ -1219,14 +1209,8 @@ export class DriverJobsService {
     });
 
     if (openTrips === 0) {
-      let newStatus: JobStatus;
-      let completedAt: Date | null = null;
-      if (job.jobType === JobType.LCL) {
-        newStatus = JobStatus.Completed;
-        completedAt = now;
-      } else {
-        newStatus = JobStatus.PendingDepot;
-      }
+      const newStatus: JobStatus = JobStatus.ONGOING;
+      const completedAt: Date | null = null;
       await this.prisma.job.update({
         where: { id: jobId },
         data: {

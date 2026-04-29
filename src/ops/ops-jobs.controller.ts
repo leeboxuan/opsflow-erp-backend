@@ -85,7 +85,7 @@ export class OpsJobsController {
 
   @Post()
   @ApiOperation({
-    summary: "Create Draft job (ops fields only; no billing quotation snapshot)",
+    summary: "Create ONGOING job (ops fields only; no billing quotation snapshot)",
   })
   async create(@Req() req: any, @Body() dto: CreateJobDto) {
     const tenantId = req.tenant.tenantId;
@@ -120,7 +120,7 @@ export class OpsJobsController {
 
   @Post("import/confirm")
   @ApiOperation({
-    summary: "Confirm import: create Draft jobs from validated rows",
+    summary: "Confirm import: create ONGOING jobs from validated rows",
   })
   async importConfirm(@Req() req: any, @Body() dto: ImportConfirmRequestDto) {
     const tenantId = req.tenant.tenantId;
@@ -189,7 +189,7 @@ export class OpsJobsController {
   @Post("import/batch/confirm")
   @ApiOperation({
     summary:
-      "[Deprecated] Batch import confirm: prefer single-job create with trips. Creates Draft jobs using shared metadata and validated rows",
+      "[Deprecated] Batch import confirm: prefer single-job create with trips. Creates ONGOING jobs using shared metadata and validated rows",
     deprecated: true,
   })
   async batchImportConfirm(
@@ -258,7 +258,7 @@ export class OpsJobsController {
   }
 
   @Post("import/lcl/confirm")
-  @ApiOperation({ summary: "LCL Order In: confirm import, create Draft jobs" })
+  @ApiOperation({ summary: "LCL Order In: confirm import, create ONGOING jobs" })
   async lclImportConfirm(
     @Req() req: any,
     @Body() dto: LclImportConfirmRequestDto,
@@ -299,7 +299,7 @@ export class OpsJobsController {
   }
 
   @Patch(":jobId")
-  @ApiOperation({ summary: "Update job (not if Completed/Cancelled)" })
+  @ApiOperation({ summary: "Update job (not if COMPLETED/CANCELLED)" })
   async update(
     @Req() req: any,
     @Param("jobId") jobId: string,
@@ -347,7 +347,7 @@ export class OpsJobsController {
   }
 
   @Delete(":jobId")
-  @ApiOperation({ summary: "Delete job (only if Draft or unassigned Assigned)" })
+  @ApiOperation({ summary: "Delete job (only if ONGOING and not started/assigned)" })
   async delete(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -360,7 +360,7 @@ export class OpsJobsController {
 
   @Post(":jobId/verify-depot")
   @ApiOperation({
-    summary: "Verify depot for IMPORT/EXPORT PendingDepot -> Completed",
+    summary: "Mark IMPORT/EXPORT invoice completion handoff as COMPLETED",
   })
   async verifyDepot(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;

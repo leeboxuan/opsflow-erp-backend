@@ -11,7 +11,7 @@ describe("driver jobs published-trip visibility", () => {
           internalRef: "JOB-1",
           externalRef: null,
           jobType: "LCL",
-          status: "Assigned",
+          status: "ONGOING",
           invoiceReadyAt: null,
           pickupAddress1: "A",
           deliveryAddress1: "B",
@@ -58,9 +58,9 @@ describe("driver jobs published-trip visibility", () => {
     const args = prisma.job.findFirst.mock.calls[0][0];
     expect(args.where.OR).toEqual([
       { trips: { none: {} } },
-      { trips: { some: { status: { not: "DRAFT" } } } },
+      { trips: { some: { status: { notIn: ["DRAFT", "CANCELLED"] } } } },
     ]);
-    expect(args.include.trips.where).toEqual({ status: { not: "DRAFT" } });
+    expect(args.include.trips.where).toEqual({ status: { notIn: ["DRAFT", "CANCELLED"] } });
   });
 });
 
@@ -74,7 +74,7 @@ describe("driver trip completion requirements", () => {
           customerCompanyId: "c1",
           assignedDriverId: "u1",
           jobType: "IMPORT",
-          status: "InProgress",
+          status: "ONGOING",
           documents: [],
         }),
       },
@@ -128,7 +128,7 @@ describe("DriverJobsService.listActiveByDriver date visibility", () => {
       internalRef: "JOB-1",
       externalRef: null,
       jobType: "LCL",
-      status: "Assigned",
+      status: "ONGOING",
       invoiceReadyAt: null,
       notes: null,
       pickupDate: new Date("2026-04-28T00:00:00.000Z"),
@@ -203,7 +203,7 @@ describe("DriverJobsService.listActiveByDriver date visibility", () => {
 
     const countWhere = prisma.job.count.mock.calls[0][0].where;
     expect(countWhere.AND?.[0]?.OR?.[0]?.trips?.some).toEqual({
-      status: { not: "DRAFT" },
+      status: { notIn: ["DRAFT", "CANCELLED"] },
       plannedStartAt: {
         gte: new Date("2026-04-29T00:00:00.000Z"),
         lt: new Date("2026-04-30T00:00:00.000Z"),
@@ -240,7 +240,7 @@ describe("DriverJobsService.listActiveByDriver date visibility", () => {
 
     const countWhere = prisma.job.count.mock.calls[0][0].where;
     expect(countWhere.AND?.[0]?.OR?.[1]?.AND?.[0]?.trips?.none).toEqual({
-      status: { not: "DRAFT" },
+      status: { notIn: ["DRAFT", "CANCELLED"] },
       plannedStartAt: { not: null },
     });
     expect(countWhere.AND?.[0]?.OR?.[1]?.AND?.[1]?.pickupDate).toEqual({
@@ -267,6 +267,31 @@ describe("DriverJobsService.listActiveByDriver date visibility", () => {
 
     expect(result.data).toHaveLength(0);
     const countWhere = prisma.job.count.mock.calls[0][0].where;
-    expect(countWhere.AND?.[0]?.OR?.[0]?.trips?.some?.status).toEqual({ not: "DRAFT" });
+    expect(countWhere.AND?.[0]?.OR?.[0]?.trips?.some?.status).toEqual({
+      notIn: ["DRAFT", "CANCELLED"],
+    });
+    expect(countWhere.status).toEqual({ in: ["ONGOING"] });
+  });
+
+  it("excludes CANCELLED trips from active visibility rules", async () => {
+    const prisma: any = {
+      job: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      vehicle: { findMany: jest.fn() },
+      fleetVehicle: { findMany: jest.fn() },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new DriverJobsService(prisma, audit, supabaseService);
+
+    await svc.listActiveByDriver(tenantId, driverUserId, { date: today });
+
+    const countWhere = prisma.job.count.mock.calls[0][0].where;
+    expect(countWhere.AND?.[0]?.OR?.[0]?.trips?.some?.status).toEqual({
+      notIn: ["DRAFT", "CANCELLED"],
+    });
   });
 });

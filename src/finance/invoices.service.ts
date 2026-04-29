@@ -14,7 +14,7 @@ import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
 import { CreateInvoiceDto, InvoiceDto } from "./dto/invoice.dto";
 import { PortalInvoiceDto } from "./dto/portal-invoice.dto";
-import { OrderStatus, Role } from "@prisma/client";
+import { JobStatus, OrderStatus, Role } from "@prisma/client";
 import { SupabaseService } from "../auth/supabase.service";
 import { AuditService } from "../audit/audit.service";
 
@@ -457,7 +457,11 @@ export class InvoicesService {
     }> = [];
 
     const jobsNotInvoiceReady = jobs
-      .filter((j) => !j.invoiceReadyAt)
+      .filter(
+        (j) =>
+          j.status !== JobStatus.READY_FOR_INVOICE &&
+          !j.invoiceReadyAt,
+      )
       .map((j) => j.internalRef || j.id);
     if (jobsNotInvoiceReady.length > 0) {
       throw new BadRequestException(
@@ -680,6 +684,19 @@ export class InvoicesService {
       const sourceJobIds: string[] = Array.isArray((inv.snapshot as any)?.sourceJobIds)
         ? ((inv.snapshot as any).sourceJobIds as string[])
         : [];
+      if (sourceJobIds.length > 0) {
+        await tx.job.updateMany({
+          where: {
+            tenantId,
+            id: { in: sourceJobIds },
+            status: JobStatus.READY_FOR_INVOICE,
+          },
+          data: {
+            status: JobStatus.COMPLETED,
+            completedAt: new Date(),
+          },
+        });
+      }
 
       const finalSnapshot = {
         stage: "Sent",

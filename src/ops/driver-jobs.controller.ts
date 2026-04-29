@@ -95,7 +95,7 @@ export class DriverJobsController {
   @Post(":jobId/start")
   @ApiOperation({
     summary:
-      "Start job without trips (Assigned -> InProgress). Multi-trip jobs must use trips/:tripId/start.",
+      "Start job without trips (ONGOING lifecycle). Multi-trip jobs must use trips/:tripId/start.",
   })
   async start(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;

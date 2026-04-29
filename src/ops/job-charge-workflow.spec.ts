@@ -21,7 +21,7 @@ describe("job charge workflow hardening", () => {
           internalRef: "WF-2026-04-0001-LCL",
           externalRef: null,
           jobType: JobType.LCL,
-          status: "Draft",
+          status: "ONGOING",
           notes: null,
           createdByUserId: "u1",
           pickupDate: new Date("2026-04-09T00:00:00.000Z"),
@@ -64,7 +64,7 @@ describe("job charge workflow hardening", () => {
             internalRef: "WF-2026-04-0001-LCL",
             externalRef: null,
             jobType: JobType.LCL,
-            status: "Draft",
+            status: "ONGOING",
             notes: null,
             createdByUserId: "u1",
             pickupDate: new Date("2026-04-09T00:00:00.000Z"),
@@ -156,6 +156,18 @@ describe("job charge workflow hardening", () => {
 
     expect(jobChargeDeleteMany).not.toHaveBeenCalled();
     expect(jobChargeCreateMany).not.toHaveBeenCalled();
+    expect(prisma.job.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "ONGOING" }),
+      }),
+    );
+    expect(prisma.trip.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({ status: "DRAFT", pendingState: "NONE" }),
+        ]),
+      }),
+    );
   });
 
   it("driver trip rate options for ops come from trucking dataset rows", async () => {
@@ -206,7 +218,7 @@ describe("job charge workflow hardening", () => {
           id: "job1",
           tenantId: "t1",
           customerCompanyId: "comp1",
-          status: "Draft",
+          status: "ONGOING",
           charges: [],
         }),
       },
@@ -254,7 +266,7 @@ describe("job charge workflow hardening", () => {
           id: "job1",
           tenantId: "t1",
           customerCompanyId: "comp1",
-          status: "Draft",
+          status: "ONGOING",
           charges: [],
         }),
       },
@@ -352,7 +364,7 @@ describe("job charge workflow hardening", () => {
           internalRef: "WF-2026-04-0001-IMP",
           externalRef: null,
           jobType: JobType.IMPORT,
-          status: "Draft",
+          status: "ONGOING",
           notes: null,
           createdByUserId: "u1",
           pickupDate: new Date("2026-04-24T00:00:00.000Z"),
@@ -394,7 +406,7 @@ describe("job charge workflow hardening", () => {
           internalRef: "WF-2026-04-0001-IMP",
           externalRef: null,
           jobType: JobType.IMPORT,
-          status: "Draft",
+          status: "ONGOING",
           notes: null,
           createdByUserId: "u1",
           pickupDate: new Date("2026-04-24T00:00:00.000Z"),
@@ -503,7 +515,7 @@ describe("job charge workflow hardening", () => {
           internalRef: "WF-2026-04-0001-EXP",
           externalRef: null,
           jobType: JobType.EXPORT,
-          status: "Draft",
+          status: "ONGOING",
           notes: null,
           createdByUserId: "u1",
           pickupDate: new Date("2026-04-24T00:00:00.000Z"),
@@ -539,7 +551,7 @@ describe("job charge workflow hardening", () => {
           internalRef: "WF-2026-04-0001-EXP",
           externalRef: null,
           jobType: JobType.EXPORT,
-          status: "Draft",
+          status: "ONGOING",
           notes: null,
           createdByUserId: "u1",
           pickupDate: new Date("2026-04-24T00:00:00.000Z"),
@@ -1027,23 +1039,34 @@ describe("job charge workflow hardening", () => {
     ).resolves.toBeTruthy();
   });
 
-  it("sendJobToInvoice validates trip completion gate", async () => {
+  it("sendJobToInvoice requires READY_FOR_INVOICE and does not change job status", async () => {
     const prisma: any = {
       job: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: "job1",
-          status: "Completed",
-          invoiceReadyAt: null,
-        }),
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: "job1",
+            status: "ONGOING",
+            invoiceReadyAt: null,
+          })
+          .mockResolvedValueOnce({
+            id: "job1",
+            status: "ONGOING",
+            invoiceReadyAt: null,
+          })
+          .mockResolvedValueOnce({
+            id: "job1",
+            status: "READY_FOR_INVOICE",
+            invoiceReadyAt: null,
+          }),
         update: jest.fn(),
       },
       trip: {
         findMany: jest
           .fn()
-          .mockResolvedValueOnce([])
           .mockResolvedValueOnce([{ id: "t1", status: "ONGOING" }])
           .mockResolvedValueOnce([
-            { id: "t1", status: "COMPLETED" },
+            { id: "t1", status: "DONE" },
             { id: "t2", status: "DONE" },
           ]),
       },
@@ -1052,18 +1075,159 @@ describe("job charge workflow hardening", () => {
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new OpsJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+    const recalcSpy = jest
+      .spyOn(svc as any, "recalculateJobStatusFromTrips")
+      .mockResolvedValue(undefined);
 
     await expect(
       svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
-    ).rejects.toThrow("Job must have at least one trip before sending to invoice");
+    ).rejects.toThrow("All non-cancelled trips must be done before invoicing.");
 
     await expect(
       svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
-    ).rejects.toThrow("All trips must be completed before sending job to invoice");
+    ).resolves.toBeTruthy();
 
-    await svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS });
+    expect(recalcSpy).toHaveBeenCalled();
+    expect(prisma.job.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ invoiceReadyAt: expect.any(Date) }),
+      }),
+    );
+    expect(prisma.job.update.mock.calls[0][0].data.status).toBeUndefined();
+  });
 
-    expect(prisma.job.update).toHaveBeenCalled();
+  it("sendJobToInvoice returns clear error when status is not recalculated to READY_FOR_INVOICE", async () => {
+    const prisma: any = {
+      job: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: "job1",
+            status: "ONGOING",
+            invoiceReadyAt: null,
+          })
+          .mockResolvedValueOnce({
+            id: "job1",
+            status: "ONGOING",
+            invoiceReadyAt: null,
+          }),
+        update: jest.fn(),
+      },
+      trip: {
+        findMany: jest.fn().mockResolvedValue([{ id: "t1", status: "DONE" }]),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+    jest
+      .spyOn(svc as any, "recalculateJobStatusFromTrips")
+      .mockResolvedValue(undefined);
+
+    await expect(
+      svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
+    ).rejects.toThrow(
+      "Job is not READY_FOR_INVOICE yet. Please recheck trip completion.",
+    );
+  });
+
+  it("markTripDone promotes job to READY_FOR_INVOICE when all non-cancelled trips are DONE", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({ id: "trip1", status: "COMPLETED" })
+          .mockResolvedValueOnce({ status: "ONGOING" }),
+        update: jest.fn().mockResolvedValue({ id: "trip1" }),
+        findMany: jest.fn().mockResolvedValue([
+          { status: "DONE" },
+          { status: "CANCELLED" },
+        ]),
+      },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({ id: "job1", status: "ONGOING" }),
+        update: jest.fn(),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+
+    await svc.markTripDone("t1", "job1", "trip1", { userId: "u1", role: Role.OPS });
+
+    expect(prisma.job.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "job1" },
+        data: { status: "READY_FOR_INVOICE" },
+      }),
+    );
+  });
+
+  it("issueInvoice promotes READY_FOR_INVOICE jobs to COMPLETED", async () => {
+    const tx: any = {
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "inv1",
+          invoiceNo: "INV-202604-0001",
+          customerName: "Customer A",
+          currency: "SGD",
+          issueDate: new Date("2026-04-29T00:00:00.000Z"),
+          dueDate: null,
+          notes: null,
+          subtotalCents: 1000,
+          taxCents: 90,
+          totalCents: 1090,
+          status: "ONGOING",
+          snapshot: { orderIds: [], sourceJobIds: ["job1"] },
+          lineItems: [],
+        }),
+        update: jest.fn().mockResolvedValue({
+          id: "inv1",
+          invoiceNo: "INV-202604-0001",
+          customerName: "Customer A",
+          currency: "SGD",
+          issueDate: new Date("2026-04-29T00:00:00.000Z"),
+          dueDate: null,
+          notes: null,
+          subtotalCents: 1000,
+          taxCents: 90,
+          totalCents: 1090,
+          status: "Sent",
+          snapshot: { orderIds: [], sourceJobIds: ["job1"] },
+          lineItems: [],
+          orders: [],
+          issuedAt: new Date("2026-04-29T01:00:00.000Z"),
+          issuedByUserId: null,
+          pdfKey: null,
+          pdfGeneratedAt: null,
+        }),
+      },
+      transportOrder: {
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      job: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const prisma: any = {
+      $transaction: jest.fn(async (fn: any) => fn(tx)),
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new InvoicesService(prisma, supabaseService, audit);
+
+    await svc.issueInvoice("t1", "inv1", { userId: "u1", role: Role.OPS });
+
+    expect(tx.job.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: "READY_FOR_INVOICE" }),
+        data: expect.objectContaining({ status: "COMPLETED" }),
+      }),
+    );
   });
 
   it("requires manual amount when quotation source row is marked requiresManualAmount", async () => {
@@ -1075,7 +1239,7 @@ describe("job charge workflow hardening", () => {
           id: "job1",
           tenantId: "t1",
           customerCompanyId: "comp1",
-          status: "Draft",
+          status: "ONGOING",
         }),
       },
       $transaction: jest.fn(async (input: any) => {
@@ -1646,7 +1810,7 @@ describe("job charge workflow hardening", () => {
             internalRef: "WF-001",
             externalRef: null,
             jobType: "IMPORT",
-            status: "Assigned",
+            status: "ONGOING",
             receiverName: "Receiver",
             receiverPhone: "123",
             createdAt: new Date(),
@@ -1689,7 +1853,7 @@ describe("job charge workflow hardening", () => {
             internalRef: "WF-002",
             externalRef: null,
             jobType: "EXPORT",
-            status: "Assigned",
+            status: "ONGOING",
             receiverName: "Receiver",
             receiverPhone: "123",
             createdAt: new Date(),
@@ -1741,7 +1905,7 @@ describe("job charge workflow hardening", () => {
             internalRef: "WF-003",
             externalRef: null,
             jobType: "LCL",
-            status: "Assigned",
+            status: "ONGOING",
             receiverName: "Receiver",
             receiverPhone: "123",
             createdAt: now,
@@ -1806,7 +1970,7 @@ describe("job charge workflow hardening", () => {
             internalRef: "WF-004",
             externalRef: null,
             jobType: "LCL",
-            status: "Assigned",
+            status: "ONGOING",
             receiverName: "Receiver",
             receiverPhone: "123",
             createdAt: new Date(),
@@ -1859,7 +2023,7 @@ describe("job charge workflow hardening", () => {
             internalRef: "WF-005",
             externalRef: null,
             jobType: "LCL",
-            status: "Assigned",
+            status: "ONGOING",
             receiverName: "Receiver",
             receiverPhone: "123",
             createdAt: new Date(),
