@@ -467,7 +467,7 @@ export class DriverJobsService {
         `;
       }
 
-      const sortedJobIds = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      const sortedJobIds = (await this.prisma.$queryRaw(Prisma.sql`
         SELECT j.id
         FROM jobs j
         WHERE
@@ -509,7 +509,7 @@ export class DriverJobsService {
           j."createdAt" ASC
         OFFSET ${skip}
         LIMIT ${take}
-      `);
+      `)) as Array<{ id: string }>;
 
       const ids = sortedJobIds.map((row) => row.id);
       if (ids.length) {
@@ -519,8 +519,8 @@ export class DriverJobsService {
         });
         const orderMap = new Map(ids.map((id, idx) => [id, idx] as const));
         jobs = fetchedJobs.sort(
-          (a, b) => (orderMap.get(a.id) ?? Number.MAX_SAFE_INTEGER)
-            - (orderMap.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+          (a, b) => Number(orderMap.get(a.id) ?? Number.MAX_SAFE_INTEGER)
+            - Number(orderMap.get(b.id) ?? Number.MAX_SAFE_INTEGER),
         );
       }
     } else {
