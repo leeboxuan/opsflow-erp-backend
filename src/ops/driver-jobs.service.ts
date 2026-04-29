@@ -56,6 +56,11 @@ function toDocDto(d: any): JobDocumentDto {
 function toJobDto(j: any): JobDto {
   const documents = Array.isArray(j.documents) ? j.documents : [];
   const items = Array.isArray(j.items) ? j.items : [];
+  const trips = Array.isArray(j.trips) ? j.trips : [];
+  const primaryTrip =
+    trips.find((t: any) => t.status !== TripStatus.DRAFT && t.status !== TripStatus.CANCELLED)
+    ?? trips[0]
+    ?? null;
 
   return {
     id: j.id,
@@ -84,25 +89,25 @@ function toJobDto(j: any): JobDto {
     receiverName: normalizeText(j.receiverName) ?? "",
     receiverPhone: j.receiverPhone,
 
-    assignedDriverId: j.assignedDriverId ?? null,
+    assignedDriverId: primaryTrip?.assignedDriverUserId ?? null,
     assignedDriverName: j.assignedDriver?.name ?? null,
-    assignedVehicleId: j.assignedVehicleId ?? null,
-    assignedFleetVehicleId: j.assignedFleetVehicleId ?? null,
+    assignedVehicleId: primaryTrip?.vehicleId ?? null,
+    assignedFleetVehicleId: primaryTrip?.fleetVehicleId ?? null,
     assignedVehiclePlateNo: (j as any).assignedVehiclePlateNo ?? null,
 
-    assignedAt: j.assignedAt ?? null,
-    startedAt: j.startedAt ?? null,
-    completedAt: j.completedAt ?? null,
-    deliveredAt: j.deliveredAt ?? null,
-    podRecipientName: normalizeText(j.podRecipientName),
+    assignedAt: primaryTrip?.assignedAt ?? null,
+    startedAt: null,
+    completedAt: null,
+    deliveredAt: null,
+    podRecipientName: null,
 
     cancelledReason: j.cancelledReason ?? null,
     cancelledAt: j.cancelledAt ?? null,
     cancelledByUserId: j.cancelledByUserId ?? null,
 
-    lastLat: j.lastLat ?? null,
-    lastLng: j.lastLng ?? null,
-    lastLocationAt: j.lastLocationAt ?? null,
+    lastLat: null,
+    lastLng: null,
+    lastLocationAt: null,
 
     createdAt: j.createdAt,
     updatedAt: j.updatedAt,
@@ -121,7 +126,7 @@ function toJobDto(j: any): JobDto {
     documents: documents.map((d: any) => toDocDto(d)),
 
     trips:
-      j.trips?.map((t: any) => ({
+      trips.map((t: any) => ({
         id: t.id,
         jobSequence: t.jobSequence ?? null,
         jobTripTemplate: t.jobTripTemplate ?? null,
@@ -310,7 +315,12 @@ export class DriverJobsService {
       where: {
         id: jobId,
         tenantId,
-        assignedDriverId: driverUserId,
+        trips: {
+          some: {
+            status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] },
+            assignedDriverUserId: driverUserId,
+          },
+        },
         ...this.publishedTripVisibilityWhere(),
       },
       include,
@@ -343,9 +353,14 @@ export class DriverJobsService {
 
     const where: any = {
       tenantId,
-      assignedDriverId: driverUserId,
       status: statusFilter,
       ...this.publishedTripVisibilityWhere(),
+      trips: {
+        some: {
+          status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] },
+          assignedDriverUserId: driverUserId,
+        },
+      },
     };
 
     // Filtering rules:
@@ -466,7 +481,14 @@ export class DriverJobsService {
         FROM jobs j
         WHERE
           j."tenantId" = ${tenantId}
-          AND j."assignedDriverId" = ${driverUserId}
+          AND EXISTS (
+            SELECT 1
+            FROM trips ta
+            WHERE ta."jobId" = j.id
+              AND ta."status"::text <> ${TripStatus.DRAFT}
+              AND ta."status"::text <> ${TripStatus.CANCELLED}
+              AND ta."assignedDriverUserId" = ${driverUserId}
+          )
           AND j."status"::text IN (${Prisma.join([JobStatus.ONGOING])})
           AND (
             NOT EXISTS (SELECT 1 FROM trips tv WHERE tv."jobId" = j.id)
@@ -518,8 +540,16 @@ export class DriverJobsService {
       });
     }
 
-    const vehicleIds = [...new Set(jobs.map((j) => j.assignedVehicleId).filter(Boolean))] as string[];
-    const fleetVehicleIds = [...new Set(jobs.map((j) => j.assignedFleetVehicleId).filter(Boolean))] as string[];
+    const vehicleIds = [
+      ...new Set(
+        jobs.flatMap((j) => (j.trips ?? []).map((t: any) => t.vehicleId)).filter(Boolean),
+      ),
+    ] as string[];
+    const fleetVehicleIds = [
+      ...new Set(
+        jobs.flatMap((j) => (j.trips ?? []).map((t: any) => t.fleetVehicleId)).filter(Boolean),
+      ),
+    ] as string[];
 
     const [vehicles, fleetVehicles] = await Promise.all([
       vehicleIds.length
@@ -550,10 +580,16 @@ export class DriverJobsService {
     const data = await Promise.all(jobs.map(async (job: any) => {
       const dto = toJobDto({
         ...job,
-        assignedVehiclePlateNo:
-          (job.assignedVehicleId && vehicleMap.get(job.assignedVehicleId)) ||
-          (job.assignedFleetVehicleId && vehicleMap.get(job.assignedFleetVehicleId)) ||
-          null,
+        assignedVehiclePlateNo: (() => {
+          const primaryTrip = (job.trips ?? []).find(
+            (t: any) => t.status !== TripStatus.DRAFT && t.status !== TripStatus.CANCELLED,
+          );
+          return (
+            (primaryTrip?.vehicleId && vehicleMap.get(primaryTrip.vehicleId)) ||
+            (primaryTrip?.fleetVehicleId && vehicleMap.get(primaryTrip.fleetVehicleId)) ||
+            null
+          );
+        })(),
       });
 
       return {
@@ -606,9 +642,14 @@ export class DriverJobsService {
 
     const where: any = {
       tenantId,
-      assignedDriverId: driverUserId,
       status: JobStatus.COMPLETED,
       ...this.publishedTripVisibilityWhere(),
+      trips: {
+        some: {
+          status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] },
+          assignedDriverUserId: driverUserId,
+        },
+      },
       // Practical stable rule: filter history by pickupDate range.
       pickupDate: range,
     };
@@ -661,8 +702,16 @@ export class DriverJobsService {
       }),
     ]);
 
-    const vehicleIds = [...new Set(jobs.map((j) => j.assignedVehicleId).filter(Boolean))] as string[];
-    const fleetVehicleIds = [...new Set(jobs.map((j) => j.assignedFleetVehicleId).filter(Boolean))] as string[];
+    const vehicleIds = [
+      ...new Set(
+        jobs.flatMap((j) => (j.trips ?? []).map((t: any) => t.vehicleId)).filter(Boolean),
+      ),
+    ] as string[];
+    const fleetVehicleIds = [
+      ...new Set(
+        jobs.flatMap((j) => (j.trips ?? []).map((t: any) => t.fleetVehicleId)).filter(Boolean),
+      ),
+    ] as string[];
 
     const [vehicles, fleetVehicles] = await Promise.all([
       vehicleIds.length
@@ -687,11 +736,16 @@ export class DriverJobsService {
     const data = await Promise.all(jobs.map(async (job: any) => {
       const dto = toJobDto({
         ...job,
-        assignedVehiclePlateNo:
-          (job.assignedVehicleId && vehicleMap.get(job.assignedVehicleId)) ||
-          (job.assignedFleetVehicleId &&
-            vehicleMap.get(job.assignedFleetVehicleId)) ||
-          null,
+        assignedVehiclePlateNo: (() => {
+          const primaryTrip = (job.trips ?? []).find(
+            (t: any) => t.status !== TripStatus.DRAFT && t.status !== TripStatus.CANCELLED,
+          );
+          return (
+            (primaryTrip?.vehicleId && vehicleMap.get(primaryTrip.vehicleId)) ||
+            (primaryTrip?.fleetVehicleId && vehicleMap.get(primaryTrip.fleetVehicleId)) ||
+            null
+          );
+        })(),
       });
 
       return {
@@ -729,7 +783,14 @@ export class DriverJobsService {
       FROM jobs
       WHERE
         "tenantId" = ${tenantId}
-        AND "assignedDriverId" = ${driverUserId}
+        AND id IN (
+          SELECT DISTINCT t."jobId"
+          FROM trips t
+          WHERE t."tenantId" = ${tenantId}
+            AND t."assignedDriverUserId" = ${driverUserId}
+            AND t."status"::text <> ${TripStatus.DRAFT}
+            AND t."status"::text <> ${TripStatus.CANCELLED}
+        )
         AND "status"::text = 'COMPLETED'
         AND "pickupDate" IS NOT NULL
       GROUP BY 1, 2, 3
@@ -834,13 +895,15 @@ export class DriverJobsService {
     });
 
     let assignedVehiclePlateNo: string | null = null;
-
-    if (job.assignedVehicleId || job.assignedFleetVehicleId) {
+    const primaryTrip = (job.trips ?? []).find(
+      (t: any) => t.status !== TripStatus.DRAFT && t.status !== TripStatus.CANCELLED,
+    );
+    if (primaryTrip?.vehicleId || primaryTrip?.fleetVehicleId) {
       const [vehicle, fleetVehicle] = await Promise.all([
-        job.assignedVehicleId
+        primaryTrip?.vehicleId
           ? this.prisma.vehicle.findFirst({
               where: {
-                id: job.assignedVehicleId,
+                id: primaryTrip.vehicleId,
                 tenantId,
               },
               select: {
@@ -848,10 +911,10 @@ export class DriverJobsService {
               },
             })
           : null,
-        job.assignedFleetVehicleId
+        primaryTrip?.fleetVehicleId
           ? this.prisma.fleetVehicle.findFirst({
               where: {
-                id: job.assignedFleetVehicleId,
+                id: primaryTrip.fleetVehicleId,
                 tenantId,
               },
               select: {
@@ -1035,7 +1098,6 @@ export class DriverJobsService {
         where: { id: jobId },
         data: {
           status: JobStatus.ONGOING,
-          ...(job.startedAt ? {} : { startedAt: now }),
         },
       });
     });
@@ -1073,12 +1135,25 @@ export class DriverJobsService {
   ): Promise<void> {
     await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
 
-    await this.prisma.job.update({
-      where: { id: jobId },
-      data: {
-        lastLat: dto.lat,
-        lastLng: dto.lng,
-        lastLocationAt: new Date(),
+    const now = new Date();
+    await this.prisma.driverLocationLatest.upsert({
+      where: {
+        tenantId_driverUserId: {
+          tenantId,
+          driverUserId,
+        },
+      },
+      create: {
+        tenantId,
+        driverUserId,
+        lat: dto.lat,
+        lng: dto.lng,
+        capturedAt: now,
+      },
+      update: {
+        lat: dto.lat,
+        lng: dto.lng,
+        capturedAt: now,
       },
     });
   }
@@ -1113,7 +1188,6 @@ export class DriverJobsService {
       where: { id: jobId },
       data: {
         status: newStatus,
-        deliveredAt: job.deliveredAt ?? now,
         completedAt,
       },
     });
@@ -1215,7 +1289,6 @@ export class DriverJobsService {
         where: { id: jobId },
         data: {
           status: newStatus,
-          deliveredAt: job.deliveredAt ?? now,
           completedAt,
         },
       });

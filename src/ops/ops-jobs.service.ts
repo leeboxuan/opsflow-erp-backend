@@ -165,6 +165,11 @@ function normalizeExternalRef(value: unknown): string | null {
 }
 
 function toJobDto(j: any): JobDto {
+  const trips = Array.isArray(j.trips) ? j.trips : [];
+  const primaryTrip =
+    trips.find((t: any) => t.status !== TripStatus.DRAFT && t.status !== TripStatus.CANCELLED)
+    ?? trips[0]
+    ?? null;
   const assignedDriverName = j.assignedDriver
     ? j.assignedDriver.name?.trim() || j.assignedDriver.email || null
     : null;
@@ -217,25 +222,25 @@ function toJobDto(j: any): JobDto {
     receiverName: j.receiverName,
     receiverPhone: j.receiverPhone,
 
-    assignedDriverId: j.assignedDriverId,
+    assignedDriverId: primaryTrip?.assignedDriverUserId ?? null,
     assignedDriverName,
-    assignedVehicleId: j.assignedVehicleId,
-    assignedFleetVehicleId: j.assignedFleetVehicleId ?? null,
+    assignedVehicleId: primaryTrip?.vehicleId ?? null,
+    assignedFleetVehicleId: primaryTrip?.fleetVehicleId ?? null,
     assignedVehiclePlateNo: (j as any).assignedVehiclePlateNo ?? null,
 
-    assignedAt: j.assignedAt,
-    startedAt: j.startedAt,
-    completedAt: j.completedAt,
-    deliveredAt: j.deliveredAt,
-    podRecipientName: j.podRecipientName,
+    assignedAt: primaryTrip?.assignedAt ?? null,
+    startedAt: null,
+    completedAt: null,
+    deliveredAt: null,
+    podRecipientName: null,
 
     cancelledReason: j.cancelledReason,
     cancelledAt: j.cancelledAt,
     cancelledByUserId: j.cancelledByUserId,
 
-    lastLat: j.lastLat,
-    lastLng: j.lastLng,
-    lastLocationAt: j.lastLocationAt,
+    lastLat: null,
+    lastLng: null,
+    lastLocationAt: null,
 
     createdAt: j.createdAt,
     updatedAt: j.updatedAt,
@@ -3615,12 +3620,15 @@ export class OpsJobsService {
       where: { id: jobId, tenantId },
       select: {
         customerCompanyId: true,
-        lastLat: true,
-        lastLng: true,
-        lastLocationAt: true,
-        assignedDriverId: true,
-        assignedVehicleId: true,
-        assignedFleetVehicleId: true,
+        trips: {
+          where: { status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] } },
+          orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }],
+          select: {
+            assignedDriverUserId: true,
+            vehicleId: true,
+            fleetVehicleId: true,
+          },
+        },
         status: true,
       },
     });
@@ -3629,13 +3637,25 @@ export class OpsJobsService {
 
     this.assertCanAccessJob(job, user);
 
+    const primaryTrip = job.trips?.[0] ?? null;
+    const latestDriverLocation = primaryTrip?.assignedDriverUserId
+      ? await this.prisma.driverLocationLatest.findUnique({
+          where: {
+            tenantId_driverUserId: {
+              tenantId,
+              driverUserId: primaryTrip.assignedDriverUserId,
+            },
+          },
+        })
+      : null;
+
     return {
-      lastLat: job.lastLat,
-      lastLng: job.lastLng,
-      lastLocationAt: job.lastLocationAt,
-      assignedDriverId: job.assignedDriverId,
-      assignedVehicleId: job.assignedVehicleId,
-      assignedFleetVehicleId: job.assignedFleetVehicleId ?? null,
+      lastLat: latestDriverLocation?.lat ?? null,
+      lastLng: latestDriverLocation?.lng ?? null,
+      lastLocationAt: latestDriverLocation?.capturedAt ?? null,
+      assignedDriverId: primaryTrip?.assignedDriverUserId ?? null,
+      assignedVehicleId: primaryTrip?.vehicleId ?? null,
+      assignedFleetVehicleId: primaryTrip?.fleetVehicleId ?? null,
       status: job.status,
     };
   }

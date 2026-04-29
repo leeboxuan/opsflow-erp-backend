@@ -216,7 +216,6 @@ model TransportOrder {
   doSignerName   String?
   doStatus       DoStatus  @default(PENDING)
   doVersion      Int       @default(1)
-  itemsJson      Json?
   // Client's reference (what they give you)
   orderRef       String
 
@@ -273,7 +272,7 @@ model Trip {
   title                String?
   startedByDriverUserId   String?
   completedByDriverUserId String?
-  /// Snapshot: driver earning for this leg once assigned (frozen).
+  /// Cached summary only. Source of truth is TripPayoutLine.
   driverEarningCents      Int?
   earningRateMasterId     String?
   payoutItemId            String?
@@ -750,6 +749,7 @@ model driver_wallet_entries {
   amountCents Int
   currency    String   @default("SGD")
   sourceType  String
+  /// TODO(phase-2): verify downstream export dependencies before removal.
   sourceId    String
   createdAt   DateTime @default(now())
   drivers     drivers  @relation(fields: [driverId], references: [id], onDelete: Cascade)
@@ -805,21 +805,32 @@ model Job {
   deliveryPostal     String?
   receiverName       String
   receiverPhone      String
+  /// Deprecated runtime field: use Trip.assignedDriverUserId/Trip.driverId for execution assignment.
   assignedDriverId   String?
+  /// Deprecated runtime field: use Trip.vehicleId/Trip.fleetVehicleId for execution assignment.
   assignedVehicleId  String?
+  /// Deprecated runtime field: use Trip.vehicleId/Trip.fleetVehicleId for execution assignment.
   assignedFleetVehicleId String?
+  /// Deprecated runtime field: assignment timestamp should come from Trip.assignedAt.
   assignedAt         DateTime?
+  /// Deprecated runtime field: execution lifecycle is trip-driven.
   startedAt          DateTime?
+  /// Deprecated runtime field: execution lifecycle is trip-driven.
   completedAt        DateTime?
+  /// Deprecated runtime field: execution lifecycle is trip-driven.
   deliveredAt        DateTime?
   /// Set when ops explicitly hands this job over to finance invoicing flow.
   invoiceReadyAt     DateTime?
+  /// Deprecated runtime field: derive proof/recipient data from TripDocument artifacts.
   podRecipientName   String?
   cancelledReason    String?
   cancelledAt        DateTime?
   cancelledByUserId  String?
+  /// Deprecated runtime field: use DriverLocationLatest as location source of truth.
   lastLat            Float?
+  /// Deprecated runtime field: use DriverLocationLatest as location source of truth.
   lastLng            Float?
+  /// Deprecated runtime field: use DriverLocationLatest as location source of truth.
   lastLocationAt     DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
@@ -922,7 +933,6 @@ model CustomerCompanyQuotation {
   customerCompany customer_companies @relation(fields: [customerCompanyId], references: [id], onDelete: Cascade)
   uploadedBy      User?              @relation("QuotationUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
   rateLines       CustomerQuotationRateLine[]
-  masterRateLines CustomerRateMasterLine[]
 
   @@index([tenantId, customerCompanyId])
   @@index([tenantId, customerCompanyId, status])
@@ -987,7 +997,6 @@ model CustomerRateMasterLine {
   id            String   @id @default(cuid())
   tenantId      String
   customerCompanyId String
-  sourceQuotationId String?
   section       String?
   code          String
   label         String
@@ -1011,7 +1020,6 @@ model CustomerRateMasterLine {
 
   tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customerCompany customer_companies @relation(fields: [customerCompanyId], references: [id], onDelete: Cascade)
-  sourceQuotation CustomerCompanyQuotation? @relation(fields: [sourceQuotationId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, customerCompanyId, active])
   @@index([tenantId, customerCompanyId, code])
@@ -1277,7 +1285,6 @@ model inventory_items {
 model profiles {
   id         String   @id
   userId     String   @unique
-  globalRole String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime
   users      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
