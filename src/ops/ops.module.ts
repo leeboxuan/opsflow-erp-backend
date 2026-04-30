@@ -5,6 +5,7 @@ import { AuditModule } from "../audit/audit.module";
 import { OpsJobsController } from "./ops-jobs.controller";
 import { OpsTripsController } from "./ops-trips.controller";
 import { DriverJobsController } from "./driver-jobs.controller";
+import { DriverTripsController } from "./driver-trips.controller";
 import { DispatchController } from "./dispatch.controller";
 import { OpsJobsService } from "./ops-jobs.service";
 import { DriverJobsService } from "./driver-jobs.service";
@@ -16,6 +17,7 @@ import { DispatchService } from "./dispatch.service";
     OpsJobsController,
     OpsTripsController,
     DriverJobsController,
+    DriverTripsController,
     DispatchController,
   ],
   providers: [OpsJobsService, DriverJobsService, DispatchService],

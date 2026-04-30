@@ -1598,6 +1598,135 @@ export class DriverJobsService {
     return Promise.all(docs.map((d) => this.attachTripDocumentSignedUrl(d)));
   }
 
+  async getTripDetailForDriver(
+    tenantId: string,
+    tripId: string,
+    driverUserId: string,
+  ): Promise<any> {
+    const trip = await this.prisma.trip.findFirst({
+      where: {
+        id: tripId,
+        tenantId,
+        status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] },
+      },
+      include: {
+        job: {
+          include: {
+            customerCompany: { select: { name: true } },
+            items: {
+              orderBy: { createdAt: "asc" },
+              select: {
+                id: true,
+                itemCode: true,
+                description: true,
+                qty: true,
+              },
+            },
+          },
+        },
+        documents: {
+          where: { isActive: true },
+          orderBy: { createdAt: "desc" },
+        },
+      },
+    });
+    if (!trip || trip.assignedDriverUserId !== driverUserId) {
+      throw new NotFoundException("Trip not found");
+    }
+
+    const trailerLocationName = trip.trailerLastLocationCode
+      ? (await this.prisma.masterTrailerLocation.findFirst({
+          where: { code: trip.trailerLastLocationCode },
+          select: { name: true },
+        }))?.name ?? null
+      : null;
+
+    const docsWithUrls = await Promise.all(
+      (trip.documents ?? []).map((d) => this.attachTripDocumentSignedUrl(d)),
+    );
+
+    const trailerStartPhotoUrl = docsWithUrls.find(
+      (d) => d.type === TripDocumentType.TRAILER_START_PHOTO,
+    )?.url ?? null;
+    const trailerEndPhotoUrl = docsWithUrls.find(
+      (d) => d.type === TripDocumentType.TRAILER_END_PHOTO,
+    )?.url ?? null;
+
+    return {
+      id: trip.id,
+      jobId: trip.jobId,
+      title: trip.title ?? trip.displayTitle ?? null,
+      status: trip.status,
+      plannedStartAt: trip.plannedStartAt ?? null,
+      jobSequence: trip.jobSequence ?? null,
+      tripSequence: trip.tripSequence ?? null,
+      origin: trip.originLabel ?? null,
+      destination: trip.destinationLabel ?? null,
+
+      trailerNumber: trip.trailerNumber ?? null,
+      trailerLastLocationCode: trip.trailerLastLocationCode ?? null,
+      trailerLastLocationName: trailerLocationName,
+      trailerParkedAt: trip.trailerParkedAt ?? null,
+      trailerParkingLat: trip.trailerParkingLat ?? null,
+      trailerParkingLng: trip.trailerParkingLng ?? null,
+      trailerStartPhotoUrl,
+      trailerEndPhotoUrl,
+
+      job: trip.job
+        ? {
+            id: trip.job.id,
+            internalRef: trip.job.internalRef ?? null,
+            externalRef: trip.job.externalRef ?? null,
+            jobType: trip.job.jobType ?? null,
+            status: trip.job.status ?? null,
+            customerName: trip.job.customerCompany?.name ?? null,
+          }
+        : null,
+
+      documents: docsWithUrls.map((doc) => ({
+        id: doc.id,
+        type: doc.type,
+        status: doc.signedAt ? "SIGNED" : "UPLOADED",
+        label: doc.type,
+        fileUrl: doc.url ?? null,
+        uploadedAt: doc.createdAt,
+        signedAt: doc.signedAt ?? null,
+      })),
+
+      cargo: {
+        items: (trip.job?.items ?? []).map((item: any) => ({
+          id: item.id,
+          itemCode: item.itemCode ?? null,
+          description: item.description ?? null,
+          qty: item.qty ?? null,
+        })),
+      },
+      route: {
+        origin: {
+          label: trip.originLabel ?? null,
+          addressLine1: trip.originAddressLine1 ?? null,
+          addressLine2: trip.originAddressLine2 ?? null,
+          postalCode: trip.originPostalCode ?? null,
+          country: trip.originCountry ?? null,
+          lat: trip.originLat ?? null,
+          lng: trip.originLng ?? null,
+        },
+        destination: {
+          label: trip.destinationLabel ?? null,
+          addressLine1: trip.destinationAddressLine1 ?? null,
+          addressLine2: trip.destinationAddressLine2 ?? null,
+          postalCode: trip.destinationPostalCode ?? null,
+          country: trip.destinationCountry ?? null,
+          lat: trip.destinationLat ?? null,
+          lng: trip.destinationLng ?? null,
+        },
+        publishedAt: trip.publishedAt ?? null,
+        startedAt: trip.startedAt ?? null,
+        closedAt: trip.closedAt ?? null,
+      },
+    };
+  }
+
   async uploadTripDocumentForDriver(
     tenantId: string,
     jobId: string,

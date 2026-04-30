@@ -514,3 +514,141 @@ describe("DriverJobsService trip assignment and trailer checkout", () => {
     expect(updateData.trailerParkedAt).toBeInstanceOf(Date);
   });
 });
+
+describe("Driver trip detail endpoint service contract", () => {
+  it("assigned driver can read trip detail with trailer fields and signed photo urls", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          title: "Trip 1",
+          displayTitle: null,
+          status: "ONGOING",
+          plannedStartAt: new Date("2026-04-30T01:00:00.000Z"),
+          jobSequence: 1,
+          tripSequence: 1,
+          originLabel: "Origin A",
+          destinationLabel: "Dest B",
+          originAddressLine1: null,
+          originAddressLine2: null,
+          originPostalCode: null,
+          originCountry: null,
+          originLat: 1.11,
+          originLng: 103.61,
+          destinationAddressLine1: null,
+          destinationAddressLine2: null,
+          destinationPostalCode: null,
+          destinationCountry: null,
+          destinationLat: 1.22,
+          destinationLng: 103.72,
+          publishedAt: new Date("2026-04-30T00:30:00.000Z"),
+          startedAt: new Date("2026-04-30T01:00:00.000Z"),
+          closedAt: null,
+          assignedDriverUserId: "driver-1",
+          trailerNumber: "TRL-1",
+          trailerLastLocationCode: "G7",
+          trailerParkedAt: new Date("2026-04-30T10:00:00.000Z"),
+          trailerParkingLat: 1.31,
+          trailerParkingLng: 103.71,
+          job: {
+            id: "job1",
+            internalRef: "JOB-1",
+            externalRef: "EXT-1",
+            jobType: "IMPORT",
+            status: "ONGOING",
+            customerCompany: { name: "Customer A" },
+            items: [{ id: "itm1", itemCode: "SKU1", description: "Item 1", qty: 2 }],
+          },
+          documents: [
+            {
+              id: "doc-start",
+              type: "TRAILER_START_PHOTO",
+              storageKey: "k1",
+              originalName: "s.jpg",
+              mimeType: "image/jpeg",
+              sizeBytes: 100,
+              isActive: true,
+              createdAt: new Date("2026-04-30T01:01:00.000Z"),
+              updatedAt: new Date("2026-04-30T01:01:00.000Z"),
+              uploadedByUserId: "driver-1",
+              uploadedByNameSnapshot: "Driver A",
+              generatedBySystem: false,
+              generatedSource: null,
+              requiresSignature: false,
+              isSigned: false,
+              signedAt: null,
+              signedByUserId: null,
+              signedByName: null,
+              tripId: "trip1",
+              jobId: "job1",
+            },
+            {
+              id: "doc-end",
+              type: "TRAILER_END_PHOTO",
+              storageKey: "k2",
+              originalName: "e.jpg",
+              mimeType: "image/jpeg",
+              sizeBytes: 100,
+              isActive: true,
+              createdAt: new Date("2026-04-30T10:01:00.000Z"),
+              updatedAt: new Date("2026-04-30T10:01:00.000Z"),
+              uploadedByUserId: "driver-1",
+              uploadedByNameSnapshot: "Driver A",
+              generatedBySystem: false,
+              generatedSource: null,
+              requiresSignature: false,
+              isSigned: false,
+              signedAt: null,
+              signedByUserId: null,
+              signedByName: null,
+              tripId: "trip1",
+              jobId: "job1",
+            },
+          ],
+        }),
+      },
+      masterTrailerLocation: { findFirst: jest.fn().mockResolvedValue({ name: "Gul 7" }) },
+    };
+    const supabaseService = {
+      getClient: jest.fn().mockReturnValue({
+        storage: {
+          from: jest.fn().mockReturnValue({
+            createSignedUrl: jest
+              .fn()
+              .mockResolvedValueOnce({ data: { signedUrl: "https://signed/start" } })
+              .mockResolvedValueOnce({ data: { signedUrl: "https://signed/end" } }),
+          }),
+        },
+      }),
+    } as any;
+    const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, supabaseService);
+
+    const res = await svc.getTripDetailForDriver("t1", "trip1", "driver-1");
+    expect(res.id).toBe("trip1");
+    expect(res.trailerNumber).toBe("TRL-1");
+    expect(res.trailerLastLocationName).toBe("Gul 7");
+    expect(res.trailerStartPhotoUrl).toBe("https://signed/start");
+    expect(res.trailerEndPhotoUrl).toBe("https://signed/end");
+  });
+
+  it("other driver cannot read trip detail", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          assignedDriverUserId: "driver-2",
+          status: "ONGOING",
+          documents: [],
+          job: { items: [] },
+        }),
+      },
+    };
+    const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+    await expect(svc.getTripDetailForDriver("t1", "trip1", "driver-1")).rejects.toThrow(
+      "Trip not found",
+    );
+  });
+});
