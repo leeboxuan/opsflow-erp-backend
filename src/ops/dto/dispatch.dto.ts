@@ -51,3 +51,146 @@ export class DispatchOptimiseRouteDto {
   @Type(() => DispatchStartLocationDto)
   startLocation?: DispatchStartLocationDto;
 }
+
+export class DispatchBoardTripDto {
+  @ApiProperty()
+  id!: string;
+
+  @ApiPropertyOptional()
+  jobId!: string | null;
+
+  @ApiPropertyOptional()
+  jobInternalRef!: string | null;
+
+  @ApiPropertyOptional()
+  customerName!: string | null;
+
+  @ApiPropertyOptional()
+  title!: string | null;
+
+  @ApiProperty()
+  status!: string;
+
+  @ApiPropertyOptional()
+  plannedStartAt!: Date | null;
+
+  @ApiPropertyOptional()
+  jobSequence!: number | null;
+
+  @ApiPropertyOptional()
+  tripSequence!: number | null;
+
+  @ApiPropertyOptional()
+  origin!: string | null;
+
+  @ApiPropertyOptional()
+  destination!: string | null;
+
+  @ApiPropertyOptional()
+  originLat!: number | null;
+
+  @ApiPropertyOptional()
+  originLng!: number | null;
+
+  @ApiPropertyOptional()
+  destinationLat!: number | null;
+
+  @ApiPropertyOptional()
+  destinationLng!: number | null;
+
+  @ApiPropertyOptional()
+  publishedAt!: Date | null;
+
+  @ApiPropertyOptional()
+  startedAt!: Date | null;
+
+  @ApiPropertyOptional()
+  closedAt!: Date | null;
+
+  @ApiPropertyOptional()
+  trailerNumber!: string | null;
+
+  @ApiPropertyOptional()
+  trailerLastLocationCode!: string | null;
+
+  @ApiPropertyOptional()
+  trailerParkedAt!: Date | null;
+
+  @ApiPropertyOptional()
+  trailerParkingLat!: number | null;
+
+  @ApiPropertyOptional()
+  trailerParkingLng!: number | null;
+
+  @ApiPropertyOptional()
+  trailerLastLocationName!: string | null;
+
+  @ApiPropertyOptional()
+  trailerStartPhotoUrl!: string | null;
+
+  @ApiPropertyOptional()
+  trailerEndPhotoUrl!: string | null;
+}
+
+export class DispatchBoardLocationDto {
+  @ApiProperty()
+  lat!: number;
+
+  @ApiProperty()
+  lng!: number;
+
+  @ApiPropertyOptional()
+  accuracy!: number | null;
+
+  @ApiPropertyOptional()
+  heading!: number | null;
+
+  @ApiPropertyOptional()
+  speed!: number | null;
+
+  @ApiProperty()
+  capturedAt!: Date;
+}
+
+export class DispatchBoardDriverDto {
+  @ApiProperty()
+  driverUserId!: string;
+
+  @ApiPropertyOptional()
+  driverId!: string | null;
+
+  @ApiPropertyOptional()
+  driverName!: string | null;
+
+  @ApiPropertyOptional()
+  phone!: string | null;
+
+  @ApiPropertyOptional()
+  vehicle!: string | null;
+
+  @ApiPropertyOptional({ type: () => DispatchBoardLocationDto })
+  latestLocation!: DispatchBoardLocationDto | null;
+
+  @ApiPropertyOptional()
+  lastGpsAgeMinutes!: number | null;
+
+  @ApiPropertyOptional({ type: () => DispatchBoardTripDto })
+  activeTrip!: DispatchBoardTripDto | null;
+
+  @ApiProperty({ type: () => [DispatchBoardTripDto] })
+  todayTrips!: DispatchBoardTripDto[];
+}
+
+export class DispatchBoardResponseDto {
+  @ApiProperty()
+  generatedAt!: string;
+
+  @ApiProperty({ type: () => [DispatchBoardDriverDto] })
+  drivers!: DispatchBoardDriverDto[];
+
+  @ApiProperty({ type: () => [DispatchBoardTripDto] })
+  unassignedTrips!: DispatchBoardTripDto[];
+
+  @ApiProperty({ type: () => [DispatchBoardTripDto] })
+  ongoingTrips!: DispatchBoardTripDto[];
+}

@@ -61,6 +61,13 @@ export class DispatchService {
       tripSequence: trip.tripSequence,
       origin: trip.originLabel ?? null,
       destination: trip.destinationLabel ?? null,
+      originLat: trip.originLat ?? null,
+      originLng: trip.originLng ?? null,
+      destinationLat: trip.destinationLat ?? null,
+      destinationLng: trip.destinationLng ?? null,
+      publishedAt: trip.publishedAt ?? null,
+      startedAt: trip.startedAt ?? null,
+      closedAt: trip.closedAt ?? null,
       trailerNumber: trip.trailerNumber ?? null,
       trailerLastLocationCode: trip.trailerLastLocationCode ?? null,
       trailerParkedAt: trip.trailerParkedAt ?? null,
@@ -151,6 +158,12 @@ export class DispatchService {
               speed: latestLocation.speed,
               capturedAt: latestLocation.capturedAt,
             }
+          : null,
+        lastGpsAgeMinutes: latestLocation
+          ? Math.max(
+              0,
+              Math.floor((Date.now() - new Date(latestLocation.capturedAt).getTime()) / 60000),
+            )
           : null,
         activeTrip: activeTrip ? await this.toBoardTrip(activeTrip, trailerLocationMap) : null,
         todayTrips: await Promise.all(

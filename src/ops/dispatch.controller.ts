@@ -1,11 +1,15 @@
 import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from "@nestjs/common";
-import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { Role } from "@prisma/client";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { RoleGuard, Roles } from "../auth/guards/role.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
 import { DispatchService } from "./dispatch.service";
-import { DispatchOptimiseRouteDto, DispatchReorderTripsDto } from "./dto/dispatch.dto";
+import {
+  DispatchBoardResponseDto,
+  DispatchOptimiseRouteDto,
+  DispatchReorderTripsDto,
+} from "./dto/dispatch.dto";
 
 @ApiTags("dispatch")
 @Controller("dispatch")
@@ -17,6 +21,7 @@ export class DispatchController {
 
   @Get("board")
   @ApiOperation({ summary: "Get dispatch board data for tenant" })
+  @ApiOkResponse({ type: DispatchBoardResponseDto })
   async board(@Req() req: any) {
     return this.dispatchService.getBoard(req.tenant.tenantId);
   }
