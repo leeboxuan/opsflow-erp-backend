@@ -223,6 +223,111 @@ export class DriverJobsService {
     return { gte: start, lt: end };
   }
 
+  private getSafeTenantTimezone(value?: string | null): string {
+    const fallback = "Asia/Singapore";
+    const timezone = value?.trim() || fallback;
+    try {
+      // Throws when timezone is invalid.
+      Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+      return timezone;
+    } catch {
+      return fallback;
+    }
+  }
+
+  private getTimeZoneOffsetMs(date: Date, timeZone: string): number {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    const parts = dtf.formatToParts(date);
+    const map = new Map(parts.map((p) => [p.type, p.value] as const));
+    const asUtc = Date.UTC(
+      Number(map.get("year")),
+      Number(map.get("month")) - 1,
+      Number(map.get("day")),
+      Number(map.get("hour")),
+      Number(map.get("minute")),
+      Number(map.get("second")),
+    );
+    return asUtc - date.getTime();
+  }
+
+  private zonedDateTimeToUtc(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+    second: number,
+    timeZone: string,
+  ): Date {
+    const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second);
+    const offset = this.getTimeZoneOffsetMs(new Date(utcGuess), timeZone);
+    return new Date(utcGuess - offset);
+  }
+
+  private getTenantDayWindow(referenceDate: Date, timeZone: string): { gte: Date; lt: Date } {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const parts = dtf.formatToParts(referenceDate);
+    const map = new Map(parts.map((p) => [p.type, p.value] as const));
+    const year = Number(map.get("year"));
+    const month = Number(map.get("month"));
+    const day = Number(map.get("day"));
+    const start = this.zonedDateTimeToUtc(year, month, day, 0, 0, 0, timeZone);
+    const nextDay = new Date(Date.UTC(year, month - 1, day + 1, 0, 0, 0));
+    const nextParts = dtf.formatToParts(nextDay);
+    const nextMap = new Map(nextParts.map((p) => [p.type, p.value] as const));
+    const end = this.zonedDateTimeToUtc(
+      Number(nextMap.get("year")),
+      Number(nextMap.get("month")),
+      Number(nextMap.get("day")),
+      0,
+      0,
+      0,
+      timeZone,
+    );
+    return { gte: start, lt: end };
+  }
+
+  private async getDriverDayOpenTripsByWindow(
+    tenantId: string,
+    driverUserId: string,
+    dayWindow: { gte: Date; lt: Date },
+  ) {
+    return this.prisma.trip.findMany({
+      where: {
+        tenantId,
+        assignedDriverUserId: driverUserId,
+        status: { notIn: [TripStatus.COMPLETED, TripStatus.DONE, TripStatus.CANCELLED] },
+        OR: [
+          { plannedStartAt: { gte: dayWindow.gte, lt: dayWindow.lt } },
+          { plannedStartAt: null, createdAt: { gte: dayWindow.gte, lt: dayWindow.lt } },
+        ],
+      },
+      select: { id: true, plannedStartAt: true, createdAt: true },
+    });
+  }
+
+  private async getTenantTimeZone(tenantId: string): Promise<string> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timezone: true },
+    });
+    return this.getSafeTenantTimezone(tenant?.timezone);
+  }
+
   private buildActiveTripExecutionRangeWhere(range: { gte: Date; lt: Date }) {
     return {
       OR: [
@@ -1001,8 +1106,7 @@ export class DriverJobsService {
     driverUserId: string,
     payload: {
       trailerNumber: string;
-      trailerLastLocationCode: string;
-      parkingPhoto: Express.Multer.File;
+      trailerPhoto: Express.Multer.File;
     },
   ): Promise<JobDto> {
     const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId, {
@@ -1021,31 +1125,23 @@ export class DriverJobsService {
     }
 
     const trailerNumber = payload.trailerNumber?.trim();
-    const locCode = payload.trailerLastLocationCode?.trim();
     if (!trailerNumber) {
       throw new BadRequestException("trailerNumber is required");
     }
-    if (!locCode) {
-      throw new BadRequestException("trailerLastLocationCode is required");
-    }
 
-    const loc = await this.prisma.masterTrailerLocation.findFirst({
-      where: { code: locCode },
-    });
-    if (!loc) {
-      throw new BadRequestException(`Unknown trailerLastLocationCode: ${locCode}`);
-    }
-
-    const file = payload.parkingPhoto;
+    const file = payload.trailerPhoto;
     if (!file?.buffer?.length) {
-      throw new BadRequestException("Trailer parking photo is required");
+      throw new BadRequestException("trailerPhoto is required");
     }
     const mime = String(file.mimetype ?? "").toLowerCase();
     if (!mime.startsWith("image/")) {
-      throw new BadRequestException("Parking photo must be an image");
+      throw new BadRequestException("trailerPhoto must be an image");
     }
 
     const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
+    if (trip.assignedDriverUserId !== driverUserId) {
+      throw new BadRequestException("You are not assigned to this trip");
+    }
     if (trip.status !== TripStatus.PUBLISHED) {
       throw new BadRequestException("Trip must be published and ready to start");
     }
@@ -1054,7 +1150,7 @@ export class DriverJobsService {
     }
 
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
-    const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/trailer-parking/${Date.now()}${ext}`;
+    const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/trailer-start/${Date.now()}${ext}`;
 
     const supabase = this.supabaseService.getClient();
     const { error: upErr } = await supabase.storage
@@ -1074,9 +1170,9 @@ export class DriverJobsService {
         data: {
           tenantId,
           tripId,
-          type: TripDocumentType.TRAILER_PARKING_PHOTO,
+          type: TripDocumentType.TRAILER_START_PHOTO,
           storageKey: key,
-          originalName: file.originalname ?? "parking.jpg",
+          originalName: file.originalname ?? "trailer-start.jpg",
           mimeType: file.mimetype ?? "image/jpeg",
           sizeBytes: file.size ?? null,
           uploadedByUserId: driverUserId,
@@ -1087,7 +1183,6 @@ export class DriverJobsService {
         where: { id: tripId },
         data: {
           trailerNumber,
-          trailerLastLocationCode: locCode,
           startedAt: now,
           startedByDriverUserId: driverUserId,
           status: TripStatus.ONGOING,
@@ -1110,17 +1205,16 @@ export class DriverJobsService {
       {
         jobId,
         trailerNumber,
-        trailerLastLocationCode: locCode,
       },
       driverUserId,
     );
 
     await this.audit.log(
       tenantId,
-      "TRAILER_DETAILS",
-      "JOB",
-      jobId,
-      { tripId, trailerNumber, trailerLastLocationCode: locCode },
+      "TRIP_TRAILER_CHECK_IN",
+      "TRIP",
+      tripId,
+      { jobId, trailerNumber },
       driverUserId,
     );
 
@@ -1212,12 +1306,21 @@ export class DriverJobsService {
     jobId: string,
     tripId: string,
     driverUserId: string,
-  ): Promise<JobDto> {
+    payload?: {
+      trailerParkingLocationCode?: string;
+      trailerParkingLat?: number;
+      trailerParkingLng?: number;
+      trailerEndPhoto?: Express.Multer.File;
+    },
+  ): Promise<{ requiresTrailerCheckout: boolean; trip: any; job: JobDto }> {
     const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId, {
       documents: true,
     });
 
     const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
+    if (trip.assignedDriverUserId !== driverUserId) {
+      throw new BadRequestException("You are not assigned to this trip");
+    }
 
     if (trip.status !== TripStatus.ONGOING) {
       throw new BadRequestException("Trip must be ONGOING to complete");
@@ -1247,16 +1350,92 @@ export class DriverJobsService {
       );
     }
 
-    const now = new Date();
+    const referenceDate = trip.plannedStartAt ?? trip.createdAt;
+    const tenantTimeZone = await this.getTenantTimeZone(tenantId);
+    const dayWindow = this.getTenantDayWindow(referenceDate, tenantTimeZone);
+    const driverDayOpenTrips = await this.getDriverDayOpenTripsByWindow(
+      tenantId,
+      driverUserId,
+      dayWindow,
+    );
+    const requiresTrailerCheckout = driverDayOpenTrips.length === 1;
+    const missingTrailerCheckoutFields: string[] = [];
 
-    await this.prisma.trip.update({
-      where: { id: tripId },
-      data: {
-        status: TripStatus.COMPLETED,
-        pendingState: TripPendingState.NONE,
-        closedAt: now,
-        completedByDriverUserId: driverUserId,
-      },
+    let trailerLocation: { code: string; name: string } | null = null;
+    if (requiresTrailerCheckout) {
+      const trailerEndPhoto = payload?.trailerEndPhoto;
+      const trailerParkingLocationCode = payload?.trailerParkingLocationCode?.trim();
+      if (!trailerEndPhoto?.buffer?.length) {
+        missingTrailerCheckoutFields.push("trailerEndPhoto");
+      }
+      if (!trailerParkingLocationCode) {
+        missingTrailerCheckoutFields.push("trailerParkingLocationCode");
+      }
+      if (missingTrailerCheckoutFields.length > 0) {
+        throw new BadRequestException(
+          `Missing trailer checkout fields: ${missingTrailerCheckoutFields.join(", ")}`,
+        );
+      }
+      const mime = String(trailerEndPhoto.mimetype ?? "").toLowerCase();
+      if (!mime.startsWith("image/")) {
+        throw new BadRequestException("trailerEndPhoto must be an image");
+      }
+
+      const location = await this.prisma.masterTrailerLocation.findFirst({
+        where: { code: trailerParkingLocationCode },
+        select: { code: true, name: true },
+      });
+      if (!location) {
+        throw new BadRequestException(
+          `Unknown trailerParkingLocationCode: ${trailerParkingLocationCode}`,
+        );
+      }
+      trailerLocation = location;
+    }
+
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      if (requiresTrailerCheckout && payload?.trailerEndPhoto && trailerLocation) {
+        const file = payload.trailerEndPhoto;
+        const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
+        const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/trailer-end/${Date.now()}${ext}`;
+        const supabase = this.supabaseService.getClient();
+        const { error: upErr } = await supabase.storage
+          .from(JOB_DOCUMENTS_BUCKET)
+          .upload(key, file.buffer, {
+            contentType: file.mimetype ?? "image/jpeg",
+            upsert: false,
+          });
+        if (upErr) {
+          throw new BadRequestException(`Storage upload failed: ${upErr.message}`);
+        }
+        await tx.tripDocument.create({
+          data: {
+            tenantId,
+            tripId,
+            type: TripDocumentType.TRAILER_END_PHOTO,
+            storageKey: key,
+            originalName: file.originalname ?? "trailer-end.jpg",
+            mimeType: file.mimetype ?? "image/jpeg",
+            sizeBytes: file.size ?? null,
+            uploadedByUserId: driverUserId,
+          },
+        });
+      }
+
+      await tx.trip.update({
+        where: { id: tripId },
+        data: {
+          status: TripStatus.COMPLETED,
+          pendingState: TripPendingState.NONE,
+          trailerLastLocationCode: trailerLocation?.code ?? undefined,
+          trailerParkingLat: requiresTrailerCheckout ? (payload?.trailerParkingLat ?? null) : undefined,
+          trailerParkingLng: requiresTrailerCheckout ? (payload?.trailerParkingLng ?? null) : undefined,
+          trailerParkedAt: requiresTrailerCheckout ? now : undefined,
+          closedAt: now,
+          completedByDriverUserId: driverUserId,
+        },
+      });
     });
 
     await this.audit.log(
@@ -1267,6 +1446,23 @@ export class DriverJobsService {
       { jobId },
       driverUserId,
     );
+    if (requiresTrailerCheckout) {
+      await this.audit.log(
+        tenantId,
+        "TRIP_TRAILER_CHECK_OUT",
+        "TRIP",
+        tripId,
+        {
+          jobId,
+          trailerNumber: trip.trailerNumber ?? null,
+          trailerParkingLocationCode: trailerLocation?.code ?? null,
+          trailerParkingLocationName: trailerLocation?.name ?? null,
+          trailerParkingLat: payload?.trailerParkingLat ?? null,
+          trailerParkingLng: payload?.trailerParkingLng ?? null,
+        },
+        driverUserId,
+      );
+    }
 
     const openTrips = await this.prisma.trip.count({
       where: {
@@ -1294,7 +1490,68 @@ export class DriverJobsService {
       });
     }
 
-    return this.getOneForDriver(tenantId, jobId, driverUserId);
+    const refreshedJob = await this.getOneForDriver(tenantId, jobId, driverUserId);
+    const refreshedTrip = refreshedJob.trips.find((t) => t.id === tripId) ?? null;
+    return {
+      requiresTrailerCheckout,
+      trip: refreshedTrip,
+      job: refreshedJob,
+    };
+  }
+
+  async getTripCompletionRequirements(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    driverUserId: string,
+  ) {
+    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
+    const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
+    if (trip.assignedDriverUserId !== driverUserId) {
+      throw new BadRequestException("You are not assigned to this trip");
+    }
+
+    const missingDocuments: string[] = [];
+    const requiredTripDocs = await this.prisma.tripDocument.findMany({
+      where: {
+        tenantId,
+        tripId,
+        isActive: true,
+        type: { in: [TripDocumentType.DELIVERY_DO, TripDocumentType.POD_SIGNATURE] },
+      },
+      select: { type: true },
+    });
+    const uploadedTypes = new Set(requiredTripDocs.map((d) => d.type));
+    if (!uploadedTypes.has(TripDocumentType.DELIVERY_DO)) missingDocuments.push("DELIVERY_DO");
+    if (!uploadedTypes.has(TripDocumentType.POD_SIGNATURE)) missingDocuments.push("POD_SIGNATURE");
+
+    const referenceDate = trip.plannedStartAt ?? trip.createdAt;
+    const tenantTimeZone = await this.getTenantTimeZone(tenantId);
+    const dayWindow = this.getTenantDayWindow(referenceDate, tenantTimeZone);
+    const driverDayOpenTrips = await this.getDriverDayOpenTripsByWindow(
+      tenantId,
+      driverUserId,
+      dayWindow,
+    );
+    const requiresTrailerCheckout = driverDayOpenTrips.length === 1;
+    const missingTrailerCheckoutFields: string[] = [];
+    if (requiresTrailerCheckout) {
+      missingTrailerCheckoutFields.push("trailerEndPhoto", "trailerParkingLocationCode");
+    }
+    const parkingLocations = await this.prisma.masterTrailerLocation.findMany({
+      orderBy: [{ code: "asc" }],
+      select: { id: true, code: true, name: true },
+    });
+
+    return {
+      canComplete: trip.status === TripStatus.ONGOING && missingDocuments.length === 0,
+      missingDocuments,
+      requiresTrailerCheckout,
+      missingBaseCompletionDocuments: missingDocuments,
+      missingTrailerCheckoutFields,
+      trailerNumber: trip.trailerNumber ?? null,
+      parkingLocations,
+    };
   }
 
   async listJobDocumentsForDriver(
@@ -1330,6 +1587,9 @@ export class DriverJobsService {
             TripDocumentType.POD_PHOTO,
             TripDocumentType.POD_SIGNATURE,
             TripDocumentType.OTHER,
+            TripDocumentType.TRAILER_PARKING_PHOTO,
+            TripDocumentType.TRAILER_START_PHOTO,
+            TripDocumentType.TRAILER_END_PHOTO,
           ],
         },
       },

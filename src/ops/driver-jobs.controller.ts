@@ -34,6 +34,7 @@ import { DriverJobsListQueryDto } from "./dto/driver-jobs-list-query.dto";
 import { DriverJobsHistoryListQueryDto } from "./dto/driver-jobs-history-list-query.dto";
 import { DriverCompleteJobDto } from "./dto/complete-job.dto";
 import { JobLocationDto } from "./dto/location.dto";
+import { DriverTripCompleteDto } from "./dto/driver-trip-complete.dto";
 
 @ApiTags("driver-jobs")
 @Controller("drivers/jobs")
@@ -106,58 +107,89 @@ export class DriverJobsController {
   @Post(":jobId/trips/:tripId/start")
   @ApiOperation({
     summary:
-      "Start a trip leg: trailer number, Gul Circle location code, parking photo (multipart)",
+      "Start a trip leg: trailer number + trailer photo (multipart)",
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
     schema: {
       type: "object",
-      required: ["parkingPhoto", "trailerNumber", "trailerLastLocationCode"],
+      required: ["trailerPhoto", "trailerNumber"],
       properties: {
         trailerNumber: { type: "string" },
-        trailerLastLocationCode: { type: "string" },
-        parkingPhoto: { type: "string", format: "binary" },
+        trailerPhoto: { type: "string", format: "binary" },
       },
     },
   })
   @UseInterceptors(
-    FileFieldsInterceptor([{ name: "parkingPhoto", maxCount: 1 }]),
+    FileFieldsInterceptor([{ name: "trailerPhoto", maxCount: 1 }]),
   )
   async startTrip(
     @Req() req: any,
     @Param("jobId") jobId: string,
     @Param("tripId") tripId: string,
     @UploadedFiles()
-    files: { parkingPhoto?: Express.Multer.File[] },
+    files: { trailerPhoto?: Express.Multer.File[] },
   ) {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
     const body = req.body as Record<string, string>;
     const trailerNumber = body?.trailerNumber?.trim() ?? "";
-    const trailerLastLocationCode = body?.trailerLastLocationCode?.trim() ?? "";
-    const parkingPhoto = files?.parkingPhoto?.[0];
-    if (!parkingPhoto) {
-      throw new BadRequestException("parkingPhoto is required");
+    const trailerPhoto = files?.trailerPhoto?.[0];
+    if (!trailerPhoto) {
+      throw new BadRequestException("trailerPhoto is required");
     }
     return this.driverJobs.startTripWithTrailer(
       tenantId,
       jobId,
       tripId,
       userId,
-      { trailerNumber, trailerLastLocationCode, parkingPhoto },
+      { trailerNumber, trailerPhoto },
     );
   }
 
-  @Post(":jobId/trips/:tripId/complete")
-  @ApiOperation({ summary: "Complete trip leg (checks DO signature + required uploads)" })
-  async completeTrip(
+  @Get(":jobId/trips/:tripId/completion-requirements")
+  @ApiOperation({ summary: "Get completion requirements before trip complete" })
+  async getTripCompletionRequirements(
     @Req() req: any,
     @Param("jobId") jobId: string,
     @Param("tripId") tripId: string,
   ) {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
-    return this.driverJobs.completeTrip(tenantId, jobId, tripId, userId);
+    return this.driverJobs.getTripCompletionRequirements(tenantId, jobId, tripId, userId);
+  }
+
+  @Post(":jobId/trips/:tripId/complete")
+  @ApiOperation({ summary: "Complete trip leg (checks DO signature + required uploads)" })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        trailerEndPhoto: { type: "string", format: "binary" },
+        trailerParkingLocationCode: { type: "string" },
+        trailerParkingLat: { type: "number" },
+        trailerParkingLng: { type: "number" },
+      },
+    },
+  })
+  @UseInterceptors(
+    FileFieldsInterceptor([{ name: "trailerEndPhoto", maxCount: 1 }]),
+  )
+  async completeTrip(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @UploadedFiles()
+    files: { trailerEndPhoto?: Express.Multer.File[] },
+    @Body() dto: DriverTripCompleteDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.completeTrip(tenantId, jobId, tripId, userId, {
+      ...dto,
+      trailerEndPhoto: files?.trailerEndPhoto?.[0],
+    });
   }
 
   @Get(":jobId/documents")

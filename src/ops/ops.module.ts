@@ -5,12 +5,19 @@ import { AuditModule } from "../audit/audit.module";
 import { OpsJobsController } from "./ops-jobs.controller";
 import { OpsTripsController } from "./ops-trips.controller";
 import { DriverJobsController } from "./driver-jobs.controller";
+import { DispatchController } from "./dispatch.controller";
 import { OpsJobsService } from "./ops-jobs.service";
 import { DriverJobsService } from "./driver-jobs.service";
+import { DispatchService } from "./dispatch.service";
 
 @Module({
   imports: [PrismaModule, AuthModule, AuditModule],
-  controllers: [OpsJobsController, OpsTripsController, DriverJobsController],
-  providers: [OpsJobsService, DriverJobsService],
+  controllers: [
+    OpsJobsController,
+    OpsTripsController,
+    DriverJobsController,
+    DispatchController,
+  ],
+  providers: [OpsJobsService, DriverJobsService, DispatchService],
 })
 export class OpsModule {}
