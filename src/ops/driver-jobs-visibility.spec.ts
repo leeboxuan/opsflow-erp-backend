@@ -112,8 +112,80 @@ describe("driver trip completion requirements", () => {
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new DriverJobsService(prisma, audit, supabaseService);
     await expect(svc.completeTrip("t1", "job1", "trip1", "u1")).rejects.toThrow(
-      "Missing required trip documents: DELIVERY_DO, POD_SIGNATURE",
+      "Missing required trip documents: DELIVERY_DO",
     );
+  });
+});
+
+describe("completion requirements: customer signature vs DELIVERY_DO", () => {
+  function basePrismaForRequirements(tripDocRows: any[]) {
+    return {
+      tenant: { findUnique: jest.fn().mockResolvedValue({ timezone: "Asia/Singapore" }) },
+      job: { findFirst: jest.fn().mockResolvedValue({ id: "job1", status: "ONGOING", documents: [] }) },
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          status: "ONGOING",
+          assignedDriverUserId: "driver-1",
+          trailerNumber: "T1",
+          plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
+          createdAt: new Date("2026-04-30T08:00:00.000Z"),
+        }),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "trip1",
+            plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
+            createdAt: new Date("2026-04-30T08:00:00.000Z"),
+          },
+        ]),
+      },
+      tripDocument: { findMany: jest.fn().mockResolvedValue(tripDocRows) },
+      masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+  }
+
+  it("unsigned DELIVERY_DO returns POD_SIGNATURE as missing (customer signature)", async () => {
+    const prisma: any = basePrismaForRequirements([
+      { type: "DELIVERY_DO", signedAt: null, isSigned: false },
+    ]);
+    const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+    const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+    expect(res.missingDocuments).toContain("POD_SIGNATURE");
+    expect(res.missingDocuments).not.toContain("DELIVERY_DO");
+  });
+
+  it("signed DELIVERY_DO (signedAt) does not list POD_SIGNATURE missing", async () => {
+    const prisma: any = basePrismaForRequirements([
+      {
+        type: "DELIVERY_DO",
+        signedAt: new Date("2026-04-30T09:00:00.000Z"),
+        isSigned: false,
+      },
+    ]);
+    const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+    const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+    expect(res.missingDocuments).not.toContain("POD_SIGNATURE");
+  });
+
+  it("signed DELIVERY_DO (isSigned only) does not list POD_SIGNATURE missing", async () => {
+    const prisma: any = basePrismaForRequirements([
+      { type: "DELIVERY_DO", signedAt: null, isSigned: true },
+    ]);
+    const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+    const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+    expect(res.missingDocuments).not.toContain("POD_SIGNATURE");
+  });
+
+  it("active POD_SIGNATURE upload satisfies signature without signed DELIVERY_DO", async () => {
+    const prisma: any = basePrismaForRequirements([
+      { type: "DELIVERY_DO", signedAt: null, isSigned: false },
+      { type: "POD_SIGNATURE", signedAt: null, isSigned: false },
+    ]);
+    const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+    const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+    expect(res.missingDocuments).not.toContain("POD_SIGNATURE");
   });
 });
 

@@ -191,6 +191,50 @@ export class DriverJobsService {
     return trip;
   }
 
+  /** Signature on a signable DO (not standalone POD_SIGNATURE artifact). */
+  private isSignableDoMarkedSigned(doc: {
+    type: TripDocumentType;
+    signedAt: Date | null;
+    isSigned: boolean;
+  }): boolean {
+    if (
+      doc.type !== TripDocumentType.DELIVERY_DO
+      && doc.type !== TripDocumentType.PICKUP_DO
+    ) {
+      return false;
+    }
+    return !!doc.signedAt || doc.isSigned === true;
+  }
+
+  /**
+   * Customer signature requirement is met if:
+   * - a standalone POD_SIGNATURE upload exists (legacy), or
+   * - any active DELIVERY_DO or PICKUP_DO is signed (signedAt or isSigned).
+   */
+  private customerSignatureRequirementMet(
+    docs: Array<{ type: TripDocumentType; signedAt: Date | null; isSigned: boolean }>,
+  ): boolean {
+    if (docs.some((d) => d.type === TripDocumentType.POD_SIGNATURE)) {
+      return true;
+    }
+    return docs.some((d) => this.isSignableDoMarkedSigned(d));
+  }
+
+  private buildTripCompletionDocumentGaps(
+    docs: Array<{ type: TripDocumentType; signedAt: Date | null; isSigned: boolean }>,
+  ): string[] {
+    const missing: string[] = [];
+    const hasDeliveryDo = docs.some((d) => d.type === TripDocumentType.DELIVERY_DO);
+    if (!hasDeliveryDo) {
+      missing.push("DELIVERY_DO");
+      return missing;
+    }
+    if (!this.customerSignatureRequirementMet(docs)) {
+      missing.push("POD_SIGNATURE");
+    }
+    return missing;
+  }
+
   private parseMonthToRange(month: string): { gte: Date; lt: Date } {
     const m = month.trim().match(/^(\d{4})-(\d{2})$/);
     if (!m) throw new BadRequestException("month must be YYYY-MM");
@@ -1326,23 +1370,22 @@ export class DriverJobsService {
       throw new BadRequestException("Trip must be ONGOING to complete");
     }
 
-    const missing: string[] = [];
-    const requiredTripDocs = await this.prisma.tripDocument.findMany({
+    const completionDocs = await this.prisma.tripDocument.findMany({
       where: {
         tenantId,
         tripId,
         isActive: true,
-        type: { in: [TripDocumentType.DELIVERY_DO, TripDocumentType.POD_SIGNATURE] },
+        type: {
+          in: [
+            TripDocumentType.DELIVERY_DO,
+            TripDocumentType.POD_SIGNATURE,
+            TripDocumentType.PICKUP_DO,
+          ],
+        },
       },
-      select: { type: true },
+      select: { type: true, signedAt: true, isSigned: true },
     });
-    const uploadedTypes = new Set(requiredTripDocs.map((d) => d.type));
-    if (!uploadedTypes.has(TripDocumentType.DELIVERY_DO)) {
-      missing.push("DELIVERY_DO");
-    }
-    if (!uploadedTypes.has(TripDocumentType.POD_SIGNATURE)) {
-      missing.push("POD_SIGNATURE");
-    }
+    const missing = this.buildTripCompletionDocumentGaps(completionDocs);
 
     if (missing.length > 0) {
       throw new BadRequestException(
@@ -1511,19 +1554,22 @@ export class DriverJobsService {
       throw new BadRequestException("You are not assigned to this trip");
     }
 
-    const missingDocuments: string[] = [];
-    const requiredTripDocs = await this.prisma.tripDocument.findMany({
+    const completionDocs = await this.prisma.tripDocument.findMany({
       where: {
         tenantId,
         tripId,
         isActive: true,
-        type: { in: [TripDocumentType.DELIVERY_DO, TripDocumentType.POD_SIGNATURE] },
+        type: {
+          in: [
+            TripDocumentType.DELIVERY_DO,
+            TripDocumentType.POD_SIGNATURE,
+            TripDocumentType.PICKUP_DO,
+          ],
+        },
       },
-      select: { type: true },
+      select: { type: true, signedAt: true, isSigned: true },
     });
-    const uploadedTypes = new Set(requiredTripDocs.map((d) => d.type));
-    if (!uploadedTypes.has(TripDocumentType.DELIVERY_DO)) missingDocuments.push("DELIVERY_DO");
-    if (!uploadedTypes.has(TripDocumentType.POD_SIGNATURE)) missingDocuments.push("POD_SIGNATURE");
+    const missingDocuments = this.buildTripCompletionDocumentGaps(completionDocs);
 
     const referenceDate = trip.plannedStartAt ?? trip.createdAt;
     const tenantTimeZone = await this.getTenantTimeZone(tenantId);
