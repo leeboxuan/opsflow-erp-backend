@@ -184,6 +184,40 @@ export class JobTripResponseDto {
     receiverDo: "PENDING" | "UPLOADED";
   };
   completionRuleJson?: Record<string, unknown> | null;
+
+  /** Driver active/home: job ref on the trip row (same as parent job when linked). */
+  @ApiPropertyOptional()
+  jobInternalRef?: string | null;
+
+  @ApiPropertyOptional()
+  customerName?: string | null;
+
+  @ApiPropertyOptional({ enum: JobType })
+  jobType?: JobType;
+
+  /** Resolved pickup lines (trip origin route, else job pickup). */
+  @ApiPropertyOptional()
+  pickupAddress1?: string | null;
+
+  @ApiPropertyOptional()
+  pickupAddress2?: string | null;
+
+  @ApiPropertyOptional()
+  pickupPostal?: string | null;
+
+  /** Resolved delivery lines (trip destination route, else job delivery). */
+  @ApiPropertyOptional()
+  deliveryAddress1?: string | null;
+
+  @ApiPropertyOptional()
+  deliveryAddress2?: string | null;
+
+  @ApiPropertyOptional()
+  deliveryPostal?: string | null;
+
+  /** Job-level notes surfaced on the trip card. */
+  @ApiPropertyOptional()
+  notes?: string | null;
 }
 
 export class JobChargeResponseDto {

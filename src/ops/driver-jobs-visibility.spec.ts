@@ -729,3 +729,175 @@ describe("Driver trip detail endpoint service contract", () => {
     );
   });
 });
+
+describe("DriverJobsService.listActiveByDriver trip execution card", () => {
+  const tenantId = "t1";
+  const driverUserId = "driver-1";
+
+  function makeActiveJobWithTrip(tripOverrides: Record<string, any> = {}) {
+    return {
+      id: "job1",
+      tenantId,
+      customerCompanyId: "c1",
+      internalRef: "INT-REF-1",
+      externalRef: null,
+      jobType: "IMPORT",
+      status: "ONGOING",
+      invoiceReadyAt: null,
+      notes: "Handle with care",
+      pickupDate: new Date("2026-04-29T08:00:00.000Z"),
+      pickupAddress1: "Job Pickup Rd 1",
+      pickupAddress2: "Blk 1",
+      pickupPostal: "111111",
+      pickupContactName: null,
+      pickupContactPhone: null,
+      deliveryAddress1: "Job Del Rd",
+      deliveryAddress2: null,
+      deliveryPostal: "222222",
+      receiverName: "R",
+      receiverPhone: "9",
+      assignedDriverId: driverUserId,
+      assignedDriver: { id: driverUserId, name: "D" },
+      assignedVehicleId: null,
+      assignedFleetVehicleId: null,
+      assignedAt: null,
+      startedAt: null,
+      completedAt: null,
+      deliveredAt: null,
+      podRecipientName: null,
+      cancelledReason: null,
+      cancelledAt: null,
+      cancelledByUserId: null,
+      lastLat: null,
+      lastLng: null,
+      lastLocationAt: null,
+      createdAt: new Date("2026-04-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-04-01T00:00:00.000Z"),
+      items: [],
+      documents: [],
+      customerCompany: { id: "c1", name: "ACME Corp" },
+      trips: [
+        {
+          id: "trip1",
+          jobId: "job1",
+          jobSequence: 1,
+          tripSequence: 1,
+          status: "PUBLISHED",
+          pendingState: "NONE",
+          plannedStartAt: new Date("2026-04-29T10:00:00.000Z"),
+          jobTripTemplate: null,
+          startedAt: null,
+          closedAt: null,
+          trailerNumber: "TN99",
+          trailerLastLocationCode: null,
+          driverEarningCents: 5000,
+          earningLabelSnapshot: "Linehaul",
+          earningRateMasterId: null,
+          completionRuleJson: null,
+          title: "Leg 1",
+          originLabel: null,
+          originAddressLine1: "Trip Origin St 100",
+          originAddressLine2: null,
+          originPostalCode: "333333",
+          destinationLabel: null,
+          destinationAddressLine1: "Trip Dest Ave",
+          destinationAddressLine2: "Suite 2",
+          destinationPostalCode: "444444",
+          ...tripOverrides,
+        },
+      ],
+    };
+  }
+
+  it("returns pickup/delivery address fields from trip route when set", async () => {
+    const prisma: any = {
+      job: {
+        count: jest.fn().mockResolvedValue(1),
+        findMany: jest.fn().mockResolvedValue([makeActiveJobWithTrip()]),
+      },
+      vehicle: { findMany: jest.fn().mockResolvedValue([]) },
+      fleetVehicle: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const svc = new DriverJobsService(prisma, {} as any, {} as any);
+    const result = await svc.listActiveByDriver(tenantId, driverUserId, {
+      sortBy: "createdAt",
+      sortDir: "asc",
+    });
+    const trip = result.data[0].trips?.[0] as any;
+    expect(trip.jobId).toBe("job1");
+    expect(trip.tripSequence).toBe(1);
+    expect(trip.jobInternalRef).toBe("INT-REF-1");
+    expect(trip.customerName).toBe("ACME Corp");
+    expect(trip.jobType).toBe("IMPORT");
+    expect(trip.pickupAddress1).toBe("Trip Origin St 100");
+    expect(trip.pickupPostal).toBe("333333");
+    expect(trip.deliveryAddress1).toBe("Trip Dest Ave");
+    expect(trip.deliveryAddress2).toBe("Suite 2");
+    expect(trip.deliveryPostal).toBe("444444");
+    expect(trip.originSummary).toContain("Trip Origin");
+    expect(trip.destinationSummary).toContain("Trip Dest");
+  });
+
+  it("returns notes and driverEarningCents on each trip row", async () => {
+    const prisma: any = {
+      job: {
+        count: jest.fn().mockResolvedValue(1),
+        findMany: jest.fn().mockResolvedValue([makeActiveJobWithTrip()]),
+      },
+      vehicle: { findMany: jest.fn().mockResolvedValue([]) },
+      fleetVehicle: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const svc = new DriverJobsService(prisma, {} as any, {} as any);
+    const result = await svc.listActiveByDriver(tenantId, driverUserId, {
+      sortBy: "createdAt",
+      sortDir: "asc",
+    });
+    const trip = result.data[0].trips?.[0] as any;
+    expect(trip.notes).toBe("Handle with care");
+    expect(trip.driverEarningCents).toBe(5000);
+    expect(trip.earningLabelSnapshot).toBe("Linehaul");
+    expect(trip.trailerNumber).toBe("TN99");
+  });
+
+  it("falls back to job pickup/delivery when trip route address lines are missing", async () => {
+    const prisma: any = {
+      job: {
+        count: jest.fn().mockResolvedValue(1),
+        findMany: jest.fn().mockResolvedValue([
+          makeActiveJobWithTrip({
+            originAddressLine1: null,
+            originAddressLine2: null,
+            originPostalCode: null,
+            destinationAddressLine1: null,
+            destinationAddressLine2: null,
+            destinationPostalCode: null,
+            originLabel: null,
+            destinationLabel: null,
+            driverEarningCents: null,
+            earningLabelSnapshot: null,
+            trailerNumber: null,
+          }),
+        ]),
+      },
+      vehicle: { findMany: jest.fn().mockResolvedValue([]) },
+      fleetVehicle: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const svc = new DriverJobsService(prisma, {} as any, {} as any);
+    const result = await svc.listActiveByDriver(tenantId, driverUserId, {
+      sortBy: "createdAt",
+      sortDir: "asc",
+    });
+    const trip = result.data[0].trips?.[0] as any;
+    expect(trip.pickupAddress1).toBe("Job Pickup Rd 1");
+    expect(trip.pickupAddress2).toBe("Blk 1");
+    expect(trip.pickupPostal).toBe("111111");
+    expect(trip.deliveryAddress1).toBe("Job Del Rd");
+    expect(trip.deliveryPostal).toBe("222222");
+    expect(trip.originSummary).toBe("Job Pickup Rd 1");
+    expect(trip.destinationSummary).toBe("Job Del Rd");
+    expect(trip.driverEarningCents).toBeNull();
+    expect(trip.earningLabelSnapshot).toBeNull();
+    expect(trip.trailerNumber).toBeNull();
+    expect(trip.notes).toBe("Handle with care");
+  });
+});

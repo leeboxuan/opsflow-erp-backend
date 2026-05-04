@@ -50,7 +50,11 @@ export class DriverJobsController {
   constructor(private readonly driverJobs: DriverJobsService) {}
 
   @Get()
-  @ApiOperation({ summary: "Alias for active jobs" })
+  @ApiOperation({
+    summary: "Alias for active jobs",
+    description:
+      "Each job includes trips with execution-card fields (jobId, jobInternalRef, customerName, jobType, origin/destination summaries, resolved pickup/delivery address lines, notes, earnings, trailerNumber) for Home/current-trip UI.",
+  })
   async list(
     @Req() req: any,
     @Query() query: DriverJobsListQueryDto,
@@ -61,7 +65,11 @@ export class DriverJobsController {
   }
 
   @Get("active")
-  @ApiOperation({ summary: "Active jobs assigned to driver" })
+  @ApiOperation({
+    summary: "Active jobs assigned to driver",
+    description:
+      "Trips include execution-card fields (job context, route summaries, resolved addresses, notes, driverEarningCents, earningLabelSnapshot, trailerNumber) for mobile Home.",
+  })
   async listActive(
     @Req() req: any,
     @Query() query: DriverJobsListQueryDto,

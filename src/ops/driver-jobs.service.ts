@@ -26,6 +26,55 @@ function normalizeText(value?: string | null): string | null {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function firstNonEmptyText(...values: Array<unknown>): string | null {
+  for (const v of values) {
+    if (v == null) continue;
+    const s = String(v).trim();
+    if (s.length > 0) return s;
+  }
+  return null;
+}
+
+/** Home / active list: trip-first row with job context and resolved route vs job addresses. */
+function buildDriverTripExecutionCard(t: any, j: any) {
+  const originSummary =
+    firstNonEmptyText(
+      t.originLabel,
+      t.originAddressLine1,
+      t.originAddressLine2,
+      t.originPostalCode,
+    ) ?? firstNonEmptyText(j.pickupAddress1, j.pickupAddress2, j.pickupPostal);
+
+  const destinationSummary =
+    firstNonEmptyText(
+      t.destinationLabel,
+      t.destinationAddressLine1,
+      t.destinationAddressLine2,
+      t.destinationPostalCode,
+    ) ?? firstNonEmptyText(j.deliveryAddress1, j.deliveryAddress2, j.deliveryPostal);
+
+  return {
+    jobInternalRef: j.internalRef ?? null,
+    customerName: j.customerCompany?.name ?? null,
+    jobType: j.jobType,
+    originSummary,
+    destinationSummary,
+    pickupAddress1:
+      firstNonEmptyText(t.originAddressLine1, j.pickupAddress1) ?? j.pickupAddress1 ?? "",
+    pickupAddress2:
+      firstNonEmptyText(t.originAddressLine2, j.pickupAddress2) ?? j.pickupAddress2 ?? null,
+    pickupPostal:
+      firstNonEmptyText(t.originPostalCode, j.pickupPostal) ?? j.pickupPostal ?? null,
+    deliveryAddress1:
+      firstNonEmptyText(t.destinationAddressLine1, j.deliveryAddress1) ?? j.deliveryAddress1 ?? "",
+    deliveryAddress2:
+      firstNonEmptyText(t.destinationAddressLine2, j.deliveryAddress2) ?? j.deliveryAddress2 ?? null,
+    deliveryPostal:
+      firstNonEmptyText(t.destinationPostalCode, j.deliveryPostal) ?? j.deliveryPostal ?? null,
+    notes: j.notes ?? null,
+  };
+}
+
 function toDocDto(d: any): JobDocumentDto {
   const isPodSignature = d.type === TripDocumentType.POD_SIGNATURE;
   const fileDisplay =
@@ -134,7 +183,9 @@ function toJobDto(j: any): JobDto {
     trips:
       trips.map((t: any) => ({
         id: t.id,
+        jobId: t.jobId ?? j.id,
         jobSequence: t.jobSequence ?? null,
+        tripSequence: t.tripSequence ?? t.jobSequence ?? null,
         jobTripTemplate: t.jobTripTemplate ?? null,
         title: t.title ?? null,
         status: t.status,
@@ -157,6 +208,7 @@ function toJobDto(j: any): JobDto {
         documents: Array.isArray(t.documentsWithUrls)
           ? t.documentsWithUrls
           : [],
+        ...buildDriverTripExecutionCard(t, j),
       })) ?? [],
   };
 }
