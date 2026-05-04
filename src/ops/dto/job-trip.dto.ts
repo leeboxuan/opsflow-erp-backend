@@ -9,16 +9,22 @@ import {
   ValidateNested,
   IsString,
   Min,
+  Max,
   MinLength,
   IsNumber,
 } from "class-validator";
 import { JobTripTemplate } from "@prisma/client";
-import { Type } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 
 export class AppendJobTripDto {
-  @ApiProperty({ enum: JobTripTemplate })
+  @ApiPropertyOptional({
+    enum: JobTripTemplate,
+    description: "Optional. Empty/null defaults to CUSTOM in service",
+  })
+  @IsOptional()
+  @Transform(({ value }) => (value === "" ? undefined : value))
   @IsEnum(JobTripTemplate)
-  jobTripTemplate!: JobTripTemplate;
+  jobTripTemplate?: JobTripTemplate | null;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -26,10 +32,86 @@ export class AppendJobTripDto {
   @MinLength(1)
   title?: string;
 
+  @ApiPropertyOptional({ description: "Planned trip start (ISO datetime)" })
+  @IsOptional()
+  @IsDateString()
+  plannedStartAt?: string | null;
+
   @ApiPropertyOptional({ description: "Planned start (YYYY-MM-DD)" })
   @IsOptional()
   @IsDateString()
   plannedDate?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  originSummary?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  destinationSummary?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  originPostalCode?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  destinationPostalCode?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  originPlaceId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  destinationPlaceId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  originLat?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  originLng?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  destinationLat?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  destinationLng?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  notes?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      "Optional payout master item id. Validated against active DRIVER_PAYOUT master.",
+  })
+  @IsOptional()
+  @IsString()
+  earningRateMasterId?: string | null;
 }
 
 export class ReorderJobTripsDto {

@@ -2958,9 +2958,51 @@ export class OpsJobsService {
       ),
     );
     const nextSeq = maxSeq + 1;
-    const plannedStartAt = dto.plannedDate
-      ? new Date(dto.plannedDate + "T00:00:00.000Z")
-      : null;
+    const normalizedTemplateRaw =
+      dto.jobTripTemplate == null ? "" : String(dto.jobTripTemplate).trim();
+    const normalizedTemplate = normalizedTemplateRaw.length
+      ? (normalizedTemplateRaw as JobTripTemplate)
+      : JobTripTemplate.CUSTOM;
+
+    if (!Object.values(JobTripTemplate).includes(normalizedTemplate)) {
+      throw new BadRequestException(
+        `jobTripTemplate must be one of: ${Object.values(JobTripTemplate).join(", ")}`,
+      );
+    }
+
+    if (dto.notes !== undefined && dto.notes !== null && String(dto.notes).trim().length > 0) {
+      throw new BadRequestException(
+        "Trip notes are not supported on create yet (Trip.notes column is missing). Save notes at job level or use a trip custom field endpoint.",
+      );
+    }
+
+    const plannedStartAt = dto.plannedStartAt
+      ? new Date(dto.plannedStartAt)
+      : dto.plannedDate
+        ? new Date(dto.plannedDate + "T00:00:00.000Z")
+        : null;
+
+    let payoutItemId: string | null = null;
+    let driverEarningCents: number | null = null;
+    let earningLabelSnapshot: string | null = null;
+    if (dto.earningRateMasterId !== undefined && dto.earningRateMasterId !== null) {
+      const master = await this.findValidDriverPayoutItemById(
+        tenantId,
+        dto.earningRateMasterId,
+      );
+      if (!master) {
+        throw new BadRequestException("Driver trip rate master not found");
+      }
+      const resolvedAmountCents = master.rateCents ?? null;
+      if (master.requiresManualAmount || resolvedAmountCents == null) {
+        throw new BadRequestException(
+          `Selected payout item "${master.label}" requires manual amount before assignment`,
+        );
+      }
+      payoutItemId = master.id;
+      driverEarningCents = resolvedAmountCents;
+      earningLabelSnapshot = master.label;
+    }
 
     const trip = await this.prisma.trip.create({
       data: {
@@ -2968,14 +3010,28 @@ export class OpsJobsService {
         jobId,
         jobSequence: nextSeq,
         tripSequence: nextSeq,
-        jobTripTemplate: dto.jobTripTemplate,
-        title: dto.title?.trim() || dto.jobTripTemplate,
-        displayTitle: dto.title?.trim() || dto.jobTripTemplate,
+        jobTripTemplate: normalizedTemplate,
+        title: dto.title?.trim() || normalizedTemplate,
+        displayTitle: dto.title?.trim() || normalizedTemplate,
         plannedStartAt,
+        originLabel: dto.originSummary?.trim() || null,
+        destinationLabel: dto.destinationSummary?.trim() || null,
+        originPostalCode: dto.originPostalCode?.trim() || null,
+        destinationPostalCode: dto.destinationPostalCode?.trim() || null,
+        originPlaceId: dto.originPlaceId?.trim() || null,
+        destinationPlaceId: dto.destinationPlaceId?.trim() || null,
+        originLat: dto.originLat ?? null,
+        originLng: dto.originLng ?? null,
+        destinationLat: dto.destinationLat ?? null,
+        destinationLng: dto.destinationLng ?? null,
+        payoutItemId,
+        earningRateMasterId: null,
+        driverEarningCents,
+        earningLabelSnapshot,
         status: TripStatus.DRAFT,
         pendingState: TripPendingState.NONE,
         createdByUserId: actorUserId,
-        completionRuleJson: completionRuleForTemplate(dto.jobTripTemplate),
+        completionRuleJson: completionRuleForTemplate(normalizedTemplate),
       },
     });
 
@@ -2984,7 +3040,12 @@ export class OpsJobsService {
       "TRIP_CREATE",
       "JOB",
       jobId,
-      { tripId: trip.id, jobSequence: nextSeq },
+      {
+        tripId: trip.id,
+        jobSequence: nextSeq,
+        jobTripTemplate: normalizedTemplate,
+        earningRateMasterId: dto.earningRateMasterId ?? null,
+      },
       actorUserId,
     );
 
