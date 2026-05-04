@@ -3081,6 +3081,90 @@ export class OpsJobsService {
     return this.getOne(tenantId, jobId, user);
   }
 
+  async deleteTrip(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    user: any,
+  ): Promise<{ success: true; mode: "deleted" | "cancelled"; tripId: string; status?: TripStatus }> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+      select: {
+        id: true,
+        status: true,
+        jobSequence: true,
+        tripSequence: true,
+        assignedDriverUserId: true,
+        startedAt: true,
+        closedAt: true,
+        documents: { select: { id: true }, take: 1 },
+        payoutLines: { select: { id: true }, take: 1 },
+      },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    if (trip.status === TripStatus.COMPLETED || trip.status === TripStatus.DONE) {
+      throw new BadRequestException("Trips with status COMPLETED or DONE cannot be deleted.");
+    }
+
+    const hasOperationalHistory =
+      !!trip.assignedDriverUserId ||
+      !!trip.startedAt ||
+      !!trip.closedAt ||
+      (trip.documents?.length ?? 0) > 0 ||
+      (trip.payoutLines?.length ?? 0) > 0;
+
+    if (trip.status === TripStatus.DRAFT && !hasOperationalHistory) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.trip.delete({ where: { id: tripId } });
+        const remaining = await tx.trip.findMany({
+          where: { tenantId, jobId },
+          orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
+          select: { id: true },
+        });
+        for (let i = 0; i < remaining.length; i += 1) {
+          const seq = i + 1;
+          await tx.trip.update({
+            where: { id: remaining[i].id },
+            data: { tripSequence: seq, jobSequence: seq },
+          });
+        }
+      });
+      await this.audit.log(
+        tenantId,
+        "TRIP_DELETED",
+        "TRIP",
+        tripId,
+        { jobId, oldStatus: trip.status, deletedByUserId: actorUserId },
+        actorUserId,
+      );
+      return { success: true, mode: "deleted", tripId };
+    }
+
+    if (trip.status !== TripStatus.CANCELLED) {
+      await this.prisma.trip.update({
+        where: { id: tripId },
+        data: {
+          status: TripStatus.CANCELLED,
+          updatedByUserId: actorUserId,
+        },
+      });
+      await this.audit.log(
+        tenantId,
+        "TRIP_CANCELLED",
+        "TRIP",
+        tripId,
+        { jobId, oldStatus: trip.status, cancelledByUserId: actorUserId, reason: "Deleted by ops" },
+        actorUserId,
+      );
+    }
+
+    return { success: true, mode: "cancelled", tripId, status: TripStatus.CANCELLED };
+  }
+
   async reorderTrips(
     tenantId: string,
     jobId: string,

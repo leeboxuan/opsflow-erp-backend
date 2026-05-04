@@ -656,6 +656,22 @@ export class OpsJobsController {
     return this.jobs.appendTrip(tenantId, jobId, dto, accessUser);
   }
 
+  @Delete(":jobId/trips/:tripId")
+  @ApiOperation({ summary: "Delete/cancel trip by status rules" })
+  async deleteTrip(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.deleteTrip(tenantId, jobId, tripId, accessUser);
+  }
+
   @Patch(":jobId/trips/reorder")
   @ApiOperation({ summary: "Resequence trips on a job" })
   async reorderTrips(
