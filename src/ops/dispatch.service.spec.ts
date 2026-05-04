@@ -152,4 +152,90 @@ describe("DispatchService", () => {
     expect(trip.closedAt).toBeNull();
     expect(res.drivers[0].lastGpsAgeMinutes).toBeNull();
   });
+
+  it("board trip exposes trailer photo urls plus filename metadata without storage keys", async () => {
+    const prisma: any = {
+      user: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "driver-user-1", name: "Driver A", phone: "123" },
+        ]),
+      },
+      driverLocationLatest: { findMany: jest.fn().mockResolvedValue([]) },
+      trip: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "trip1",
+            jobId: "job1",
+            assignedDriverUserId: "driver-user-1",
+            status: "ONGOING",
+            title: "T",
+            displayTitle: null,
+            plannedStartAt: null,
+            publishedAt: null,
+            startedAt: null,
+            closedAt: null,
+            jobSequence: 1,
+            tripSequence: 1,
+            originLabel: null,
+            destinationLabel: null,
+            originLat: null,
+            originLng: null,
+            destinationLat: null,
+            destinationLng: null,
+            trailerNumber: null,
+            trailerLastLocationCode: null,
+            trailerParkedAt: null,
+            trailerParkingLat: null,
+            trailerParkingLng: null,
+            job: {
+              id: "job1",
+              internalRef: "J1",
+              customerCompany: { name: "C" },
+            },
+            documents: [
+              {
+                type: "TRAILER_START_PHOTO",
+                storageKey: "t1/jobs/j1/trips/t1/trailer_start_photo/99-start.jpg",
+                originalName: "start.jpg",
+                mimeType: "image/jpeg",
+                sizeBytes: 42,
+              },
+            ],
+          },
+        ]),
+      },
+      masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
+      drivers: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "drv-1",
+            userId: "driver-user-1",
+            assignedVehicle: { plateNo: "SBA1" },
+            assignedFleetVehicle: null,
+          },
+        ]),
+      },
+    };
+    const supabaseService = {
+      getClient: jest.fn().mockReturnValue({
+        storage: {
+          from: jest.fn().mockReturnValue({
+            createSignedUrl: jest
+              .fn()
+              .mockResolvedValue({ data: { signedUrl: "https://signed/start" } }),
+          }),
+        },
+      }),
+    } as any;
+    const svc = new DispatchService(prisma, supabaseService);
+    const res = await svc.getBoard("tenant-1");
+    const trip = res.drivers[0].activeTrip;
+    expect(trip.trailerStartPhotoUrl).toBe("https://signed/start");
+    expect(trip.trailerStartPhoto?.fileUrl).toBe("https://signed/start");
+    expect(trip.trailerStartPhoto?.fileName).toBe("start.jpg");
+    expect(trip.trailerStartPhoto?.originalFileName).toBe("start.jpg");
+    expect(trip.trailerStartPhoto?.mimeType).toBe("image/jpeg");
+    expect(trip.trailerStartPhoto?.fileSizeBytes).toBe(42);
+    expect(JSON.stringify(trip)).not.toMatch(/storageKey/);
+  });
 });

@@ -18,6 +18,9 @@ import {
   ApiBearerAuth,
   ApiConsumes,
   ApiBody,
+  ApiExtraModels,
+  ApiOkResponse,
+  getSchemaPath,
 } from "@nestjs/swagger";
 import {
   FileInterceptor,
@@ -30,6 +33,7 @@ import { RoleGuard } from "../auth/guards/role.guard";
 import { Roles } from "../auth/guards/role.guard";
 import { Role } from "@prisma/client";
 import { DriverJobsService } from "./driver-jobs.service";
+import { JobDocumentDto } from "./dto/job.dto";
 import { DriverJobsListQueryDto } from "./dto/driver-jobs-list-query.dto";
 import { DriverJobsHistoryListQueryDto } from "./dto/driver-jobs-history-list-query.dto";
 import { DriverCompleteJobDto } from "./dto/complete-job.dto";
@@ -41,6 +45,7 @@ import { DriverTripCompleteDto } from "./dto/driver-trip-complete.dto";
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
 @Roles(Role.DRIVER)
 @ApiBearerAuth("JWT-auth")
+@ApiExtraModels(JobDocumentDto)
 export class DriverJobsController {
   constructor(private readonly driverJobs: DriverJobsService) {}
 
@@ -194,6 +199,12 @@ export class DriverJobsController {
 
   @Get(":jobId/documents")
   @ApiOperation({ summary: "List all job documents with signed URLs" })
+  @ApiOkResponse({
+    schema: {
+      type: "array",
+      items: { $ref: getSchemaPath(JobDocumentDto) },
+    },
+  })
   async listJobDocuments(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
@@ -202,6 +213,12 @@ export class DriverJobsController {
 
   @Get(":jobId/trips/:tripId/documents")
   @ApiOperation({ summary: "List trip-level documents with signed URLs" })
+  @ApiOkResponse({
+    schema: {
+      type: "array",
+      items: { $ref: getSchemaPath(JobDocumentDto) },
+    },
+  })
   async listTripDocuments(
     @Req() req: any,
     @Param("jobId") jobId: string,

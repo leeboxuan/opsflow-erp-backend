@@ -3,6 +3,10 @@ import { Role, TripDocumentType, TripStatus } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
 import {
+  buildDocumentFileDisplayFields,
+  documentMimeTypeOrNull,
+} from "../common/document-file-display";
+import {
   DispatchOptimiseRouteDto,
   DispatchReorderTripsDto,
 } from "./dto/dispatch.dto";
@@ -49,6 +53,22 @@ export class DispatchService {
     const endPhoto = (trip.documents ?? []).find(
       (d: any) => d.type === TripDocumentType.TRAILER_END_PHOTO,
     );
+    const startUrl = startPhoto ? await this.createSignedUrl(startPhoto.storageKey) : null;
+    const endUrl = endPhoto ? await this.createSignedUrl(endPhoto.storageKey) : null;
+    const startMeta = startPhoto
+      ? {
+          fileUrl: startUrl,
+          ...buildDocumentFileDisplayFields(startPhoto),
+          mimeType: documentMimeTypeOrNull(startPhoto.mimeType),
+        }
+      : null;
+    const endMeta = endPhoto
+      ? {
+          fileUrl: endUrl,
+          ...buildDocumentFileDisplayFields(endPhoto),
+          mimeType: documentMimeTypeOrNull(endPhoto.mimeType),
+        }
+      : null;
     return {
       id: trip.id,
       jobId: trip.jobId,
@@ -76,8 +96,10 @@ export class DispatchService {
       trailerLastLocationName: trip.trailerLastLocationCode
         ? trailerLocationMap.get(trip.trailerLastLocationCode) ?? null
         : null,
-      trailerStartPhotoUrl: startPhoto ? await this.createSignedUrl(startPhoto.storageKey) : null,
-      trailerEndPhotoUrl: endPhoto ? await this.createSignedUrl(endPhoto.storageKey) : null,
+      trailerStartPhotoUrl: startUrl,
+      trailerEndPhotoUrl: endUrl,
+      trailerStartPhoto: startMeta,
+      trailerEndPhoto: endMeta,
     };
   }
 

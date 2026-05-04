@@ -29,6 +29,25 @@ export class DriverTripsController {
         tripSequence: { type: "number", nullable: true },
         origin: { type: "string", nullable: true },
         destination: { type: "string", nullable: true },
+        documents: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              type: { type: "string" },
+              status: { type: "string" },
+              label: { type: "string" },
+              fileName: { type: "string" },
+              originalFileName: { type: "string", nullable: true },
+              mimeType: { type: "string", nullable: true },
+              fileSizeBytes: { type: "integer", nullable: true },
+              fileUrl: { type: "string", nullable: true },
+              uploadedAt: { type: "string", format: "date-time" },
+              signedAt: { type: "string", format: "date-time", nullable: true },
+            },
+          },
+        },
       },
     },
   })

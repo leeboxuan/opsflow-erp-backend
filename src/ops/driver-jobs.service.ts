@@ -15,6 +15,7 @@ import { parsePaginationFromQuery, buildPaginationMeta } from "../common/paginat
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { AuditService } from "../audit/audit.service";
 import { SupabaseService } from "../auth/supabase.service";
+import { buildDocumentFileDisplayFields } from "../common/document-file-display";
 import { JobLocationDto } from "./dto/location.dto";
 import { JobDto, JobDocumentDto } from "./dto/job.dto";
 
@@ -27,12 +28,17 @@ function normalizeText(value?: string | null): string | null {
 
 function toDocDto(d: any): JobDocumentDto {
   const isPodSignature = d.type === TripDocumentType.POD_SIGNATURE;
+  const fileDisplay =
+    typeof d.storageKey === "string" && d.storageKey
+      ? buildDocumentFileDisplayFields(d)
+      : null;
   return {
     id: d.id,
     type: d.type,
     originalName: d.originalName,
     mimeType: d.mimeType,
     sizeBytes: d.sizeBytes ?? null,
+    ...(fileDisplay ?? {}),
     isActive: d.isActive ?? true,
     createdAt: d.createdAt,
     updatedAt: d.updatedAt ?? null,
@@ -420,12 +426,14 @@ export class DriverJobsService {
 
   private async attachTripDocumentSignedUrl(doc: any): Promise<JobDocumentDto> {
     const isPodSignature = doc.type === TripDocumentType.POD_SIGNATURE;
+    const fileDisplay = buildDocumentFileDisplayFields(doc);
     const base = {
       id: doc.id,
       type: doc.type,
       originalName: doc.originalName,
       mimeType: doc.mimeType,
       sizeBytes: doc.sizeBytes ?? null,
+      ...fileDisplay,
       isActive: doc.isActive ?? true,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt ?? null,
@@ -1734,6 +1742,10 @@ export class DriverJobsService {
         type: doc.type,
         status: doc.signedAt ? "SIGNED" : "UPLOADED",
         label: doc.type,
+        fileName: doc.fileName,
+        originalFileName: doc.originalFileName ?? null,
+        mimeType: doc.mimeType ?? null,
+        fileSizeBytes: doc.fileSizeBytes ?? null,
         fileUrl: doc.url ?? null,
         uploadedAt: doc.createdAt,
         signedAt: doc.signedAt ?? null,

@@ -44,6 +44,7 @@ import {
 import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
+import { buildDocumentFileDisplayFields } from "../common/document-file-display";
 
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
@@ -124,12 +125,17 @@ const OTHER_JOB_DOC_MIMES = new Set<string>([
 ]);
 
 function toDocDto(d: any): JobDocumentDto {
+  const fileDisplay =
+    typeof d.storageKey === "string" && d.storageKey
+      ? buildDocumentFileDisplayFields(d)
+      : null;
   return {
     id: d.id,
     type: d.type,
     originalName: d.originalName,
     mimeType: d.mimeType,
     sizeBytes: d.sizeBytes ?? null,
+    ...(fileDisplay ?? {}),
     isActive: d.isActive ?? true,
     createdAt: d.createdAt,
     updatedAt: d.updatedAt ?? null,
@@ -1016,12 +1022,14 @@ export class OpsJobsService {
 
     const signedUrl = error ? null : (data?.signedUrl ?? null);
     const isPodSignature = doc.type === TripDocumentType.POD_SIGNATURE;
+    const fileDisplay = buildDocumentFileDisplayFields(doc);
     return {
       id: doc.id,
       type: doc.type,
       originalName: doc.originalName,
       mimeType: doc.mimeType,
       sizeBytes: doc.sizeBytes ?? null,
+      ...fileDisplay,
       isActive: doc.isActive ?? true,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt ?? null,

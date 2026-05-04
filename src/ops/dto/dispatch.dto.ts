@@ -52,6 +52,24 @@ export class DispatchOptimiseRouteDto {
   startLocation?: DispatchStartLocationDto;
 }
 
+/** Trailer checkout photo metadata (URLs only; no storage keys). */
+export class DispatchBoardTrailerPhotoDto {
+  @ApiPropertyOptional()
+  fileUrl!: string | null;
+
+  @ApiPropertyOptional()
+  fileName!: string;
+
+  @ApiPropertyOptional()
+  originalFileName!: string | null;
+
+  @ApiPropertyOptional()
+  mimeType!: string | null;
+
+  @ApiPropertyOptional()
+  fileSizeBytes!: number | null;
+}
+
 export class DispatchBoardTripDto {
   @ApiProperty()
   id!: string;
@@ -130,6 +148,12 @@ export class DispatchBoardTripDto {
 
   @ApiPropertyOptional()
   trailerEndPhotoUrl!: string | null;
+
+  @ApiPropertyOptional({ type: () => DispatchBoardTrailerPhotoDto })
+  trailerStartPhoto!: DispatchBoardTrailerPhotoDto | null;
+
+  @ApiPropertyOptional({ type: () => DispatchBoardTrailerPhotoDto })
+  trailerEndPhoto!: DispatchBoardTrailerPhotoDto | null;
 }
 
 export class DispatchBoardLocationDto {

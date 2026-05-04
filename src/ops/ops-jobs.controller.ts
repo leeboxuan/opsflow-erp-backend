@@ -21,6 +21,8 @@ import {
   ApiConsumes,
   ApiBody,
   ApiOkResponse,
+  ApiExtraModels,
+  getSchemaPath,
 } from "@nestjs/swagger";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { AuthGuard } from "../auth/guards/auth.guard";
@@ -46,13 +48,14 @@ import {
   PutTripPayoutLinesDto,
   ReorderJobTripsDto,
 } from "./dto/job-trip.dto";
-import { JobDto, JobTripResponseDto } from "./dto/job.dto";
+import { JobDto, JobDocumentDto, JobTripResponseDto } from "./dto/job.dto";
 
 @ApiTags("ops-jobs")
 @Controller("jobs")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
 @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
 @ApiBearerAuth("JWT-auth")
+@ApiExtraModels(JobDocumentDto)
 export class OpsJobsController {
   constructor(private readonly jobs: OpsJobsService) {}
 
@@ -775,16 +778,20 @@ export class OpsJobsController {
   @ApiOperation({ summary: "List trip documents with signed URLs" })
   @ApiOkResponse({
     description:
-      "Returns only active trip-level documents. Replaced/inactive versions are omitted from primary document cards.",
+      "Returns only active trip-level documents. Replaced/inactive versions are omitted from primary document cards. Each item includes fileName, originalFileName, and fileSizeBytes; storage keys are never returned.",
     schema: {
       type: "array",
+      items: { $ref: getSchemaPath(JobDocumentDto) },
       example: [
         {
           id: "tripdoc_delivery_do_active_01",
           type: "DELIVERY_DO",
           originalName: "WF-2026-04-001-IMP_delivery-do.pdf",
+          fileName: "WF-2026-04-001-IMP_delivery-do.pdf",
+          originalFileName: "WF-2026-04-001-IMP_delivery-do.pdf",
           mimeType: "application/pdf",
           sizeBytes: 184553,
+          fileSizeBytes: 184553,
           isActive: true,
           createdAt: "2026-04-24T10:00:00.000Z",
           updatedAt: "2026-04-24T10:00:00.000Z",

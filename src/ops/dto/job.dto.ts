@@ -22,6 +22,18 @@ export class JobDocumentDto {
   @ApiPropertyOptional()
   sizeBytes?: number | null;
 
+  /** Primary display/download filename (stored original or derived from object path). */
+  @ApiPropertyOptional()
+  fileName?: string;
+
+  /** Original uploaded filename when stored; otherwise null. */
+  @ApiPropertyOptional()
+  originalFileName?: string | null;
+
+  /** Same as sizeBytes when known; included for trip/document list parity with mobile clients. */
+  @ApiPropertyOptional()
+  fileSizeBytes?: number | null;
+
   @ApiPropertyOptional()
   isActive?: boolean | null;
 

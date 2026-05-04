@@ -703,6 +703,11 @@ describe("Driver trip detail endpoint service contract", () => {
     expect(res.trailerLastLocationName).toBe("Gul 7");
     expect(res.trailerStartPhotoUrl).toBe("https://signed/start");
     expect(res.trailerEndPhotoUrl).toBe("https://signed/end");
+    const startDoc = res.documents.find((d: any) => d.type === "TRAILER_START_PHOTO");
+    expect(startDoc?.fileName).toBe("s.jpg");
+    expect(startDoc?.originalFileName).toBe("s.jpg");
+    expect(startDoc?.mimeType).toBe("image/jpeg");
+    expect(startDoc?.fileSizeBytes).toBe(100);
   });
 
   it("other driver cannot read trip detail", async () => {
