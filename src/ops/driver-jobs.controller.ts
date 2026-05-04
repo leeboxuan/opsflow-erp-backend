@@ -80,7 +80,11 @@ export class DriverJobsController {
   }
 
   @Get("history")
-  @ApiOperation({ summary: "Driver job history (completed/cancelled) with year/month filters" })
+  @ApiOperation({
+    summary: "Driver trip history (completed legs) with year/month filters",
+    description:
+      "Paginates completed (COMPLETED/DONE) trips assigned to the driver. Each job row includes only those trips on the page; parent job may still be ONGOING. Filters use trip closedAt (fallback updatedAt) in tenant timezone. Newest-completed trips first.",
+  })
   async listHistory(
     @Req() req: any,
     @Query() query: DriverJobsHistoryListQueryDto,
@@ -91,7 +95,11 @@ export class DriverJobsController {
   }
 
   @Get("history/summary")
-  @ApiOperation({ summary: "History year/month bucket summary for accordion UI" })
+  @ApiOperation({
+    summary: "History year/month bucket summary for accordion UI",
+    description:
+      "Buckets completed (COMPLETED/DONE) trips assigned to the driver by trip closedAt (fallback updatedAt), in tenant timezone. Parent job may still be ONGOING.",
+  })
   async historySummary(@Req() req: any): Promise<any> {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;

@@ -325,6 +325,39 @@ export class DriverJobsService {
     return { gte: start, lt: end };
   }
 
+  /** Inclusive-exclusive UTC range for a calendar month in a tenant IANA time zone. */
+  private parseCalendarMonthToUtcRangeInTimeZone(
+    monthStr: string,
+    timeZone: string,
+  ): { gte: Date; lt: Date } {
+    const m = monthStr.trim().match(/^(\d{4})-(\d{2})$/);
+    if (!m) throw new BadRequestException("month must be YYYY-MM");
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    if (!mo || mo < 1 || mo > 12) {
+      throw new BadRequestException("month must be YYYY-MM");
+    }
+    const gte = this.zonedDateTimeToUtc(y, mo, 1, 0, 0, 0, timeZone);
+    let ny = y;
+    let nm = mo + 1;
+    if (nm === 13) {
+      nm = 1;
+      ny += 1;
+    }
+    const lt = this.zonedDateTimeToUtc(ny, nm, 1, 0, 0, 0, timeZone);
+    return { gte, lt };
+  }
+
+  /** Inclusive-exclusive UTC range for a calendar year in a tenant IANA time zone. */
+  private parseCalendarYearToUtcRangeInTimeZone(
+    year: number,
+    timeZone: string,
+  ): { gte: Date; lt: Date } {
+    const gte = this.zonedDateTimeToUtc(year, 1, 1, 0, 0, 0, timeZone);
+    const lt = this.zonedDateTimeToUtc(year + 1, 1, 1, 0, 0, 0, timeZone);
+    return { gte, lt };
+  }
+
   private getSafeTenantTimezone(value?: string | null): string {
     const fallback = "Asia/Singapore";
     const timezone = value?.trim() || fallback;
@@ -831,95 +864,94 @@ export class DriverJobsService {
     meta: { page: number; pageSize: number; total: number };
   }> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
+    const tz = await this.getTenantTimeZone(tenantId);
 
     const month = query?.month?.trim();
     const yearStr = query?.year?.trim();
 
     const now = new Date();
-    const defaultYear = now.getUTCFullYear();
+    const defaultYear =
+      Number(
+        new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric" })
+          .formatToParts(now)
+          .find((p) => p.type === "year")?.value,
+      ) || now.getUTCFullYear();
 
     let range: { gte: Date; lt: Date };
     if (month) {
-      range = this.parseMonthToRange(month);
+      range = this.parseCalendarMonthToUtcRangeInTimeZone(month, tz);
     } else {
       const year = yearStr ? Number(yearStr) : defaultYear;
       if (!year || Number.isNaN(year)) {
         throw new BadRequestException("year must be YYYY");
       }
-      range = this.parseYearToRange(year);
+      range = this.parseCalendarYearToUtcRangeInTimeZone(year, tz);
     }
 
-    const where: any = {
-      tenantId,
-      status: JobStatus.COMPLETED,
-      ...this.publishedTripVisibilityWhere(),
-      trips: {
-        some: {
-          status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] },
-          assignedDriverUserId: driverUserId,
-        },
-      },
-      // Practical stable rule: filter history by pickupDate range.
-      pickupDate: range,
-    };
+    const countRows = (await this.prisma.$queryRaw(Prisma.sql`
+      SELECT COUNT(*)::bigint AS c
+      FROM trips t
+      WHERE
+        t."tenantId" = ${tenantId}
+        AND t."assignedDriverUserId" = ${driverUserId}
+        AND t.status::text IN ('COMPLETED', 'DONE')
+        AND (
+          (t."closedAt" IS NOT NULL AND t."closedAt" >= ${range.gte} AND t."closedAt" < ${range.lt})
+          OR (t."closedAt" IS NULL AND t."updatedAt" >= ${range.gte} AND t."updatedAt" < ${range.lt})
+        )
+    `)) as Array<{ c: bigint }>;
+    const countRow = countRows[0];
+    const total = Number(countRow?.c ?? 0);
 
-    const defaultOrder = [
-      { completedAt: "desc" as const },
-      { updatedAt: "desc" as const },
-      { createdAt: "desc" as const },
-    ];
+    const idRows = (await this.prisma.$queryRaw(Prisma.sql`
+      SELECT t.id
+      FROM trips t
+      WHERE
+        t."tenantId" = ${tenantId}
+        AND t."assignedDriverUserId" = ${driverUserId}
+        AND t.status::text IN ('COMPLETED', 'DONE')
+        AND (
+          (t."closedAt" IS NOT NULL AND t."closedAt" >= ${range.gte} AND t."closedAt" < ${range.lt})
+          OR (t."closedAt" IS NULL AND t."updatedAt" >= ${range.gte} AND t."updatedAt" < ${range.lt})
+        )
+      ORDER BY COALESCE(t."closedAt", t."updatedAt") DESC
+      OFFSET ${skip} LIMIT ${take}
+    `)) as Array<{ id: string }>;
 
-    const sortBy = query?.sortBy;
-    const sortDir = query?.sortDir ?? "desc";
+    if (!idRows.length) {
+      return {
+        data: [],
+        meta: buildPaginationMeta(page, pageSize, total),
+      };
+    }
 
-    const orderByFinal = sortBy
-      ? [
-          buildOrderBy(
-            sortBy,
-            sortDir,
-            [
-              "pickupDate",
-              "completedAt",
-              "cancelledAt",
-              "updatedAt",
-              "createdAt",
-              "internalRef",
-              "status",
-            ],
-            { completedAt: "desc" },
-          ) as any,
-          ...defaultOrder,
-        ]
-      : defaultOrder;
-
-    const [total, jobs] = await this.prisma.$transaction([
-      this.prisma.job.count({ where }),
-      this.prisma.job.findMany({
-        where,
-        orderBy: orderByFinal as any,
-        skip,
-        take,
-        include: {
-          customerCompany: { select: { id: true, name: true } },
-          assignedDriver: { select: { id: true, name: true } },
-          items: { orderBy: { createdAt: "asc" } },
-          documents: {
-            where: { isActive: true, type: { in: ["QUOTATION", "OTHER"] } },
-            orderBy: { createdAt: "desc" },
+    const tripsHydrated = await this.prisma.trip.findMany({
+      where: { id: { in: idRows.map((r) => r.id) } },
+      include: {
+        job: {
+          include: {
+            customerCompany: { select: { id: true, name: true } },
+            assignedDriver: { select: { id: true, name: true } },
+            items: { orderBy: { createdAt: "asc" } },
+            documents: {
+              where: { isActive: true, type: { in: ["QUOTATION", "OTHER"] } },
+              orderBy: { createdAt: "desc" },
+            },
           },
         },
-      }),
-    ]);
+      },
+    });
+
+    const orderIdx = new Map<string, number>(idRows.map((r, i) => [r.id, i]));
+    tripsHydrated.sort(
+      (a, b) => Number(orderIdx.get(a.id) ?? 0) - Number(orderIdx.get(b.id) ?? 0),
+    );
 
     const vehicleIds = [
-      ...new Set(
-        jobs.flatMap((j) => (j.trips ?? []).map((t: any) => t.vehicleId)).filter(Boolean),
-      ),
+      ...new Set(tripsHydrated.map((t) => t.vehicleId).filter(Boolean)),
     ] as string[];
     const fleetVehicleIds = [
-      ...new Set(
-        jobs.flatMap((j) => (j.trips ?? []).map((t: any) => t.fleetVehicleId)).filter(Boolean),
-      ),
+      ...new Set(tripsHydrated.map((t) => t.fleetVehicleId).filter(Boolean)),
     ] as string[];
 
     const [vehicles, fleetVehicles] = await Promise.all([
@@ -942,28 +974,43 @@ export class DriverJobsService {
       ...fleetVehicles.map((v) => [v.id, v.plateNo] as const),
     ]);
 
-    const data = await Promise.all(jobs.map(async (job: any) => {
-      const dto = toJobDto({
-        ...job,
-        assignedVehiclePlateNo: (() => {
-          const primaryTrip = (job.trips ?? []).find(
-            (t: any) => t.status !== TripStatus.DRAFT && t.status !== TripStatus.CANCELLED,
-          );
-          return (
+    type Group = { job: any; trips: any[] };
+    const groups: Group[] = [];
+    const idxByJob = new Map<string, number>();
+
+    for (const t of tripsHydrated) {
+      const job = t.job;
+      if (!job) continue;
+      const jid = job.id;
+      let ix = idxByJob.get(jid);
+      if (ix === undefined) {
+        groups.push({ job, trips: [] });
+        ix = groups.length - 1;
+        idxByJob.set(jid, ix);
+      }
+      groups[ix].trips.push(t);
+    }
+
+    const data = await Promise.all(
+      groups.map(async ({ job, trips: tripsForJob }) => {
+        const primaryTrip = tripsForJob[0];
+        const dto = toJobDto({
+          ...job,
+          trips: tripsForJob,
+          assignedVehiclePlateNo:
             (primaryTrip?.vehicleId && vehicleMap.get(primaryTrip.vehicleId)) ||
             (primaryTrip?.fleetVehicleId && vehicleMap.get(primaryTrip.fleetVehicleId)) ||
-            null
-          );
-        })(),
-      });
+            null,
+        });
 
-      return {
-        ...dto,
-        documents: await Promise.all(
-          (job.documents ?? []).map((doc: any) => this.attachSignedUrl(doc)),
-        ),
-      };
-    }));
+        return {
+          ...dto,
+          documents: await Promise.all(
+            (job.documents ?? []).map((doc: any) => this.attachSignedUrl(doc)),
+          ),
+        };
+      }),
+    );
 
     return {
       data,
@@ -981,30 +1028,18 @@ export class DriverJobsService {
       months: { month: string; label: string; total: number }[];
     }[];
   }> {
-    const rows = await this.prisma.$queryRaw<
-      Array<{ year: number; month: string; monthNum: number; total: number }>
-    >`
-      SELECT
-        date_part('year', "pickupDate")::int AS "year",
-        to_char("pickupDate", 'YYYY-MM') AS "month",
-        date_part('month', "pickupDate")::int AS "monthNum",
-        COUNT(*)::int AS "total"
-      FROM jobs
-      WHERE
-        "tenantId" = ${tenantId}
-        AND id IN (
-          SELECT DISTINCT t."jobId"
-          FROM trips t
-          WHERE t."tenantId" = ${tenantId}
-            AND t."assignedDriverUserId" = ${driverUserId}
-            AND t."status"::text <> ${TripStatus.DRAFT}
-            AND t."status"::text <> ${TripStatus.CANCELLED}
-        )
-        AND "status"::text = 'COMPLETED'
-        AND "pickupDate" IS NOT NULL
-      GROUP BY 1, 2, 3
-      ORDER BY 1 DESC, 3 DESC
-    `;
+    const tz = await this.getTenantTimeZone(tenantId);
+    const trips = await this.prisma.trip.findMany({
+      where: {
+        tenantId,
+        assignedDriverUserId: driverUserId,
+        status: { in: [TripStatus.COMPLETED, TripStatus.DONE] },
+      },
+      select: {
+        closedAt: true,
+        updatedAt: true,
+      },
+    });
 
     const monthNames = [
       "January",
@@ -1021,44 +1056,61 @@ export class DriverJobsService {
       "December",
     ];
 
-    const byYear = new Map<
-      number,
-      {
-        year: number;
-        total: number;
-        months: { month: string; label: string; total: number; monthNum: number }[];
-      }
-    >();
-
-    for (const r of rows ?? []) {
-      const entry =
-        byYear.get(r.year) ??
-        ({
-          year: r.year,
-          total: 0,
-          months: [],
-        } as any);
-
-      entry.total += r.total;
-      entry.months.push({
-        month: r.month,
-        label: monthNames[r.monthNum - 1] ?? r.month,
-        total: r.total,
-        monthNum: r.monthNum,
-      });
-      byYear.set(r.year, entry);
-    }
-
-    const years = Array.from(byYear.values()).map((y) => {
-      y.months.sort((a, b) => b.monthNum - a.monthNum);
-      return {
-        year: y.year,
-        total: y.total,
-        months: y.months.map((m) => ({ month: m.month, label: m.label, total: m.total })),
-      };
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "numeric",
     });
 
-    years.sort((a, b) => b.year - a.year);
+    type MonthAgg = { monthKey: string; monthNum: number; total: number; year: number };
+    const byYear = new Map<number, { year: number; total: number; months: Map<string, MonthAgg> }>();
+
+    for (const t of trips) {
+      const effective = t.closedAt ?? t.updatedAt;
+      if (!effective) continue;
+
+      const parts = dtf.formatToParts(effective);
+      const year = Number(parts.find((p) => p.type === "year")?.value ?? NaN);
+      const monthNum = Number(parts.find((p) => p.type === "month")?.value ?? NaN);
+      if (!Number.isFinite(year) || !Number.isFinite(monthNum) || monthNum < 1 || monthNum > 12) {
+        continue;
+      }
+
+      const monthKey = `${year}-${String(monthNum).padStart(2, "0")}`;
+      let yEntry = byYear.get(year);
+      if (!yEntry) {
+        yEntry = { year, total: 0, months: new Map() };
+        byYear.set(year, yEntry);
+      }
+      yEntry.total += 1;
+
+      const existing = yEntry.months.get(monthKey);
+      if (existing) {
+        existing.total += 1;
+      } else {
+        yEntry.months.set(monthKey, {
+          monthKey,
+          monthNum,
+          total: 1,
+          year,
+        });
+      }
+    }
+
+    const years = Array.from(byYear.values())
+      .sort((a, b) => b.year - a.year)
+      .map((y) => ({
+        year: y.year,
+        total: y.total,
+        months: Array.from(y.months.values())
+          .sort((a, b) => b.monthNum - a.monthNum)
+          .map((m) => ({
+            month: m.monthKey,
+            label: `${monthNames[m.monthNum - 1] ?? `Month ${m.monthNum}`} ${m.year}`,
+            total: m.total,
+          })),
+      }));
+
     return { years };
   }
 

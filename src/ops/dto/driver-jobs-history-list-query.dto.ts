@@ -3,12 +3,18 @@ import { IsOptional, IsString } from "class-validator";
 import { ListQueryBaseDto } from "../../common/dto";
 
 export class DriverJobsHistoryListQueryDto extends ListQueryBaseDto {
-  @ApiPropertyOptional({ description: "Year (YYYY) - default current year" })
+  @ApiPropertyOptional({
+    description:
+      "Calendar year (YYYY) in tenant timezone; default is current calendar year in that zone. Filters by trip completion (closedAt ?? updatedAt).",
+  })
   @IsOptional()
   @IsString()
   year?: string;
 
-  @ApiPropertyOptional({ description: "Month (YYYY-MM) - takes precedence over year" })
+  @ApiPropertyOptional({
+    description:
+      "Calendar month (YYYY-MM) in tenant timezone; takes precedence over year. Filters by trip completion (closedAt ?? updatedAt).",
+  })
   @IsOptional()
   @IsString()
   month?: string;
