@@ -2982,10 +2982,16 @@ export class OpsJobsService {
         ? new Date(dto.plannedDate + "T00:00:00.000Z")
         : null;
 
+    const hasInlinePayoutLines = Array.isArray(dto.payoutLines) && dto.payoutLines.length > 0;
+
     let payoutItemId: string | null = null;
     let driverEarningCents: number | null = null;
     let earningLabelSnapshot: string | null = null;
-    if (dto.earningRateMasterId !== undefined && dto.earningRateMasterId !== null) {
+    if (
+      !hasInlinePayoutLines &&
+      dto.earningRateMasterId !== undefined &&
+      dto.earningRateMasterId !== null
+    ) {
       const master = await this.findValidDriverPayoutItemById(
         tenantId,
         dto.earningRateMasterId,
@@ -3034,6 +3040,29 @@ export class OpsJobsService {
         completionRuleJson: completionRuleForTemplate(normalizedTemplate),
       },
     });
+
+    if (hasInlinePayoutLines) {
+      try {
+        await this.saveTripPayoutDraft(
+          tenantId,
+          jobId,
+          trip.id,
+          {
+            earningRateMasterId: dto.earningRateMasterId ?? null,
+            payoutLines: (dto.payoutLines ?? []) as any,
+          },
+          user,
+        );
+      } catch (error) {
+        // Keep create-with-payout behavior effectively atomic for clients.
+        try {
+          await this.prisma.trip.delete({ where: { id: trip.id } });
+        } catch {
+          // Best-effort cleanup only.
+        }
+        throw error;
+      }
+    }
 
     await this.audit.log(
       tenantId,

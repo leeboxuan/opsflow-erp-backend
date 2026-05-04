@@ -54,6 +54,7 @@ describe("OpsJobsService.appendTrip", () => {
       },
       trip: {
         create: jest.fn().mockResolvedValue({ id: "trip1" }),
+        delete: jest.fn().mockResolvedValue({ id: "trip1" }),
       },
       driverPayoutItem: {
         findFirst: jest.fn().mockResolvedValue({
@@ -174,5 +175,123 @@ describe("OpsJobsService.appendTrip", () => {
         { userId: "u1", role: "OPS" },
       ),
     ).rejects.toThrow("Trip notes are not supported on create yet");
+  });
+
+  it("create trip with multiple payout lines delegates to existing payout draft logic", async () => {
+    const { svc } = makeService();
+    const payoutSpy = jest
+      .spyOn(svc, "saveTripPayoutDraft")
+      .mockResolvedValue({ id: "job1" } as any);
+    await svc.appendTrip(
+      "t1",
+      "job1",
+      {
+        jobTripTemplate: JobTripTemplate.CUSTOM,
+        earningRateMasterId: "rate-1",
+        payoutLines: [
+          {
+            label: "Line A",
+            sourceRateMasterItemId: "rate-1",
+            quantity: 1,
+            amountCents: 12000,
+          },
+          {
+            label: "Line B",
+            isManual: true,
+            quantity: 1,
+            amountCents: 2000,
+          },
+        ],
+      },
+      { userId: "u1", role: "OPS" },
+    );
+    expect(payoutSpy).toHaveBeenCalledWith(
+      "t1",
+      "job1",
+      "trip1",
+      expect.objectContaining({
+        earningRateMasterId: "rate-1",
+        payoutLines: expect.any(Array),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("create trip with manual payout line delegates to payout draft logic", async () => {
+    const { svc } = makeService();
+    const payoutSpy = jest
+      .spyOn(svc, "saveTripPayoutDraft")
+      .mockResolvedValue({ id: "job1" } as any);
+    await svc.appendTrip(
+      "t1",
+      "job1",
+      {
+        jobTripTemplate: JobTripTemplate.CUSTOM,
+        payoutLines: [
+          {
+            label: "Manual handling",
+            isManual: true,
+            requiresManualAmount: true,
+            quantity: 1,
+            amountCents: 5000,
+          },
+        ],
+      },
+      { userId: "u1", role: "OPS" },
+    );
+    expect(payoutSpy).toHaveBeenCalled();
+  });
+
+  it("rejects manual-required source item without amount from delegated payout logic", async () => {
+    const { svc, prisma } = makeService();
+    jest
+      .spyOn(svc, "saveTripPayoutDraft")
+      .mockRejectedValueOnce(
+        new Error('Selected payout item "Manual" requires manual amount before assignment'),
+      );
+    await expect(
+      svc.appendTrip(
+        "t1",
+        "job1",
+        {
+          jobTripTemplate: JobTripTemplate.CUSTOM,
+          payoutLines: [
+            {
+              label: "Manual",
+              sourceRateMasterItemId: "rate-manual",
+              quantity: 1,
+            },
+          ],
+        },
+        { userId: "u1", role: "OPS" },
+      ),
+    ).rejects.toThrow("requires manual amount");
+    expect(prisma.trip.delete).toHaveBeenCalledWith({ where: { id: "trip1" } });
+  });
+
+  it("rejects invalid payout item from delegated payout logic", async () => {
+    const { svc, prisma } = makeService();
+    jest
+      .spyOn(svc, "saveTripPayoutDraft")
+      .mockRejectedValueOnce(new Error("Invalid source payout item"));
+    await expect(
+      svc.appendTrip(
+        "t1",
+        "job1",
+        {
+          jobTripTemplate: JobTripTemplate.CUSTOM,
+          payoutLines: [
+            {
+              label: "Bad line",
+              sourceRateMasterItemId: "does-not-exist",
+              quantity: 1,
+              amountCents: 1000,
+            },
+          ],
+        },
+        { userId: "u1", role: "OPS" },
+      ),
+    ).rejects.toThrow("Invalid source payout item");
+    expect(prisma.trip.delete).toHaveBeenCalledWith({ where: { id: "trip1" } });
   });
 });

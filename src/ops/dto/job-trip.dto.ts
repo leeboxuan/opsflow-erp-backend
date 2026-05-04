@@ -112,6 +112,14 @@ export class AppendJobTripDto {
   @IsOptional()
   @IsString()
   earningRateMasterId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      "Optional payout lines to save immediately after trip creation using existing payout draft logic.",
+  })
+  @IsOptional()
+  @IsArray()
+  payoutLines?: Array<Record<string, unknown>>;
 }
 
 export class ReorderJobTripsDto {
