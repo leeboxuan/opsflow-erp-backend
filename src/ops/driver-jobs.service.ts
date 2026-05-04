@@ -325,6 +325,185 @@ export class DriverJobsService {
     return { gte: start, lt: end };
   }
 
+  private parseCalendarDateToUtcRangeInTimeZone(
+    dateStr: string,
+    timeZone: string,
+  ): { gte: Date; lt: Date } {
+    const m = String(dateStr ?? "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) throw new BadRequestException("date must be YYYY-MM-DD");
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    if (!mo || mo < 1 || mo > 12 || !d || d < 1 || d > 31) {
+      throw new BadRequestException("date must be YYYY-MM-DD");
+    }
+    const gte = this.zonedDateTimeToUtc(y, mo, d, 0, 0, 0, timeZone);
+    const lt = this.zonedDateTimeToUtc(y, mo, d + 1, 0, 0, 0, timeZone);
+    return { gte, lt };
+  }
+
+  private getDateKeyInTimeZone(value: Date, timeZone: string): string {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const parts = dtf.formatToParts(value);
+    const map = new Map(parts.map((p) => [p.type, p.value] as const));
+    return `${map.get("year")}-${map.get("month")}-${map.get("day")}`;
+  }
+
+  private async buildDriverDailyRunSheet(
+    tenantId: string,
+    driverUserId: string,
+    requestedDate?: string,
+  ): Promise<any | null> {
+    // Keep backwards compatibility for legacy unit mocks that do not define trip/user delegates.
+    if (!this.prisma?.trip?.findMany || !this.prisma?.user?.findUnique) return null;
+
+    const tz = await this.getTenantTimeZone(tenantId);
+    const dayWindow = requestedDate
+      ? this.parseCalendarDateToUtcRangeInTimeZone(requestedDate, tz)
+      : this.getTenantDayWindow(new Date(), tz);
+
+    const runDate = requestedDate || this.getDateKeyInTimeZone(dayWindow.gte, tz);
+
+    const [driverUser, trips] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: driverUserId },
+        select: { id: true, name: true },
+      }),
+      this.prisma.trip.findMany({
+        where: {
+          tenantId,
+          assignedDriverUserId: driverUserId,
+          status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] },
+          OR: [
+            { plannedStartAt: { gte: dayWindow.gte, lt: dayWindow.lt } },
+            { plannedStartAt: null, createdAt: { gte: dayWindow.gte, lt: dayWindow.lt } },
+          ],
+        },
+        include: {
+          job: {
+            select: {
+              id: true,
+              internalRef: true,
+              jobType: true,
+              notes: true,
+              pickupAddress1: true,
+              pickupAddress2: true,
+              pickupPostal: true,
+              deliveryAddress1: true,
+              deliveryAddress2: true,
+              deliveryPostal: true,
+              customerCompany: { select: { name: true } },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const sorted = [...(trips ?? [])].sort((a: any, b: any) => {
+      const aSeq = a.tripSequence ?? a.jobSequence ?? null;
+      const bSeq = b.tripSequence ?? b.jobSequence ?? null;
+      if (aSeq != null && bSeq != null && aSeq !== bSeq) return aSeq - bSeq;
+      if (aSeq != null && bSeq == null) return -1;
+      if (aSeq == null && bSeq != null) return 1;
+      const aStart = a.plannedStartAt ? new Date(a.plannedStartAt).getTime() : Number.POSITIVE_INFINITY;
+      const bStart = b.plannedStartAt ? new Date(b.plannedStartAt).getTime() : Number.POSITIVE_INFINITY;
+      if (aStart !== bStart) return aStart - bStart;
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    });
+
+    const isCompleted = (s: TripStatus) => s === TripStatus.COMPLETED || s === TripStatus.DONE;
+    const current = sorted.find((t: any) => t.status === TripStatus.ONGOING) ?? null;
+    const sequentialEnforced = sorted.some((t: any) => (t.tripSequence ?? t.jobSequence) != null);
+
+    let nextTripId: string | null = current?.id ?? null;
+    if (!nextTripId) {
+      for (let i = 0; i < sorted.length; i += 1) {
+        const t = sorted[i];
+        if (t.status !== TripStatus.PUBLISHED) continue;
+        const prevIncomplete = sorted.slice(0, i).some((p: any) => !isCompleted(p.status));
+        if (!prevIncomplete) {
+          nextTripId = t.id;
+          break;
+        }
+      }
+    }
+
+    const items = sorted.map((t: any, idx: number) => {
+      const sequence = t.tripSequence ?? t.jobSequence ?? null;
+      const prevIncomplete = sorted.slice(0, idx).some((p: any) => !isCompleted(p.status));
+      const isLockedBySequence =
+        !!sequentialEnforced && t.status === TripStatus.PUBLISHED && prevIncomplete;
+      const isCurrent = current?.id === t.id;
+      const canContinue = t.status === TripStatus.ONGOING;
+      const canComplete = t.status === TripStatus.ONGOING;
+      const canStart =
+        !current
+        && t.status === TripStatus.PUBLISHED
+        && !isLockedBySequence;
+
+      const originSummary =
+        firstNonEmptyText(
+          t.originLabel,
+          t.originAddressLine1,
+          t.originAddressLine2,
+          t.originPostalCode,
+        ) ?? firstNonEmptyText(t.job?.pickupAddress1, t.job?.pickupAddress2, t.job?.pickupPostal);
+      const destinationSummary =
+        firstNonEmptyText(
+          t.destinationLabel,
+          t.destinationAddressLine1,
+          t.destinationAddressLine2,
+          t.destinationPostalCode,
+        ) ?? firstNonEmptyText(t.job?.deliveryAddress1, t.job?.deliveryAddress2, t.job?.deliveryPostal);
+
+      return {
+        tripId: t.id,
+        jobId: t.jobId ?? null,
+        jobInternalRef: t.job?.internalRef ?? null,
+        customerName: t.job?.customerCompany?.name ?? null,
+        sequence,
+        title: t.title ?? t.displayTitle ?? null,
+        status: t.status,
+        pendingState: t.pendingState ?? TripPendingState.NONE,
+        originSummary,
+        destinationSummary,
+        plannedStartAt: t.plannedStartAt ?? null,
+        startedAt: t.startedAt ?? null,
+        closedAt: t.closedAt ?? null,
+        completedAt: t.closedAt ?? (isCompleted(t.status) ? (t.updatedAt ?? null) : null),
+        trailerNumber: t.trailerNumber ?? null,
+        canStart,
+        canContinue,
+        canComplete,
+        isCurrent,
+        isNextActionable: nextTripId === t.id && !isCurrent,
+        isLockedBySequence,
+        routeVersion: t.routeVersion ?? null,
+      };
+    });
+
+    return {
+      runDate,
+      driverId: driverUserId,
+      driverName: driverUser?.name ?? null,
+      totalTrips: sorted.length,
+      completedTrips: sorted.filter((t: any) => isCompleted(t.status)).length,
+      ongoingTrips: sorted.filter((t: any) => t.status === TripStatus.ONGOING).length,
+      nextTripId,
+      currentTripId: current?.id ?? null,
+      routeVersion: sorted.find((t: any) => t.routeVersion != null)?.routeVersion ?? null,
+      routeOptimisedAt: null,
+      routeOptimisedByUserId: null,
+      routeOptimisedByName: null,
+      trips: items,
+    };
+  }
+
   /** Inclusive-exclusive UTC range for a calendar month in a tenant IANA time zone. */
   private parseCalendarMonthToUtcRangeInTimeZone(
     monthStr: string,
@@ -586,7 +765,7 @@ export class DriverJobsService {
       page?: unknown;
       pageSize?: unknown;
     },
-  ): Promise<{ data: JobDto[]; meta: { page: number; pageSize: number; total: number } }> {
+  ): Promise<{ data: JobDto[]; meta: { page: number; pageSize: number; total: number }; runSheet?: any | null }> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
 
     const statusFilter = {
@@ -842,9 +1021,12 @@ export class DriverJobsService {
       };
     }));
 
+    const runSheet = await this.buildDriverDailyRunSheet(tenantId, driverUserId, query?.date);
+
     return {
       data,
       meta: buildPaginationMeta(page, pageSize, total),
+      runSheet,
     };
   }
 
