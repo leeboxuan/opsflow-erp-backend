@@ -180,6 +180,19 @@ export class DispatchBoardLocationDto {
 
   @ApiPropertyOptional()
   recordedAt!: Date | null;
+
+  @ApiPropertyOptional()
+  updatedAt!: Date | null;
+
+  @ApiPropertyOptional()
+  lastMovedAt!: Date | null;
+}
+
+export enum DispatchGpsStatus {
+  LIVE = "LIVE",
+  IDLE = "IDLE",
+  STALE = "STALE",
+  NO_GPS = "NO_GPS",
 }
 
 export class DispatchBoardDriverDto {
@@ -209,6 +222,12 @@ export class DispatchBoardDriverDto {
 
   @ApiPropertyOptional()
   lastGpsAgeMinutes!: number | null;
+
+  @ApiPropertyOptional()
+  stationaryMinutes!: number | null;
+
+  @ApiProperty({ enum: DispatchGpsStatus })
+  gpsStatus!: DispatchGpsStatus;
 
   @ApiPropertyOptional({ type: () => DispatchBoardTripDto })
   activeTrip!: DispatchBoardTripDto | null;

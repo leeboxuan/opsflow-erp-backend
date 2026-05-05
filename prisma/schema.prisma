@@ -737,7 +737,11 @@ model DriverLocationLatest {
   accuracy     Float?
   heading      Float?
   speed        Float?
+  recordedAt   DateTime?
   capturedAt   DateTime @default(now())
+  lastMovedAt  DateTime?
+  lastMovedLat Float?
+  lastMovedLng Float?
   updatedAt    DateTime @updatedAt
   tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

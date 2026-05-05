@@ -7,6 +7,7 @@ import {
   documentMimeTypeOrNull,
 } from "../common/document-file-display";
 import {
+  DispatchGpsStatus,
   DispatchOptimiseRouteDto,
   DispatchReorderTripsDto,
 } from "./dto/dispatch.dto";
@@ -32,6 +33,10 @@ export class DispatchService {
     return status !== TripStatus.COMPLETED
       && status !== TripStatus.DONE
       && status !== TripStatus.CANCELLED;
+  }
+
+  private toSelectedDateStart(value: string): Date {
+    return new Date(`${value}T00:00:00.000`);
   }
 
   private async createSignedUrl(storageKey: string | null | undefined): Promise<string | null> {
@@ -113,6 +118,7 @@ export class DispatchService {
     const selectedDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date))
       ? date
       : this.toLocalDayKey(new Date())!;
+    const selectedDateStart = this.toSelectedDateStart(selectedDate);
     const [driverMemberships, locations, trips, trailerLocations] = await Promise.all([
       this.prisma.tenantMembership.findMany({
         where: {
@@ -196,6 +202,39 @@ export class DispatchService {
       const activeTrip = driverTrips.find((t) => t.status === TripStatus.ONGOING) ?? null;
       const latestLocation = locationMap.get(driver.id);
       const profile = profileMap.get(driver.id);
+      const gpsRefAtRaw = latestLocation
+        ? (
+          latestLocation.recordedAt
+          ?? latestLocation.capturedAt
+          ?? latestLocation.updatedAt
+          ?? latestLocation.createdAt
+        )
+        : null;
+      const gpsRefAt = gpsRefAtRaw ? new Date(gpsRefAtRaw) : null;
+      const gpsIsOnOrAfterSelectedDay = gpsRefAt != null && gpsRefAt.getTime() >= selectedDateStart.getTime();
+      const lastGpsAgeMinutes = gpsIsOnOrAfterSelectedDay && gpsRefAt
+        ? Math.max(0, Math.floor((Date.now() - gpsRefAt.getTime()) / 60000))
+        : null;
+      const lastMovedAtRaw = latestLocation?.lastMovedAt ?? null;
+      const lastMovedAt = lastMovedAtRaw ? new Date(lastMovedAtRaw) : null;
+      const stationaryMinutes = gpsIsOnOrAfterSelectedDay
+        ? Math.max(
+            0,
+            Math.floor((Date.now() - (lastMovedAt?.getTime() ?? gpsRefAt?.getTime() ?? Date.now())) / 60000),
+          )
+        : null;
+      let gpsStatus: DispatchGpsStatus;
+      if (!latestLocation || !gpsIsOnOrAfterSelectedDay || lastGpsAgeMinutes == null) {
+        gpsStatus = DispatchGpsStatus.NO_GPS;
+      } else if (lastGpsAgeMinutes <= 2 && (stationaryMinutes ?? 0) >= 10) {
+        gpsStatus = DispatchGpsStatus.IDLE;
+      } else if (lastGpsAgeMinutes <= 2) {
+        gpsStatus = DispatchGpsStatus.LIVE;
+      } else if (lastGpsAgeMinutes <= 10) {
+        gpsStatus = DispatchGpsStatus.STALE;
+      } else {
+        gpsStatus = DispatchGpsStatus.NO_GPS;
+      }
 
       return {
         driverUserId: driver.id,
@@ -214,22 +253,13 @@ export class DispatchService {
               speed: latestLocation.speed,
               capturedAt: latestLocation.capturedAt,
               recordedAt: latestLocation.recordedAt ?? latestLocation.capturedAt ?? null,
+              updatedAt: latestLocation.updatedAt ?? null,
+              lastMovedAt: latestLocation.lastMovedAt ?? null,
             }
           : null,
-        lastGpsAgeMinutes: latestLocation
-          ? Math.max(
-              0,
-              Math.floor((
-                Date.now()
-                - new Date(
-                  latestLocation.recordedAt
-                  ?? latestLocation.capturedAt
-                  ?? latestLocation.updatedAt
-                  ?? latestLocation.createdAt,
-                ).getTime()
-              ) / 60000),
-            )
-          : null,
+        lastGpsAgeMinutes,
+        stationaryMinutes,
+        gpsStatus,
         activeTrip: activeTrip ? await this.toBoardTrip(activeTrip, trailerLocationMap) : null,
         todayTrips: await Promise.all(
           driverTrips.map((trip) => this.toBoardTrip(trip, trailerLocationMap)),

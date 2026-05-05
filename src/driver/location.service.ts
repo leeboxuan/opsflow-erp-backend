@@ -9,6 +9,23 @@ import { LocationDto, DriverLocationDto } from './dto/location.dto';
 export class LocationService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private distanceMeters(
+    aLat: number,
+    aLng: number,
+    bLat: number,
+    bLng: number,
+  ): number {
+    const toRadians = (v: number) => (v * Math.PI) / 180;
+    const earthRadiusMeters = 6371000;
+    const dLat = toRadians(bLat - aLat);
+    const dLng = toRadians(bLng - aLng);
+    const lat1 = toRadians(aLat);
+    const lat2 = toRadians(bLat);
+    const h = Math.sin(dLat / 2) ** 2
+      + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+    return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  }
+
   async upsertLocation(
     tenantId: string,
     driverUserId: string,
@@ -29,6 +46,29 @@ export class LocationService {
       );
     }
 
+    const existing = await (this.prisma as any).driverLocationLatest.findUnique({
+      where: {
+        tenantId_driverUserId: {
+          tenantId,
+          driverUserId,
+        },
+      },
+    });
+
+    const movedMeters = existing
+      ? this.distanceMeters(existing.lat, existing.lng, dto.lat, dto.lng)
+      : Number.POSITIVE_INFINITY;
+    const hasMovedMeaningfully = movedMeters >= 50;
+    const lastMovedAt = hasMovedMeaningfully
+      ? recordedAt
+      : (existing?.lastMovedAt ?? null);
+    const lastMovedLat = hasMovedMeaningfully
+      ? dto.lat
+      : (existing?.lastMovedLat ?? null);
+    const lastMovedLng = hasMovedMeaningfully
+      ? dto.lng
+      : (existing?.lastMovedLng ?? null);
+
     // Upsert latest location
     const location = await (this.prisma as any).driverLocationLatest.upsert({
       where: {
@@ -40,20 +80,28 @@ export class LocationService {
       update: {
         lat: dto.lat,
         lng: dto.lng,
-        accuracy: dto.accuracy || null,
-        heading: dto.heading || null,
-        speed: dto.speed || null,
+        accuracy: dto.accuracy ?? null,
+        heading: dto.heading ?? null,
+        speed: dto.speed ?? null,
+        recordedAt,
         capturedAt: recordedAt,
+        lastMovedAt,
+        lastMovedLat,
+        lastMovedLng,
       },
       create: {
         tenantId,
         driverUserId,
         lat: dto.lat,
         lng: dto.lng,
-        accuracy: dto.accuracy || null,
-        heading: dto.heading || null,
-        speed: dto.speed || null,
+        accuracy: dto.accuracy ?? null,
+        heading: dto.heading ?? null,
+        speed: dto.speed ?? null,
+        recordedAt,
         capturedAt: recordedAt,
+        lastMovedAt: recordedAt,
+        lastMovedLat: dto.lat,
+        lastMovedLng: dto.lng,
       },
     });
 
@@ -136,7 +184,8 @@ export class LocationService {
       heading: location.heading,
       speed: location.speed,
       capturedAt: location.capturedAt,
-      recordedAt: location.capturedAt ?? null,
+      recordedAt: location.recordedAt ?? location.capturedAt ?? null,
+      lastMovedAt: location.lastMovedAt ?? null,
       updatedAt: location.updatedAt,
     };
   }
@@ -152,7 +201,8 @@ export class LocationService {
       heading: location.heading,
       speed: location.speed,
       capturedAt: location.capturedAt,
-      recordedAt: location.capturedAt ?? null,
+      recordedAt: location.recordedAt ?? location.capturedAt ?? null,
+      lastMovedAt: location.lastMovedAt ?? null,
       updatedAt: location.updatedAt,
     };
   }
