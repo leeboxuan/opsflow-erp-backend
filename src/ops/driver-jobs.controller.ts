@@ -251,7 +251,11 @@ export class DriverJobsController {
   }
 
   @Post(":jobId/trips/:tripId/documents")
-  @ApiOperation({ summary: "Upload trip document (form field type + file)" })
+  @ApiOperation({
+    summary: "Upload trip document (form field type + file)",
+    description:
+      "Used for trip/container photo documentation. Upload multiple photos by calling this endpoint repeatedly with type=OTHER or type=POD_PHOTO.",
+  })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
     schema: {
@@ -260,7 +264,7 @@ export class DriverJobsController {
       properties: {
         type: {
           type: "string",
-          example: "POD_PHOTO",
+          example: "OTHER",
           enum: ["PICKUP_DO", "DELIVERY_DO", "POD_PHOTO", "POD_SIGNATURE", "OTHER"],
         },
         requiresSignature: { type: "boolean" },
@@ -295,6 +299,18 @@ export class DriverJobsController {
       file,
       requiresSignature,
     );
+  }
+
+  @Get("wallet/summary")
+  @ApiOperation({
+    summary: "Driver wallet summary for month (YYYY-MM)",
+    description:
+      "Returns completed trip earnings for the authenticated driver in the selected month.",
+  })
+  async walletSummary(@Req() req: any, @Query("month") month: string) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.getWalletSummaryByMonth(tenantId, userId, month);
   }
 
   @Post(":jobId/trips/:tripId/documents/:documentId/sign")

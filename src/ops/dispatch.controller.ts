@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { Role } from "@prisma/client";
 import { AuthGuard } from "../auth/guards/auth.guard";
@@ -22,8 +33,12 @@ export class DispatchController {
   @Get("board")
   @ApiOperation({ summary: "Get dispatch board data for tenant" })
   @ApiOkResponse({ type: DispatchBoardResponseDto })
-  async board(@Req() req: any) {
-    return this.dispatchService.getBoard(req.tenant.tenantId);
+  async board(@Req() req: any, @Query("date") date?: string) {
+    const selectedDate = date?.trim();
+    if (selectedDate && !/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) {
+      throw new BadRequestException("date must be YYYY-MM-DD");
+    }
+    return this.dispatchService.getBoard(req.tenant.tenantId, selectedDate);
   }
 
   @Patch("drivers/:driverUserId/trips/reorder")

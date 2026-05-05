@@ -1296,6 +1296,89 @@ export class DriverJobsService {
     return { years };
   }
 
+  async getWalletSummaryByMonth(
+    tenantId: string,
+    driverUserId: string,
+    month: string,
+  ): Promise<{
+    month: string;
+    totalCents: number;
+    completedTripCount: number;
+    trips: Array<{
+      tripId: string;
+      jobId: string | null;
+      jobInternalRef: string | null;
+      title: string | null;
+      completedAt: Date | null;
+      driverEarningCents: number;
+      earningLabelSnapshot: string | null;
+      status: TripStatus;
+    }>;
+  }> {
+    const monthKey = String(month ?? "").trim();
+    if (!monthKey) {
+      throw new BadRequestException("month must be YYYY-MM");
+    }
+    const tz = await this.getTenantTimeZone(tenantId);
+    const range = this.parseCalendarMonthToUtcRangeInTimeZone(monthKey, tz);
+    const trips = await this.prisma.trip.findMany({
+      where: {
+        tenantId,
+        assignedDriverUserId: driverUserId,
+        status: { in: [TripStatus.COMPLETED, TripStatus.DONE] },
+        OR: [
+          { closedAt: { gte: range.gte, lt: range.lt } },
+          { closedAt: null, updatedAt: { gte: range.gte, lt: range.lt } },
+        ],
+      },
+      orderBy: [{ closedAt: "desc" }, { updatedAt: "desc" }],
+      select: {
+        id: true,
+        jobId: true,
+        title: true,
+        status: true,
+        closedAt: true,
+        updatedAt: true,
+        driverEarningCents: true,
+        earningLabelSnapshot: true,
+        payoutLines: {
+          select: { totalCents: true },
+        },
+        job: {
+          select: {
+            internalRef: true,
+          },
+        },
+      },
+    });
+
+    const tripRows = trips.map((trip) => {
+      const payoutTotal = (trip.payoutLines ?? []).reduce(
+        (sum, line) => sum + (line.totalCents ?? 0),
+        0,
+      );
+      const earning = trip.driverEarningCents ?? payoutTotal;
+      return {
+        tripId: trip.id,
+        jobId: trip.jobId ?? null,
+        jobInternalRef: trip.job?.internalRef ?? null,
+        title: trip.title ?? null,
+        completedAt: trip.closedAt ?? trip.updatedAt ?? null,
+        driverEarningCents: earning,
+        earningLabelSnapshot: trip.earningLabelSnapshot ?? null,
+        status: trip.status,
+      };
+    });
+    const totalCents = tripRows.reduce((sum, row) => sum + (row.driverEarningCents ?? 0), 0);
+
+    return {
+      month: monthKey,
+      totalCents,
+      completedTripCount: tripRows.length,
+      trips: tripRows,
+    };
+  }
+
   async getOneForDriver(
     tenantId: string,
     jobId: string,

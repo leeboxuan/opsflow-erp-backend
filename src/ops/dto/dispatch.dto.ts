@@ -81,6 +81,9 @@ export class DispatchBoardTripDto {
   jobInternalRef!: string | null;
 
   @ApiPropertyOptional()
+  jobRef!: string | null;
+
+  @ApiPropertyOptional()
   customerName!: string | null;
 
   @ApiPropertyOptional()
@@ -190,7 +193,13 @@ export class DispatchBoardDriverDto {
   phone!: string | null;
 
   @ApiPropertyOptional()
+  driverPhone!: string | null;
+
+  @ApiPropertyOptional()
   vehicle!: string | null;
+
+  @ApiPropertyOptional()
+  vehicleNumber!: string | null;
 
   @ApiPropertyOptional({ type: () => DispatchBoardLocationDto })
   latestLocation!: DispatchBoardLocationDto | null;
@@ -203,11 +212,17 @@ export class DispatchBoardDriverDto {
 
   @ApiProperty({ type: () => [DispatchBoardTripDto] })
   todayTrips!: DispatchBoardTripDto[];
+
+  @ApiProperty({ type: () => [DispatchBoardTripDto] })
+  trips!: DispatchBoardTripDto[];
 }
 
 export class DispatchBoardResponseDto {
   @ApiProperty()
   generatedAt!: string;
+
+  @ApiProperty()
+  date!: string;
 
   @ApiProperty({ type: () => [DispatchBoardDriverDto] })
   drivers!: DispatchBoardDriverDto[];

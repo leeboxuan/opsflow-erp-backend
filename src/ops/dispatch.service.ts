@@ -34,13 +34,18 @@ export class DispatchService {
       && status !== TripStatus.CANCELLED;
   }
 
-  private async createSignedUrl(storageKey: string): Promise<string | null> {
-    const supabase = this.supabaseService.getClient();
-    const { data, error } = await supabase.storage
-      .from(JOB_DOCUMENTS_BUCKET)
-      .createSignedUrl(storageKey, 60 * 60);
-    if (error) return null;
-    return data?.signedUrl ?? null;
+  private async createSignedUrl(storageKey: string | null | undefined): Promise<string | null> {
+    if (!storageKey) return null;
+    try {
+      const supabase = this.supabaseService.getClient();
+      const { data, error } = await supabase.storage
+        .from(JOB_DOCUMENTS_BUCKET)
+        .createSignedUrl(storageKey, 60 * 60);
+      if (error) return null;
+      return data?.signedUrl ?? null;
+    } catch {
+      return null;
+    }
   }
 
   private async toBoardTrip(
@@ -73,6 +78,7 @@ export class DispatchService {
       id: trip.id,
       jobId: trip.jobId,
       jobInternalRef: trip.job?.internalRef ?? null,
+      jobRef: trip.job?.internalRef ?? null,
       customerName: trip.job?.customerCompany?.name ?? null,
       title: trip.title ?? trip.displayTitle ?? null,
       status: trip.status,
@@ -103,7 +109,10 @@ export class DispatchService {
     };
   }
 
-  async getBoard(tenantId: string) {
+  async getBoard(tenantId: string, date?: string) {
+    const selectedDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date))
+      ? date
+      : this.toLocalDayKey(new Date())!;
     const [driverUsers, locations, trips, trailerLocations] = await Promise.all([
       this.prisma.user.findMany({
         where: { tenantId, role: Role.DRIVER },
@@ -131,7 +140,9 @@ export class DispatchService {
           },
         },
       }),
-      this.prisma.masterTrailerLocation.findMany({ select: { code: true, name: true } }),
+      this.prisma.masterTrailerLocation
+        .findMany({ select: { code: true, name: true } })
+        .catch(() => []),
     ]);
 
     const trailerLocationMap = new Map<string, string>(
@@ -154,11 +165,16 @@ export class DispatchService {
       driverProfiles.map((d) => [d.userId ?? "", d]),
     );
 
-    const ongoingTrips = trips.filter((t) => t.status === TripStatus.ONGOING);
-    const unassignedTrips = trips.filter((t) => !t.assignedDriverUserId && this.isOpenStatus(t.status));
+    const selectedDateTrips = trips.filter(
+      (trip) => this.toLocalDayKey(trip.plannedStartAt ?? trip.createdAt) === selectedDate,
+    );
+    const ongoingTrips = selectedDateTrips.filter((t) => t.status === TripStatus.ONGOING);
+    const unassignedTrips = selectedDateTrips.filter(
+      (t) => !t.assignedDriverUserId && this.isOpenStatus(t.status),
+    );
 
     const drivers = await Promise.all(driverUsers.map(async (driver) => {
-      const driverTrips = trips
+      const driverTrips = selectedDateTrips
         .filter((t) => t.assignedDriverUserId === driver.id)
         .sort((a, b) => (a.tripSequence ?? 9999) - (b.tripSequence ?? 9999));
       const activeTrip = driverTrips.find((t) => t.status === TripStatus.ONGOING) ?? null;
@@ -170,7 +186,9 @@ export class DispatchService {
         driverId: profile?.id ?? null,
         driverName: driver.name ?? null,
         phone: driver.phone ?? null,
+        driverPhone: driver.phone ?? null,
         vehicle: profile?.assignedVehicle?.plateNo ?? profile?.assignedFleetVehicle?.plateNo ?? null,
+        vehicleNumber: profile?.assignedVehicle?.plateNo ?? profile?.assignedFleetVehicle?.plateNo ?? null,
         latestLocation: latestLocation
           ? {
               lat: latestLocation.lat,
@@ -191,11 +209,15 @@ export class DispatchService {
         todayTrips: await Promise.all(
           driverTrips.map((trip) => this.toBoardTrip(trip, trailerLocationMap)),
         ),
+        trips: await Promise.all(
+          driverTrips.map((trip) => this.toBoardTrip(trip, trailerLocationMap)),
+        ),
       };
     }));
 
     return {
       generatedAt: new Date().toISOString(),
+      date: selectedDate,
       drivers,
       unassignedTrips: await Promise.all(
         unassignedTrips.map((trip) => this.toBoardTrip(trip, trailerLocationMap)),
@@ -226,6 +248,27 @@ export class DispatchService {
     );
     const existingIds = new Set(dayTrips.map((t) => t.id));
     const requestedIds = dto.tripIdsInOrder ?? [];
+    const requestedTrips = requestedIds.length
+      ? await this.prisma.trip.findMany({
+          where: {
+            tenantId,
+            assignedDriverUserId: driverUserId,
+            id: { in: requestedIds },
+          },
+          select: { id: true, status: true },
+        })
+      : [];
+    const terminalRequested = requestedTrips.filter((trip) =>
+      trip.status === TripStatus.COMPLETED
+      || trip.status === TripStatus.DONE
+      || trip.status === TripStatus.CANCELLED
+    );
+    if (terminalRequested.length > 0) {
+      throw new BadRequestException(
+        "tripIdsInOrder contains terminal trips (COMPLETED/DONE/CANCELLED) and cannot be reordered",
+      );
+    }
+
     if (!requestedIds.length) {
       throw new BadRequestException("tripIdsInOrder is required");
     }
