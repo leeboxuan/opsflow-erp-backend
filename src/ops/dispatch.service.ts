@@ -8,18 +8,266 @@ import {
 } from "../common/document-file-display";
 import {
   DispatchGpsStatus,
+  DispatchRouteMode,
+  DispatchRouteQueryDto,
+  DispatchRouteResponseDto,
   DispatchOptimiseRouteDto,
   DispatchReorderTripsDto,
 } from "./dto/dispatch.dto";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
+const GOOGLE_ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes";
 
 @Injectable()
 export class DispatchService {
+  private readonly dispatchRouteCache = new Map<string, {
+    expiresAtMs: number;
+    value: DispatchRouteResponseDto;
+  }>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
   ) {}
+
+  private haversineMeters(fromLat: number, fromLng: number, toLat: number, toLng: number): number {
+    const toRad = (v: number) => (v * Math.PI) / 180;
+    const r = 6371000;
+    const dLat = toRad(toLat - fromLat);
+    const dLng = toRad(toLng - fromLng);
+    const a = Math.sin(dLat / 2) ** 2
+      + Math.cos(toRad(fromLat)) * Math.cos(toRad(toLat)) * Math.sin(dLng / 2) ** 2;
+    return 2 * r * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  private parseDurationSeconds(value: string | null | undefined): number | null {
+    if (!value) return null;
+    const trimmed = String(value).trim();
+    const match = trimmed.match(/^(\d+(?:\.\d+)?)s$/);
+    if (!match) return null;
+    return Math.round(Number(match[1]));
+  }
+
+  private roundedCoord(value: number): string {
+    return value.toFixed(5);
+  }
+
+  private buildDispatchRouteCacheKey(input: {
+    fromLat: number;
+    fromLng: number;
+    toLat: number;
+    toLng: number;
+    mode: DispatchRouteMode;
+    cacheKey?: string;
+    tripId?: string;
+  }): string {
+    const mode = input.mode || DispatchRouteMode.DRIVE;
+    const base = [
+      mode,
+      this.roundedCoord(input.fromLat),
+      this.roundedCoord(input.fromLng),
+      this.roundedCoord(input.toLat),
+      this.roundedCoord(input.toLng),
+    ].join(":");
+    if (input.cacheKey?.trim()) return `${base}:cache:${input.cacheKey.trim()}`;
+    if (input.tripId?.trim()) return `${base}:trip:${input.tripId.trim()}`;
+    return base;
+  }
+
+  private getRouteApiKey(): string | null {
+    const key = process.env.GOOGLE_ROUTES_API_KEY?.trim() || process.env.GOOGLE_MAPS_API_KEY?.trim();
+    return key || null;
+  }
+
+  private validateRouteInput(input: DispatchRouteQueryDto): void {
+    const isFiniteNumber = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+    if (!isFiniteNumber(input.fromLat) || !isFiniteNumber(input.fromLng)
+      || !isFiniteNumber(input.toLat) || !isFiniteNumber(input.toLng)) {
+      throw new BadRequestException("fromLat, fromLng, toLat, toLng are required numbers");
+    }
+    if (input.fromLat < -90 || input.fromLat > 90 || input.toLat < -90 || input.toLat > 90) {
+      throw new BadRequestException("Latitude must be between -90 and 90");
+    }
+    if (input.fromLng < -180 || input.fromLng > 180 || input.toLng < -180 || input.toLng > 180) {
+      throw new BadRequestException("Longitude must be between -180 and 180");
+    }
+  }
+
+  async getDispatchRoute(
+    tenantId: string,
+    input: DispatchRouteQueryDto,
+  ): Promise<DispatchRouteResponseDto> {
+    this.validateRouteInput(input);
+    const mode = input.mode ?? DispatchRouteMode.DRIVE;
+    const tinyDistance = this.haversineMeters(input.fromLat, input.fromLng, input.toLat, input.toLng);
+    if (tinyDistance < 20) {
+      return {
+        provider: "GOOGLE_ROUTES",
+        polyline: null,
+        polylineEncoding: "ENCODED_POLYLINE",
+        distanceMeters: 0,
+        durationSeconds: 0,
+        staticDurationSeconds: 0,
+        routeLabels: [],
+        cached: false,
+      };
+    }
+
+    const cacheKey = this.buildDispatchRouteCacheKey({
+      fromLat: input.fromLat,
+      fromLng: input.fromLng,
+      toLat: input.toLat,
+      toLng: input.toLng,
+      mode,
+      cacheKey: input.cacheKey,
+      tripId: input.tripId,
+    });
+    const now = Date.now();
+    const cached = this.dispatchRouteCache.get(cacheKey);
+    if (cached && cached.expiresAtMs > now) {
+      return { ...cached.value, cached: true };
+    }
+
+    const apiKey = this.getRouteApiKey();
+    if (!apiKey) {
+      return {
+        provider: "GOOGLE_ROUTES",
+        polyline: null,
+        polylineEncoding: "ENCODED_POLYLINE",
+        distanceMeters: null,
+        durationSeconds: null,
+        staticDurationSeconds: null,
+        routeLabels: [],
+        cached: false,
+        error: "Missing Google Routes API key",
+      };
+    }
+
+    const body = {
+      origin: {
+        location: {
+          latLng: {
+            latitude: input.fromLat,
+            longitude: input.fromLng,
+          },
+        },
+      },
+      destination: {
+        location: {
+          latLng: {
+            latitude: input.toLat,
+            longitude: input.toLng,
+          },
+        },
+      },
+      travelMode: mode,
+      routingPreference: "TRAFFIC_AWARE",
+      computeAlternativeRoutes: false,
+      polylineQuality: "OVERVIEW",
+      polylineEncoding: "ENCODED_POLYLINE",
+    };
+
+    try {
+      const response = await fetch(GOOGLE_ROUTES_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": apiKey,
+          "X-Goog-FieldMask":
+            "routes.distanceMeters,routes.duration,routes.staticDuration,routes.polyline.encodedPolyline,routes.routeLabels",
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        const result: DispatchRouteResponseDto = {
+          provider: "GOOGLE_ROUTES",
+          polyline: null,
+          polylineEncoding: "ENCODED_POLYLINE",
+          distanceMeters: null,
+          durationSeconds: null,
+          staticDurationSeconds: null,
+          routeLabels: [],
+          cached: false,
+          error: `Google Routes error ${response.status}`,
+        };
+        console.error("dispatch.routes google_error", {
+          tenantId,
+          status: response.status,
+          body: text?.slice(0, 500),
+        });
+        return result;
+      }
+
+      const payload = await response.json() as any;
+      const route = payload?.routes?.[0];
+      const result: DispatchRouteResponseDto = {
+        provider: "GOOGLE_ROUTES",
+        polyline: route?.polyline?.encodedPolyline ?? null,
+        polylineEncoding: "ENCODED_POLYLINE",
+        distanceMeters: Number.isFinite(route?.distanceMeters) ? route.distanceMeters : null,
+        durationSeconds: this.parseDurationSeconds(route?.duration),
+        staticDurationSeconds: this.parseDurationSeconds(route?.staticDuration),
+        routeLabels: Array.isArray(route?.routeLabels) ? route.routeLabels : [],
+        cached: false,
+      };
+      this.dispatchRouteCache.set(cacheKey, {
+        expiresAtMs: now + 60_000,
+        value: result,
+      });
+      return result;
+    } catch (error: any) {
+      console.error("dispatch.routes fetch_failed", {
+        tenantId,
+        message: error?.message ?? "unknown",
+      });
+      return {
+        provider: "GOOGLE_ROUTES",
+        polyline: null,
+        polylineEncoding: "ENCODED_POLYLINE",
+        distanceMeters: null,
+        durationSeconds: null,
+        staticDurationSeconds: null,
+        routeLabels: [],
+        cached: false,
+        error: "Failed to compute route",
+      };
+    }
+  }
+
+  async getTripRoute(
+    tenantId: string,
+    tripId: string,
+  ): Promise<DispatchRouteResponseDto> {
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, status: { not: TripStatus.DRAFT } },
+      select: {
+        id: true,
+        originLat: true,
+        originLng: true,
+        destinationLat: true,
+        destinationLng: true,
+      },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+    if (
+      trip.originLat == null
+      || trip.originLng == null
+      || trip.destinationLat == null
+      || trip.destinationLng == null
+    ) {
+      throw new BadRequestException("Trip is missing route coordinates");
+    }
+    return this.getDispatchRoute(tenantId, {
+      fromLat: trip.originLat,
+      fromLng: trip.originLng,
+      toLat: trip.destinationLat,
+      toLng: trip.destinationLng,
+      mode: DispatchRouteMode.DRIVE,
+      tripId: trip.id,
+    });
+  }
 
   private toLocalDayKey(value: Date | null | undefined): string | null {
     if (!value) return null;

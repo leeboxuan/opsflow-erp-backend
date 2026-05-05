@@ -3,10 +3,12 @@ import { Type } from "class-transformer";
 import {
   IsArray,
   IsEnum,
-  Matches,
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
+  Max,
+  Min,
   ValidateNested,
 } from "class-validator";
 
@@ -36,6 +38,10 @@ export enum DispatchOptimiseStrategy {
   TIME = "TIME",
 }
 
+export enum DispatchRouteMode {
+  DRIVE = "DRIVE",
+}
+
 export class DispatchOptimiseRouteDto {
   @ApiProperty({ example: "2026-04-30" })
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
@@ -50,6 +56,80 @@ export class DispatchOptimiseRouteDto {
   @ValidateNested()
   @Type(() => DispatchStartLocationDto)
   startLocation?: DispatchStartLocationDto;
+}
+
+export class DispatchRouteQueryDto {
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  fromLat!: number;
+
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  fromLng!: number;
+
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  toLat!: number;
+
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  toLng!: number;
+
+  @ApiPropertyOptional({ enum: DispatchRouteMode, default: DispatchRouteMode.DRIVE })
+  @IsOptional()
+  @IsEnum(DispatchRouteMode)
+  mode?: DispatchRouteMode;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tripId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  cacheKey?: string;
+}
+
+export class DispatchRouteResponseDto {
+  @ApiProperty({ example: "GOOGLE_ROUTES" })
+  provider!: "GOOGLE_ROUTES";
+
+  @ApiPropertyOptional()
+  polyline!: string | null;
+
+  @ApiProperty({ example: "ENCODED_POLYLINE" })
+  polylineEncoding!: "ENCODED_POLYLINE";
+
+  @ApiPropertyOptional()
+  distanceMeters!: number | null;
+
+  @ApiPropertyOptional()
+  durationSeconds!: number | null;
+
+  @ApiPropertyOptional()
+  staticDurationSeconds?: number | null;
+
+  @ApiPropertyOptional({ type: [String] })
+  routeLabels?: string[];
+
+  @ApiProperty()
+  cached!: boolean;
+
+  @ApiPropertyOptional()
+  error?: string | null;
 }
 
 /** Trailer checkout photo metadata (URLs only; no storage keys). */

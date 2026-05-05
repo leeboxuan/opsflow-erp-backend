@@ -2,6 +2,15 @@ import { DispatchService } from "./dispatch.service";
 import { BadRequestException } from "@nestjs/common";
 
 describe("DispatchService", () => {
+  const originalRoutesKey = process.env.GOOGLE_ROUTES_API_KEY;
+  const originalMapsKey = process.env.GOOGLE_MAPS_API_KEY;
+
+  afterEach(() => {
+    process.env.GOOGLE_ROUTES_API_KEY = originalRoutesKey;
+    process.env.GOOGLE_MAPS_API_KEY = originalMapsKey;
+    delete (global as any).fetch;
+  });
+
   it("dispatch board includes coordinates, timeline, parked markers, and gps age", async () => {
     const capturedAt = new Date(Date.now() - 5 * 60 * 1000);
     const prisma: any = {
@@ -553,5 +562,98 @@ describe("DispatchService", () => {
         tripIdsInOrder: ["trip-open", "trip-done"],
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("validates required route coordinates", async () => {
+    const svc = new DispatchService({} as any, { getClient: jest.fn() } as any);
+    await expect(
+      svc.getDispatchRoute("tenant-1", {
+        fromLat: Number.NaN,
+        fromLng: 103.8,
+        toLat: 1.3,
+        toLng: 103.9,
+      } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("returns cached route on second call", async () => {
+    process.env.GOOGLE_ROUTES_API_KEY = "test-key";
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        routes: [{
+          distanceMeters: 1000,
+          duration: "120s",
+          staticDuration: "110s",
+          polyline: { encodedPolyline: "abc123" },
+          routeLabels: ["DEFAULT_ROUTE"],
+        }],
+      }),
+    });
+    const svc = new DispatchService({} as any, { getClient: jest.fn() } as any);
+    const first = await svc.getDispatchRoute("tenant-1", {
+      fromLat: 1.29,
+      fromLng: 103.85,
+      toLat: 1.3,
+      toLng: 103.86,
+      mode: "DRIVE" as any,
+    });
+    const second = await svc.getDispatchRoute("tenant-1", {
+      fromLat: 1.29,
+      fromLng: 103.85,
+      toLat: 1.3,
+      toLng: 103.86,
+      mode: "DRIVE" as any,
+    });
+    expect(first.cached).toBe(false);
+    expect(second.cached).toBe(true);
+    expect((global as any).fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles google route failure gracefully", async () => {
+    process.env.GOOGLE_ROUTES_API_KEY = "test-key";
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => "google error",
+    });
+    const svc = new DispatchService({} as any, { getClient: jest.fn() } as any);
+    const res = await svc.getDispatchRoute("tenant-1", {
+      fromLat: 1.29,
+      fromLng: 103.85,
+      toLat: 1.3,
+      toLng: 103.86,
+      mode: "DRIVE" as any,
+    });
+    expect(res.polyline).toBeNull();
+    expect(res.error).toContain("Google Routes error");
+  });
+
+  it("parses encoded polyline and durations", async () => {
+    process.env.GOOGLE_ROUTES_API_KEY = "test-key";
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        routes: [{
+          distanceMeters: 3210,
+          duration: "345s",
+          staticDuration: "300s",
+          polyline: { encodedPolyline: "encoded-poly" },
+          routeLabels: ["DEFAULT_ROUTE"],
+        }],
+      }),
+    });
+    const svc = new DispatchService({} as any, { getClient: jest.fn() } as any);
+    const res = await svc.getDispatchRoute("tenant-1", {
+      fromLat: 1.29,
+      fromLng: 103.85,
+      toLat: 1.3,
+      toLng: 103.86,
+      mode: "DRIVE" as any,
+    });
+    expect(res.polyline).toBe("encoded-poly");
+    expect(res.distanceMeters).toBe(3210);
+    expect(res.durationSeconds).toBe(345);
+    expect(res.staticDurationSeconds).toBe(300);
   });
 });

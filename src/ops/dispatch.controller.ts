@@ -18,6 +18,8 @@ import { TenantGuard } from "../auth/guards/tenant.guard";
 import { DispatchService } from "./dispatch.service";
 import {
   DispatchBoardResponseDto,
+  DispatchRouteQueryDto,
+  DispatchRouteResponseDto,
   DispatchOptimiseRouteDto,
   DispatchReorderTripsDto,
 } from "./dto/dispatch.dto";
@@ -39,6 +41,26 @@ export class DispatchController {
       throw new BadRequestException("date must be YYYY-MM-DD");
     }
     return this.dispatchService.getBoard(req.tenant.tenantId, selectedDate);
+  }
+
+  @Get("routes")
+  @ApiOperation({ summary: "Get road route polyline between two coordinates" })
+  @ApiOkResponse({ type: DispatchRouteResponseDto })
+  async getRoute(
+    @Req() req: any,
+    @Query() query: DispatchRouteQueryDto,
+  ) {
+    return this.dispatchService.getDispatchRoute(req.tenant.tenantId, query);
+  }
+
+  @Get("trips/:tripId/route")
+  @ApiOperation({ summary: "Get road route polyline for a trip origin/destination" })
+  @ApiOkResponse({ type: DispatchRouteResponseDto })
+  async getTripRoute(
+    @Req() req: any,
+    @Param("tripId") tripId: string,
+  ) {
+    return this.dispatchService.getTripRoute(req.tenant.tenantId, tripId);
   }
 
   @Patch("drivers/:driverUserId/trips/reorder")
