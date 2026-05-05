@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { Role, TripDocumentType, TripStatus } from "@prisma/client";
+import { MembershipStatus, Role, TripDocumentType, TripStatus } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
 import {
@@ -113,10 +113,22 @@ export class DispatchService {
     const selectedDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date))
       ? date
       : this.toLocalDayKey(new Date())!;
-    const [driverUsers, locations, trips, trailerLocations] = await Promise.all([
-      this.prisma.user.findMany({
-        where: { tenantId, role: Role.DRIVER },
-        select: { id: true, name: true, phone: true },
+    const [driverMemberships, locations, trips, trailerLocations] = await Promise.all([
+      this.prisma.tenantMembership.findMany({
+        where: {
+          tenantId,
+          role: Role.DRIVER,
+          status: MembershipStatus.Active,
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+            },
+          },
+        },
       }),
       this.prisma.driverLocationLatest.findMany({
         where: { tenantId },
@@ -144,6 +156,10 @@ export class DispatchService {
         .findMany({ select: { code: true, name: true } })
         .catch(() => []),
     ]);
+
+    const driverUsers = driverMemberships
+      .map((membership) => membership.user)
+      .filter(Boolean);
 
     const trailerLocationMap = new Map<string, string>(
       trailerLocations.map((l) => [l.code, l.name]),

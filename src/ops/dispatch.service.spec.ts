@@ -5,9 +5,9 @@ describe("DispatchService", () => {
   it("dispatch board includes coordinates, timeline, parked markers, and gps age", async () => {
     const capturedAt = new Date(Date.now() - 5 * 60 * 1000);
     const prisma: any = {
-      user: {
+      tenantMembership: {
         findMany: jest.fn().mockResolvedValue([
-          { id: "driver-user-1", name: "Driver A", phone: "123" },
+          { user: { id: "driver-user-1", name: "Driver A", phone: "123" } },
         ]),
       },
       driverLocationLatest: {
@@ -96,9 +96,9 @@ describe("DispatchService", () => {
 
   it("returns nulls safely for optional route/timeline/gps fields", async () => {
     const prisma: any = {
-      user: {
+      tenantMembership: {
         findMany: jest.fn().mockResolvedValue([
-          { id: "driver-user-2", name: "Driver B", phone: null },
+          { user: { id: "driver-user-2", name: "Driver B", phone: null } },
         ]),
       },
       driverLocationLatest: { findMany: jest.fn().mockResolvedValue([]) },
@@ -162,9 +162,9 @@ describe("DispatchService", () => {
 
   it("board trip exposes trailer photo urls plus filename metadata without storage keys", async () => {
     const prisma: any = {
-      user: {
+      tenantMembership: {
         findMany: jest.fn().mockResolvedValue([
-          { id: "driver-user-1", name: "Driver A", phone: "123" },
+          { user: { id: "driver-user-1", name: "Driver A", phone: "123" } },
         ]),
       },
       driverLocationLatest: { findMany: jest.fn().mockResolvedValue([]) },
@@ -249,7 +249,9 @@ describe("DispatchService", () => {
 
   it("scopes board trips to selected date using plannedStartAt fallback createdAt", async () => {
     const prisma: any = {
-      user: { findMany: jest.fn().mockResolvedValue([{ id: "driver-user-1", name: "Driver A", phone: "123" }]) },
+      tenantMembership: {
+        findMany: jest.fn().mockResolvedValue([{ user: { id: "driver-user-1", name: "Driver A", phone: "123" } }]),
+      },
       driverLocationLatest: { findMany: jest.fn().mockResolvedValue([]) },
       trip: {
         findMany: jest.fn().mockResolvedValue([
@@ -319,7 +321,9 @@ describe("DispatchService", () => {
 
   it("does not fail board when signed URL or trailer location lookups fail", async () => {
     const prisma: any = {
-      user: { findMany: jest.fn().mockResolvedValue([{ id: "driver-user-1", name: "Driver A", phone: "123" }]) },
+      tenantMembership: {
+        findMany: jest.fn().mockResolvedValue([{ user: { id: "driver-user-1", name: "Driver A", phone: "123" } }]),
+      },
       driverLocationLatest: { findMany: jest.fn().mockResolvedValue([]) },
       trip: {
         findMany: jest.fn().mockResolvedValue([
