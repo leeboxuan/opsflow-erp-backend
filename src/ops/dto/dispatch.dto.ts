@@ -177,6 +177,9 @@ export class DispatchBoardLocationDto {
 
   @ApiProperty()
   capturedAt!: Date;
+
+  @ApiPropertyOptional()
+  recordedAt!: Date | null;
 }
 
 export class DispatchBoardDriverDto {

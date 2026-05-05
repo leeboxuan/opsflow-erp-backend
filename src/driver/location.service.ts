@@ -14,6 +14,7 @@ export class LocationService {
     driverUserId: string,
     dto: UpdateLocationDto,
   ): Promise<LocationDto> {
+    const recordedAt = dto.recordedAt ? new Date(dto.recordedAt) : new Date();
     // Verify driver belongs to tenant
     const membership = await (this.prisma as any).tenantMembership.findFirst({
       where: {
@@ -42,7 +43,7 @@ export class LocationService {
         accuracy: dto.accuracy || null,
         heading: dto.heading || null,
         speed: dto.speed || null,
-        capturedAt: new Date(),
+        capturedAt: recordedAt,
       },
       create: {
         tenantId,
@@ -52,7 +53,7 @@ export class LocationService {
         accuracy: dto.accuracy || null,
         heading: dto.heading || null,
         speed: dto.speed || null,
-        capturedAt: new Date(),
+        capturedAt: recordedAt,
       },
     });
 
@@ -135,6 +136,7 @@ export class LocationService {
       heading: location.heading,
       speed: location.speed,
       capturedAt: location.capturedAt,
+      recordedAt: location.capturedAt ?? null,
       updatedAt: location.updatedAt,
     };
   }
@@ -150,6 +152,7 @@ export class LocationService {
       heading: location.heading,
       speed: location.speed,
       capturedAt: location.capturedAt,
+      recordedAt: location.capturedAt ?? null,
       updatedAt: location.updatedAt,
     };
   }

@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional } from 'class-validator';
+import { IsDateString, IsNumber, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 
@@ -30,4 +30,9 @@ export class UpdateLocationDto {
   @IsNumber()
   @Type(() => Number)
   speed?: number;
+
+  @ApiProperty({ example: "2026-05-05T11:20:30.000Z", required: false })
+  @IsOptional()
+  @IsDateString()
+  recordedAt?: string;
 }

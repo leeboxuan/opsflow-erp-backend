@@ -213,12 +213,21 @@ export class DispatchService {
               heading: latestLocation.heading,
               speed: latestLocation.speed,
               capturedAt: latestLocation.capturedAt,
+              recordedAt: latestLocation.recordedAt ?? latestLocation.capturedAt ?? null,
             }
           : null,
         lastGpsAgeMinutes: latestLocation
           ? Math.max(
               0,
-              Math.floor((Date.now() - new Date(latestLocation.capturedAt).getTime()) / 60000),
+              Math.floor((
+                Date.now()
+                - new Date(
+                  latestLocation.recordedAt
+                  ?? latestLocation.capturedAt
+                  ?? latestLocation.updatedAt
+                  ?? latestLocation.createdAt,
+                ).getTime()
+              ) / 60000),
             )
           : null,
         activeTrip: activeTrip ? await this.toBoardTrip(activeTrip, trailerLocationMap) : null,

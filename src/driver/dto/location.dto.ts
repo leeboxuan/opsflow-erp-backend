@@ -22,6 +22,9 @@ export class LocationDto {
   @ApiProperty()
   capturedAt: Date;
 
+  @ApiProperty({ nullable: true })
+  recordedAt: Date | null;
+
   @ApiProperty()
   updatedAt: Date;
 }

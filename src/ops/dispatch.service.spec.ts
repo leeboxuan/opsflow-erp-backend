@@ -87,6 +87,7 @@ describe("DispatchService", () => {
     expect(trip.closedAt).toEqual(new Date("2026-04-30T12:15:00.000Z"));
     expect(res.drivers[0].lastGpsAgeMinutes).toBeGreaterThanOrEqual(4);
     expect(res.drivers[0].lastGpsAgeMinutes).toBeLessThanOrEqual(6);
+    expect(res.drivers[0].latestLocation?.recordedAt).toEqual(capturedAt);
     expect(res.date).toBe("2026-04-30");
     expect(res.drivers[0].driverPhone).toBe("123");
     expect(res.drivers[0].vehicleNumber).toBe("SBA1234X");
@@ -366,6 +367,68 @@ describe("DispatchService", () => {
     const res = await svc.getBoard("tenant-1", "2026-05-05");
     expect(res.drivers[0].activeTrip.trailerStartPhotoUrl).toBeNull();
     expect(res.drivers[0].activeTrip.trailerLastLocationName).toBeNull();
+  });
+
+  it("uses updatedAt for gps age when capturedAt is missing", async () => {
+    const updatedAt = new Date(Date.now() - 5 * 60 * 1000);
+    const prisma: any = {
+      tenantMembership: {
+        findMany: jest.fn().mockResolvedValue([{ user: { id: "driver-user-1", name: "Driver A", phone: "123" } }]),
+      },
+      driverLocationLatest: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            driverUserId: "driver-user-1",
+            lat: 1.2,
+            lng: 103.8,
+            accuracy: null,
+            heading: null,
+            speed: null,
+            capturedAt: null,
+            updatedAt,
+          },
+        ]),
+      },
+      trip: { findMany: jest.fn().mockResolvedValue([]) },
+      masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
+      drivers: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const svc = new DispatchService(prisma, { getClient: jest.fn() } as any);
+    const res = await svc.getBoard("tenant-1", "2026-05-05");
+    expect(res.drivers[0].lastGpsAgeMinutes).toBeGreaterThanOrEqual(4);
+    expect(res.drivers[0].lastGpsAgeMinutes).toBeLessThanOrEqual(6);
+  });
+
+  it("uses recordedAt for gps age when present", async () => {
+    const recordedAt = new Date(Date.now() - 7 * 60 * 1000);
+    const prisma: any = {
+      tenantMembership: {
+        findMany: jest.fn().mockResolvedValue([{ user: { id: "driver-user-1", name: "Driver A", phone: "123" } }]),
+      },
+      driverLocationLatest: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            driverUserId: "driver-user-1",
+            lat: 1.2,
+            lng: 103.8,
+            accuracy: null,
+            heading: null,
+            speed: null,
+            capturedAt: new Date(),
+            recordedAt,
+            updatedAt: new Date(),
+          },
+        ]),
+      },
+      trip: { findMany: jest.fn().mockResolvedValue([]) },
+      masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
+      drivers: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const svc = new DispatchService(prisma, { getClient: jest.fn() } as any);
+    const res = await svc.getBoard("tenant-1", "2026-05-05");
+    expect(res.drivers[0].latestLocation?.recordedAt).toEqual(recordedAt);
+    expect(res.drivers[0].lastGpsAgeMinutes).toBeGreaterThanOrEqual(6);
+    expect(res.drivers[0].lastGpsAgeMinutes).toBeLessThanOrEqual(8);
   });
 
   it("rejects reordering when requested ids include terminal trips", async () => {
