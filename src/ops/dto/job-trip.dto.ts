@@ -16,6 +16,54 @@ import {
 import { JobTripTemplate } from "@prisma/client";
 import { Transform, Type } from "class-transformer";
 
+export enum JobTripOrderStrategy {
+  DISTANCE = "DISTANCE",
+  TIME = "TIME",
+}
+
+export class JobTripSuggestStartLocationDto {
+  @ApiProperty()
+  @IsNumber()
+  lat!: number;
+
+  @ApiProperty()
+  @IsNumber()
+  lng!: number;
+}
+
+export class SuggestJobTripOrderDto {
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  tripIds?: string[];
+
+  @ApiPropertyOptional({ type: () => JobTripSuggestStartLocationDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => JobTripSuggestStartLocationDto)
+  startLocation?: JobTripSuggestStartLocationDto;
+
+  @ApiPropertyOptional({ enum: JobTripOrderStrategy, default: JobTripOrderStrategy.DISTANCE })
+  @IsOptional()
+  @IsEnum(JobTripOrderStrategy)
+  strategy?: JobTripOrderStrategy;
+}
+
+export class PublishJobTripRouteDto {
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  tripIdsInOrder?: string[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  publishTripIds?: string[];
+}
+
 export class AppendJobTripDto {
   @ApiPropertyOptional({
     enum: JobTripTemplate,

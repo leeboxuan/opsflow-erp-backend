@@ -46,6 +46,7 @@ import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
 import { buildDocumentFileDisplayFields } from "../common/document-file-display";
 import { buildTripDisplayRef } from "../common/trip-display-ref";
+import { suggestTripOrderByNearestNeighbour } from "../common/trip-order-suggest";
 
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
@@ -65,7 +66,9 @@ import {
   AssignJobTripDto,
   PatchTripPayoutDto,
   PatchJobTripDto,
+  PublishJobTripRouteDto,
   ReorderJobTripsDto,
+  SuggestJobTripOrderDto,
   TripPayoutLineInputDto,
 } from "./dto/job-trip.dto";
 import {
@@ -407,6 +410,12 @@ type TripPublishReadinessResult = {
   payoutLineCount: number;
 };
 
+type PublishRouteBlockedTrip = {
+  tripId: string;
+  tripDisplayRef: string;
+  reason: string;
+};
+
 function payoutLineLabel(line: any): string {
   const label = String(line?.label ?? "").trim();
   return label.length > 0 ? label : "Manual line";
@@ -543,6 +552,18 @@ function evaluateTripPublishReadiness(input: TripPublishReadinessInput): TripPub
     totalPayoutCents: input.driverEarningCents ?? 0,
     payoutLineCount: 0,
   };
+}
+
+function isPlanningEligibleStatus(status: TripStatus): boolean {
+  return status === TripStatus.DRAFT || status === TripStatus.PUBLISHED;
+}
+
+function isTerminalStatus(status: TripStatus): boolean {
+  return (
+    status === TripStatus.COMPLETED
+    || status === TripStatus.DONE
+    || status === TripStatus.CANCELLED
+  );
 }
 
 function firstNonEmptyText(...values: Array<unknown>): string | null {
@@ -3182,7 +3203,12 @@ export class OpsJobsService {
     const actorUserId: string | null = user?.userId ?? null;
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
-      include: { trips: { select: { id: true } } },
+      include: {
+        trips: {
+          select: { id: true, status: true },
+          orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
+        },
+      },
     });
     if (!job) throw new NotFoundException("Job not found");
 
@@ -3200,12 +3226,28 @@ export class OpsJobsService {
       if (!ids.has(id)) throw new BadRequestException(`Unknown trip id: ${id}`);
     }
 
+    const existingOrder = (job.trips ?? []).map((t: { id: string }) => t.id);
+    const existingIndex = new Map(existingOrder.map((id, idx) => [id, idx] as const));
+    const terminalTrips = (job.trips ?? []).filter((t: any) => isTerminalStatus(t.status));
+    const movedTerminalTrips = terminalTrips.filter((t: any) =>
+      existingIndex.get(t.id) !== requestedOrder.indexOf(t.id)
+    );
+    if (movedTerminalTrips.length > 0) {
+      throw new BadRequestException(
+        "Terminal trips (COMPLETED/DONE/CANCELLED) cannot be moved in reorder",
+      );
+    }
+
     let seq = 1;
     await this.prisma.$transaction(async (tx) => {
       for (const tripId of requestedOrder) {
         await tx.trip.update({
           where: { id: tripId },
-          data: { jobSequence: seq, tripSequence: seq++ },
+          data: {
+            jobSequence: seq,
+            tripSequence: seq++,
+            routeVersion: { increment: 1 },
+          },
         });
       }
     });
@@ -3220,6 +3262,292 @@ export class OpsJobsService {
     );
 
     return this.getOne(tenantId, jobId, user);
+  }
+
+  private async getTripPublishState(
+    tenantId: string,
+    trip: {
+      id: string;
+      status: TripStatus;
+      driverEarningCents: number | null;
+      assignedDriverUserId: string | null;
+      driverId: string | null;
+      vehicleId: string | null;
+      fleetVehicleId: string | null;
+    },
+  ): Promise<{ readiness: TripPublishReadinessResult; payoutLines: any[] }> {
+    const payoutLines =
+      (this.prisma as any).tripPayoutLine?.findMany
+        ? await this.prisma.tripPayoutLine.findMany({
+            where: { tenantId, tripId: trip.id },
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          })
+        : [];
+    const readiness = evaluateTripPublishReadiness({
+      status: trip.status,
+      assignedDriverUserId: trip.assignedDriverUserId ?? null,
+      driverId: trip.driverId ?? null,
+      vehicleId: trip.vehicleId ?? null,
+      fleetVehicleId: trip.fleetVehicleId ?? null,
+      driverEarningCents: trip.driverEarningCents ?? null,
+      payoutLines,
+    });
+    return { readiness, payoutLines };
+  }
+
+  async suggestTripOrder(
+    tenantId: string,
+    jobId: string,
+    dto: SuggestJobTripOrderDto,
+    user: any,
+  ): Promise<{
+    suggestedTripIdsInOrder: string[];
+    reason: string;
+    warnings: string[];
+    skippedTripIds: string[];
+    strategy: "DISTANCE";
+  }> {
+    this.assertCustomerCanOnlyRead(user);
+    const job = await this.prisma.job.findFirst({ where: { id: jobId, tenantId } });
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job, user);
+
+    const trips = await this.prisma.trip.findMany({
+      where: { tenantId, jobId },
+      orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        status: true,
+        originLat: true,
+        originLng: true,
+        destinationLat: true,
+        destinationLng: true,
+      },
+    });
+
+    const requestedTripIds = Array.isArray(dto.tripIds) ? dto.tripIds : [];
+    const tripById = new Map(trips.map((t) => [t.id, t] as const));
+    for (const tripId of requestedTripIds) {
+      if (!tripById.has(tripId)) {
+        throw new BadRequestException(`Unknown trip id: ${tripId}`);
+      }
+    }
+
+    const candidatePool = requestedTripIds.length
+      ? requestedTripIds.map((id) => tripById.get(id)!).filter(Boolean)
+      : trips;
+    const eligible = candidatePool.filter((trip) => isPlanningEligibleStatus(trip.status));
+    const skippedTripIds = candidatePool
+      .filter((trip) => !isPlanningEligibleStatus(trip.status))
+      .map((trip) => trip.id);
+
+    const suggestion = suggestTripOrderByNearestNeighbour({
+      trips: eligible.map((trip) => ({
+        id: trip.id,
+        originLat: trip.originLat,
+        originLng: trip.originLng,
+        destinationLat: trip.destinationLat,
+        destinationLng: trip.destinationLng,
+      })),
+      startLocation: dto.startLocation
+        ? { lat: dto.startLocation.lat, lng: dto.startLocation.lng }
+        : null,
+    });
+
+    const warnings = [...suggestion.warnings];
+    if (dto.strategy && dto.strategy !== "DISTANCE") {
+      warnings.push("Requested strategy is not traffic-aware; distance heuristic was used.");
+    }
+
+    return {
+      suggestedTripIdsInOrder: suggestion.suggestedTripIdsInOrder,
+      reason:
+        "Suggested using distance between available stop coordinates. This is not traffic-aware.",
+      warnings,
+      skippedTripIds,
+      strategy: "DISTANCE",
+    };
+  }
+
+  async publishTripRoute(
+    tenantId: string,
+    jobId: string,
+    dto: PublishJobTripRouteDto,
+    user: any,
+  ): Promise<{
+    ok: true;
+    jobId: string;
+    orderedTripIds: string[];
+    publishedTripIds: string[];
+    alreadyPublishedTripIds: string[];
+    skippedTripIds: string[];
+  }> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+      select: { id: true, internalRef: true, customerCompanyId: true },
+    });
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job as any, user);
+
+    const trips = await this.prisma.trip.findMany({
+      where: { tenantId, jobId },
+      orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        status: true,
+        tripSequence: true,
+        jobSequence: true,
+        driverEarningCents: true,
+        assignedDriverUserId: true,
+        driverId: true,
+        vehicleId: true,
+        fleetVehicleId: true,
+      },
+    });
+    const tripById = new Map(trips.map((t) => [t.id, t] as const));
+    const planningTrips = trips.filter((t) => isPlanningEligibleStatus(t.status));
+    const planningIds = planningTrips.map((t) => t.id);
+
+    const orderedTripIds = Array.isArray(dto.tripIdsInOrder) ? dto.tripIdsInOrder : [];
+    if (orderedTripIds.length > 0) {
+      const expected = new Set(planningIds);
+      if (orderedTripIds.length !== expected.size) {
+        throw new BadRequestException(
+          "tripIdsInOrder must include exactly all planning trips (DRAFT/PUBLISHED)",
+        );
+      }
+      for (const tripId of orderedTripIds) {
+        if (!expected.has(tripId)) {
+          throw new BadRequestException(`tripIdsInOrder contains non-planning or unknown trip: ${tripId}`);
+        }
+      }
+      let seq = 1;
+      await this.prisma.$transaction(async (tx) => {
+        for (const tripId of orderedTripIds) {
+          await tx.trip.update({
+            where: { id: tripId },
+            data: {
+              tripSequence: seq,
+              jobSequence: seq,
+              routeVersion: { increment: 1 },
+            },
+          });
+          seq += 1;
+        }
+      });
+      await this.audit.log(
+        tenantId,
+        "TRIP_ROUTE_REORDER",
+        "JOB",
+        jobId,
+        { orderedTripIds, source: "ROUTE_PLAN" },
+        actorUserId,
+      );
+    }
+
+    const requestedPublishIds = Array.isArray(dto.publishTripIds) && dto.publishTripIds.length
+      ? dto.publishTripIds
+      : planningIds;
+    for (const tripId of requestedPublishIds) {
+      if (!tripById.has(tripId)) {
+        throw new BadRequestException(`Unknown trip id: ${tripId}`);
+      }
+    }
+
+    const selectedTrips = requestedPublishIds.map((id) => tripById.get(id)!);
+    const alreadyPublishedTripIds = selectedTrips
+      .filter((trip) => trip.status === TripStatus.PUBLISHED)
+      .map((trip) => trip.id);
+    const publishCandidates = selectedTrips.filter((trip) => trip.status === TripStatus.DRAFT);
+    const skippedTripIds = selectedTrips
+      .filter((trip) =>
+        trip.status === TripStatus.ONGOING
+        || trip.status === TripStatus.COMPLETED
+        || trip.status === TripStatus.DONE
+        || trip.status === TripStatus.CANCELLED
+      )
+      .map((trip) => trip.id);
+
+    const blockedTrips: PublishRouteBlockedTrip[] = [];
+    const readyTripIds: string[] = [];
+    const payoutLineCountByTrip = new Map<string, number>();
+    const payoutTotalByTrip = new Map<string, number>();
+    for (const trip of publishCandidates) {
+      const { readiness, payoutLines } = await this.getTripPublishState(tenantId, trip);
+      if (!readiness.canPublish) {
+        blockedTrips.push({
+          tripId: trip.id,
+          tripDisplayRef: buildTripDisplayRef({
+            jobInternalRef: job.internalRef,
+            tripSequence: trip.tripSequence,
+            jobSequence: trip.jobSequence,
+            tripId: trip.id,
+          }),
+          reason: readiness.errorMessage ?? "Trip is not ready to publish",
+        });
+      } else {
+        readyTripIds.push(trip.id);
+        payoutLineCountByTrip.set(trip.id, payoutLines.length);
+        payoutTotalByTrip.set(trip.id, readiness.totalPayoutCents);
+      }
+    }
+
+    if (blockedTrips.length > 0) {
+      throw new BadRequestException({
+        message: "Some trips are not ready to publish",
+        blockedTrips,
+      });
+    }
+
+    if (readyTripIds.length > 0) {
+      await this.prisma.$transaction(async (tx) => {
+        for (const tripId of readyTripIds) {
+          const payoutLineCount = payoutLineCountByTrip.get(tripId) ?? 0;
+          if (payoutLineCount > 0) {
+            await tx.trip.update({
+              where: { id: tripId },
+              data: {
+                driverEarningCents: payoutTotalByTrip.get(tripId) ?? null,
+                earningLabelSnapshot: `${payoutLineCount} payout items`,
+              },
+            });
+          }
+          await tx.trip.update({
+            where: { id: tripId },
+            data: {
+              status: TripStatus.PUBLISHED,
+              pendingState: TripPendingState.NONE,
+              publishedAt: new Date(),
+              publishedByUserId: actorUserId,
+            },
+          });
+        }
+      });
+    }
+
+    await this.audit.log(
+      tenantId,
+      "TRIP_ROUTE_PUBLISH",
+      "JOB",
+      jobId,
+      {
+        orderedTripIds,
+        publishedTripIds: readyTripIds,
+        alreadyPublishedTripIds,
+      },
+      actorUserId,
+    );
+
+    return {
+      ok: true,
+      jobId,
+      orderedTripIds,
+      publishedTripIds: readyTripIds,
+      alreadyPublishedTripIds,
+      skippedTripIds,
+    };
   }
 
   async patchTrip(
@@ -3571,22 +3899,7 @@ export class OpsJobsService {
     });
     if (!trip) throw new NotFoundException("Trip not found");
 
-    const payoutLines =
-      (this.prisma as any).tripPayoutLine?.findMany
-        ? await this.prisma.tripPayoutLine.findMany({
-            where: { tenantId, tripId },
-            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-          })
-        : [];
-    const readiness = evaluateTripPublishReadiness({
-      status: trip.status,
-      assignedDriverUserId: trip.assignedDriverUserId ?? null,
-      driverId: trip.driverId ?? null,
-      vehicleId: trip.vehicleId ?? null,
-      fleetVehicleId: trip.fleetVehicleId ?? null,
-      driverEarningCents: trip.driverEarningCents ?? null,
-      payoutLines,
-    });
+    const { readiness, payoutLines } = await this.getTripPublishState(tenantId, trip);
     if (!readiness.canPublish) {
       throw new BadRequestException(readiness.errorMessage ?? "Trip is not ready to publish");
     }
@@ -3620,6 +3933,85 @@ export class OpsJobsService {
     );
 
     return this.getOne(tenantId, jobId, user);
+  }
+
+  async unpublishTrip(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    user: any,
+  ): Promise<{ ok: true; tripId: string; tripDisplayRef: string; status: "DRAFT" }> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+      select: {
+        id: true,
+        status: true,
+        tripSequence: true,
+        jobSequence: true,
+        job: { select: { internalRef: true } },
+      },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    if (trip.status === TripStatus.DRAFT) {
+      throw new BadRequestException("Trip is already unpublished.");
+    }
+    if (trip.status === TripStatus.CANCELLED) {
+      throw new BadRequestException("Cancelled trip cannot be unpublished.");
+    }
+    if (
+      trip.status === TripStatus.ONGOING
+      || trip.status === TripStatus.COMPLETED
+      || trip.status === TripStatus.DONE
+    ) {
+      throw new BadRequestException(
+        "Trip cannot be unpublished after execution has started.",
+      );
+    }
+    if (trip.status !== TripStatus.PUBLISHED) {
+      throw new BadRequestException(`Trip cannot be unpublished from status ${trip.status}.`);
+    }
+
+    await this.prisma.trip.update({
+      where: { id: tripId },
+      data: {
+        status: TripStatus.DRAFT,
+        publishedAt: null,
+        publishedByUserId: null,
+        updatedByUserId: actorUserId,
+      },
+    });
+
+    const tripDisplayRef = buildTripDisplayRef({
+      jobInternalRef: trip.job?.internalRef ?? null,
+      tripSequence: trip.tripSequence ?? null,
+      jobSequence: trip.jobSequence ?? null,
+      tripId: trip.id,
+    });
+
+    await this.audit.log(
+      tenantId,
+      "TRIP_UNPUBLISHED",
+      "TRIP",
+      tripId,
+      {
+        jobId,
+        tripDisplayRef,
+        previousStatus: TripStatus.PUBLISHED,
+        nextStatus: TripStatus.DRAFT,
+      },
+      actorUserId,
+    );
+
+    return {
+      ok: true,
+      tripId,
+      tripDisplayRef,
+      status: TripStatus.DRAFT,
+    };
   }
 
   private async recalculateJobStatusFromTrips(tenantId: string, jobId: string): Promise<void> {

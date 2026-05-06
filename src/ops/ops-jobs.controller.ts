@@ -45,8 +45,10 @@ import {
   AssignJobTripDto,
   PatchTripPayoutDto,
   PatchJobTripDto,
+  PublishJobTripRouteDto,
   PutTripPayoutLinesDto,
   ReorderJobTripsDto,
+  SuggestJobTripOrderDto,
 } from "./dto/job-trip.dto";
 import { JobDto, JobDocumentDto, JobTripResponseDto } from "./dto/job.dto";
 
@@ -688,6 +690,38 @@ export class OpsJobsController {
     return this.jobs.reorderTrips(tenantId, jobId, dto, accessUser);
   }
 
+  @Post(":jobId/trips/suggest-order")
+  @ApiOperation({ summary: "Suggest job trip order for planning (distance-based)" })
+  async suggestTripOrder(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Body() dto: SuggestJobTripOrderDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.suggestTripOrder(tenantId, jobId, dto, accessUser);
+  }
+
+  @Post(":jobId/trips/publish-route")
+  @ApiOperation({ summary: "Apply planned route order and publish ready draft trips" })
+  async publishTripRoute(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Body() dto: PublishJobTripRouteDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.publishTripRoute(tenantId, jobId, dto, accessUser);
+  }
+
   @Patch(":jobId/trips/:tripId")
   @ApiOperation({ summary: "Update trip metadata or assign driver earning rate" })
   async patchTrip(
@@ -740,6 +774,25 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.publishTrip(tenantId, jobId, tripId, accessUser);
+  }
+
+  @Post(":jobId/trips/:tripId/unpublish")
+  @ApiOperation({
+    summary:
+      "Unpublish a published trip back to draft (only before execution starts)",
+  })
+  async unpublishTrip(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.unpublishTrip(tenantId, jobId, tripId, accessUser);
   }
 
   @Post(":jobId/trips/:tripId/mark-done")

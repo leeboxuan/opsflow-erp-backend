@@ -7,6 +7,7 @@ import {
   documentMimeTypeOrNull,
 } from "../common/document-file-display";
 import { buildTripDisplayRef } from "../common/trip-display-ref";
+import { suggestTripOrderByNearestNeighbour } from "../common/trip-order-suggest";
 import {
   DispatchGpsStatus,
   DispatchRouteMode,
@@ -630,51 +631,23 @@ export class DispatchService {
     const dayTrips = trips.filter((t) => this.toLocalDayKey(t.plannedStartAt ?? t.createdAt) === day);
     if (!dayTrips.length) throw new NotFoundException("No open trips found for this driver/day");
 
-    const warnings: string[] = [];
-    const available = [...dayTrips];
-    const output: string[] = [];
-    let current = dto.startLocation ? { lat: dto.startLocation.lat, lng: dto.startLocation.lng } : null;
-
-    const distance = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
-      const dx = a.lat - b.lat;
-      const dy = a.lng - b.lng;
-      return Math.sqrt(dx * dx + dy * dy);
-    };
-
-    while (available.length > 0) {
-      let bestIndex = 0;
-      let bestDistance = Number.POSITIVE_INFINITY;
-
-      for (let i = 0; i < available.length; i += 1) {
-        const trip = available[i];
-        if (current && trip.originLat != null && trip.originLng != null) {
-          const d = distance(current, { lat: trip.originLat, lng: trip.originLng });
-          if (d < bestDistance) {
-            bestDistance = d;
-            bestIndex = i;
-          }
-        } else if (!current) {
-          bestIndex = 0;
-          break;
-        }
-      }
-
-      const [nextTrip] = available.splice(bestIndex, 1);
-      output.push(nextTrip.id);
-      if (nextTrip.destinationLat != null && nextTrip.destinationLng != null) {
-        current = { lat: nextTrip.destinationLat, lng: nextTrip.destinationLng };
-      } else {
-        warnings.push(`Trip ${nextTrip.id} missing destination coordinates`);
-      }
-      if (nextTrip.originLat == null || nextTrip.originLng == null) {
-        warnings.push(`Trip ${nextTrip.id} missing origin coordinates`);
-      }
-    }
+    const suggestion = suggestTripOrderByNearestNeighbour({
+      trips: dayTrips.map((trip) => ({
+        id: trip.id,
+        originLat: trip.originLat,
+        originLng: trip.originLng,
+        destinationLat: trip.destinationLat,
+        destinationLng: trip.destinationLng,
+      })),
+      startLocation: dto.startLocation
+        ? { lat: dto.startLocation.lat, lng: dto.startLocation.lng }
+        : null,
+    });
 
     return {
-      suggestedTripIdsInOrder: output,
+      suggestedTripIdsInOrder: suggestion.suggestedTripIdsInOrder,
       reason: "Deterministic nearest-neighbour ordering using available origin/destination coordinates",
-      warnings,
+      warnings: suggestion.warnings,
     };
   }
 }
