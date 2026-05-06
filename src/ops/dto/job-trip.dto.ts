@@ -44,6 +44,15 @@ export class SuggestJobTripOrderDto {
   @Type(() => JobTripSuggestStartLocationDto)
   startLocation?: JobTripSuggestStartLocationDto;
 
+  @ApiPropertyOptional({
+    description:
+      "When true and startLocation is omitted, attempt to use assigned driver's latest GPS as suggestion start point.",
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  useDriverLatestLocation?: boolean;
+
   @ApiPropertyOptional({ enum: JobTripOrderStrategy, default: JobTripOrderStrategy.DISTANCE })
   @IsOptional()
   @IsEnum(JobTripOrderStrategy)

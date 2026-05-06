@@ -21,6 +21,9 @@ describe("OpsJobsService route planning", () => {
       tripPayoutLine: {
         findMany: jest.fn().mockResolvedValue([]),
       },
+      driverLocationLatest: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
       $transaction: jest.fn(async (cb: any) => {
         if (typeof cb === "function") return cb(prisma);
         return Promise.all(cb);
@@ -63,6 +66,126 @@ describe("OpsJobsService route planning", () => {
     const res = await svc.suggestTripOrder("t1", "job1", {}, accessUser);
     expect(res.warnings.join(" ")).toContain("missing origin");
     expect(res.warnings.join(" ")).toContain("missing destination");
+  });
+
+  it("useDriverLatestLocation true uses assigned driver latest GPS", async () => {
+    const { svc } = makeService({
+      trip: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "t1", status: TripStatus.DRAFT, tripSequence: 1, assignedDriverUserId: "d1", originLat: 1.4, originLng: 103.9, destinationLat: 1.45, destinationLng: 103.95 },
+          { id: "t2", status: TripStatus.PUBLISHED, tripSequence: 2, assignedDriverUserId: "d1", originLat: 1.1, originLng: 103.6, destinationLat: 1.2, destinationLng: 103.7 },
+        ]),
+      },
+      driverLocationLatest: {
+        findUnique: jest.fn().mockResolvedValue({
+          lat: 1.39,
+          lng: 103.89,
+          capturedAt: new Date(),
+          recordedAt: null,
+          updatedAt: new Date(),
+        }),
+      },
+    });
+
+    const res = await svc.suggestTripOrder(
+      "t1",
+      "job1",
+      { useDriverLatestLocation: true },
+      accessUser,
+    );
+    expect(res.reason).toContain("driver's latest GPS");
+    expect(res.suggestedTripIdsInOrder[0]).toBe("t1");
+  });
+
+  it("explicit startLocation overrides driver GPS", async () => {
+    const driverLocationLatestFindUnique = jest.fn().mockResolvedValue({
+      lat: 1.39,
+      lng: 103.89,
+      capturedAt: new Date(),
+      recordedAt: null,
+      updatedAt: new Date(),
+    });
+    const { svc } = makeService({
+      trip: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "near-driver", status: TripStatus.DRAFT, tripSequence: 1, assignedDriverUserId: "d1", originLat: 1.39, originLng: 103.89, destinationLat: 1.40, destinationLng: 103.90 },
+          { id: "near-start", status: TripStatus.PUBLISHED, tripSequence: 2, assignedDriverUserId: "d1", originLat: 1.0, originLng: 103.0, destinationLat: 1.01, destinationLng: 103.01 },
+        ]),
+      },
+      driverLocationLatest: {
+        findUnique: driverLocationLatestFindUnique,
+      },
+    });
+
+    const res = await svc.suggestTripOrder(
+      "t1",
+      "job1",
+      { useDriverLatestLocation: true, startLocation: { lat: 1.0, lng: 103.0 } },
+      accessUser,
+    );
+    expect(driverLocationLatestFindUnique).not.toHaveBeenCalled();
+    expect(res.suggestedTripIdsInOrder[0]).toBe("near-start");
+    expect(res.reason).toContain("distance between available stop coordinates");
+  });
+
+  it("no usable driver GPS falls back with warning", async () => {
+    const { svc } = makeService({
+      trip: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "t1", status: TripStatus.DRAFT, tripSequence: 1, assignedDriverUserId: "d1", originLat: 1.4, originLng: 103.9, destinationLat: 1.45, destinationLng: 103.95 },
+        ]),
+      },
+      driverLocationLatest: {
+        findUnique: jest.fn().mockResolvedValue({
+          lat: 1.39,
+          lng: 103.89,
+          capturedAt: null,
+          recordedAt: null,
+          updatedAt: null,
+        }),
+      },
+    });
+    const res = await svc.suggestTripOrder("t1", "job1", { useDriverLatestLocation: true }, accessUser);
+    expect(res.reason).toContain("distance between available stop coordinates");
+    expect(res.warnings).toContain("No recent driver GPS found; driver GPS was not used.");
+  });
+
+  it("different drivers fall back with warning", async () => {
+    const { svc, prisma } = makeService({
+      trip: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "t1", status: TripStatus.DRAFT, tripSequence: 1, assignedDriverUserId: "d1", originLat: 1.4, originLng: 103.9, destinationLat: 1.45, destinationLng: 103.95 },
+          { id: "t2", status: TripStatus.PUBLISHED, tripSequence: 2, assignedDriverUserId: "d2", originLat: 1.5, originLng: 103.7, destinationLat: 1.52, destinationLng: 103.72 },
+        ]),
+      },
+    });
+    const res = await svc.suggestTripOrder("t1", "job1", { useDriverLatestLocation: true }, accessUser);
+    expect(res.reason).toContain("distance between available stop coordinates");
+    expect(res.warnings).toContain("Trips have different assigned drivers; driver GPS was not used.");
+    expect(prisma.driverLocationLatest.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("completed trips remain skipped when using driver GPS", async () => {
+    const { svc } = makeService({
+      trip: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "t-draft", status: TripStatus.DRAFT, tripSequence: 1, assignedDriverUserId: "d1", originLat: 1.4, originLng: 103.9, destinationLat: 1.45, destinationLng: 103.95 },
+          { id: "t-completed", status: TripStatus.COMPLETED, tripSequence: 2, assignedDriverUserId: "d1", originLat: 1.5, originLng: 103.7, destinationLat: 1.52, destinationLng: 103.72 },
+        ]),
+      },
+      driverLocationLatest: {
+        findUnique: jest.fn().mockResolvedValue({
+          lat: 1.39,
+          lng: 103.89,
+          capturedAt: new Date(),
+          recordedAt: null,
+          updatedAt: new Date(),
+        }),
+      },
+    });
+    const res = await svc.suggestTripOrder("t1", "job1", { useDriverLatestLocation: true }, accessUser);
+    expect(res.suggestedTripIdsInOrder).toEqual(["t-draft"]);
+    expect(res.skippedTripIds).toContain("t-completed");
   });
 
   it("publishTripRoute applies order and publishes ready DRAFT trips", async () => {

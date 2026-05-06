@@ -3318,6 +3318,7 @@ export class OpsJobsService {
       select: {
         id: true,
         status: true,
+        assignedDriverUserId: true,
         originLat: true,
         originLng: true,
         destinationLat: true,
@@ -3341,6 +3342,62 @@ export class OpsJobsService {
       .filter((trip) => !isPlanningEligibleStatus(trip.status))
       .map((trip) => trip.id);
 
+    const warnings: string[] = [];
+    let startLocation: { lat: number; lng: number } | null = dto.startLocation
+      ? { lat: dto.startLocation.lat, lng: dto.startLocation.lng }
+      : null;
+    let usedDriverGps = false;
+
+    if (!startLocation && dto.useDriverLatestLocation === true && eligible.length > 0) {
+      const assignedDriverIds = Array.from(
+        new Set(
+          eligible
+            .map((trip) => String(trip.assignedDriverUserId ?? "").trim())
+            .filter((id) => id.length > 0),
+        ),
+      );
+
+      if (assignedDriverIds.length !== 1) {
+        warnings.push("Trips have different assigned drivers; driver GPS was not used.");
+      } else {
+        const driverUserId = assignedDriverIds[0];
+        const latestLocation = await this.prisma.driverLocationLatest.findUnique({
+          where: {
+            tenantId_driverUserId: {
+              tenantId,
+              driverUserId,
+            },
+          },
+          select: {
+            lat: true,
+            lng: true,
+            capturedAt: true,
+            recordedAt: true,
+            updatedAt: true,
+          },
+        });
+        const gpsTimestamp =
+          latestLocation?.capturedAt
+          ?? latestLocation?.recordedAt
+          ?? latestLocation?.updatedAt
+          ?? null;
+        const hasUsableGps =
+          latestLocation != null
+          && typeof latestLocation.lat === "number"
+          && typeof latestLocation.lng === "number"
+          && gpsTimestamp != null;
+        if (hasUsableGps) {
+          startLocation = {
+            lat: latestLocation!.lat,
+            lng: latestLocation!.lng,
+          };
+          usedDriverGps = true;
+        } else {
+          warnings.push("No recent driver GPS found; driver GPS was not used.");
+        }
+      }
+    }
+
     const suggestion = suggestTripOrderByNearestNeighbour({
       trips: eligible.map((trip) => ({
         id: trip.id,
@@ -3349,20 +3406,19 @@ export class OpsJobsService {
         destinationLat: trip.destinationLat,
         destinationLng: trip.destinationLng,
       })),
-      startLocation: dto.startLocation
-        ? { lat: dto.startLocation.lat, lng: dto.startLocation.lng }
-        : null,
+      startLocation,
     });
 
-    const warnings = [...suggestion.warnings];
+    warnings.push(...suggestion.warnings);
     if (dto.strategy && dto.strategy !== "DISTANCE") {
       warnings.push("Requested strategy is not traffic-aware; distance heuristic was used.");
     }
 
     return {
       suggestedTripIdsInOrder: suggestion.suggestedTripIdsInOrder,
-      reason:
-        "Suggested using distance between available stop coordinates. This is not traffic-aware.",
+      reason: usedDriverGps
+        ? "Suggested from driver's latest GPS using stop distance. This is not traffic-aware."
+        : "Suggested using distance between available stop coordinates. This is not traffic-aware.",
       warnings,
       skippedTripIds,
       strategy: "DISTANCE",
