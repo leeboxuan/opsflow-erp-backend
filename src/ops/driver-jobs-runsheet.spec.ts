@@ -127,6 +127,7 @@ describe("DriverJobsService.listActiveByDriver runSheet", () => {
     expect(res.runSheet?.totalTrips).toBe(2);
     expect(res.runSheet?.completedTrips).toBe(1);
     expect(res.runSheet?.trips.map((t: any) => t.tripId)).toEqual(["done-trip", "open-trip"]);
+    expect(res.runSheet?.trips[0]?.tripDisplayRef).toBe("JOB-INT-1-T01");
     expect(res.runSheet?.trips.find((t: any) => t.tripId === "done-trip")?.closedAt).toBeInstanceOf(Date);
   });
 

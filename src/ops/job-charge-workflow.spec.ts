@@ -1778,8 +1778,8 @@ describe("job charge workflow hardening", () => {
           id: "trip1",
           tenantId: "t1",
           jobId: "job1",
-          jobSequence: 1,
-          tripSequence: 1,
+          jobSequence: 3,
+          tripSequence: 3,
           title: "Trip A",
           displayTitle: "Trip A",
           status: "PUBLISHED",
@@ -1807,7 +1807,7 @@ describe("job charge workflow hardening", () => {
           job: {
             id: "job1",
             customerCompanyId: "c1",
-            internalRef: "WF-001",
+            internalRef: "WF-2026-04-0002-IMP",
             externalRef: null,
             jobType: "IMPORT",
             status: "ONGOING",
@@ -1832,6 +1832,7 @@ describe("job charge workflow hardening", () => {
     expect(result.cargo.mode).toBe("CONTAINER");
     expect(result.cargo.containers[0].containerCode).toBe("CONT-001");
     expect(result.job.customerCompanyName).toBe("Customer A");
+    expect(result.tripDisplayRef).toBe("WF-0002-IMP-T03");
   });
 
   it("getTripDetail maps EXPORT cargo as CONTAINER with containerCode", async () => {

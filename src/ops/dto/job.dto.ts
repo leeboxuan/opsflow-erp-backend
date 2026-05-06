@@ -126,6 +126,7 @@ export class JobTripResponseDto {
   jobId!: string | null;
   jobSequence!: number | null;
   tripSequence!: number | null;
+  tripDisplayRef!: string | null;
   jobTripTemplate!: JobTripTemplate | null;
   title!: string | null;
   displayTitle!: string | null;

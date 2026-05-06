@@ -103,6 +103,7 @@ describe("DispatchService", () => {
     expect(res.drivers[0].vehicleNumber).toBe("SBA1234X");
     expect(res.drivers[0].trips).toHaveLength(1);
     expect(trip.jobRef).toBe("JOB-1");
+    expect(trip.tripDisplayRef).toBe("JOB-1-T01");
   });
 
   it("returns nulls safely for optional route/timeline/gps fields", async () => {

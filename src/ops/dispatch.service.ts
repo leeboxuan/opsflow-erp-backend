@@ -6,6 +6,7 @@ import {
   buildDocumentFileDisplayFields,
   documentMimeTypeOrNull,
 } from "../common/document-file-display";
+import { buildTripDisplayRef } from "../common/trip-display-ref";
 import {
   DispatchGpsStatus,
   DispatchRouteMode,
@@ -329,6 +330,12 @@ export class DispatchService {
       id: trip.id,
       jobId: trip.jobId,
       jobInternalRef: trip.job?.internalRef ?? null,
+      tripDisplayRef: buildTripDisplayRef({
+        jobInternalRef: trip.job?.internalRef ?? null,
+        tripSequence: trip.tripSequence ?? null,
+        jobSequence: trip.jobSequence ?? null,
+        tripId: trip.id,
+      }),
       jobRef: trip.job?.internalRef ?? null,
       customerName: trip.job?.customerCompany?.name ?? null,
       title: trip.title ?? trip.displayTitle ?? null,

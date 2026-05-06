@@ -769,6 +769,7 @@ describe("Driver trip detail endpoint service contract", () => {
 
     const res = await svc.getTripDetailForDriver("t1", "trip1", "driver-1");
     expect(res.id).toBe("trip1");
+    expect(res.tripDisplayRef).toBe("JOB-1-T01");
     expect(res.trailerNumber).toBe("TRL-1");
     expect(res.trailerLastLocationName).toBe("Gul 7");
     expect(res.trailerStartPhotoUrl).toBe("https://signed/start");
@@ -900,6 +901,7 @@ describe("DriverJobsService.listActiveByDriver trip execution card", () => {
     const trip = result.data[0].trips?.[0] as any;
     expect(trip.jobId).toBe("job1");
     expect(trip.tripSequence).toBe(1);
+    expect(trip.tripDisplayRef).toBe("INT-REF-1-T01");
     expect(trip.jobInternalRef).toBe("INT-REF-1");
     expect(trip.customerName).toBe("ACME Corp");
     expect(trip.jobType).toBe("IMPORT");

@@ -161,6 +161,9 @@ export class DispatchBoardTripDto {
   jobInternalRef!: string | null;
 
   @ApiPropertyOptional()
+  tripDisplayRef!: string | null;
+
+  @ApiPropertyOptional()
   jobRef!: string | null;
 
   @ApiPropertyOptional()

@@ -147,6 +147,7 @@ describe("DriverJobsService.listHistoryByDriver (trip-first)", () => {
     expect(row.closedAt).toEqual(trip.closedAt);
     expect(row.jobId).toBe("job1");
     expect(row.jobInternalRef).toBe("JOB-INT-1");
+    expect(row.tripDisplayRef).toBe("JOB-INT-1-T01");
     expect(row.customerName).toBe("Customer Co");
     expect(row.originSummary).toBe("Port A");
     expect(row.destinationSummary).toBe("Site B");

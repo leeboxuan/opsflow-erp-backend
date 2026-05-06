@@ -45,6 +45,7 @@ import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
 import { buildDocumentFileDisplayFields } from "../common/document-file-display";
+import { buildTripDisplayRef } from "../common/trip-display-ref";
 
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
@@ -268,6 +269,12 @@ function toJobDto(j: any): JobDto {
         jobId: j.id,
         jobSequence: t.jobSequence ?? null,
         tripSequence: t.tripSequence ?? t.jobSequence ?? null,
+        tripDisplayRef: buildTripDisplayRef({
+          jobInternalRef: j.internalRef ?? null,
+          tripSequence: t.tripSequence ?? null,
+          jobSequence: t.jobSequence ?? null,
+          tripId: t.id,
+        }),
         jobTripTemplate: t.jobTripTemplate ?? null,
         title: t.title ?? null,
         displayTitle: t.displayTitle ?? t.title ?? null,
@@ -3948,6 +3955,12 @@ export class OpsJobsService {
       ...route,
       id: t.id,
       jobId: job.id,
+      tripDisplayRef: buildTripDisplayRef({
+        jobInternalRef: job.internalRef ?? null,
+        tripSequence: t.tripSequence ?? null,
+        jobSequence: t.jobSequence ?? null,
+        tripId: t.id,
+      }),
       createdAt: t.createdAt ?? null,
       createdByUserId: t.createdByUserId ?? null,
       updatedByUserId: t.updatedByUserId ?? null,
@@ -4294,6 +4307,12 @@ export class OpsJobsService {
       jobId: trip.jobId ?? null,
       jobSequence: trip.jobSequence ?? null,
       tripSequence: trip.tripSequence ?? trip.jobSequence ?? null,
+      tripDisplayRef: buildTripDisplayRef({
+        jobInternalRef: trip.job?.internalRef ?? null,
+        tripSequence: trip.tripSequence ?? null,
+        jobSequence: trip.jobSequence ?? null,
+        tripId: trip.id,
+      }),
       title: trip.title ?? null,
       displayTitle: trip.displayTitle ?? trip.title ?? null,
       status: trip.status,
@@ -4588,7 +4607,7 @@ export class OpsJobsService {
         job: whereJob,
       },
       include: {
-        job: { select: { id: true, customerCompanyId: true } },
+        job: { select: { id: true, internalRef: true, customerCompanyId: true } },
         vehicles: { select: { plateNo: true } },
         fleetVehicle: { select: { plateNo: true } },
       },
@@ -4612,6 +4631,12 @@ export class OpsJobsService {
       return {
         jobId: trip.jobId,
         tripId: trip.id,
+        tripDisplayRef: buildTripDisplayRef({
+          jobInternalRef: trip.job?.internalRef ?? null,
+          tripSequence: trip.tripSequence ?? null,
+          jobSequence: trip.jobSequence ?? null,
+          tripId: trip.id,
+        }),
         tripTitle: trip.title ?? null,
         driverId: trip.assignedDriverUserId,
         driverName:

@@ -22,6 +22,7 @@ export class DriverTripsController {
       properties: {
         id: { type: "string" },
         jobId: { type: "string", nullable: true },
+        tripDisplayRef: { type: "string", nullable: true },
         title: { type: "string", nullable: true },
         status: { type: "string" },
         plannedStartAt: { type: "string", format: "date-time", nullable: true },

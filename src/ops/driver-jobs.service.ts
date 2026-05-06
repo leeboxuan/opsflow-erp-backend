@@ -17,6 +17,7 @@ import { buildOrderBy } from "../common/listing/listing.sort";
 import { AuditService } from "../audit/audit.service";
 import { SupabaseService } from "../auth/supabase.service";
 import { buildDocumentFileDisplayFields } from "../common/document-file-display";
+import { buildTripDisplayRef } from "../common/trip-display-ref";
 import { JobLocationDto } from "./dto/location.dto";
 import { JobDto, JobDocumentDto } from "./dto/job.dto";
 
@@ -191,6 +192,12 @@ function toJobDto(j: any): JobDto {
         jobId: t.jobId ?? j.id,
         jobSequence: t.jobSequence ?? null,
         tripSequence: t.tripSequence ?? t.jobSequence ?? null,
+        tripDisplayRef: buildTripDisplayRef({
+          jobInternalRef: j.internalRef ?? null,
+          tripSequence: t.tripSequence ?? null,
+          jobSequence: t.jobSequence ?? null,
+          tripId: t.id,
+        }),
         jobTripTemplate: t.jobTripTemplate ?? null,
         title: t.title ?? null,
         status: t.status,
@@ -469,6 +476,12 @@ export class DriverJobsService {
       return {
         tripId: t.id,
         jobId: t.jobId ?? null,
+        tripDisplayRef: buildTripDisplayRef({
+          jobInternalRef: t.job?.internalRef ?? null,
+          tripSequence: t.tripSequence ?? null,
+          jobSequence: t.jobSequence ?? null,
+          tripId: t.id,
+        }),
         jobInternalRef: t.job?.internalRef ?? null,
         customerName: t.job?.customerCompany?.name ?? null,
         sequence,
@@ -2083,6 +2096,12 @@ export class DriverJobsService {
     return {
       id: trip.id,
       jobId: trip.jobId,
+      tripDisplayRef: buildTripDisplayRef({
+        jobInternalRef: trip.job?.internalRef ?? null,
+        tripSequence: trip.tripSequence ?? null,
+        jobSequence: trip.jobSequence ?? null,
+        tripId: trip.id,
+      }),
       title: trip.title ?? trip.displayTitle ?? null,
       status: trip.status,
       plannedStartAt: trip.plannedStartAt ?? null,
