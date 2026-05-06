@@ -26,7 +26,8 @@ Use `.env.local` for local development (the app loads `.env.local` then `.env`).
 
 | Variable | Required | Where to get it |
 |----------|----------|-----------------|
-| `DATABASE_URL` | Yes | Supabase → Project Settings → Database → Connection string (Session mode pooler, port 5432) |
+| `DATABASE_URL` | Yes | Supabase pooled/session URL (port 5432), recommended params: `pgbouncer=true&connection_limit=5&pool_timeout=30` |
+| `DIRECT_URL` | Recommended | Supabase direct Postgres URL (`db.<PROJECT_REF>.supabase.co:5432`) for migrations/introspection |
 | `SUPABASE_PROJECT_URL` | Yes | Supabase → Project Settings → API → Project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase → Project Settings → API → `service_role` secret |
 | `SUPABASE_JWT_SECRET` | Optional | Supabase → Project Settings → API → JWT Secret (for legacy HS256 tokens) |
@@ -50,7 +51,8 @@ Set all env vars in Render dashboard (Environment) so they match your `.env.loca
 
 2. **Render**  
    - Env vars must match what the code expects (see table above).  
-   - `DATABASE_URL` = Supabase session pooler.  
+   - `DATABASE_URL` = Supabase session pooler with safe pool params (for example `connection_limit=5`, `pool_timeout=30`).  
+   - `DIRECT_URL` = direct Supabase host for tooling/migrations when supported.  
    - `SUPABASE_PROJECT_URL` + `SUPABASE_SERVICE_ROLE_KEY` = same Supabase project as DB.
 
 3. **Local**  
@@ -64,4 +66,4 @@ Set all env vars in Render dashboard (Environment) so they match your `.env.loca
 ## Prisma and schema
 
 - **Client generation:** `pnpm prisma:generate` (runs in build; uses `DATABASE_URL`).
-- **Migrations:** Prisma migrations are **not** run via CLI against Supabase. Schema changes are applied via **Supabase SQL Editor** or by generating a SQL diff (e.g. `prisma migrate diff`) and running it in Supabase. The app uses `DATABASE_URL` (session pooler) only.
+- **Migrations:** Prefer `DIRECT_URL` (direct host) for migration/introspection tooling. If your deployment environment cannot reach direct host (common IPv6/network restrictions), follow Supabase guidance and run SQL via Supabase SQL Editor or CI from a network that can access the direct host.

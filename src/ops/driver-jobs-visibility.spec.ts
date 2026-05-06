@@ -68,6 +68,7 @@ describe("driver jobs published-trip visibility", () => {
 describe("driver trip completion requirements", () => {
   it("fails completion when required trip document is missing", async () => {
     const prisma: any = {
+      tenant: { findUnique: jest.fn().mockResolvedValue({ timezone: "Asia/Singapore" }) },
       job: {
         findFirst: jest.fn().mockResolvedValue({
           id: "job1",
@@ -557,6 +558,71 @@ describe("DriverJobsService trip assignment and trailer checkout", () => {
     };
     const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
     await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+    const where = prisma.trip.findMany.mock.calls[0][0].where;
+    expect(where.OR[0].plannedStartAt.gte).toEqual(new Date("2026-04-29T16:00:00.000Z"));
+  });
+
+  it("caches tenant timezone across repeated completion requirement calls", async () => {
+    const tenantFindUnique = jest.fn().mockResolvedValue({ timezone: "Asia/Singapore" });
+    const prisma: any = {
+      tenant: { findUnique: tenantFindUnique },
+      job: { findFirst: jest.fn().mockResolvedValue({ id: "job1", status: "ONGOING", documents: [] }) },
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          status: "ONGOING",
+          assignedDriverUserId: "driver-1",
+          trailerNumber: "T1",
+          plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
+          createdAt: new Date("2026-04-30T08:00:00.000Z"),
+        }),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "trip1",
+            plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
+            createdAt: new Date("2026-04-30T08:00:00.000Z"),
+          },
+        ]),
+      },
+      tripDocument: { findMany: jest.fn().mockResolvedValue([{ type: "DELIVERY_DO" }, { type: "POD_SIGNATURE" }]) },
+      masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+
+    await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+    await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+
+    expect(tenantFindUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses fallback timezone when tenant lookup fails with P2024", async () => {
+    const tenantFindUnique = jest.fn().mockRejectedValue({ code: "P2024", message: "pool timeout" });
+    const prisma: any = {
+      tenant: { findUnique: tenantFindUnique },
+      job: { findFirst: jest.fn().mockResolvedValue({ id: "job1", status: "ONGOING", documents: [] }) },
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          status: "ONGOING",
+          assignedDriverUserId: "driver-1",
+          plannedStartAt: new Date("2026-04-30T15:30:00.000Z"),
+          createdAt: new Date("2026-04-30T15:30:00.000Z"),
+        }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      tripDocument: { findMany: jest.fn().mockResolvedValue([{ type: "DELIVERY_DO" }, { type: "POD_SIGNATURE" }]) },
+      masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+
+    await expect(
+      svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1"),
+    ).resolves.toEqual(expect.objectContaining({ canComplete: true }));
+
     const where = prisma.trip.findMany.mock.calls[0][0].where;
     expect(where.OR[0].plannedStartAt.gte).toEqual(new Date("2026-04-29T16:00:00.000Z"));
   });

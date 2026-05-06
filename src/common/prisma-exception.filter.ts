@@ -7,7 +7,17 @@ export class PrismaExceptionFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const res = ctx.getResponse();
 
-    // Prisma known errors -> 400 (or tweak to 409 for unique constraint)
+    if (exception.code === "P2024") {
+      console.error("[PrismaExceptionFilter] Pool timeout", {
+        code: exception.code,
+        meta: exception.meta,
+      });
+      return res.status(HttpStatus.SERVICE_UNAVAILABLE).json({
+        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+        message: "Database is busy. Please try again.",
+      });
+    }
+
     const status =
       exception.code === "P2002" ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST;
 
@@ -15,7 +25,6 @@ export class PrismaExceptionFilter implements ExceptionFilter {
       statusCode: status,
       message: exception.message,
       prismaCode: exception.code,
-      meta: exception.meta,
     });
   }
 }

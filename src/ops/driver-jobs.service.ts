@@ -22,6 +22,8 @@ import { JobLocationDto } from "./dto/location.dto";
 import { JobDto, JobDocumentDto } from "./dto/job.dto";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
+const DEFAULT_TENANT_TIMEZONE = "Asia/Singapore";
+const TENANT_TIMEZONE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DRIVER_DELETABLE_TRIP_DOC_TYPES = new Set<TripDocumentType>([
   TripDocumentType.POD_PHOTO,
   TripDocumentType.OTHER,
@@ -229,6 +231,8 @@ function toJobDto(j: any): JobDto {
 
 @Injectable()
 export class DriverJobsService {
+  private readonly tenantTimezoneCache = new Map<string, { timezone: string; expiresAt: number }>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -558,7 +562,7 @@ export class DriverJobsService {
   }
 
   private getSafeTenantTimezone(value?: string | null): string {
-    const fallback = "Asia/Singapore";
+    const fallback = DEFAULT_TENANT_TIMEZONE;
     const timezone = value?.trim() || fallback;
     try {
       // Throws when timezone is invalid.
@@ -567,6 +571,11 @@ export class DriverJobsService {
     } catch {
       return fallback;
     }
+  }
+
+  private isPrismaPoolTimeout(error: unknown): boolean {
+    const maybe = error as { code?: string } | null;
+    return String(maybe?.code ?? "") === "P2024";
   }
 
   private getTimeZoneOffsetMs(date: Date, timeZone: string): number {
@@ -655,11 +664,38 @@ export class DriverJobsService {
   }
 
   private async getTenantTimeZone(tenantId: string): Promise<string> {
-    const tenant = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { timezone: true },
-    });
-    return this.getSafeTenantTimezone(tenant?.timezone);
+    const now = Date.now();
+    const cached = this.tenantTimezoneCache.get(tenantId);
+    if (cached && cached.expiresAt > now) {
+      return cached.timezone;
+    }
+    try {
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { timezone: true },
+      });
+      const timezone = this.getSafeTenantTimezone(tenant?.timezone);
+      this.tenantTimezoneCache.set(tenantId, {
+        timezone,
+        expiresAt: now + TENANT_TIMEZONE_CACHE_TTL_MS,
+      });
+      return timezone;
+    } catch (error: unknown) {
+      if (this.isPrismaPoolTimeout(error)) {
+        const fallbackTimezone = cached?.timezone ?? DEFAULT_TENANT_TIMEZONE;
+        console.warn("[DriverJobsService] tenant timezone lookup timeout; using fallback", {
+          tenantId,
+          fallbackTimezone,
+          prismaCode: "P2024",
+        });
+        this.tenantTimezoneCache.set(tenantId, {
+          timezone: fallbackTimezone,
+          expiresAt: now + TENANT_TIMEZONE_CACHE_TTL_MS,
+        });
+        return fallbackTimezone;
+      }
+      throw error;
+    }
   }
 
   private buildActiveTripExecutionRangeWhere(range: { gte: Date; lt: Date }) {
@@ -1767,21 +1803,24 @@ export class DriverJobsService {
       throw new BadRequestException("Trip must be ONGOING to complete");
     }
 
-    const completionDocs = await this.prisma.tripDocument.findMany({
-      where: {
-        tenantId,
-        tripId,
-        isActive: true,
-        type: {
-          in: [
-            TripDocumentType.DELIVERY_DO,
-            TripDocumentType.POD_SIGNATURE,
-            TripDocumentType.PICKUP_DO,
-          ],
+    const [completionDocs, tenantTimeZone] = await Promise.all([
+      this.prisma.tripDocument.findMany({
+        where: {
+          tenantId,
+          tripId,
+          isActive: true,
+          type: {
+            in: [
+              TripDocumentType.DELIVERY_DO,
+              TripDocumentType.POD_SIGNATURE,
+              TripDocumentType.PICKUP_DO,
+            ],
+          },
         },
-      },
-      select: { type: true, signedAt: true, isSigned: true },
-    });
+        select: { type: true, signedAt: true, isSigned: true },
+      }),
+      this.getTenantTimeZone(tenantId),
+    ]);
     const missing = this.buildTripCompletionDocumentGaps(completionDocs);
 
     if (missing.length > 0) {
@@ -1791,7 +1830,6 @@ export class DriverJobsService {
     }
 
     const referenceDate = trip.plannedStartAt ?? trip.createdAt;
-    const tenantTimeZone = await this.getTenantTimeZone(tenantId);
     const dayWindow = this.getTenantDayWindow(referenceDate, tenantTimeZone);
     const driverDayOpenTrips = await this.getDriverDayOpenTripsByWindow(
       tenantId,
@@ -1951,25 +1989,27 @@ export class DriverJobsService {
       throw new BadRequestException("You are not assigned to this trip");
     }
 
-    const completionDocs = await this.prisma.tripDocument.findMany({
-      where: {
-        tenantId,
-        tripId,
-        isActive: true,
-        type: {
-          in: [
-            TripDocumentType.DELIVERY_DO,
-            TripDocumentType.POD_SIGNATURE,
-            TripDocumentType.PICKUP_DO,
-          ],
+    const [completionDocs, tenantTimeZone] = await Promise.all([
+      this.prisma.tripDocument.findMany({
+        where: {
+          tenantId,
+          tripId,
+          isActive: true,
+          type: {
+            in: [
+              TripDocumentType.DELIVERY_DO,
+              TripDocumentType.POD_SIGNATURE,
+              TripDocumentType.PICKUP_DO,
+            ],
+          },
         },
-      },
-      select: { type: true, signedAt: true, isSigned: true },
-    });
+        select: { type: true, signedAt: true, isSigned: true },
+      }),
+      this.getTenantTimeZone(tenantId),
+    ]);
     const missingDocuments = this.buildTripCompletionDocumentGaps(completionDocs);
 
     const referenceDate = trip.plannedStartAt ?? trip.createdAt;
-    const tenantTimeZone = await this.getTenantTimeZone(tenantId);
     const dayWindow = this.getTenantDayWindow(referenceDate, tenantTimeZone);
     const driverDayOpenTrips = await this.getDriverDayOpenTripsByWindow(
       tenantId,
