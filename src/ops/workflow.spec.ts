@@ -16,6 +16,8 @@ describe("workflow helpers", () => {
       "j1",
       JobType.IMPORT,
       new Date("2026-03-15"),
+      null,
+      null,
     );
     expect(rows).toHaveLength(2);
     expect(rows[0].jobSequence).toBe(1);
@@ -48,6 +50,8 @@ describe("workflow helpers", () => {
       "j1",
       JobType.IMPORT,
       new Date("2026-03-15"),
+      null,
+      null,
       {
         [JobTripTemplate.PICKUP_TO_DELIVERY]: {
           originLabel: "BRANI — Brani Terminal",
@@ -65,6 +69,8 @@ describe("workflow helpers", () => {
       "j1",
       JobType.EXPORT,
       new Date("2026-03-15"),
+      null,
+      null,
     );
     expect(rows).toHaveLength(2);
     expect(rows[0].jobTripTemplate).toBe(JobTripTemplate.DEPOT_TO_DELIVERY);
@@ -95,6 +101,8 @@ describe("workflow helpers", () => {
       "j1",
       JobType.LCL,
       new Date("2026-03-15"),
+      null,
+      null,
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].jobTripTemplate).toBe(JobTripTemplate.PICKUP_TO_DELIVERY);
@@ -125,6 +133,38 @@ describe("workflow helpers", () => {
     expect(completionRuleForTemplate(JobTripTemplate.CUSTOM)).toEqual(
       TRIP_COMPLETION_RULES[JobTripTemplate.CUSTOM],
     );
+  });
+
+  it("tripCreateManyForJob seeds containerNumber to each generated trip", () => {
+    const rows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.IMPORT,
+      new Date("2026-03-15"),
+      "  CONT-001  ",
+      null,
+    );
+    expect(rows.every((r) => r.containerNumber === "CONT-001")).toBe(true);
+  });
+
+  it("tripCreateManyForJob seeds shipping reference fields to each generated trip", () => {
+    const rows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.IMPORT,
+      new Date("2026-03-15"),
+      null,
+      {
+        carrier: "  MAERSK ",
+        shipper: "  ACME ",
+        vessel: "  VESSEL-X ",
+      },
+    );
+    expect(rows.every((r) =>
+      r.carrier === "MAERSK"
+      && r.shipper === "ACME"
+      && r.vessel === "VESSEL-X"
+    )).toBe(true);
   });
 
   it("LCL completion rule requires POD signature at trip level", () => {

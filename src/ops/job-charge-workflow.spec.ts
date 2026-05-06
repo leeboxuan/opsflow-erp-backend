@@ -1179,7 +1179,7 @@ describe("job charge workflow hardening", () => {
           subtotalCents: 1000,
           taxCents: 90,
           totalCents: 1090,
-          status: "ONGOING",
+          status: "Draft",
           snapshot: { orderIds: [], sourceJobIds: ["job1"] },
           lineItems: [],
         }),
@@ -1756,6 +1756,12 @@ describe("job charge workflow hardening", () => {
       trip: {
         findFirst: jest.fn().mockResolvedValue({ id: "trip1", status: "COMPLETED" }),
         update: jest.fn().mockResolvedValue({ id: "trip1" }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      job: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ id: "job1", status: "ONGOING" }),
       },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
@@ -1771,7 +1777,7 @@ describe("job charge workflow hardening", () => {
     });
   });
 
-  it("getTripDetail maps IMPORT cargo as CONTAINER with containerCode", async () => {
+  it("getTripDetail maps IMPORT cargo as CONTAINER with containerNumber", async () => {
     const prisma: any = {
       trip: {
         findFirst: jest.fn().mockResolvedValue({
@@ -1830,12 +1836,12 @@ describe("job charge workflow hardening", () => {
 
     const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
     expect(result.cargo.mode).toBe("CONTAINER");
-    expect(result.cargo.containers[0].containerCode).toBe("CONT-001");
+    expect(result.cargo.containers[0].containerNumber).toBe("CONT-001");
     expect(result.job.customerCompanyName).toBe("Customer A");
     expect(result.tripDisplayRef).toBe("WF-0002-IMP-T03");
   });
 
-  it("getTripDetail maps EXPORT cargo as CONTAINER with containerCode", async () => {
+  it("getTripDetail maps EXPORT cargo as CONTAINER with containerNumber", async () => {
     const prisma: any = {
       trip: {
         findFirst: jest.fn().mockResolvedValue({
@@ -1874,7 +1880,7 @@ describe("job charge workflow hardening", () => {
 
     const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
     expect(result.cargo.mode).toBe("CONTAINER");
-    expect(result.cargo.containers[0].containerCode).toBe("CONT-EXP-01");
+    expect(result.cargo.containers[0].containerNumber).toBe("CONT-EXP-01");
   });
 
   it("getTripDetail maps LCL cargo as ITEMS with itemCode and publish metadata", async () => {

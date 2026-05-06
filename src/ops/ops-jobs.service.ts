@@ -306,6 +306,10 @@ function toJobDto(j: any): JobDto {
         contactPhone: j.receiverPhone ?? null,
         tripPICName: t.tripPICName ?? null,
         tripPICContact: t.tripPICContact ?? null,
+        containerNumber: t.containerNumber ?? null,
+        carrier: t.carrier ?? null,
+        shipper: t.shipper ?? null,
+        vessel: t.vessel ?? null,
         originSummary: null,
         destinationSummary: null,
         origin: null,
@@ -1515,6 +1519,10 @@ export class OpsJobsService {
               title: true,
               tripPICName: true,
               tripPICContact: true,
+              containerNumber: true,
+              carrier: true,
+              shipper: true,
+              vessel: true,
               status: true,
               plannedStartAt: true,
               startedAt: true,
@@ -1820,12 +1828,20 @@ export class OpsJobsService {
       actorUserId,
     );
 
+    const seededContainerNumber = String(dto.containerNumber ?? "").trim() || null;
+    const seededShippingRefs = {
+      carrier: null,
+      shipper: null,
+      vessel: String((job as any)?.vesselName ?? "").trim() || null,
+    };
     await this.prisma.trip.createMany({
       data: tripCreateManyForJob(
         tenantId,
         job.id,
         dto.jobType,
         pickupDateParsed,
+        seededContainerNumber,
+        seededShippingRefs,
         undefined,
         actorUserId,
       ),
@@ -3060,6 +3076,10 @@ export class OpsJobsService {
         displayTitle: dto.title?.trim() || normalizedTemplate,
         tripPICName: dto.tripPICName?.trim() || null,
         tripPICContact: dto.tripPICContact?.trim() || null,
+        containerNumber: dto.containerNumber?.trim() || null,
+        carrier: dto.carrier?.trim() || null,
+        shipper: dto.shipper?.trim() || null,
+        vessel: dto.vessel?.trim() || null,
         plannedStartAt,
         originLabel: dto.originSummary?.trim() || null,
         destinationLabel: dto.destinationSummary?.trim() || null,
@@ -3796,6 +3816,18 @@ export class OpsJobsService {
     if (dto.tripPICContact !== undefined) {
       data.tripPICContact = dto.tripPICContact?.trim() || null;
     }
+    if (dto.containerNumber !== undefined) {
+      data.containerNumber = dto.containerNumber?.trim() || null;
+    }
+    if (dto.carrier !== undefined) {
+      data.carrier = dto.carrier?.trim() || null;
+    }
+    if (dto.shipper !== undefined) {
+      data.shipper = dto.shipper?.trim() || null;
+    }
+    if (dto.vessel !== undefined) {
+      data.vessel = dto.vessel?.trim() || null;
+    }
 
     if (dto.earningRateMasterId !== undefined) {
       if (dto.earningRateMasterId === null) {
@@ -4449,6 +4481,10 @@ export class OpsJobsService {
       contactPhone: job.receiverPhone ?? null,
       tripPICName: t.tripPICName ?? null,
       tripPICContact: t.tripPICContact ?? null,
+      containerNumber: t.containerNumber ?? null,
+      carrier: t.carrier ?? null,
+      shipper: t.shipper ?? null,
+      vessel: t.vessel ?? null,
       jobSequence: t.jobSequence ?? null,
       tripSequence: t.tripSequence ?? t.jobSequence ?? null,
       jobTripTemplate: t.jobTripTemplate ?? null,
@@ -4751,7 +4787,7 @@ export class OpsJobsService {
           mode: "CONTAINER",
           containers: cargoItems.map((item: any) => ({
             id: item.id,
-            containerCode: item.itemCode,
+            containerNumber: item.itemCode,
             containerSize: null,
             sealNo: null,
             weight: null,
@@ -4806,6 +4842,10 @@ export class OpsJobsService {
       contactPhone: trip.job?.receiverPhone ?? null,
       tripPICName: trip.tripPICName ?? null,
       tripPICContact: trip.tripPICContact ?? null,
+      containerNumber: trip.containerNumber ?? null,
+      carrier: trip.carrier ?? null,
+      shipper: trip.shipper ?? null,
+      vessel: trip.vessel ?? null,
       plannedStartAt: trip.plannedStartAt ?? null,
       startedAt: trip.startedAt ?? null,
       completedAt: trip.closedAt ?? null,
@@ -5421,6 +5461,10 @@ export class OpsJobsService {
             job.id,
             jobType,
             pickupDateParsed,
+            null,
+            {
+              vessel: String(job?.vesselName ?? "").trim() || null,
+            },
             undefined,
             actorUserId,
           ),
@@ -5538,6 +5582,8 @@ export class OpsJobsService {
             job.id,
             dto.jobType,
             row.pickupDate ? new Date(row.pickupDate) : null,
+            null,
+            null,
             undefined,
             actorUserId,
           ),
@@ -6071,6 +6117,8 @@ export class OpsJobsService {
             job.id,
             JobType.LCL,
             pickupDate,
+            null,
+            null,
             undefined,
             actorUserId,
           ),

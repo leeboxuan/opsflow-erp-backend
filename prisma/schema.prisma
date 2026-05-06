@@ -282,6 +282,10 @@ model Trip {
   trailerLastLocationCode String?
   tripPICName             String?
   tripPICContact          String?
+  containerNumber         String?
+  carrier                 String?
+  shipper                 String?
+  vessel                  String?
   trailerParkingLat       Float?
   trailerParkingLng       Float?
   trailerParkedAt         DateTime?

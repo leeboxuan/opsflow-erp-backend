@@ -313,6 +313,14 @@ export class CreateJobDto {
   notes?: string;
 
   @ApiPropertyOptional({
+    description:
+      "Legacy job-level container number input. Used as initial fallback for generated trips.",
+  })
+  @IsOptional()
+  @IsString()
+  containerNumber?: string;
+
+  @ApiPropertyOptional({
     type: CreateJobImportDetailsDto,
     description:
       "IMPORT-only nested details. Preferred shape for import routing and vessel fields.",

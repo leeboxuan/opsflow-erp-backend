@@ -3,6 +3,7 @@ import {
   JobType,
   Prisma,
   TripDocumentType,
+  TripPendingState,
   TripStatus,
 } from "@prisma/client";
 
@@ -230,6 +231,12 @@ export function tripCreateManyForJob(
   jobId: string,
   jobType: JobType,
   pickupDate: Date | null,
+  containerNumber?: string | null,
+  shippingRefs?: {
+    carrier?: string | null;
+    shipper?: string | null;
+    vessel?: string | null;
+  } | null,
   routeSnapshots?: Partial<
     Record<
       JobTripTemplate,
@@ -248,8 +255,13 @@ export function tripCreateManyForJob(
     title: s.title,
     plannedStartAt: s.plannedStartAt,
     status: TripStatus.DRAFT,
+    pendingState: TripPendingState.NONE,
     tripPICName: null,
     tripPICContact: null,
+    containerNumber: String(containerNumber ?? "").trim() || null,
+    carrier: String(shippingRefs?.carrier ?? "").trim() || null,
+    shipper: String(shippingRefs?.shipper ?? "").trim() || null,
+    vessel: String(shippingRefs?.vessel ?? "").trim() || null,
     createdByUserId: createdByUserId ?? null,
     completionRuleJson: completionRuleForTemplate(s.jobTripTemplate),
     ...(routeSnapshots?.[s.jobTripTemplate] ?? {}),

@@ -3,7 +3,7 @@ import { DriverJobsService } from "./driver-jobs.service";
 import { OpsJobsService } from "./ops-jobs.service";
 
 describe("Trip PIC fields", () => {
-  it("patchTrip can set and clear tripPICName/tripPICContact without touching job PIC", async () => {
+  it("patchTrip can set and clear tripPICName/tripPICContact/containerNumber/shipping refs without touching job PIC", async () => {
     const prisma: any = {
       trip: {
         findFirst: jest.fn().mockResolvedValue({
@@ -27,7 +27,14 @@ describe("Trip PIC fields", () => {
       "t1",
       "job1",
       "trip1",
-      { tripPICName: "  John Tan  ", tripPICContact: "  +65 9876 5432  " } as any,
+      {
+        tripPICName: "  John Tan  ",
+        tripPICContact: "  +65 9876 5432  ",
+        containerNumber: "  CONT-7788 ",
+        carrier: "  MAERSK ",
+        shipper: "  ACME ",
+        vessel: "  VESSEL-A ",
+      } as any,
       { userId: "u1", role: Role.OPS, customerCompanyId: null },
     );
     expect(prisma.trip.update).toHaveBeenCalledWith(
@@ -36,6 +43,10 @@ describe("Trip PIC fields", () => {
         data: expect.objectContaining({
           tripPICName: "John Tan",
           tripPICContact: "+65 9876 5432",
+          containerNumber: "CONT-7788",
+          carrier: "MAERSK",
+          shipper: "ACME",
+          vessel: "VESSEL-A",
         }),
       }),
     );
@@ -44,7 +55,14 @@ describe("Trip PIC fields", () => {
       "t1",
       "job1",
       "trip1",
-      { tripPICName: null, tripPICContact: "" } as any,
+      {
+        tripPICName: null,
+        tripPICContact: "",
+        containerNumber: " ",
+        carrier: "",
+        shipper: " ",
+        vessel: "",
+      } as any,
       { userId: "u1", role: Role.OPS, customerCompanyId: null },
     );
     expect(prisma.trip.update).toHaveBeenLastCalledWith(
@@ -52,13 +70,17 @@ describe("Trip PIC fields", () => {
         data: expect.objectContaining({
           tripPICName: null,
           tripPICContact: null,
+          containerNumber: null,
+          carrier: null,
+          shipper: null,
+          vessel: null,
         }),
       }),
     );
     expect(prisma.job.update).not.toHaveBeenCalled();
   });
 
-  it("job detail trip list returns tripPICName/tripPICContact", async () => {
+  it("job detail trip list returns tripPICName/tripPICContact/container and shipping refs", async () => {
     const prisma: any = {
       $transaction: jest.fn().mockResolvedValue([
         1,
@@ -97,6 +119,10 @@ describe("Trip PIC fields", () => {
             earningRateMasterId: null,
             tripPICName: "Ops PIC",
             tripPICContact: "999",
+            containerNumber: "CONT-001",
+            carrier: "Carrier A",
+            shipper: "Shipper A",
+            vessel: "Vessel A",
           }],
           items: [],
           documents: [],
@@ -117,11 +143,15 @@ describe("Trip PIC fields", () => {
       expect.objectContaining({
         tripPICName: "Ops PIC",
         tripPICContact: "999",
+        containerNumber: "CONT-001",
+        carrier: "Carrier A",
+        shipper: "Shipper A",
+        vessel: "Vessel A",
       }),
     );
   });
 
-  it("driver trip detail returns tripPICName/tripPICContact", async () => {
+  it("driver trip detail returns tripPICName/tripPICContact/container and shipping refs", async () => {
     const prisma: any = {
       trip: {
         findFirst: jest.fn().mockResolvedValue({
@@ -139,6 +169,10 @@ describe("Trip PIC fields", () => {
           destinationLabel: null,
           tripPICName: "Site PIC",
           tripPICContact: "888",
+          containerNumber: "CONT-DRIVER",
+          carrier: "Carrier D",
+          shipper: "Shipper D",
+          vessel: "Vessel D",
           trailerLastLocationCode: null,
           trailerParkedAt: null,
           trailerParkingLat: null,
@@ -162,5 +196,9 @@ describe("Trip PIC fields", () => {
     const res = await svc.getTripDetailForDriver("t1", "trip1", "d1");
     expect(res.tripPICName).toBe("Site PIC");
     expect(res.tripPICContact).toBe("888");
+    expect(res.containerNumber).toBe("CONT-DRIVER");
+    expect(res.carrier).toBe("Carrier D");
+    expect(res.shipper).toBe("Shipper D");
+    expect(res.vessel).toBe("Vessel D");
   });
 });

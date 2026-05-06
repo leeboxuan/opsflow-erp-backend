@@ -58,6 +58,10 @@ describe("DispatchService", () => {
             trailerParkedAt: new Date("2026-04-30T12:00:00.000Z"),
             trailerParkingLat: 1.31,
             trailerParkingLng: 103.71,
+            containerNumber: "CONT-100",
+            carrier: "Carrier A",
+            shipper: "Shipper A",
+            vessel: "Vessel A",
             job: {
               id: "job1",
               internalRef: "JOB-1",
@@ -104,6 +108,10 @@ describe("DispatchService", () => {
     expect(res.drivers[0].trips).toHaveLength(1);
     expect(trip.jobRef).toBe("JOB-1");
     expect(trip.tripDisplayRef).toBe("JOB-1-T01");
+    expect(trip.containerNumber).toBe("CONT-100");
+    expect(trip.carrier).toBe("Carrier A");
+    expect(trip.shipper).toBe("Shipper A");
+    expect(trip.vessel).toBe("Vessel A");
   });
 
   it("returns nulls safely for optional route/timeline/gps fields", async () => {

@@ -178,6 +178,18 @@ export class DispatchBoardTripDto {
   @ApiPropertyOptional()
   tripPICContact!: string | null;
 
+  @ApiPropertyOptional()
+  containerNumber!: string | null;
+
+  @ApiPropertyOptional()
+  carrier!: string | null;
+
+  @ApiPropertyOptional()
+  shipper!: string | null;
+
+  @ApiPropertyOptional()
+  vessel!: string | null;
+
   @ApiProperty()
   status!: string;
 

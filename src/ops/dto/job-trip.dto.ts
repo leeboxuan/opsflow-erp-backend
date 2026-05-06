@@ -172,6 +172,26 @@ export class AppendJobTripDto {
   @IsString()
   tripPICContact?: string | null;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  containerNumber?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  carrier?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  shipper?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  vessel?: string | null;
+
   @ApiPropertyOptional({
     description:
       "Optional payout master item id. Validated against active DRIVER_PAYOUT master.",
@@ -356,6 +376,26 @@ export class PatchJobTripDto {
   @IsOptional()
   @IsString()
   tripPICContact?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  containerNumber?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  carrier?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  shipper?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  vessel?: string | null;
 }
 
 export class TripPayoutLineInputDto {

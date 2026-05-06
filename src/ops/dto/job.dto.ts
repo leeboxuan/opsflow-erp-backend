@@ -148,6 +148,10 @@ export class JobTripResponseDto {
   contactPhone!: string | null;
   tripPICName!: string | null;
   tripPICContact!: string | null;
+  containerNumber!: string | null;
+  carrier!: string | null;
+  shipper!: string | null;
+  vessel!: string | null;
   fromLabel!: string | null;
   toLabel!: string | null;
   fromAddress!: string | null;
