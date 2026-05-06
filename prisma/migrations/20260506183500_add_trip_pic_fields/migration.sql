@@ -1,0 +1,3 @@
+ALTER TABLE "trips"
+ADD COLUMN "tripPICName" TEXT,
+ADD COLUMN "tripPICContact" TEXT;

@@ -248,6 +248,8 @@ export function tripCreateManyForJob(
     title: s.title,
     plannedStartAt: s.plannedStartAt,
     status: TripStatus.DRAFT,
+    tripPICName: null,
+    tripPICContact: null,
     createdByUserId: createdByUserId ?? null,
     completionRuleJson: completionRuleForTemplate(s.jobTripTemplate),
     ...(routeSnapshots?.[s.jobTripTemplate] ?? {}),

@@ -297,6 +297,8 @@ function toJobDto(j: any): JobDto {
         customerCompanyName: j.customerCompany?.name ?? null,
         contactName: j.receiverName ?? null,
         contactPhone: j.receiverPhone ?? null,
+        tripPICName: t.tripPICName ?? null,
+        tripPICContact: t.tripPICContact ?? null,
         originSummary: null,
         destinationSummary: null,
         origin: null,
@@ -1504,6 +1506,8 @@ export class OpsJobsService {
               jobSequence: true,
               jobTripTemplate: true,
               title: true,
+              tripPICName: true,
+              tripPICContact: true,
               status: true,
               plannedStartAt: true,
               startedAt: true,
@@ -3047,6 +3051,8 @@ export class OpsJobsService {
         jobTripTemplate: normalizedTemplate,
         title: dto.title?.trim() || normalizedTemplate,
         displayTitle: dto.title?.trim() || normalizedTemplate,
+        tripPICName: dto.tripPICName?.trim() || null,
+        tripPICContact: dto.tripPICContact?.trim() || null,
         plannedStartAt,
         originLabel: dto.originSummary?.trim() || null,
         destinationLabel: dto.destinationSummary?.trim() || null,
@@ -3777,6 +3783,12 @@ export class OpsJobsService {
     if (dto.trailerLastLocationCode !== undefined) {
       data.trailerLastLocationCode = dto.trailerLastLocationCode?.trim() || null;
     }
+    if (dto.tripPICName !== undefined) {
+      data.tripPICName = dto.tripPICName?.trim() || null;
+    }
+    if (dto.tripPICContact !== undefined) {
+      data.tripPICContact = dto.tripPICContact?.trim() || null;
+    }
 
     if (dto.earningRateMasterId !== undefined) {
       if (dto.earningRateMasterId === null) {
@@ -4428,6 +4440,8 @@ export class OpsJobsService {
       customerCompanyName: job.customerCompany?.name ?? null,
       contactName: job.receiverName ?? null,
       contactPhone: job.receiverPhone ?? null,
+      tripPICName: t.tripPICName ?? null,
+      tripPICContact: t.tripPICContact ?? null,
       jobSequence: t.jobSequence ?? null,
       tripSequence: t.tripSequence ?? t.jobSequence ?? null,
       jobTripTemplate: t.jobTripTemplate ?? null,
@@ -4783,6 +4797,8 @@ export class OpsJobsService {
       customerCompanyName: trip.job?.customerCompany?.name ?? null,
       contactName: trip.job?.receiverName ?? null,
       contactPhone: trip.job?.receiverPhone ?? null,
+      tripPICName: trip.tripPICName ?? null,
+      tripPICContact: trip.tripPICContact ?? null,
       plannedStartAt: trip.plannedStartAt ?? null,
       startedAt: trip.startedAt ?? null,
       completedAt: trip.closedAt ?? null,

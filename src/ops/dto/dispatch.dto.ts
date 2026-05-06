@@ -172,6 +172,12 @@ export class DispatchBoardTripDto {
   @ApiPropertyOptional()
   title!: string | null;
 
+  @ApiPropertyOptional()
+  tripPICName!: string | null;
+
+  @ApiPropertyOptional()
+  tripPICContact!: string | null;
+
   @ApiProperty()
   status!: string;
 

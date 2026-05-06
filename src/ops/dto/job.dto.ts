@@ -146,6 +146,8 @@ export class JobTripResponseDto {
   customerCompanyName!: string | null;
   contactName!: string | null;
   contactPhone!: string | null;
+  tripPICName!: string | null;
+  tripPICContact!: string | null;
   fromLabel!: string | null;
   toLabel!: string | null;
   fromAddress!: string | null;

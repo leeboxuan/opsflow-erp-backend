@@ -280,6 +280,8 @@ model Trip {
   earningLabelSnapshot    String?
   trailerNumber           String?
   trailerLastLocationCode String?
+  tripPICName             String?
+  tripPICContact          String?
   trailerParkingLat       Float?
   trailerParkingLng       Float?
   trailerParkedAt         DateTime?

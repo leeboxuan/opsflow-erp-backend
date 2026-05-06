@@ -340,6 +340,8 @@ export class DispatchService {
       jobRef: trip.job?.internalRef ?? null,
       customerName: trip.job?.customerCompany?.name ?? null,
       title: trip.title ?? trip.displayTitle ?? null,
+      tripPICName: trip.tripPICName ?? null,
+      tripPICContact: trip.tripPICContact ?? null,
       status: trip.status,
       plannedStartAt: trip.plannedStartAt,
       jobSequence: trip.jobSequence,

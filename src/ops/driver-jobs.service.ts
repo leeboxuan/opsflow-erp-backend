@@ -200,6 +200,8 @@ function toJobDto(j: any): JobDto {
         }),
         jobTripTemplate: t.jobTripTemplate ?? null,
         title: t.title ?? null,
+        tripPICName: t.tripPICName ?? null,
+        tripPICContact: t.tripPICContact ?? null,
         status: t.status,
         isPublished: t.status !== TripStatus.DRAFT && t.status !== TripStatus.CANCELLED,
         isCompleted:
@@ -2103,6 +2105,8 @@ export class DriverJobsService {
         tripId: trip.id,
       }),
       title: trip.title ?? trip.displayTitle ?? null,
+      tripPICName: trip.tripPICName ?? null,
+      tripPICContact: trip.tripPICContact ?? null,
       status: trip.status,
       plannedStartAt: trip.plannedStartAt ?? null,
       jobSequence: trip.jobSequence ?? null,

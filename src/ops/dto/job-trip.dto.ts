@@ -162,6 +162,16 @@ export class AppendJobTripDto {
   @IsString()
   notes?: string | null;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tripPICName?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tripPICContact?: string | null;
+
   @ApiPropertyOptional({
     description:
       "Optional payout master item id. Validated against active DRIVER_PAYOUT master.",
@@ -336,6 +346,16 @@ export class PatchJobTripDto {
   @IsOptional()
   @IsString()
   trailerLastLocationCode?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tripPICName?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tripPICContact?: string | null;
 }
 
 export class TripPayoutLineInputDto {
