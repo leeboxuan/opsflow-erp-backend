@@ -80,6 +80,53 @@ describe("Trip PIC fields", () => {
     expect(prisma.job.update).not.toHaveBeenCalled();
   });
 
+  it("trip patch clears containerNumber/carrier/shipper/vessel on LCL trips without requiring them on create", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          status: TripStatus.DRAFT,
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const svc = new OpsJobsService(
+      prisma,
+      { log: jest.fn().mockResolvedValue(undefined) } as any,
+      {} as any,
+    );
+    jest.spyOn(svc, "getOne").mockResolvedValue({
+      id: "job1",
+      jobType: JobType.LCL,
+    } as any);
+
+    await svc.patchTrip(
+      "t1",
+      "job1",
+      "trip1",
+      {
+        containerNumber: null,
+        carrier: null,
+        shipper: null,
+        vessel: null,
+      } as any,
+      { userId: "u1", role: Role.OPS, customerCompanyId: null },
+    );
+
+    expect(prisma.trip.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          containerNumber: null,
+          carrier: null,
+          shipper: null,
+          vessel: null,
+        }),
+      }),
+    );
+  });
+
   it("job detail trip list returns tripPICName/tripPICContact/container and shipping refs", async () => {
     const prisma: any = {
       $transaction: jest.fn().mockResolvedValue([

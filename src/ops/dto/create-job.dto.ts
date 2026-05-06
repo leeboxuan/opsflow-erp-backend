@@ -314,7 +314,7 @@ export class CreateJobDto {
 
   @ApiPropertyOptional({
     description:
-      "Legacy job-level container number input. Used as initial fallback for generated trips.",
+      "Optional legacy job-level container number. Seeds generated trips only for IMPORT and EXPORT; not applied to generated LCL trips.",
   })
   @IsOptional()
   @IsString()

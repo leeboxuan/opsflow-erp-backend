@@ -1828,6 +1828,7 @@ export class OpsJobsService {
       actorUserId,
     );
 
+    // Cargo/shipping defaults are applied inside tripCreateManyForJob only for IMPORT/EXPORT; LCL legs are skipped.
     const seededContainerNumber = String(dto.containerNumber ?? "").trim() || null;
     const seededShippingRefs = {
       carrier: null,

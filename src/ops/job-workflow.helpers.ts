@@ -226,6 +226,41 @@ export function buildDefaultTripSeeds(
   ];
 }
 
+/**
+ * IMPORT/EXPORT jobs are container-shipment oriented; auto-generated trips seed
+ * container + shipping refs from job-level defaults when provided.
+ * LCL is item-based: generated trips do not copy those fields (always null).
+ * Patches and manual appends remain optional so legacy LCL rows are untouched.
+ */
+function tripCargoShippingSeedForJobType(
+  jobType: JobType,
+  containerNumber: string | null | undefined,
+  shippingRefs: {
+    carrier?: string | null;
+    shipper?: string | null;
+    vessel?: string | null;
+  } | null | undefined,
+): Pick<
+  Prisma.TripCreateManyInput,
+  "containerNumber" | "carrier" | "shipper" | "vessel"
+> {
+  if (jobType === JobType.LCL) {
+    return {
+      containerNumber: null,
+      carrier: null,
+      shipper: null,
+      vessel: null,
+    };
+  }
+
+  return {
+    containerNumber: String(containerNumber ?? "").trim() || null,
+    carrier: String(shippingRefs?.carrier ?? "").trim() || null,
+    shipper: String(shippingRefs?.shipper ?? "").trim() || null,
+    vessel: String(shippingRefs?.vessel ?? "").trim() || null,
+  };
+}
+
 export function tripCreateManyForJob(
   tenantId: string,
   jobId: string,
@@ -245,25 +280,39 @@ export function tripCreateManyForJob(
   >,
   createdByUserId?: string | null,
 ): Prisma.TripCreateManyInput[] {
-  return buildDefaultTripSeeds(jobType, pickupDate).map((s) => ({
-    tenantId,
-    jobId,
-    jobSequence: s.jobSequence,
-    tripSequence: s.tripSequence,
-    displayTitle: s.displayTitle,
-    jobTripTemplate: s.jobTripTemplate,
-    title: s.title,
-    plannedStartAt: s.plannedStartAt,
-    status: TripStatus.DRAFT,
-    pendingState: TripPendingState.NONE,
-    tripPICName: null,
-    tripPICContact: null,
-    containerNumber: String(containerNumber ?? "").trim() || null,
-    carrier: String(shippingRefs?.carrier ?? "").trim() || null,
-    shipper: String(shippingRefs?.shipper ?? "").trim() || null,
-    vessel: String(shippingRefs?.vessel ?? "").trim() || null,
-    createdByUserId: createdByUserId ?? null,
-    completionRuleJson: completionRuleForTemplate(s.jobTripTemplate),
-    ...(routeSnapshots?.[s.jobTripTemplate] ?? {}),
-  }));
+  const cargoShipping = tripCargoShippingSeedForJobType(
+    jobType,
+    containerNumber,
+    shippingRefs,
+  );
+  return buildDefaultTripSeeds(jobType, pickupDate).map((s) => {
+    const row: Prisma.TripCreateManyInput = {
+      tenantId,
+      jobId,
+      jobSequence: s.jobSequence,
+      tripSequence: s.tripSequence,
+      displayTitle: s.displayTitle,
+      jobTripTemplate: s.jobTripTemplate,
+      title: s.title,
+      plannedStartAt: s.plannedStartAt,
+      status: TripStatus.DRAFT,
+      pendingState: TripPendingState.NONE,
+      tripPICName: null,
+      tripPICContact: null,
+      ...cargoShipping,
+      createdByUserId: createdByUserId ?? null,
+      completionRuleJson: completionRuleForTemplate(s.jobTripTemplate),
+      ...(routeSnapshots?.[s.jobTripTemplate] ?? {}),
+    };
+
+    // LCL: never persist container/shipping defaults on bulk-generated legs.
+    if (jobType === JobType.LCL) {
+      row.containerNumber = null;
+      row.carrier = null;
+      row.shipper = null;
+      row.vessel = null;
+    }
+
+    return row;
+  });
 }

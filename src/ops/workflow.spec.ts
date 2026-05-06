@@ -115,6 +115,55 @@ describe("workflow helpers", () => {
       },
     });
     expect(rows[0].status).toBe("DRAFT");
+    expect(rows[0].containerNumber).toBeNull();
+    expect(rows[0].carrier).toBeNull();
+    expect(rows[0].shipper).toBeNull();
+    expect(rows[0].vessel).toBeNull();
+  });
+
+  it("tripCreateManyForJob LCL does not seed container or shipping refs even when passed", () => {
+    const rows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.LCL,
+      new Date("2026-03-15"),
+      "  LEGACY-CONT  ",
+      {
+        carrier: "  MAERSK ",
+        shipper: "  ACME ",
+        vessel: "  VESSEL-X ",
+      },
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].containerNumber).toBeNull();
+    expect(rows[0].carrier).toBeNull();
+    expect(rows[0].shipper).toBeNull();
+    expect(rows[0].vessel).toBeNull();
+  });
+
+  it("tripCreateManyForJob LCL clears cargo/shipping after route snapshots", () => {
+    const rows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.LCL,
+      new Date("2026-03-15"),
+      null,
+      null,
+      {
+        [JobTripTemplate.PICKUP_TO_DELIVERY]: {
+          containerNumber: "from-snapshot",
+          carrier: "X",
+          shipper: "Y",
+          vessel: "Z",
+          originLabel: "Warehouse",
+        },
+      },
+    );
+    expect(rows[0].originLabel).toBe("Warehouse");
+    expect(rows[0].containerNumber).toBeNull();
+    expect(rows[0].carrier).toBeNull();
+    expect(rows[0].shipper).toBeNull();
+    expect(rows[0].vessel).toBeNull();
   });
 
   it("completionRuleForTemplate uses explicit per-template rule map", () => {
@@ -135,7 +184,7 @@ describe("workflow helpers", () => {
     );
   });
 
-  it("tripCreateManyForJob seeds containerNumber to each generated trip", () => {
+  it("tripCreateManyForJob seeds containerNumber onto IMPORT-generated trips", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -147,24 +196,56 @@ describe("workflow helpers", () => {
     expect(rows.every((r) => r.containerNumber === "CONT-001")).toBe(true);
   });
 
-  it("tripCreateManyForJob seeds shipping reference fields to each generated trip", () => {
+  it("tripCreateManyForJob seeds containerNumber onto EXPORT-generated trips", () => {
     const rows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.EXPORT,
+      new Date("2026-03-15"),
+      "  CONT-EXP-01  ",
+      null,
+    );
+    expect(rows.every((r) => r.containerNumber === "CONT-EXP-01")).toBe(true);
+  });
+
+  it("tripCreateManyForJob seeds shipping reference fields onto IMPORT and EXPORT trips", () => {
+    const seeds = {
+      carrier: "  MAERSK ",
+      shipper: "  ACME ",
+      vessel: "  VESSEL-X ",
+    };
+
+    const importRows = tripCreateManyForJob(
       "t1",
       "j1",
       JobType.IMPORT,
       new Date("2026-03-15"),
       null,
-      {
-        carrier: "  MAERSK ",
-        shipper: "  ACME ",
-        vessel: "  VESSEL-X ",
-      },
+      seeds,
     );
-    expect(rows.every((r) =>
-      r.carrier === "MAERSK"
-      && r.shipper === "ACME"
-      && r.vessel === "VESSEL-X"
-    )).toBe(true);
+    expect(
+      importRows.every((r) =>
+        r.carrier === "MAERSK"
+        && r.shipper === "ACME"
+        && r.vessel === "VESSEL-X"
+      ),
+    ).toBe(true);
+
+    const exportRows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.EXPORT,
+      new Date("2026-03-15"),
+      null,
+      seeds,
+    );
+    expect(
+      exportRows.every((r) =>
+        r.carrier === "MAERSK"
+        && r.shipper === "ACME"
+        && r.vessel === "VESSEL-X"
+      ),
+    ).toBe(true);
   });
 
   it("LCL completion rule requires POD signature at trip level", () => {

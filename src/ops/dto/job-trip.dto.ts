@@ -172,22 +172,31 @@ export class AppendJobTripDto {
   @IsString()
   tripPICContact?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      "Optional. Primary for IMPORT/EXPORT; LCL is item-based—UI may omit. Never required.",
+  })
   @IsOptional()
   @IsString()
   containerNumber?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Optional shipping ref; primary for IMPORT/EXPORT. Not required for LCL.",
+  })
   @IsOptional()
   @IsString()
   carrier?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Optional shipping ref; primary for IMPORT/EXPORT. Not required for LCL.",
+  })
   @IsOptional()
   @IsString()
   shipper?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Optional shipping ref; primary for IMPORT/EXPORT. Not required for LCL.",
+  })
   @IsOptional()
   @IsString()
   vessel?: string | null;
@@ -377,22 +386,31 @@ export class PatchJobTripDto {
   @IsString()
   tripPICContact?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      "Optional. Primary for IMPORT/EXPORT; LCL is item-based—UI may omit. Never required.",
+  })
   @IsOptional()
   @IsString()
   containerNumber?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Optional shipping ref; primary for IMPORT/EXPORT. Not required for LCL.",
+  })
   @IsOptional()
   @IsString()
   carrier?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Optional shipping ref; primary for IMPORT/EXPORT. Not required for LCL.",
+  })
   @IsOptional()
   @IsString()
   shipper?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Optional shipping ref; primary for IMPORT/EXPORT. Not required for LCL.",
+  })
   @IsOptional()
   @IsString()
   vessel?: string | null;
