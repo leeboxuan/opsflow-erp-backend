@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from "@nestjs/common";
 import {
   JobStatus,
@@ -20,6 +21,10 @@ import { JobLocationDto } from "./dto/location.dto";
 import { JobDto, JobDocumentDto } from "./dto/job.dto";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
+const DRIVER_DELETABLE_TRIP_DOC_TYPES = new Set<TripDocumentType>([
+  TripDocumentType.POD_PHOTO,
+  TripDocumentType.OTHER,
+]);
 
 function normalizeText(value?: string | null): string | null {
   if (!value) return null;
@@ -702,7 +707,7 @@ export class DriverJobsService {
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt ?? null,
       uploadedByUserId: doc.uploadedByUserId ?? null,
-      uploadedByName: doc.uploadedByNameSnapshot ?? null,
+      uploadedByName: doc.uploadedByName ?? doc.uploadedByNameSnapshot ?? null,
       generatedBySystem: doc.generatedBySystem ?? false,
       generatedSource: doc.generatedSource ?? null,
       jobId: doc.jobId ?? null,
@@ -2118,6 +2123,13 @@ export class DriverJobsService {
         fileUrl: doc.url ?? null,
         uploadedAt: doc.createdAt,
         signedAt: doc.signedAt ?? null,
+        uploadedByUserId: doc.uploadedByUserId ?? null,
+        uploadedByName: doc.uploadedByName ?? null,
+        uploadedByCurrentDriver: doc.uploadedByUserId === driverUserId,
+        canDelete:
+          doc.isActive === true
+          && doc.uploadedByUserId === driverUserId
+          && DRIVER_DELETABLE_TRIP_DOC_TYPES.has(doc.type as TripDocumentType),
       })),
 
       cargo: {
@@ -2244,6 +2256,63 @@ export class DriverJobsService {
     );
 
     return this.attachTripDocumentSignedUrl(doc);
+  }
+
+  async deleteTripDocumentForDriver(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    documentId: string,
+    driverUserId: string,
+  ): Promise<{ success: true; documentId: string }> {
+    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
+    const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
+    if (
+      trip.status === TripStatus.COMPLETED
+      || trip.status === TripStatus.DONE
+      || trip.status === TripStatus.CANCELLED
+    ) {
+      throw new BadRequestException(
+        "Trip documents cannot be deleted after trip completion/cancellation",
+      );
+    }
+
+    const doc = await this.prisma.tripDocument.findFirst({
+      where: {
+        id: documentId,
+        tenantId,
+        tripId,
+        isActive: true,
+      },
+    });
+
+    if (!doc) {
+      throw new NotFoundException("Trip document not found");
+    }
+
+    if (!DRIVER_DELETABLE_TRIP_DOC_TYPES.has(doc.type)) {
+      throw new BadRequestException("Unsupported trip document type for driver delete");
+    }
+
+    if (doc.uploadedByUserId !== driverUserId) {
+      throw new ForbiddenException("You can only delete your own trip documents");
+    }
+
+    await this.prisma.tripDocument.update({
+      where: { id: doc.id },
+      data: { isActive: false },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "TRIP_DOC_DELETE",
+      "TRIP",
+      tripId,
+      { jobId, documentId: doc.id, type: doc.type },
+      driverUserId,
+    );
+
+    return { success: true, documentId: doc.id };
   }
 
   async signTripDocumentForDriver(

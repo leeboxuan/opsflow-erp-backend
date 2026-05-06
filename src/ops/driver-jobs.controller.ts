@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   Post,
   Param,
@@ -298,6 +299,25 @@ export class DriverJobsController {
       type,
       file,
       requiresSignature,
+    );
+  }
+
+  @Delete(":jobId/trips/:tripId/documents/:documentId")
+  @ApiOperation({ summary: "Delete own trip photo documentation (soft delete)" })
+  async deleteTripDocument(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Param("documentId") documentId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.deleteTripDocumentForDriver(
+      tenantId,
+      jobId,
+      tripId,
+      documentId,
+      userId,
     );
   }
 
