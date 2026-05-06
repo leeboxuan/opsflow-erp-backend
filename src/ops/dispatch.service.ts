@@ -17,6 +17,8 @@ import {
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
 const GOOGLE_ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes";
+const GPS_FRESHNESS_MINUTES = 5;
+const GPS_IDLE_MINUTES = 10;
 
 @Injectable()
 export class DispatchService {
@@ -283,10 +285,6 @@ export class DispatchService {
       && status !== TripStatus.CANCELLED;
   }
 
-  private toSelectedDateStart(value: string): Date {
-    return new Date(`${value}T00:00:00.000`);
-  }
-
   private async createSignedUrl(storageKey: string | null | undefined): Promise<string | null> {
     if (!storageKey) return null;
     try {
@@ -366,7 +364,7 @@ export class DispatchService {
     const selectedDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date))
       ? date
       : this.toLocalDayKey(new Date())!;
-    const selectedDateStart = this.toSelectedDateStart(selectedDate);
+    const generatedAt = new Date();
     const [driverMemberships, locations, trips, trailerLocations] = await Promise.all([
       this.prisma.tenantMembership.findMany({
         where: {
@@ -452,36 +450,41 @@ export class DispatchService {
       const profile = profileMap.get(driver.id);
       const gpsRefAtRaw = latestLocation
         ? (
-          latestLocation.recordedAt
-          ?? latestLocation.capturedAt
+          latestLocation.capturedAt
+          ?? latestLocation.recordedAt
           ?? latestLocation.updatedAt
-          ?? latestLocation.createdAt
         )
         : null;
       const gpsRefAt = gpsRefAtRaw ? new Date(gpsRefAtRaw) : null;
-      const gpsIsOnOrAfterSelectedDay = gpsRefAt != null && gpsRefAt.getTime() >= selectedDateStart.getTime();
-      const lastGpsAgeMinutes = gpsIsOnOrAfterSelectedDay && gpsRefAt
-        ? Math.max(0, Math.floor((Date.now() - gpsRefAt.getTime()) / 60000))
+      const gpsHasUsableTimestamp = gpsRefAt != null && !Number.isNaN(gpsRefAt.getTime());
+      const lastGpsAgeMinutes = gpsHasUsableTimestamp
+        ? Math.max(0, Math.floor((generatedAt.getTime() - gpsRefAt.getTime()) / 60000))
         : null;
       const lastMovedAtRaw = latestLocation?.lastMovedAt ?? null;
       const lastMovedAt = lastMovedAtRaw ? new Date(lastMovedAtRaw) : null;
-      const stationaryMinutes = gpsIsOnOrAfterSelectedDay
+      const stationaryMinutes = gpsHasUsableTimestamp
         ? Math.max(
             0,
-            Math.floor((Date.now() - (lastMovedAt?.getTime() ?? gpsRefAt?.getTime() ?? Date.now())) / 60000),
+            Math.floor(
+              (
+                generatedAt.getTime()
+                - (lastMovedAt?.getTime() ?? gpsRefAt?.getTime() ?? generatedAt.getTime())
+              ) / 60000,
+            ),
           )
         : null;
       let gpsStatus: DispatchGpsStatus;
-      if (!latestLocation || !gpsIsOnOrAfterSelectedDay || lastGpsAgeMinutes == null) {
+      if (!latestLocation || !gpsHasUsableTimestamp || lastGpsAgeMinutes == null) {
         gpsStatus = DispatchGpsStatus.NO_GPS;
-      } else if (lastGpsAgeMinutes <= 2 && (stationaryMinutes ?? 0) >= 10) {
+      } else if (
+        lastGpsAgeMinutes <= GPS_FRESHNESS_MINUTES
+        && (stationaryMinutes ?? 0) >= GPS_IDLE_MINUTES
+      ) {
         gpsStatus = DispatchGpsStatus.IDLE;
-      } else if (lastGpsAgeMinutes <= 2) {
+      } else if (lastGpsAgeMinutes <= GPS_FRESHNESS_MINUTES) {
         gpsStatus = DispatchGpsStatus.LIVE;
-      } else if (lastGpsAgeMinutes <= 10) {
-        gpsStatus = DispatchGpsStatus.STALE;
       } else {
-        gpsStatus = DispatchGpsStatus.NO_GPS;
+        gpsStatus = DispatchGpsStatus.STALE;
       }
 
       return {
@@ -519,7 +522,7 @@ export class DispatchService {
     }));
 
     return {
-      generatedAt: new Date().toISOString(),
+      generatedAt: generatedAt.toISOString(),
       date: selectedDate,
       drivers,
       unassignedTrips: await Promise.all(
