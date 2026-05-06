@@ -129,6 +129,13 @@ const OTHER_JOB_DOC_MIMES = new Set<string>([
 ]);
 
 function toDocDto(d: any): JobDocumentDto {
+  const uploadedByName = String(
+    d?.uploadedByName
+    ?? d?.uploadedBy?.name
+    ?? d?.uploadedByNameSnapshot
+    ?? "",
+  ).trim();
+  const uploadedByEmail = String(d?.uploadedBy?.email ?? d?.uploadedByEmail ?? "").trim();
   const fileDisplay =
     typeof d.storageKey === "string" && d.storageKey
       ? buildDocumentFileDisplayFields(d)
@@ -145,7 +152,7 @@ function toDocDto(d: any): JobDocumentDto {
     updatedAt: d.updatedAt ?? null,
     url: d.url ?? null,
     uploadedByUserId: d.uploadedByUserId ?? null,
-    uploadedByName: d.uploadedByName ?? d.uploadedByNameSnapshot ?? null,
+    uploadedByName: uploadedByName || uploadedByEmail || (d.generatedBySystem ? "System" : null),
     generatedBySystem: d.generatedBySystem ?? false,
     generatedSource: d.generatedSource ?? null,
     jobId: d.jobId ?? null,

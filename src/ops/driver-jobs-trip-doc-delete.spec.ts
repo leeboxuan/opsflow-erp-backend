@@ -50,7 +50,12 @@ describe("DriverJobsService.deleteTripDocumentForDriver", () => {
       "TRIP_DOC_DELETE",
       "TRIP",
       "trip-1",
-      { jobId: "job-1", documentId: "doc-1", type: TripDocumentType.POD_PHOTO },
+      {
+        jobId: "job-1",
+        documentId: "doc-1",
+        type: TripDocumentType.POD_PHOTO,
+        uploadedByUserId: "driver-1",
+      },
       "driver-1",
     );
   });
@@ -84,18 +89,72 @@ describe("DriverJobsService.deleteTripDocumentForDriver", () => {
 
     await expect(
       svc.deleteTripDocumentForDriver("tenant-1", "job-1", "trip-1", "doc-3", "driver-1"),
-    ).rejects.toThrow("You can only delete your own trip documents");
+    ).rejects.toThrow("You can only delete documents you uploaded.");
     expect(prisma.tripDocument.update).not.toHaveBeenCalled();
+  });
+
+  it("driver can delete own POD_SIGNATURE upload", async () => {
+    const doc = {
+      id: "doc-signature",
+      tenantId: "tenant-1",
+      tripId: "trip-1",
+      type: TripDocumentType.POD_SIGNATURE,
+      isActive: true,
+      uploadedByUserId: "driver-1",
+    };
+    const { svc } = createServiceWithDoc(doc);
+
+    await expect(
+      svc.deleteTripDocumentForDriver("tenant-1", "job-1", "trip-1", "doc-signature", "driver-1"),
+    ).resolves.toEqual({ success: true, documentId: "doc-signature" });
+  });
+
+  it.each([
+    TripDocumentType.DELIVERY_DO,
+    TripDocumentType.PICKUP_DO,
+  ])("driver can delete own %s upload", async (type) => {
+    const doc = {
+      id: "doc-own-do",
+      tenantId: "tenant-1",
+      tripId: "trip-1",
+      type,
+      isActive: true,
+      uploadedByUserId: "driver-1",
+    };
+    const { svc } = createServiceWithDoc(doc);
+
+    await expect(
+      svc.deleteTripDocumentForDriver("tenant-1", "job-1", "trip-1", "doc-own-do", "driver-1"),
+    ).resolves.toEqual({ success: true, documentId: "doc-own-do" });
   });
 
   it.each([
     TripDocumentType.DELIVERY_DO,
     TripDocumentType.PICKUP_DO,
     TripDocumentType.POD_SIGNATURE,
+    TripDocumentType.OTHER,
+    TripDocumentType.POD_PHOTO,
+  ])("rejects when document was uploaded by another user: %s", async (type) => {
+    const doc = {
+      id: "doc-other-owner",
+      tenantId: "tenant-1",
+      tripId: "trip-1",
+      type,
+      isActive: true,
+      uploadedByUserId: "someone-else",
+    };
+    const { svc, prisma } = createServiceWithDoc(doc);
+
+    await expect(
+      svc.deleteTripDocumentForDriver("tenant-1", "job-1", "trip-1", "doc-other-owner", "driver-1"),
+    ).rejects.toThrow("You can only delete documents you uploaded.");
+    expect(prisma.tripDocument.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
     TripDocumentType.TRAILER_START_PHOTO,
     TripDocumentType.TRAILER_END_PHOTO,
-    TripDocumentType.TRAILER_PARKING_PHOTO,
-  ])("rejects unsupported type %s", async (type) => {
+  ])("rejects trailer photo type %s", async (type) => {
     const doc = {
       id: "doc-4",
       tenantId: "tenant-1",
@@ -108,7 +167,7 @@ describe("DriverJobsService.deleteTripDocumentForDriver", () => {
 
     await expect(
       svc.deleteTripDocumentForDriver("tenant-1", "job-1", "trip-1", "doc-4", "driver-1"),
-    ).rejects.toThrow("Unsupported trip document type for driver delete");
+    ).rejects.toThrow("Trailer photos cannot be deleted.");
     expect(prisma.tripDocument.update).not.toHaveBeenCalled();
   });
 
@@ -121,7 +180,7 @@ describe("DriverJobsService.deleteTripDocumentForDriver", () => {
     expect(prisma.tripDocument.update).not.toHaveBeenCalled();
   });
 
-  it.each([TripStatus.COMPLETED, TripStatus.DONE])(
+  it.each([TripStatus.COMPLETED, TripStatus.DONE, TripStatus.CANCELLED])(
     "rejects deletion when trip status is %s",
     async (status) => {
       const doc = {
@@ -290,7 +349,10 @@ describe("DriverJobsService.deleteTripDocumentForDriver", () => {
     expect(listed.some((d) => d.id === "doc-do")).toBe(true);
 
     const detail = await svc.getTripDetailForDriver("tenant-1", "trip-1", "driver-1");
+    const doDoc = detail.documents.find((d: any) => d.id === "doc-do");
     expect(detail.documents.some((d: any) => d.id === "doc-photo")).toBe(false);
     expect(detail.documents.some((d: any) => d.id === "doc-do")).toBe(true);
+    expect(doDoc?.uploadedByCurrentDriver).toBe(true);
+    expect(doDoc?.canDelete).toBe(true);
   });
 });

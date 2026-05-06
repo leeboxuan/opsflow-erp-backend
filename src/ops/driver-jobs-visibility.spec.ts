@@ -851,6 +851,180 @@ describe("Driver trip detail endpoint service contract", () => {
     expect(startDoc?.canDelete).toBe(false);
   });
 
+  it("trip detail document uploader metadata supports driver/admin/system cases", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          title: "Trip 1",
+          displayTitle: null,
+          status: "ONGOING",
+          plannedStartAt: null,
+          jobSequence: 1,
+          tripSequence: 1,
+          originLabel: "Origin",
+          destinationLabel: "Dest",
+          originAddressLine1: null,
+          originAddressLine2: null,
+          originPostalCode: null,
+          originCountry: null,
+          originLat: null,
+          originLng: null,
+          destinationAddressLine1: null,
+          destinationAddressLine2: null,
+          destinationPostalCode: null,
+          destinationCountry: null,
+          destinationLat: null,
+          destinationLng: null,
+          publishedAt: null,
+          startedAt: null,
+          closedAt: null,
+          assignedDriverUserId: "driver-1",
+          trailerNumber: null,
+          trailerLastLocationCode: null,
+          trailerParkedAt: null,
+          trailerParkingLat: null,
+          trailerParkingLng: null,
+          job: {
+            id: "job1",
+            internalRef: "JOB-1",
+            externalRef: null,
+            jobType: "IMPORT",
+            status: "ONGOING",
+            customerCompany: { name: "Customer A" },
+            items: [],
+          },
+          documents: [
+            {
+              id: "doc-driver",
+              type: "POD_PHOTO",
+              storageKey: "k-driver",
+              originalName: "driver.jpg",
+              mimeType: "image/jpeg",
+              sizeBytes: 100,
+              isActive: true,
+              createdAt: new Date("2026-04-30T01:01:00.000Z"),
+              updatedAt: new Date("2026-04-30T01:01:00.000Z"),
+              uploadedByUserId: "driver-1",
+              uploadedByNameSnapshot: "Driver One",
+              generatedBySystem: false,
+              generatedSource: null,
+              requiresSignature: false,
+              isSigned: false,
+              signedAt: null,
+              signedByUserId: null,
+              signedByName: null,
+              tripId: "trip1",
+              jobId: "job1",
+            },
+            {
+              id: "doc-admin",
+              type: "OTHER",
+              storageKey: "k-admin",
+              originalName: "admin.pdf",
+              mimeType: "application/pdf",
+              sizeBytes: 100,
+              isActive: true,
+              createdAt: new Date("2026-04-30T01:02:00.000Z"),
+              updatedAt: new Date("2026-04-30T01:02:00.000Z"),
+              uploadedByUserId: "admin-1",
+              uploadedByNameSnapshot: "Ops Admin",
+              generatedBySystem: false,
+              generatedSource: null,
+              requiresSignature: false,
+              isSigned: false,
+              signedAt: null,
+              signedByUserId: null,
+              signedByName: null,
+              tripId: "trip1",
+              jobId: "job1",
+            },
+            {
+              id: "doc-system",
+              type: "DELIVERY_DO",
+              storageKey: "k-system",
+              originalName: "delivery.pdf",
+              mimeType: "application/pdf",
+              sizeBytes: 100,
+              isActive: true,
+              createdAt: new Date("2026-04-30T01:03:00.000Z"),
+              updatedAt: new Date("2026-04-30T01:03:00.000Z"),
+              uploadedByUserId: null,
+              uploadedByNameSnapshot: null,
+              generatedBySystem: true,
+              generatedSource: "AUTO",
+              requiresSignature: false,
+              isSigned: false,
+              signedAt: null,
+              signedByUserId: null,
+              signedByName: null,
+              tripId: "trip1",
+              jobId: "job1",
+            },
+            {
+              id: "doc-trailer",
+              type: "TRAILER_START_PHOTO",
+              storageKey: "k-trailer",
+              originalName: "start.jpg",
+              mimeType: "image/jpeg",
+              sizeBytes: 100,
+              isActive: true,
+              createdAt: new Date("2026-04-30T01:04:00.000Z"),
+              updatedAt: new Date("2026-04-30T01:04:00.000Z"),
+              uploadedByUserId: "driver-1",
+              uploadedByNameSnapshot: "Driver One",
+              generatedBySystem: false,
+              generatedSource: null,
+              requiresSignature: false,
+              isSigned: false,
+              signedAt: null,
+              signedByUserId: null,
+              signedByName: null,
+              tripId: "trip1",
+              jobId: "job1",
+            },
+          ],
+        }),
+      },
+      masterTrailerLocation: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const supabaseService = {
+      getClient: jest.fn().mockReturnValue({
+        storage: {
+          from: jest.fn().mockReturnValue({
+            createSignedUrl: jest.fn().mockResolvedValue({ data: { signedUrl: "https://signed/doc" } }),
+          }),
+        },
+      }),
+    } as any;
+    const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, supabaseService);
+
+    const res = await svc.getTripDetailForDriver("t1", "trip1", "driver-1");
+    const byId = new Map((res.documents ?? []).map((d: any) => [d.id, d]));
+    expect(byId.get("doc-driver")).toEqual(expect.objectContaining({
+      uploadedByName: "Driver One",
+      uploadedByCurrentDriver: true,
+      canDelete: true,
+    }));
+    expect(byId.get("doc-admin")).toEqual(expect.objectContaining({
+      uploadedByName: "Ops Admin",
+      uploadedByCurrentDriver: false,
+      canDelete: false,
+    }));
+    expect(byId.get("doc-system")).toEqual(expect.objectContaining({
+      uploadedByName: "System",
+      uploadedByCurrentDriver: false,
+      canDelete: false,
+    }));
+    expect(byId.get("doc-trailer")).toEqual(expect.objectContaining({
+      uploadedByName: "Driver One",
+      uploadedByCurrentDriver: true,
+      canDelete: false,
+    }));
+  });
+
   it("other driver cannot read trip detail", async () => {
     const prisma: any = {
       trip: {

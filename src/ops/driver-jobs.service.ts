@@ -24,9 +24,14 @@ import { JobDto, JobDocumentDto } from "./dto/job.dto";
 const JOB_DOCUMENTS_BUCKET = "job-documents";
 const DEFAULT_TENANT_TIMEZONE = "Asia/Singapore";
 const TENANT_TIMEZONE_CACHE_TTL_MS = 5 * 60 * 1000;
-const DRIVER_DELETABLE_TRIP_DOC_TYPES = new Set<TripDocumentType>([
-  TripDocumentType.POD_PHOTO,
-  TripDocumentType.OTHER,
+const DRIVER_NON_DELETABLE_TRIP_DOC_TYPES = new Set<TripDocumentType>([
+  TripDocumentType.TRAILER_START_PHOTO,
+  TripDocumentType.TRAILER_END_PHOTO,
+]);
+const DRIVER_NON_DELETABLE_TRIP_STATUSES = new Set<TripStatus>([
+  TripStatus.COMPLETED,
+  TripStatus.DONE,
+  TripStatus.CANCELLED,
 ]);
 
 function normalizeText(value?: string | null): string | null {
@@ -40,6 +45,20 @@ function firstNonEmptyText(...values: Array<unknown>): string | null {
     const s = String(v).trim();
     if (s.length > 0) return s;
   }
+  return null;
+}
+
+function resolveUploadedByName(doc: any): string | null {
+  const name = String(
+    doc?.uploadedByName
+    ?? doc?.uploadedBy?.name
+    ?? doc?.uploadedByNameSnapshot
+    ?? "",
+  ).trim();
+  if (name) return name;
+  const email = String(doc?.uploadedBy?.email ?? doc?.uploadedByEmail ?? "").trim();
+  if (email) return email;
+  if (doc?.generatedBySystem) return "System";
   return null;
 }
 
@@ -101,7 +120,7 @@ function toDocDto(d: any): JobDocumentDto {
     updatedAt: d.updatedAt ?? null,
     url: d.url ?? null,
     uploadedByUserId: d.uploadedByUserId ?? null,
-    uploadedByName: d.uploadedByName ?? d.uploadedByNameSnapshot ?? null,
+    uploadedByName: resolveUploadedByName(d),
     generatedBySystem: d.generatedBySystem ?? false,
     generatedSource: d.generatedSource ?? null,
     jobId: d.jobId ?? null,
@@ -758,7 +777,7 @@ export class DriverJobsService {
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt ?? null,
       uploadedByUserId: doc.uploadedByUserId ?? null,
-      uploadedByName: doc.uploadedByName ?? doc.uploadedByNameSnapshot ?? null,
+      uploadedByName: resolveUploadedByName(doc),
       generatedBySystem: doc.generatedBySystem ?? false,
       generatedSource: doc.generatedSource ?? null,
       jobId: doc.jobId ?? null,
@@ -2187,12 +2206,13 @@ export class DriverJobsService {
         uploadedAt: doc.createdAt,
         signedAt: doc.signedAt ?? null,
         uploadedByUserId: doc.uploadedByUserId ?? null,
-        uploadedByName: doc.uploadedByName ?? null,
+        uploadedByName: resolveUploadedByName(doc),
         uploadedByCurrentDriver: doc.uploadedByUserId === driverUserId,
         canDelete:
           doc.isActive === true
           && doc.uploadedByUserId === driverUserId
-          && DRIVER_DELETABLE_TRIP_DOC_TYPES.has(doc.type as TripDocumentType),
+          && !DRIVER_NON_DELETABLE_TRIP_DOC_TYPES.has(doc.type as TripDocumentType)
+          && !DRIVER_NON_DELETABLE_TRIP_STATUSES.has(trip.status as TripStatus),
       })),
 
       cargo: {
@@ -2353,12 +2373,12 @@ export class DriverJobsService {
       throw new NotFoundException("Trip document not found");
     }
 
-    if (!DRIVER_DELETABLE_TRIP_DOC_TYPES.has(doc.type)) {
-      throw new BadRequestException("Unsupported trip document type for driver delete");
+    if (DRIVER_NON_DELETABLE_TRIP_DOC_TYPES.has(doc.type)) {
+      throw new BadRequestException("Trailer photos cannot be deleted.");
     }
 
     if (doc.uploadedByUserId !== driverUserId) {
-      throw new ForbiddenException("You can only delete your own trip documents");
+      throw new ForbiddenException("You can only delete documents you uploaded.");
     }
 
     await this.prisma.tripDocument.update({
@@ -2371,7 +2391,7 @@ export class DriverJobsService {
       "TRIP_DOC_DELETE",
       "TRIP",
       tripId,
-      { jobId, documentId: doc.id, type: doc.type },
+      { jobId, documentId: doc.id, type: doc.type, uploadedByUserId: doc.uploadedByUserId ?? null },
       driverUserId,
     );
 
