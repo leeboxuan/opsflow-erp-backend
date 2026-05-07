@@ -47,8 +47,8 @@ export class CustomerCompanyDocumentDto {
   @ApiProperty()
   customerCompanyId: string;
 
-  @ApiProperty({ enum: ["CUSTOMER_DOCUMENT"] })
-  type: "CUSTOMER_DOCUMENT";
+  @ApiProperty({ enum: ["CUSTOMER_DOCUMENT", "INVOICE", "COMPANY_INVOICE"] })
+  type: "CUSTOMER_DOCUMENT" | "INVOICE" | "COMPANY_INVOICE";
 
   @ApiProperty()
   fileName: string;
@@ -70,6 +70,21 @@ export class CustomerCompanyDocumentDto {
 
   @ApiPropertyOptional({ nullable: true })
   uploadedByName?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  generatedByUserId?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  generatedByName?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  generatedAt?: Date | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  sourceJobId?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  sourceInvoiceId?: string | null;
 
   @ApiProperty()
   uploadedAt: Date;

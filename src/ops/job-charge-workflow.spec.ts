@@ -1070,6 +1070,9 @@ describe("job charge workflow hardening", () => {
             { id: "t2", status: "DONE" },
           ]),
       },
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
@@ -1116,6 +1119,9 @@ describe("job charge workflow hardening", () => {
       trip: {
         findMany: jest.fn().mockResolvedValue([{ id: "t1", status: "DONE" }]),
       },
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
@@ -1156,6 +1162,9 @@ describe("job charge workflow hardening", () => {
           { id: "t3", status: "CANCELLED" },
         ]),
       },
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
@@ -1183,6 +1192,9 @@ describe("job charge workflow hardening", () => {
           { id: "t1", status: "CANCELLED" },
           { id: "t2", status: "CANCELLED" },
         ]),
+      },
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(null),
       },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
@@ -1212,6 +1224,9 @@ describe("job charge workflow hardening", () => {
             { id: "t2", status: blockingStatus },
             { id: "t3", status: "CANCELLED" },
           ]),
+        },
+        invoice: {
+          findFirst: jest.fn().mockResolvedValue(null),
         },
       };
       const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;

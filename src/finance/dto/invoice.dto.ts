@@ -36,12 +36,41 @@ export class CreateInvoiceLineItemDto {
   @IsInt()
   @Min(0)
   taxRate: number; // 900 = 9%
+
+  @ApiPropertyOptional({ example: "QUOTATION_MASTER" })
+  @IsOptional()
+  @IsString()
+  sourceType?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sourceMasterItemId?: string | null;
+
+  @ApiPropertyOptional({ default: false })
+  @IsOptional()
+  requiresManualAmount?: boolean;
 }
 
 export class CreateInvoiceDto {
   @ApiProperty()
   @IsString()
   customerName: string;
+
+  @ApiPropertyOptional({ example: "WISDOM_FORCE" })
+  @IsOptional()
+  @IsString()
+  templateCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  customerCompanyId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sourceJobId?: string;
 
   @ApiPropertyOptional({ example: 'SGD' })
   @IsOptional()
@@ -100,12 +129,18 @@ export class InvoiceLineItemDto {
   @ApiProperty() taxCode: string;
   @ApiProperty() taxRate: number;
   @ApiProperty() taxCents: number;
+  @ApiPropertyOptional() sourceType?: string | null;
+  @ApiPropertyOptional() sourceMasterItemId?: string | null;
+  @ApiPropertyOptional() requiresManualAmount?: boolean;
 }
 
 export class InvoiceDto {
   @ApiProperty() id: string;
   @ApiProperty() invoiceNo: string;
   @ApiProperty() customerName: string;
+  @ApiPropertyOptional() customerCompanyId?: string | null;
+  @ApiPropertyOptional() sourceJobId?: string | null;
+  @ApiPropertyOptional() templateCode?: string;
   @ApiProperty() currency: string;
   @ApiProperty() status: string;
 
@@ -145,5 +180,51 @@ export class InvoiceDto {
 
   @ApiPropertyOptional() pdfKey?: string | null;
   @ApiPropertyOptional() pdfGeneratedAt?: Date | null;
+}
+
+export class InvoicePrefillResponseDto {
+  @ApiProperty() jobId: string;
+  @ApiProperty() internalJobReference: string;
+  @ApiProperty() customerCompanyId: string;
+  @ApiProperty() customerCompanyName: string;
+  @ApiProperty() invoiceTemplate: string;
+  @ApiProperty() invoiceDate: string;
+  @ApiProperty() dueDate: string;
+  @ApiProperty() reference: string;
+  @ApiProperty() currency: string;
+  @ApiProperty() taxRate: number;
+  @ApiProperty({ type: [CreateInvoiceLineItemDto] }) lineItems: CreateInvoiceLineItemDto[];
+  @ApiProperty() subtotalCents: number;
+  @ApiProperty() taxCents: number;
+  @ApiProperty() totalCents: number;
+  @ApiProperty() amountDueCents: number;
+  @ApiPropertyOptional() existingDraftInvoiceId?: string | null;
+  @ApiPropertyOptional({ type: [Object] }) quotationOptions?: Array<{
+    id: string;
+    code: string;
+    label: string;
+    description: string | null;
+    unit: string | null;
+    rateCents: number | null;
+    unitPriceCents: number | null;
+    requiresManualAmount: boolean;
+    taxRate: number;
+    rawRateText?: string | null;
+    sourceMasterFileId?: string | null;
+  }>;
+}
+
+export class InvoiceableJobDto {
+  @ApiProperty() id: string;
+  @ApiProperty() internalJobReference: string;
+  @ApiPropertyOptional() customerReference?: string | null;
+  @ApiProperty() jobType: string;
+  @ApiProperty() status: string;
+  @ApiPropertyOptional() invoiceReadyAt?: Date | null;
+  @ApiProperty() tripCount: number;
+  @ApiProperty() completedTripCount: number;
+  @ApiPropertyOptional() existingInvoiceId?: string | null;
+  @ApiPropertyOptional() existingInvoiceStatus?: string | null;
+  @ApiProperty() label: string;
 }
 

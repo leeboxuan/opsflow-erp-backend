@@ -91,6 +91,7 @@ model User {
   jobsCreated      Job[]               @relation("JobCreatedBy")
   quotationsUploaded CustomerCompanyQuotation[] @relation("QuotationUploadedBy")
   customerCompanyDocumentsUploaded CustomerCompanyDocument[] @relation("CustomerCompanyDocumentUploadedBy")
+  customerCompanyDocumentsGenerated CustomerCompanyDocument[] @relation("CustomerCompanyDocumentGeneratedBy")
   jobChargesSelected JobCharge[]       @relation("JobChargeSelectedBy")
   masterFilesUploaded MasterFile[]      @relation("MasterFileUploadedBy")
 
@@ -964,14 +965,20 @@ model CustomerCompanyDocument {
   mimeType          String
   fileSizeBytes     Int?
   uploadedByUserId  String?
+  generatedByUserId String?
   uploadedAt        DateTime                      @default(now())
+  generatedAt       DateTime?
+  sourceJobId       String?
+  sourceInvoiceId   String?
   status            CustomerCompanyDocumentStatus @default(ACTIVE)
+  deletedAt         DateTime?
   createdAt         DateTime                      @default(now())
   updatedAt         DateTime                      @updatedAt
 
   tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customerCompany customer_companies @relation(fields: [customerCompanyId], references: [id], onDelete: Cascade)
   uploadedBy      User?              @relation("CustomerCompanyDocumentUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  generatedBy     User?              @relation("CustomerCompanyDocumentGeneratedBy", fields: [generatedByUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, customerCompanyId, status, uploadedAt])
   @@index([tenantId, customerCompanyId, type])
@@ -1406,6 +1413,8 @@ enum QuotationVersionStatus {
 
 enum CustomerCompanyDocumentType {
   CUSTOMER_DOCUMENT
+  INVOICE
+  COMPANY_INVOICE
 }
 
 enum CustomerCompanyDocumentStatus {
@@ -1625,6 +1634,9 @@ model Invoice {
 
   invoiceNo    String
   customerName String
+  customerCompanyId String?
+  sourceJobId       String?
+  templateCode      String @default("DB_WISDOM")
   currency     String @default("SGD")
 
   issueDate DateTime  @default(now())
@@ -1673,6 +1685,9 @@ model InvoiceLineItem {
   taxCode  String // "SR" | "ZR"
   taxRate  Int // store as integer percent*100? We'll store 900 = 9.00%, 0 = 0
   taxCents Int
+  sourceType String? // JOB | QUOTATION_MASTER | MANUAL
+  sourceMasterItemId String?
+  requiresManualAmount Boolean @default(false)
 
   createdAt DateTime @default(now())
 

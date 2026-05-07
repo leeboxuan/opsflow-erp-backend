@@ -31,6 +31,7 @@ import { RoleGuard } from "../auth/guards/role.guard";
 import { Roles } from "../auth/guards/role.guard";
 import { Role, JobType, TripPendingState } from "@prisma/client";
 import { OpsJobsService } from "./ops-jobs.service";
+import { InvoicesService } from "../finance/invoices.service";
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
 import { AssignJobDto } from "./dto/assign-job.dto";
@@ -59,7 +60,10 @@ import { JobDto, JobDocumentDto, JobTripResponseDto } from "./dto/job.dto";
 @ApiBearerAuth("JWT-auth")
 @ApiExtraModels(JobDocumentDto)
 export class OpsJobsController {
-  constructor(private readonly jobs: OpsJobsService) {}
+  constructor(
+    private readonly jobs: OpsJobsService,
+    private readonly invoices: InvoicesService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: "List jobs with filters" })
@@ -301,6 +305,19 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.getOne(tenantId, jobId, accessUser);
+  }
+
+  @Get(":jobId/invoice-prefill")
+  @ApiOperation({ summary: "Build create-invoice prefill payload from job" })
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  async invoicePrefill(@Req() req: any, @Param("jobId") jobId: string) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.getInvoicePrefillFromJob(tenantId, jobId, accessUser);
   }
 
   @Patch(":jobId")

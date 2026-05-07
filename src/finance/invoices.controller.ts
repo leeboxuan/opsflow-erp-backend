@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Patch,
   Get,
   Param,
   Post,
@@ -17,7 +18,11 @@ import { TenantGuard } from "../auth/guards/tenant.guard";
 import { RoleGuard, Roles } from "@/auth/guards/role.guard";
 import { Role } from "@prisma/client";
 import { InvoicesService } from "./invoices.service";
-import { CreateInvoiceDto } from "./dto/invoice.dto";
+import {
+  CreateInvoiceDto,
+  InvoicePrefillResponseDto,
+  InvoiceableJobDto,
+} from "./dto/invoice.dto";
 import { DraftFromJobsDto } from "./dto/draft-from-jobs.dto";
 import { ListInvoicesQueryDto } from "./dto/list-invoices-query.dto";
 import { FileInterceptor } from "@nestjs/platform-express";
@@ -28,6 +33,51 @@ import { FileInterceptor } from "@nestjs/platform-express";
 @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER) // add Role.FINANCE later if you have it
 @ApiBearerAuth("JWT-auth")
 export class InvoicesController {
+  @Get("jobs/:jobId/prefill")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  async prefillFromJob(
+    @Request() req: any,
+    @Param("jobId") jobId: string,
+  ): Promise<InvoicePrefillResponseDto> {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.getInvoicePrefillFromJob(tenantId, jobId, accessUser);
+  }
+
+  @Get("companies/:companyId/invoiceable-jobs")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  async listInvoiceableJobs(
+    @Request() req: any,
+    @Param("companyId") companyId: string,
+  ): Promise<{ items: InvoiceableJobDto[] }> {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.listInvoiceableJobsByCompany(tenantId, companyId, accessUser);
+  }
+
+  @Get("companies/:companyId/quotation-options")
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  async listQuotationOptions(
+    @Request() req: any,
+    @Param("companyId") companyId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.listQuotationOptionsByCompany(tenantId, companyId, accessUser);
+  }
+
   constructor(private readonly invoices: InvoicesService) {}
 
   @Get()
@@ -56,6 +106,21 @@ export class InvoicesController {
   // Update an existing Draft invoice (used by web: /invoices/[id]/edit)
   @Post(":id/draft")
   async updateDraft(
+    @Request() req: any,
+    @Param("id") id: string,
+    @Body() dto: CreateInvoiceDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.updateDraftInvoice(tenantId, id, dto, accessUser);
+  }
+
+  @Patch(":id")
+  async patchDraft(
     @Request() req: any,
     @Param("id") id: string,
     @Body() dto: CreateInvoiceDto,
@@ -157,6 +222,28 @@ export class InvoicesController {
     };
 
     return this.invoices.uploadInvoicePdf(tenantId, id, file, accessUser);
+  }
+
+  @Get(":id/preview")
+  async preview(@Request() req: any, @Param("id") id: string) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.getInvoicePreview(tenantId, id, accessUser);
+  }
+
+  @Post(":id/generate")
+  async generate(@Request() req: any, @Param("id") id: string) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.generateInvoicePdf(tenantId, id, accessUser);
   }
 
   @Get(":id/pdf/download")

@@ -4288,7 +4288,18 @@ export class OpsJobsService {
       throw new BadRequestException("COMPLETED jobs cannot be sent to invoice");
     }
     if (job.status === JobStatus.READY_FOR_INVOICE && job.invoiceReadyAt) {
-      throw new BadRequestException("Job is already marked as invoice-ready");
+      const existingInvoice = await this.prisma.invoice.findFirst({
+        where: { tenantId, sourceJobId: jobId },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      });
+      return {
+        jobId,
+        invoiceReady: true,
+        invoiceReadyAt: job.invoiceReadyAt,
+        existingInvoiceId: existingInvoice?.id ?? null,
+        redirectTo: `/invoices/create?jobId=${jobId}`,
+      } as any;
     }
 
     const trips = await this.prisma.trip.findMany({
@@ -4323,7 +4334,18 @@ export class OpsJobsService {
     }
 
     if (refreshedJob.invoiceReadyAt) {
-      throw new BadRequestException("Job is already marked as invoice-ready");
+      const existingInvoice = await this.prisma.invoice.findFirst({
+        where: { tenantId, sourceJobId: jobId },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      });
+      return {
+        jobId,
+        invoiceReady: true,
+        invoiceReadyAt: refreshedJob.invoiceReadyAt,
+        existingInvoiceId: existingInvoice?.id ?? null,
+        redirectTo: `/invoices/create?jobId=${jobId}`,
+      } as any;
     }
 
     const now = new Date();

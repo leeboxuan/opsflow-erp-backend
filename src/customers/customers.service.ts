@@ -662,7 +662,12 @@ export class CustomersService {
     uploadedByUserId: string | null;
     uploadedAt: Date;
     status: string;
+    generatedByUserId?: string | null;
+    generatedAt?: Date | null;
+    sourceJobId?: string | null;
+    sourceInvoiceId?: string | null;
     uploadedBy?: { name: string | null } | null;
+    generatedBy?: { name: string | null; email?: string | null } | null;
   }): Promise<CustomerCompanyDocumentDto> {
     const supabase = this.supabaseService.getClient();
     const { data, error } = await supabase.storage
@@ -672,13 +677,18 @@ export class CustomersService {
     return {
       id: row.id,
       customerCompanyId: row.customerCompanyId,
-      type: "CUSTOMER_DOCUMENT",
+      type: row.type as "CUSTOMER_DOCUMENT" | "INVOICE" | "COMPANY_INVOICE",
       fileName: row.fileName,
       fileUrl: error ? null : (data?.signedUrl ?? null),
       mimeType: row.mimeType,
       fileSizeBytes: row.fileSizeBytes ?? null,
       uploadedByUserId: row.uploadedByUserId ?? null,
       uploadedByName: row.uploadedBy?.name ?? null,
+      generatedByUserId: row.generatedByUserId ?? null,
+      generatedByName: row.generatedBy?.name ?? row.generatedBy?.email ?? null,
+      generatedAt: row.generatedAt ?? null,
+      sourceJobId: row.sourceJobId ?? null,
+      sourceInvoiceId: row.sourceInvoiceId ?? null,
       uploadedAt: row.uploadedAt,
       status: row.status as "ACTIVE" | "DELETED",
     };
@@ -723,6 +733,51 @@ export class CustomersService {
 
     return {
       data: await Promise.all(rows.map((r) => this.attachCustomerDocumentSignedUrl(r))),
+      meta: buildPaginationMeta(page, pageSize, total),
+    };
+  }
+
+  async listCompanyDocuments(
+    tenantId: string,
+    customerCompanyId: string,
+    query: ListCustomerCompanyDocumentsQueryDto,
+  ): Promise<{
+    data: CustomerCompanyDocumentDto[];
+    meta: { page: number; pageSize: number; total: number };
+  }> {
+    await this.assertCustomerCompanyExists(tenantId, customerCompanyId);
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
+
+    const where: any = {
+      tenantId,
+      customerCompanyId,
+      status: "ACTIVE",
+    };
+    applyQSearch(where, query.q, ["fileName"]);
+
+    const orderBy = buildOrderBy(
+      query.sortBy,
+      query.sortDir,
+      ["uploadedAt", "createdAt", "fileName"],
+      { uploadedAt: "desc" },
+    );
+
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.customerCompanyDocument.findMany({
+        where,
+        orderBy,
+        skip,
+        take,
+        include: {
+          uploadedBy: { select: { name: true } },
+          generatedBy: { select: { name: true, email: true } },
+        },
+      }),
+      this.prisma.customerCompanyDocument.count({ where }),
+    ]);
+
+    return {
+      data: await Promise.all(rows.map((r) => this.attachCustomerDocumentSignedUrl(r as any))),
       meta: buildPaginationMeta(page, pageSize, total),
     };
   }
@@ -794,6 +849,27 @@ export class CustomersService {
     return this.attachCustomerDocumentSignedUrl(row);
   }
 
+  async getCompanyDocument(
+    tenantId: string,
+    customerCompanyId: string,
+    documentId: string,
+  ): Promise<CustomerCompanyDocumentDto> {
+    const row = await this.prisma.customerCompanyDocument.findFirst({
+      where: {
+        id: documentId,
+        tenantId,
+        customerCompanyId,
+        status: "ACTIVE",
+      },
+      include: {
+        uploadedBy: { select: { name: true } },
+        generatedBy: { select: { name: true, email: true } },
+      },
+    });
+    if (!row) throw new NotFoundException("Company document not found");
+    return this.attachCustomerDocumentSignedUrl(row as any);
+  }
+
   async deleteCustomerCompanyDocument(
     tenantId: string,
     customerCompanyId: string,
@@ -832,6 +908,40 @@ export class CustomersService {
     return { ok: true };
   }
 
+  async deleteCompanyDocument(
+    tenantId: string,
+    customerCompanyId: string,
+    documentId: string,
+    actorUserId: string | null,
+  ): Promise<{ ok: true }> {
+    const row = await this.prisma.customerCompanyDocument.findFirst({
+      where: {
+        id: documentId,
+        tenantId,
+        customerCompanyId,
+        status: "ACTIVE",
+      },
+      select: { id: true, storageKey: true },
+    });
+    if (!row) throw new NotFoundException("Company document not found");
+
+    const supabase = this.supabaseService.getClient();
+    await supabase.storage.from(COMPANY_DOCS_BUCKET).remove([row.storageKey]);
+    await this.prisma.customerCompanyDocument.update({
+      where: { id: row.id },
+      data: { status: "DELETED", deletedAt: new Date() },
+    });
+    await this.audit.log(
+      tenantId,
+      "COMPANY_DOCUMENT_DELETE",
+      "CUSTOMER_COMPANY",
+      customerCompanyId,
+      { documentId: row.id, storageKey: row.storageKey },
+      actorUserId,
+    );
+    return { ok: true };
+  }
+
   async getCustomerCompanyDocumentDownloadUrl(
     tenantId: string,
     customerCompanyId: string,
@@ -858,6 +968,60 @@ export class CustomersService {
       url: error ? null : (data?.signedUrl ?? null),
       expiresInSeconds: CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS,
     };
+  }
+
+  async getCompanyDocumentDownloadUrl(
+    tenantId: string,
+    customerCompanyId: string,
+    documentId: string,
+  ): Promise<{ url: string | null; expiresInSeconds: number }> {
+    const row = await this.prisma.customerCompanyDocument.findFirst({
+      where: {
+        id: documentId,
+        tenantId,
+        customerCompanyId,
+        status: "ACTIVE",
+      },
+      select: { fileUrl: true },
+    });
+    if (!row) throw new NotFoundException("Company document not found");
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase.storage
+      .from(COMPANY_DOCS_BUCKET)
+      .createSignedUrl(row.fileUrl, CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS);
+    return {
+      url: error ? null : (data?.signedUrl ?? null),
+      expiresInSeconds: CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS,
+    };
+  }
+
+  async updateCompanyDocumentMetadata(
+    tenantId: string,
+    customerCompanyId: string,
+    documentId: string,
+    dto: { fileName?: string | null },
+  ): Promise<CustomerCompanyDocumentDto> {
+    const row = await this.prisma.customerCompanyDocument.findFirst({
+      where: {
+        id: documentId,
+        tenantId,
+        customerCompanyId,
+        status: "ACTIVE",
+      },
+      select: { id: true },
+    });
+    if (!row) throw new NotFoundException("Company document not found");
+    const updated = await this.prisma.customerCompanyDocument.update({
+      where: { id: row.id },
+      data: {
+        ...(dto.fileName !== undefined ? { fileName: String(dto.fileName ?? "").trim() || "document" } : {}),
+      },
+      include: {
+        uploadedBy: { select: { name: true } },
+        generatedBy: { select: { name: true, email: true } },
+      },
+    });
+    return this.attachCustomerDocumentSignedUrl(updated as any);
   }
 
   private async putCompanyQuotationObject(
