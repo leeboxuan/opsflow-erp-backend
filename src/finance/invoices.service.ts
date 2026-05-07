@@ -1595,59 +1595,75 @@ export class InvoicesService {
 
   private async createInvoicePdfBuffer(renderData: any): Promise<Buffer> {
     const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([595.28, 841.89]);
+    const page = pdfDoc.addPage([595.28, 841.89]); // A4
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const logoBytes = loadInvoiceAssetBuffer("WF-logo.jpeg");
     const qrBytes = loadInvoiceAssetBuffer("WF-QR.jpeg");
+    const marginX = 42;
+    const pageWidth = 595.28;
+    const contentRight = pageWidth - marginX;
+
+    const tryEmbedImage = async (bytes: Buffer) => {
+      try {
+        return await pdfDoc.embedJpg(bytes);
+      } catch {
+        try {
+          return await pdfDoc.embedPng(bytes);
+        } catch {
+          return null;
+        }
+      }
+    };
+
     let y = 804;
     if (logoBytes) {
-      try {
-        const logo = await pdfDoc.embedJpg(logoBytes);
+      const logo = await tryEmbedImage(logoBytes);
+      if (logo) {
         const w = 170;
         const h = (logo.height / logo.width) * w;
-        page.drawImage(logo, { x: 40, y: y - h + 6, width: w, height: h });
-      } catch {
-        // non-fatal fallback to text header
+        page.drawImage(logo, { x: marginX, y: y - h + 8, width: w, height: h });
+      } else {
+        console.warn("[invoices] Failed to embed WF-logo asset in PDF");
       }
     } else {
-      page.drawText("WISDOM FORCE LOGISTICS PTE LTD", { x: 40, y: y - 10, size: 11, font: bold });
+      page.drawText("WISDOM FORCE LOGISTICS PTE LTD", { x: marginX, y: y - 10, size: 11, font: bold });
     }
 
-    page.drawText("TAX INVOICE", { x: 390, y: 802, size: 18, font: bold });
-    page.drawText(`Invoice No: ${renderData.invoiceNo}`, { x: 390, y: 782, size: 10, font });
-    page.drawText(`Invoice Date: ${renderData.issueDateISO}`, { x: 390, y: 768, size: 10, font });
-    page.drawText(`Due Date: ${renderData.dueDateISO ?? "-"}`, { x: 390, y: 754, size: 10, font });
-    page.drawText(`Reference: ${renderData.reference ?? "-"}`, { x: 390, y: 740, size: 10, font });
+    page.drawText("TAX INVOICE", { x: 382, y: 802, size: 18, font: bold });
+    page.drawText(`Invoice No: ${renderData.invoiceNo}`, { x: 382, y: 782, size: 10, font });
+    page.drawText(`Invoice Date: ${renderData.issueDateISO}`, { x: 382, y: 768, size: 10, font });
+    page.drawText(`Due Date: ${renderData.dueDateISO ?? "-"}`, { x: 382, y: 754, size: 10, font });
+    page.drawText(`Reference: ${renderData.reference ?? "-"}`, { x: 382, y: 740, size: 10, font });
 
-    y = 708;
-    page.drawText("Bill To", { x: 40, y, size: 11, font: bold });
+    y = 714;
+    page.drawText("Bill To", { x: marginX, y, size: 11, font: bold });
     y -= 14;
-    page.drawText(String(renderData.customerName ?? ""), { x: 40, y, size: 10, font: bold });
+    page.drawText(String(renderData.customerName ?? ""), { x: marginX, y, size: 10, font: bold });
     y -= 13;
-    page.drawText(String(renderData.customerBillingAddress ?? ""), { x: 40, y, size: 10, font });
+    page.drawText(String(renderData.customerBillingAddress ?? ""), { x: marginX, y, size: 10, font });
 
-    y = 652;
-    page.drawText("Description", { x: 40, y, size: 10, font: bold });
-    page.drawText("Qty", { x: 350, y, size: 10, font: bold });
+    y = 656;
+    page.drawText("Description", { x: marginX, y, size: 10, font: bold });
+    page.drawText("Qty", { x: 352, y, size: 10, font: bold });
     page.drawText("Unit Price", { x: 390, y, size: 10, font: bold });
     page.drawText("Tax", { x: 470, y, size: 10, font: bold });
-    page.drawText("Amount SGD", { x: 515, y, size: 10, font: bold });
+    page.drawText("Amount SGD", { x: 520, y, size: 10, font: bold });
     y -= 8;
-    page.drawLine({ start: { x: 40, y }, end: { x: 555, y }, thickness: 0.8 });
+    page.drawLine({ start: { x: marginX, y }, end: { x: contentRight, y }, thickness: 0.8 });
 
-    for (const line of renderData.lines.slice(0, 18)) {
-      y -= 14;
+    for (const line of renderData.lines.slice(0, 16)) {
+      y -= 15;
       const amount = (Number(line.amountCents || 0) / 100).toFixed(2);
       const unit = (Number(line.unitPriceCents || 0) / 100).toFixed(2);
-      page.drawText(String(line.description).slice(0, 54), { x: 40, y, size: 9.5, font });
+      page.drawText(String(line.description).replace(/\n/g, " | ").slice(0, 58), { x: marginX, y, size: 9.2, font });
       page.drawText(String(line.qty), { x: 355, y, size: 9.5, font });
       page.drawText(unit, { x: 396, y, size: 9.5, font });
       page.drawText(String(line.taxLabel ?? ""), { x: 472, y, size: 9.5, font });
-      page.drawText(amount, { x: 516, y, size: 9.5, font });
+      page.drawText(amount, { x: 520, y, size: 9.5, font });
     }
-    y -= 10;
-    page.drawLine({ start: { x: 340, y }, end: { x: 555, y }, thickness: 0.8 });
+    y -= 12;
+    page.drawLine({ start: { x: 338, y }, end: { x: contentRight, y }, thickness: 0.8 });
     y -= 14;
     const subtotal = (Number(renderData.subtotalCents || 0) / 100).toFixed(2);
     const gst = (Number(renderData.taxCents || 0) / 100).toFixed(2);
@@ -1669,27 +1685,35 @@ export class InvoicesService {
     page.drawText(`SGD ${due}`, { x: 500, y, size: 11, font: bold });
 
     const page2 = pdfDoc.addPage([595.28, 841.89]);
-    page2.drawText("Payment Details", { x: 40, y: 790, size: 16, font: bold });
+    page2.drawText("Payment Details", { x: marginX, y: 790, size: 16, font: bold });
     page2.drawText(String(renderData.paymentInstructions ?? "Bank transfer / PayNow supported."), {
-      x: 40,
-      y: 760,
+      x: marginX,
+      y: 756,
       size: 11,
       font,
     });
-    page2.drawText("PayNow / SGQR", { x: 40, y: 725, size: 12, font: bold });
-    page2.drawText("Scan to Pay", { x: 40, y: 708, size: 11, font });
-    page2.drawText(`UEN: ${renderData.sellerUen ?? "202606497W"}`, { x: 40, y: 692, size: 11, font });
+    page2.drawText("PayNow / SGQR", { x: marginX, y: 724, size: 12, font: bold });
+    page2.drawText("Scan to Pay", { x: marginX, y: 706, size: 11, font });
+    page2.drawText(`UEN: ${renderData.sellerUen ?? "202606497W"}`, { x: marginX, y: 690, size: 11, font });
     if (qrBytes) {
-      try {
-        const qr = await pdfDoc.embedJpg(qrBytes);
-        const w = 220;
+      const qr = await tryEmbedImage(qrBytes);
+      if (qr) {
+        const w = 190;
         const h = (qr.height / qr.width) * w;
-        page2.drawImage(qr, { x: 320, y: 745 - h, width: w, height: h });
-      } catch {
-        page2.drawText("QR unavailable", { x: 330, y: 700, size: 10, font });
+        page2.drawImage(qr, { x: 360, y: 735 - h, width: w, height: h });
+        page2.drawRectangle({
+          x: 356,
+          y: 731 - h,
+          width: w + 8,
+          height: h + 8,
+          borderWidth: 1,
+        });
+      } else {
+        console.warn("[invoices] Failed to embed WF-QR asset in PDF");
+        page2.drawText("QR unavailable", { x: 365, y: 700, size: 10, font });
       }
     } else {
-      page2.drawText("QR unavailable", { x: 330, y: 700, size: 10, font });
+      page2.drawText("QR unavailable", { x: 365, y: 700, size: 10, font });
     }
     const bytes = await pdfDoc.save();
     return Buffer.from(bytes);
