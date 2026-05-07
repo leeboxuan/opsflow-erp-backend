@@ -1382,123 +1382,140 @@ export class InvoicesService {
   ): Promise<InvoiceDto> {
     this.assertCustomerCanOnlyRead(user);
     const updatedByUserId: string | null = user?.userId ?? null;
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const inv = await tx.invoice.findFirst({
-        where: { tenantId, id: invoiceId },
-        include: { lineItems: true, orders: { select: { id: true } } },
-      });
+    const inv = await this.prisma.invoice.findFirst({
+      where: { tenantId, id: invoiceId },
+      include: { lineItems: true, orders: { select: { id: true } } },
+    });
 
-      if (!inv) throw new BadRequestException("Invoice not found");
-      if (inv.status !== "Draft") {
-        throw new BadRequestException("Only Draft invoices can be updated");
-      }
+    if (!inv) throw new BadRequestException("Invoice not found");
+    if (inv.status !== "Draft") {
+      throw new BadRequestException("Only Draft invoices can be updated");
+    }
 
-      const prevSnapEarly = inv.snapshot as any;
-      const existingOrderIds = Array.isArray(prevSnapEarly?.orderIds)
-        ? (prevSnapEarly.orderIds as string[])
+    const prevSnapEarly = inv.snapshot as any;
+    const existingOrderIds = Array.isArray(prevSnapEarly?.orderIds)
+      ? (prevSnapEarly.orderIds as string[])
+      : [];
+    const existingSourceJobIds = Array.isArray(prevSnapEarly?.sourceJobIds)
+      ? (prevSnapEarly.sourceJobIds as string[])
+      : [];
+    // Optional: omit orderIds on PATCH to keep current snapshot; send [] to clear.
+    const orderIds =
+      dto.orderIds !== undefined ? (dto.orderIds ?? []) : existingOrderIds;
+    const sourceJobIds =
+      dto.sourceJobIds !== undefined
+        ? (dto.sourceJobIds ?? [])
+        : existingSourceJobIds;
+
+    // Validate orders before opening the transaction.
+    const orders =
+      orderIds.length > 0
+        ? await this.prisma.transportOrder.findMany({
+            where: { tenantId, id: { in: orderIds } },
+            select: { id: true, status: true, invoiceId: true },
+          })
         : [];
-      const existingSourceJobIds = Array.isArray(prevSnapEarly?.sourceJobIds)
-        ? (prevSnapEarly.sourceJobIds as string[])
-        : [];
-      // Optional: omit orderIds on PATCH to keep current snapshot; send [] to clear.
-      const orderIds =
-        dto.orderIds !== undefined ? (dto.orderIds ?? []) : existingOrderIds;
-      const sourceJobIds =
-        dto.sourceJobIds !== undefined
-          ? (dto.sourceJobIds ?? [])
-          : existingSourceJobIds;
 
-      // Validate orders only when orderIds are provided.
-      const orders =
-        orderIds.length > 0
-          ? await tx.transportOrder.findMany({
-              where: { tenantId, id: { in: orderIds } },
-              select: { id: true, status: true, invoiceId: true },
-            })
-          : [];
-
-      if (orderIds.length > 0 && orders.length !== orderIds.length) {
-        throw new BadRequestException(
-          "Some orders not found under this tenant",
-        );
-      }
-
-      if (orders.length > 0) {
-        const bad = orders.find(
-          (o) =>
-            o.invoiceId ||
-            ![OrderStatus.Delivered, OrderStatus.Closed].includes(
-              o.status as any,
-            ),
-        );
-        if (bad) {
-          throw new BadRequestException(
-            "Orders must be Delivered/Closed and not already invoiced",
-          );
-        }
-      }
-
-      await this.validateInvoiceLineSources(
-        tenantId,
-        dto.customerCompanyId ?? (inv as any).customerCompanyId ?? null,
-        dto.sourceJobId ?? (inv as any).sourceJobId ?? null,
-        dto.lineItems ?? [],
+    if (orderIds.length > 0 && orders.length !== orderIds.length) {
+      throw new BadRequestException(
+        "Some orders not found under this tenant",
       );
+    }
 
-      // Compute totals from manual line items
-      const normalized = dto.lineItems.map((l) => {
-        const unitPriceCents = Number(l.unitPriceCents ?? 0);
-        const amountCents = l.qty * unitPriceCents;
-        const taxCents =
-          l.taxRate > 0 ? Math.round((amountCents * l.taxRate) / 10000) : 0;
-        return {
-          ...l,
-          unitPriceCents,
-          amountCents,
-          taxCents,
-          taxRate: toBasisPoints(l.taxRate),
-        };
+    if (orders.length > 0) {
+      const bad = orders.find(
+        (o) =>
+          o.invoiceId ||
+          ![OrderStatus.Delivered, OrderStatus.Closed].includes(o.status as any),
+      );
+      if (bad) {
+        throw new BadRequestException(
+          "Orders must be Delivered/Closed and not already invoiced",
+        );
+      }
+    }
+
+    const sourceJobId = dto.sourceJobId ?? (inv as any).sourceJobId ?? null;
+    const customerCompanyId =
+      dto.customerCompanyId ?? (inv as any).customerCompanyId ?? null;
+    const draftLineItems = dto.lineItems ?? [];
+    const normalizedSourceJobIds = (sourceJobIds ?? [])
+      .map((id) => String(id ?? "").trim())
+      .filter(Boolean);
+    if (normalizedSourceJobIds.length !== (sourceJobIds ?? []).length) {
+      throw new BadRequestException("sourceJobIds cannot contain empty values");
+    }
+    const uniqueSourceJobIds = Array.from(new Set(normalizedSourceJobIds));
+    if (uniqueSourceJobIds.length > 0) {
+      const foundJobs = await this.prisma.job.findMany({
+        where: {
+          tenantId,
+          id: { in: uniqueSourceJobIds },
+        },
+        select: { id: true },
       });
+      if (foundJobs.length !== uniqueSourceJobIds.length) {
+        throw new BadRequestException("Some sourceJobIds not found under this tenant");
+      }
+    }
 
-      const subtotalCents = normalized.reduce((s, l) => s + l.amountCents, 0);
-      const taxCents = normalized.reduce((s, l) => s + l.taxCents, 0);
-      const totalCents = subtotalCents + taxCents;
+    await this.validateInvoiceLineSources(
+      tenantId,
+      customerCompanyId,
+      sourceJobId,
+      draftLineItems,
+    );
 
-      const issueDate = dto.issueDateISO
-        ? new Date(dto.issueDateISO + "T00:00:00")
-        : inv.issueDate;
-
-      const dueDate = dto.dueDateISO
-        ? new Date(dto.dueDateISO + "T00:00:00")
-        : null;
-
-      const prevSnap = inv.snapshot as any;
-      const draftMeta = extractDraftMeta(prevSnap);
-
-      const nextSnapshot = {
-        ...(prevSnap ?? {}),
-        stage: "Draft",
-        orderIds,
-        sourceJobIds,
-        confirmedAt:
-          draftMeta.confirmedAt?.toISOString() ?? prevSnap?.confirmedAt ?? null,
-        confirmedByUserId:
-          draftMeta.confirmedByUserId ?? prevSnap?.confirmedByUserId ?? null,
-        updatedAt: new Date().toISOString(),
-        updatedByUserId: updatedByUserId ?? null,
+    // Compute totals from manual line items before opening the transaction.
+    const normalized = draftLineItems.map((l) => {
+      const unitPriceCents = Number(l.unitPriceCents ?? 0);
+      const amountCents = l.qty * unitPriceCents;
+      const taxCents =
+        l.taxRate > 0 ? Math.round((amountCents * l.taxRate) / 10000) : 0;
+      return {
+        ...l,
+        unitPriceCents,
+        amountCents,
+        taxCents,
+        taxRate: toBasisPoints(l.taxRate),
       };
+    });
 
-      // Replace line items (simple + safe)
-      await tx.invoiceLineItem.deleteMany({
-        where: { tenantId, invoiceId: inv.id },
-      });
+    const subtotalCents = normalized.reduce((s, l) => s + l.amountCents, 0);
+    const taxCents = normalized.reduce((s, l) => s + l.taxCents, 0);
+    const totalCents = subtotalCents + taxCents;
 
-      const inv2 = await tx.invoice.update({
+    const issueDate = dto.issueDateISO
+      ? new Date(dto.issueDateISO + "T00:00:00")
+      : inv.issueDate;
+
+    const dueDate = dto.dueDateISO
+      ? new Date(dto.dueDateISO + "T00:00:00")
+      : null;
+
+    const prevSnap = inv.snapshot as any;
+    const draftMeta = extractDraftMeta(prevSnap);
+
+    const nextSnapshot = {
+      ...(prevSnap ?? {}),
+      stage: "Draft",
+      orderIds,
+      sourceJobIds: normalizedSourceJobIds,
+      confirmedAt:
+        draftMeta.confirmedAt?.toISOString() ?? prevSnap?.confirmedAt ?? null,
+      confirmedByUserId:
+        draftMeta.confirmedByUserId ?? prevSnap?.confirmedByUserId ?? null,
+      updatedAt: new Date().toISOString(),
+      updatedByUserId: updatedByUserId ?? null,
+    };
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.invoice.update({
         where: { id: inv.id },
         data: {
           customerName: dto.customerName,
-          customerCompanyId: dto.customerCompanyId ?? (inv as any).customerCompanyId ?? null,
-          sourceJobId: dto.sourceJobId ?? (inv as any).sourceJobId ?? null,
+          customerCompanyId,
+          sourceJobId,
           templateCode: dto.templateCode ?? (inv as any).templateCode ?? "DB_WISDOM",
           currency: dto.currency ?? inv.currency,
           issueDate,
@@ -1508,29 +1525,40 @@ export class InvoicesService {
           taxCents,
           totalCents,
           snapshot: nextSnapshot,
-          lineItems: {
-            create: normalized.map((l) => ({
-              tenantId,
-              description: l.description,
-              qty: l.qty,
-              unitPriceCents: l.unitPriceCents,
-              amountCents: l.amountCents,
-              taxCode: l.taxCode,
-              taxRate: l.taxRate,
-              taxCents: l.taxCents,
-              sourceType: (l as any).sourceType ?? "MANUAL",
-              sourceMasterItemId: (l as any).sourceMasterItemId ?? null,
-              sourceTripId: (l as any).sourceTripId ?? null,
-              tripDisplayRefSnapshot: (l as any).tripDisplayRef ?? null,
-              requiresManualAmount: Boolean((l as any).requiresManualAmount),
-            })),
-          },
         },
-        include: { lineItems: true, orders: { select: { id: true } } },
       });
 
-      return inv2;
+      await tx.invoiceLineItem.deleteMany({
+        where: { tenantId, invoiceId: inv.id },
+      });
+
+      if (normalized.length > 0) {
+        await tx.invoiceLineItem.createMany({
+          data: normalized.map((l) => ({
+            tenantId,
+            invoiceId: inv.id,
+            description: l.description,
+            qty: l.qty,
+            unitPriceCents: l.unitPriceCents,
+            amountCents: l.amountCents,
+            taxCode: l.taxCode,
+            taxRate: l.taxRate,
+            taxCents: l.taxCents,
+            sourceType: (l as any).sourceType ?? "MANUAL",
+            sourceMasterItemId: (l as any).sourceMasterItemId ?? null,
+            sourceTripId: (l as any).sourceTripId ?? null,
+            tripDisplayRefSnapshot: (l as any).tripDisplayRef ?? null,
+            requiresManualAmount: Boolean((l as any).requiresManualAmount),
+          })),
+        });
+      }
+
+      return tx.invoice.findFirst({
+        where: { id: inv.id, tenantId },
+        include: { lineItems: true, orders: { select: { id: true } } },
+      });
     });
+    if (!updated) throw new BadRequestException("Failed to update draft invoice");
 
     // Draft has no linked orders; return with snapshot orderIds.
     // PDF: regenerated on the client after edits; upload via POST .../pdf.

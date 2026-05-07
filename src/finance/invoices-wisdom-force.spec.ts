@@ -60,6 +60,10 @@ describe("InvoicesService Wisdom Force flow", () => {
           orders: [],
         }),
       },
+      invoiceLineItem: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       customerRateMasterLine: {
         findMany: jest.fn().mockResolvedValue([
           {
@@ -945,5 +949,371 @@ describe("InvoicesService Wisdom Force flow", () => {
       ),
     ).resolves.toBeTruthy();
     expect(prisma.invoice.create).toHaveBeenCalled();
+  });
+
+  it("updates draft with TRIP lines without calling PDF render/upload", async () => {
+    const existingDraft = {
+      id: "inv-upd-1",
+      tenantId: "t1",
+      invoiceNo: "INV-202605-0005",
+      customerName: "Customer A",
+      customerCompanyId: "c1",
+      sourceJobId: "job1",
+      templateCode: "WISDOM_FORCE",
+      currency: "SGD",
+      status: "Draft",
+      issueDate: new Date("2026-05-07T00:00:00.000Z"),
+      dueDate: null,
+      notes: null,
+      subtotalCents: 0,
+      taxCents: 0,
+      totalCents: 0,
+      lineItems: [],
+      orders: [],
+      snapshot: { orderIds: [], sourceJobIds: ["job1"] },
+      pdfKey: "t1/invoices/inv-upd-1/WFL-LCL-2604-0077-INVOICE.pdf",
+      pdfGeneratedAt: new Date("2026-05-07T01:00:00.000Z"),
+    };
+    const updatedDraft = {
+      ...existingDraft,
+      customerName: "Customer A Updated",
+      lineItems: [
+        {
+          id: "li-upd-1",
+          description: "WF-0002-IMP-T01\nFrom: A\nTo: B",
+          qty: 1,
+          unitPriceCents: 9000,
+          amountCents: 9000,
+          taxCode: "SR",
+          taxRate: 900,
+          taxCents: 810,
+          sourceType: "TRIP",
+          sourceMasterItemId: null,
+          sourceTripId: "trip-1",
+          tripDisplayRefSnapshot: "WF-0002-IMP-T01",
+          requiresManualAmount: false,
+        },
+      ],
+      subtotalCents: 9000,
+      taxCents: 810,
+      totalCents: 9810,
+    };
+    const { svc, prisma, supabase } = makeService({
+      invoice: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(existingDraft)
+          .mockResolvedValueOnce(updatedDraft),
+        update: jest.fn().mockResolvedValue({ id: existingDraft.id }),
+      },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          internalRef: "WFL-LCL-2604-0077",
+          externalRef: "CUST-REF",
+          customerCompanyId: "c1",
+          customerCompany: { id: "c1", name: "Wisdom Customer" },
+          jobType: "LCL",
+          status: JobStatus.READY_FOR_INVOICE,
+          invoiceReadyAt: new Date("2026-05-07T00:00:00.000Z"),
+          trips: [{ id: "t1", status: "DONE", displayTitle: "Trip A" }],
+        }),
+        findMany: jest.fn().mockResolvedValue([{ id: "job1" }]),
+      },
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip-1", status: "DONE" }),
+      },
+    });
+    const pdfSpy = jest.spyOn<any, any>(svc as any, "createInvoicePdfBuffer");
+
+    const result = await svc.updateDraftInvoice(
+      "t1",
+      existingDraft.id,
+      {
+        customerName: "Customer A Updated",
+        customerCompanyId: "c1",
+        sourceJobId: "job1",
+        templateCode: "WISDOM_FORCE",
+        lineItems: [
+          {
+            description: "WF-0002-IMP-T01\nFrom: A\nTo: B",
+            qty: 1,
+            unitPriceCents: 9000,
+            taxCode: "SR",
+            taxRate: 900,
+            sourceType: "TRIP",
+            sourceTripId: "trip-1",
+            tripDisplayRef: "WF-0002-IMP-T01",
+            requiresManualAmount: false,
+          },
+        ],
+      } as any,
+      { userId: "u1", role: "OPS" },
+    );
+
+    expect(result.id).toBe(existingDraft.id);
+    expect(result.pdfGeneratedAt).toEqual(existingDraft.pdfGeneratedAt);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.invoiceLineItem.deleteMany).toHaveBeenCalled();
+    expect(prisma.invoiceLineItem.createMany).toHaveBeenCalled();
+    expect(pdfSpy).not.toHaveBeenCalled();
+    expect(supabase.upload).not.toHaveBeenCalled();
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
+  it("updates draft with QUOTATION_MASTER fallback and runs validation before transaction", async () => {
+    const existingDraft = {
+      id: "inv-upd-2",
+      tenantId: "t1",
+      invoiceNo: "INV-202605-0006",
+      customerName: "Customer A",
+      customerCompanyId: "c1",
+      sourceJobId: "job1",
+      templateCode: "WISDOM_FORCE",
+      currency: "SGD",
+      status: "Draft",
+      issueDate: new Date("2026-05-07T00:00:00.000Z"),
+      dueDate: null,
+      notes: null,
+      subtotalCents: 0,
+      taxCents: 0,
+      totalCents: 0,
+      lineItems: [],
+      orders: [],
+      snapshot: { orderIds: [], sourceJobIds: ["job1"] },
+    };
+    const updatedDraft = {
+      ...existingDraft,
+      lineItems: [],
+      subtotalCents: 8000,
+      taxCents: 720,
+      totalCents: 8720,
+    };
+    const { svc, prisma } = makeService({
+      invoice: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(existingDraft)
+          .mockResolvedValueOnce(updatedDraft),
+        update: jest.fn().mockResolvedValue({ id: existingDraft.id }),
+      },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          internalRef: "WFL-LCL-2604-0077",
+          externalRef: "CUST-REF",
+          customerCompanyId: "c1",
+          customerCompany: { id: "c1", name: "Wisdom Customer" },
+          jobType: "LCL",
+          status: JobStatus.READY_FOR_INVOICE,
+          invoiceReadyAt: new Date("2026-05-07T00:00:00.000Z"),
+          trips: [{ id: "t1", status: "DONE", displayTitle: "Trip A" }],
+        }),
+        findMany: jest.fn().mockResolvedValue([{ id: "job1" }]),
+      },
+      customerRateMasterLine: { findMany: jest.fn().mockResolvedValue([]) },
+      customerQuotationRateLine: { findMany: jest.fn().mockResolvedValue([]) },
+      masterRateDatasetRow: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "dataset-row-1",
+            code: "A_1",
+            label: "One Way Charges",
+            description: null,
+            unit: "trip",
+            rateCents: 8000,
+            requiresManualAmount: false,
+            rawRateText: null,
+            dataset: { id: "dataset-q-1" },
+          },
+        ]),
+      },
+    });
+
+    await expect(
+      svc.updateDraftInvoice(
+        "t1",
+        existingDraft.id,
+        {
+          customerName: "Customer A",
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          templateCode: "WISDOM_FORCE",
+          lineItems: [
+            {
+              description: "One Way Charges",
+              qty: 1,
+              unitPriceCents: 8000,
+              taxCode: "SR",
+              taxRate: 900,
+              sourceType: "QUOTATION_MASTER",
+              sourceMasterItemId: "dataset-row-1",
+            },
+          ],
+        } as any,
+        { userId: "u1", role: "OPS" },
+      ),
+    ).resolves.toBeTruthy();
+    expect(prisma.masterRateDatasetRow.findMany).toHaveBeenCalled();
+    expect(
+      prisma.masterRateDatasetRow.findMany.mock.invocationCallOrder[0],
+    ).toBeLessThan(prisma.$transaction.mock.invocationCallOrder[0]);
+  });
+
+  it("updates draft with MANUAL line and allows update when PDF snapshot exists", async () => {
+    const existingDraft = {
+      id: "inv-upd-3",
+      tenantId: "t1",
+      invoiceNo: "INV-202605-0007",
+      customerName: "Customer A",
+      customerCompanyId: "c1",
+      sourceJobId: "job1",
+      templateCode: "WISDOM_FORCE",
+      currency: "SGD",
+      status: "Draft",
+      issueDate: new Date("2026-05-07T00:00:00.000Z"),
+      dueDate: null,
+      notes: null,
+      subtotalCents: 0,
+      taxCents: 0,
+      totalCents: 0,
+      lineItems: [],
+      orders: [],
+      snapshot: { orderIds: [], sourceJobIds: ["job1"] },
+      pdfKey: "t1/invoices/inv-upd-3/WFL-LCL-2604-0077-INVOICE.pdf",
+      pdfGeneratedAt: new Date("2026-05-07T01:00:00.000Z"),
+    };
+    const updatedDraft = {
+      ...existingDraft,
+      lineItems: [],
+      subtotalCents: 10000,
+      taxCents: 900,
+      totalCents: 10900,
+    };
+    const { svc } = makeService({
+      invoice: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(existingDraft)
+          .mockResolvedValueOnce(updatedDraft),
+        update: jest.fn().mockResolvedValue({ id: existingDraft.id }),
+      },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          internalRef: "WFL-LCL-2604-0077",
+          externalRef: "CUST-REF",
+          customerCompanyId: "c1",
+          customerCompany: { id: "c1", name: "Wisdom Customer" },
+          jobType: "LCL",
+          status: JobStatus.READY_FOR_INVOICE,
+          invoiceReadyAt: new Date("2026-05-07T00:00:00.000Z"),
+          trips: [{ id: "t1", status: "DONE", displayTitle: "Trip A" }],
+        }),
+        findMany: jest.fn().mockResolvedValue([{ id: "job1" }]),
+      },
+    });
+
+    const result = await svc.updateDraftInvoice(
+      "t1",
+      existingDraft.id,
+      {
+        customerName: "Customer A",
+        customerCompanyId: "c1",
+        sourceJobId: "job1",
+        templateCode: "WISDOM_FORCE",
+        lineItems: [
+          {
+            description: "Manual service",
+            qty: 1,
+            unitPriceCents: 10000,
+            taxCode: "SR",
+            taxRate: 900,
+            sourceType: "MANUAL",
+          },
+        ],
+      } as any,
+      { userId: "u1", role: "OPS" },
+    );
+
+    expect(result.id).toBe(existingDraft.id);
+    expect(result.pdfKey).toBe(existingDraft.pdfKey);
+    expect(result.pdfGeneratedAt).toEqual(existingDraft.pdfGeneratedAt);
+  });
+
+  it("update draft rolls back write result on line-item create failure", async () => {
+    const existingDraft = {
+      id: "inv-upd-4",
+      tenantId: "t1",
+      invoiceNo: "INV-202605-0008",
+      customerName: "Customer A",
+      customerCompanyId: "c1",
+      sourceJobId: "job1",
+      templateCode: "WISDOM_FORCE",
+      currency: "SGD",
+      status: "Draft",
+      issueDate: new Date("2026-05-07T00:00:00.000Z"),
+      dueDate: null,
+      notes: null,
+      subtotalCents: 0,
+      taxCents: 0,
+      totalCents: 0,
+      lineItems: [],
+      orders: [],
+      snapshot: { orderIds: [], sourceJobIds: ["job1"] },
+    };
+    const { svc, prisma } = makeService({
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(existingDraft),
+        update: jest.fn().mockResolvedValue({ id: existingDraft.id }),
+      },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          internalRef: "WFL-LCL-2604-0077",
+          externalRef: "CUST-REF",
+          customerCompanyId: "c1",
+          customerCompany: { id: "c1", name: "Wisdom Customer" },
+          jobType: "LCL",
+          status: JobStatus.READY_FOR_INVOICE,
+          invoiceReadyAt: new Date("2026-05-07T00:00:00.000Z"),
+          trips: [{ id: "t1", status: "DONE", displayTitle: "Trip A" }],
+        }),
+        findMany: jest.fn().mockResolvedValue([{ id: "job1" }]),
+      },
+      invoiceLineItem: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        createMany: jest.fn().mockRejectedValue(new Error("line create failed")),
+      },
+    });
+
+    await expect(
+      svc.updateDraftInvoice(
+        "t1",
+        existingDraft.id,
+        {
+          customerName: "Customer A",
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          templateCode: "WISDOM_FORCE",
+          lineItems: [
+            {
+              description: "Manual service",
+              qty: 1,
+              unitPriceCents: 10000,
+              taxCode: "SR",
+              taxRate: 900,
+              sourceType: "MANUAL",
+            },
+          ],
+        } as any,
+        { userId: "u1", role: "OPS" },
+      ),
+    ).rejects.toThrow("line create failed");
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 });
