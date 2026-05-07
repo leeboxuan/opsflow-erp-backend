@@ -345,6 +345,55 @@ export class InvoicesService {
     sourceJobId: string | null,
     lineItems: Array<any>,
   ): Promise<void> {
+    const quotationOptionsCache = new Map<string, Set<string>>();
+    const getQuotationOptionIds = async (companyId: string): Promise<Set<string>> => {
+      const cached = quotationOptionsCache.get(companyId);
+      if (cached) return cached;
+      const options = await this.resolveQuotationOptionsForCompany(tenantId, companyId);
+      const ids = new Set(
+        (options ?? [])
+          .map((item: any) => String(item?.id ?? "").trim())
+          .filter(Boolean),
+      );
+      quotationOptionsCache.set(companyId, ids);
+      return ids;
+    };
+
+    const resolveCompanyIdForLine = async (line: any): Promise<string | null> => {
+      const fromLine = String(line?.customerCompanyId ?? customerCompanyId ?? "").trim();
+      if (fromLine) return fromLine;
+      const jobIdForCompany = String(line?.sourceJobId ?? sourceJobId ?? "").trim();
+      if (!jobIdForCompany) return null;
+      const job = await this.prisma.job.findFirst({
+        where: { id: jobIdForCompany, tenantId },
+        select: { customerCompanyId: true },
+      });
+      return job?.customerCompanyId ?? null;
+    };
+
+    const validateQuotationSourceItemForInvoice = async (
+      line: any,
+      requireSourceMaster = true,
+    ): Promise<void> => {
+      const sourceMasterItemId = String(line?.sourceMasterItemId ?? "").trim();
+      if (!sourceMasterItemId) {
+        if (requireSourceMaster) {
+          throw new BadRequestException("sourceMasterItemId is required for QUOTATION_MASTER");
+        }
+        return;
+      }
+      const companyId = await resolveCompanyIdForLine(line);
+      if (!companyId) {
+        throw new BadRequestException(
+          "customerCompanyId is required for quotation master validation",
+        );
+      }
+      const validIds = await getQuotationOptionIds(companyId);
+      if (!validIds.has(sourceMasterItemId)) {
+        throw new BadRequestException("Invalid quotation source line item");
+      }
+    };
+
     for (const line of lineItems) {
       const sourceType = String(line.sourceType ?? "MANUAL").toUpperCase();
       const resolvedSourceJobId = String(line.sourceJobId ?? sourceJobId ?? "").trim() || null;
@@ -352,46 +401,7 @@ export class InvoicesService {
         throw new BadRequestException(`Unsupported sourceType: ${sourceType}`);
       }
       if (sourceType === "QUOTATION_MASTER") {
-        if (!line.sourceMasterItemId) {
-          throw new BadRequestException("sourceMasterItemId is required for QUOTATION_MASTER");
-        }
-        const companyId = customerCompanyId ?? (
-          sourceJobId
-            ? (await this.prisma.job.findFirst({
-              where: { id: sourceJobId, tenantId },
-              select: { customerCompanyId: true },
-            }))?.customerCompanyId ?? null
-            : null
-        );
-        if (!companyId) {
-          throw new BadRequestException("customerCompanyId is required for quotation master validation");
-        }
-        const inRateMaster = await this.prisma.customerRateMasterLine.findFirst({
-          where: {
-            id: line.sourceMasterItemId,
-            tenantId,
-            customerCompanyId: companyId,
-            active: true,
-            isSelectableForJob: true,
-          },
-          select: { id: true },
-        });
-        if (!inRateMaster) {
-          const inQuotation = await this.prisma.customerQuotationRateLine.findFirst({
-            where: {
-              id: line.sourceMasterItemId,
-              tenantId,
-              quotation: {
-                customerCompanyId: companyId,
-                status: "ACTIVE",
-              },
-            },
-            select: { id: true },
-          });
-          if (!inQuotation) {
-            throw new BadRequestException("Invalid quotation source line item");
-          }
-        }
+        await validateQuotationSourceItemForInvoice(line, true);
       }
       if (sourceType === "JOB" && !resolvedSourceJobId) {
         throw new BadRequestException("sourceJobId is required for JOB line items");
@@ -418,6 +428,7 @@ export class InvoicesService {
         if (trip.status === TripStatus.CANCELLED) {
           throw new BadRequestException("Cancelled trips cannot be invoiced");
         }
+        await validateQuotationSourceItemForInvoice(line, false);
       }
     }
   }

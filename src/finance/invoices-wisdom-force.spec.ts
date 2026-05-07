@@ -476,4 +476,174 @@ describe("InvoicesService Wisdom Force flow", () => {
     ).resolves.toBeTruthy();
     expect(prisma.invoice.create).toHaveBeenCalled();
   });
+
+  it("accepts QUOTATION_MASTER from tenant quotation dataset fallback", async () => {
+    const { svc, prisma } = makeService({
+      customerRateMasterLine: { findMany: jest.fn().mockResolvedValue([]) },
+      customerQuotationRateLine: { findMany: jest.fn().mockResolvedValue([]) },
+      masterRateDatasetRow: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "dataset-row-1",
+            code: "A_1",
+            label: "One Way Charges",
+            description: null,
+            unit: "trip",
+            rateCents: 8000,
+            requiresManualAmount: false,
+            rawRateText: null,
+            dataset: { id: "dataset-q-1" },
+          },
+        ]),
+      },
+      invoice: {
+        ...makeService().prisma.invoice,
+        create: jest.fn().mockResolvedValue({
+          id: "inv-d3",
+          invoiceNo: "INV-202605-0003",
+          customerName: "Customer A",
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          templateCode: "WISDOM_FORCE",
+          currency: "SGD",
+          status: "Draft",
+          issueDate: new Date("2026-05-07T00:00:00.000Z"),
+          dueDate: null,
+          notes: null,
+          subtotalCents: 8000,
+          taxCents: 720,
+          totalCents: 8720,
+          lineItems: [],
+          orders: [],
+          snapshot: { orderIds: [], sourceJobIds: [] },
+        }),
+      },
+    });
+    await expect(
+      svc.createDraftInvoice(
+        "t1",
+        {
+          customerName: "Customer A",
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          templateCode: "WISDOM_FORCE",
+          lineItems: [
+            {
+              description: "One Way Charges",
+              qty: 1,
+              unitPriceCents: 8000,
+              taxCode: "SR",
+              taxRate: 900,
+              sourceType: "QUOTATION_MASTER",
+              sourceMasterItemId: "dataset-row-1",
+              requiresManualAmount: false,
+            },
+          ],
+        } as any,
+        { userId: "u1", role: "OPS" },
+      ),
+    ).resolves.toBeTruthy();
+    expect(prisma.invoice.create).toHaveBeenCalled();
+  });
+
+  it("rejects invalid quotation source line item id (driver payout/inactive/other tenant)", async () => {
+    const { svc } = makeService({
+      customerRateMasterLine: { findMany: jest.fn().mockResolvedValue([]) },
+      customerQuotationRateLine: { findMany: jest.fn().mockResolvedValue([]) },
+      masterRateDatasetRow: { findMany: jest.fn().mockResolvedValue([]) },
+    });
+    await expect(
+      svc.createDraftInvoice(
+        "t1",
+        {
+          customerName: "Customer A",
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          lineItems: [
+            {
+              description: "Bad quotation source",
+              qty: 1,
+              unitPriceCents: 1000,
+              taxCode: "SR",
+              taxRate: 900,
+              sourceType: "QUOTATION_MASTER",
+              sourceMasterItemId: "driver-payout-or-inactive-or-other-tenant-id",
+            },
+          ],
+        } as any,
+        { userId: "u1", role: "OPS" },
+      ),
+    ).rejects.toThrow("Invalid quotation source line item");
+  });
+
+  it("accepts TRIP line with fallback quotation source item", async () => {
+    const { svc, prisma } = makeService({
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip-1", status: "DONE" }),
+      },
+      customerRateMasterLine: { findMany: jest.fn().mockResolvedValue([]) },
+      customerQuotationRateLine: { findMany: jest.fn().mockResolvedValue([]) },
+      masterRateDatasetRow: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "dataset-row-trip-pricing",
+            code: "A_2",
+            label: "One Way Charges",
+            description: null,
+            unit: "trip",
+            rateCents: 8000,
+            requiresManualAmount: false,
+            rawRateText: null,
+            dataset: { id: "dataset-q-1" },
+          },
+        ]),
+      },
+      invoice: {
+        ...makeService().prisma.invoice,
+        create: jest.fn().mockResolvedValue({
+          id: "inv-d4",
+          invoiceNo: "INV-202605-0004",
+          customerName: "Customer A",
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          templateCode: "WISDOM_FORCE",
+          currency: "SGD",
+          status: "Draft",
+          issueDate: new Date("2026-05-07T00:00:00.000Z"),
+          dueDate: null,
+          notes: null,
+          subtotalCents: 8000,
+          taxCents: 720,
+          totalCents: 8720,
+          lineItems: [],
+          orders: [],
+          snapshot: { orderIds: [], sourceJobIds: [] },
+        }),
+      },
+    });
+    await expect(
+      svc.createDraftInvoice(
+        "t1",
+        {
+          customerName: "Customer A",
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          lineItems: [
+            {
+              description: "WF-0002-IMP-T01\nFrom: A\nTo: B",
+              qty: 1,
+              unitPriceCents: 8000,
+              taxCode: "SR",
+              taxRate: 900,
+              sourceType: "TRIP",
+              sourceTripId: "trip-1",
+              sourceMasterItemId: "dataset-row-trip-pricing",
+            },
+          ],
+        } as any,
+        { userId: "u1", role: "OPS" },
+      ),
+    ).resolves.toBeTruthy();
+    expect(prisma.invoice.create).toHaveBeenCalled();
+  });
 });
