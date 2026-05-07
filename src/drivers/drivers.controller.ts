@@ -71,6 +71,7 @@ export class DriversController {
     const profile = await this.prisma.drivers.findFirst({
       where: { tenantId, userId },
       select: {
+        name: true,
         assignedVehicleId: true,
         assignedFleetVehicleId: true,
       },
@@ -142,16 +143,32 @@ export class DriversController {
     const profile = await this.prisma.drivers.findFirst({
       where: { tenantId, userId },
       select: {
+        name: true,
         assignedVehicleId: true,
         assignedFleetVehicleId: true,
       },
     });
 
     return {
+      userId: user.id,
       id: user.id,
       email: user.email,
-      name: user.name,
+      name:
+        (profile as any)?.name ??
+        (user as any).displayName ??
+        user.name ??
+        user.email,
+      displayName:
+        (user as any).displayName ??
+        user.name ??
+        user.email,
+      userName: user.name ?? null,
+      userEmail: user.email ?? null,
       role: membership.role,
+      avatarUrl: await this.usersService.getUserAvatarSignedUrl(
+        (user as any).avatarKey ?? null,
+      ),
+      avatarUpdatedAt: (user as any).avatarUpdatedAt ?? null,
       defaultVehicleId: profile?.assignedVehicleId ?? null,
       defaultFleetVehicleId: profile?.assignedFleetVehicleId ?? null,
       createdAt: user.createdAt,
