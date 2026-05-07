@@ -181,6 +181,10 @@ function normalizeExternalRef(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function isInvoiceReadyTripStatus(status: TripStatus): boolean {
+  return status === TripStatus.COMPLETED || status === TripStatus.DONE;
+}
+
 function toJobDto(j: any): JobDto {
   const trips = Array.isArray(j.trips) ? j.trips : [];
   const primaryTrip =
@@ -3203,6 +3207,7 @@ export class OpsJobsService {
         { jobId, oldStatus: trip.status, deletedByUserId: actorUserId },
         actorUserId,
       );
+      await this.recalculateJobStatusFromTrips(tenantId, jobId);
       return { success: true, mode: "deleted", tripId };
     }
 
@@ -3222,6 +3227,7 @@ export class OpsJobsService {
         { jobId, oldStatus: trip.status, cancelledByUserId: actorUserId, reason: "Deleted by ops" },
         actorUserId,
       );
+      await this.recalculateJobStatusFromTrips(tenantId, jobId);
     }
 
     return { success: true, mode: "cancelled", tripId, status: TripStatus.CANCELLED };
@@ -4138,10 +4144,12 @@ export class OpsJobsService {
     if (!trips.length) return;
 
     const nonCancelledTrips = trips.filter((t) => t.status !== TripStatus.CANCELLED);
-    if (!nonCancelledTrips.length) return;
-
-    const allDone = nonCancelledTrips.every((t) => t.status === TripStatus.DONE);
-    const nextStatus = allDone ? JobStatus.READY_FOR_INVOICE : JobStatus.ONGOING;
+    const hasBillableTrips = nonCancelledTrips.length > 0;
+    const allBillableTripsReady =
+      hasBillableTrips && nonCancelledTrips.every((t) => isInvoiceReadyTripStatus(t.status));
+    const nextStatus = allBillableTripsReady
+      ? JobStatus.READY_FOR_INVOICE
+      : JobStatus.ONGOING;
     if (job.status !== nextStatus) {
       await this.prisma.job.update({
         where: { id: jobId },
@@ -4256,12 +4264,15 @@ export class OpsJobsService {
       );
     }
 
-    const nonDoneNonCancelled = trips.filter(
-      (t) => t.status !== TripStatus.DONE && t.status !== TripStatus.CANCELLED,
-    );
-    if (nonDoneNonCancelled.length > 0) {
+    const billableTrips = trips.filter((t) => t.status !== TripStatus.CANCELLED);
+    if (billableTrips.length === 0) {
+      throw new BadRequestException("No completed trips available for invoicing.");
+    }
+
+    const blockingTrips = billableTrips.filter((t) => !isInvoiceReadyTripStatus(t.status));
+    if (blockingTrips.length > 0) {
       throw new BadRequestException(
-        "All non-cancelled trips must be done before invoicing.",
+        "All non-cancelled trips must be completed or done before invoicing.",
       );
     }
 

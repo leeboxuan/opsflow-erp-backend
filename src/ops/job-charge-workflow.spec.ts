@@ -1081,7 +1081,7 @@ describe("job charge workflow hardening", () => {
 
     await expect(
       svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
-    ).rejects.toThrow("All non-cancelled trips must be done before invoicing.");
+    ).rejects.toThrow("All non-cancelled trips must be completed or done before invoicing.");
 
     await expect(
       svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
@@ -1132,7 +1132,99 @@ describe("job charge workflow hardening", () => {
     );
   });
 
-  it("markTripDone promotes job to READY_FOR_INVOICE when all non-cancelled trips are DONE", async () => {
+  it("sendJobToInvoice allows COMPLETED/DONE + CANCELLED trips", async () => {
+    const prisma: any = {
+      job: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: "job1",
+            status: "ONGOING",
+            invoiceReadyAt: null,
+          })
+          .mockResolvedValueOnce({
+            id: "job1",
+            status: "READY_FOR_INVOICE",
+            invoiceReadyAt: null,
+          }),
+        update: jest.fn(),
+      },
+      trip: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "t1", status: "COMPLETED" },
+          { id: "t2", status: "DONE" },
+          { id: "t3", status: "CANCELLED" },
+        ]),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+    jest.spyOn(svc as any, "recalculateJobStatusFromTrips").mockResolvedValue(undefined);
+
+    await expect(
+      svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
+    ).resolves.toBeTruthy();
+  });
+
+  it("sendJobToInvoice rejects all-cancelled jobs with clear reason", async () => {
+    const prisma: any = {
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          status: "ONGOING",
+          invoiceReadyAt: null,
+        }),
+        update: jest.fn(),
+      },
+      trip: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "t1", status: "CANCELLED" },
+          { id: "t2", status: "CANCELLED" },
+        ]),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+    await expect(
+      svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
+    ).rejects.toThrow("No completed trips available for invoicing.");
+  });
+
+  it.each(["PUBLISHED", "DRAFT", "ONGOING"] as const)(
+    "sendJobToInvoice blocks non-cancelled %s trips",
+    async (blockingStatus) => {
+      const prisma: any = {
+        job: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "job1",
+            status: "ONGOING",
+            invoiceReadyAt: null,
+          }),
+          update: jest.fn(),
+        },
+        trip: {
+          findMany: jest.fn().mockResolvedValue([
+            { id: "t1", status: "COMPLETED" },
+            { id: "t2", status: blockingStatus },
+            { id: "t3", status: "CANCELLED" },
+          ]),
+        },
+      };
+      const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+      const supabaseService = { getClient: jest.fn() } as any;
+      const svc = new OpsJobsService(prisma, audit, supabaseService);
+
+      await expect(
+        svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
+      ).rejects.toThrow("All non-cancelled trips must be completed or done before invoicing.");
+    },
+  );
+
+  it("markTripDone promotes job to READY_FOR_INVOICE when all non-cancelled trips are completed/done", async () => {
     const prisma: any = {
       trip: {
         findFirst: jest
@@ -1142,6 +1234,39 @@ describe("job charge workflow hardening", () => {
         update: jest.fn().mockResolvedValue({ id: "trip1" }),
         findMany: jest.fn().mockResolvedValue([
           { status: "DONE" },
+          { status: "CANCELLED" },
+        ]),
+      },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({ id: "job1", status: "ONGOING" }),
+        update: jest.fn(),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+
+    await svc.markTripDone("t1", "job1", "trip1", { userId: "u1", role: Role.OPS });
+
+    expect(prisma.job.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "job1" },
+        data: { status: "READY_FOR_INVOICE" },
+      }),
+    );
+  });
+
+  it("markTripDone treats COMPLETED + CANCELLED mix as invoice-ready", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({ id: "trip1", status: "COMPLETED" })
+          .mockResolvedValueOnce({ status: "ONGOING" }),
+        update: jest.fn().mockResolvedValue({ id: "trip1" }),
+        findMany: jest.fn().mockResolvedValue([
+          { status: "COMPLETED" },
           { status: "CANCELLED" },
         ]),
       },

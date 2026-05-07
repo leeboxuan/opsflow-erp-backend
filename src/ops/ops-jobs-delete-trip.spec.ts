@@ -11,6 +11,10 @@ describe("OpsJobsService.deleteTrip", () => {
         delete: jest.fn().mockResolvedValue({}),
         findMany: jest.fn().mockResolvedValue([]),
       },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({ id: "job1", status: "ONGOING" }),
+        update: jest.fn().mockResolvedValue({}),
+      },
       $transaction: jest.fn(async (cb: any) => cb(prisma)),
       ...prismaOverrides,
     };
@@ -112,7 +116,11 @@ describe("OpsJobsService.deleteTrip", () => {
 
   it("deleting one trip does not delete the job", async () => {
     const { svc, prisma } = makeService({
-      job: { delete: jest.fn() },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({ id: "job1", status: "ONGOING" }),
+        update: jest.fn().mockResolvedValue({}),
+        delete: jest.fn(),
+      },
     });
     prisma.trip.findFirst.mockResolvedValue(baseTrip);
     await svc.deleteTrip("t1", "job1", "trip1", { userId: "u1", role: "OPS" });
@@ -130,5 +138,22 @@ describe("OpsJobsService.deleteTrip", () => {
     expect(prisma.trip.delete).not.toHaveBeenCalled();
     expect(prisma.trip.update).toHaveBeenCalled();
     expect(res.mode).toBe("cancelled");
+  });
+
+  it("cancelling last incomplete trip makes job READY_FOR_INVOICE when remaining trips are completed/done", async () => {
+    const { svc, prisma } = makeService();
+    prisma.trip.findFirst.mockResolvedValue({ ...baseTrip, status: TripStatus.PUBLISHED });
+    prisma.trip.findMany.mockResolvedValue([
+      { status: TripStatus.COMPLETED },
+      { status: TripStatus.DONE },
+      { status: TripStatus.CANCELLED },
+    ]);
+
+    await svc.deleteTrip("t1", "job1", "trip1", { userId: "u1", role: "OPS" });
+
+    expect(prisma.job.update).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: { status: "READY_FOR_INVOICE" },
+    });
   });
 });
