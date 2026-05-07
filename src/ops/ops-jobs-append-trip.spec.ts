@@ -49,12 +49,17 @@ describe("OpsJobsService.appendTrip", () => {
         findFirst: jest.fn().mockResolvedValue({
           id: "job1",
           status: JobStatus.ONGOING,
+          invoiceReadyAt: null,
           trips: [{ jobSequence: 1 }],
         }),
+        update: jest.fn().mockResolvedValue({}),
       },
       trip: {
         create: jest.fn().mockResolvedValue({ id: "trip1" }),
         delete: jest.fn().mockResolvedValue({ id: "trip1" }),
+        findMany: jest.fn().mockResolvedValue([
+          { status: "DRAFT" },
+        ]),
       },
       driverPayoutItem: {
         findFirst: jest.fn().mockResolvedValue({
@@ -293,5 +298,46 @@ describe("OpsJobsService.appendTrip", () => {
       ),
     ).rejects.toThrow("Invalid source payout item");
     expect(prisma.trip.delete).toHaveBeenCalledWith({ where: { id: "trip1" } });
+  });
+
+  it("appendTrip demotes READY_FOR_INVOICE jobs when new non-cancelled draft trip is added", async () => {
+    const { svc, prisma } = makeService({
+      job: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: "job1",
+            status: JobStatus.READY_FOR_INVOICE,
+            invoiceReadyAt: new Date("2026-05-01T00:00:00.000Z"),
+            trips: [{ jobSequence: 1 }],
+          })
+          .mockResolvedValueOnce({
+            id: "job1",
+            status: JobStatus.READY_FOR_INVOICE,
+            invoiceReadyAt: new Date("2026-05-01T00:00:00.000Z"),
+          }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      trip: {
+        create: jest.fn().mockResolvedValue({ id: "trip1" }),
+        delete: jest.fn().mockResolvedValue({ id: "trip1" }),
+        findMany: jest.fn().mockResolvedValue([
+          { status: "DONE" },
+          { status: "DRAFT" },
+        ]),
+      },
+    });
+
+    await svc.appendTrip(
+      "t1",
+      "job1",
+      { jobTripTemplate: JobTripTemplate.CUSTOM },
+      { userId: "u1", role: "OPS" },
+    );
+
+    expect(prisma.job.update).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: { status: JobStatus.ONGOING, invoiceReadyAt: null },
+    });
   });
 });

@@ -47,6 +47,10 @@ import { applyQSearch } from "../common/listing/listing.search";
 import { buildDocumentFileDisplayFields } from "../common/document-file-display";
 import { buildTripDisplayRef } from "../common/trip-display-ref";
 import { suggestTripOrderByNearestNeighbour } from "../common/trip-order-suggest";
+import {
+  evaluateJobInvoiceReadiness,
+  isInvoiceReadyTripStatus,
+} from "./job-invoice-readiness";
 
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
@@ -181,10 +185,6 @@ function normalizeExternalRef(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function isInvoiceReadyTripStatus(status: TripStatus): boolean {
-  return status === TripStatus.COMPLETED || status === TripStatus.DONE;
-}
-
 function toJobDto(j: any): JobDto {
   const trips = Array.isArray(j.trips) ? j.trips : [];
   const primaryTrip =
@@ -199,6 +199,14 @@ function toJobDto(j: any): JobDto {
     ? j.createdBy.name?.trim() || j.createdBy.email || null
     : null;
 
+  const computedReadiness = trips.length > 0
+    ? evaluateJobInvoiceReadiness(
+      trips
+        .filter((trip: any) => trip?.id && trip?.status)
+        .map((trip: any) => ({ id: trip.id as string, status: trip.status as TripStatus })),
+    )
+    : null;
+
   return {
     id: j.id,
     tenantId: j.tenantId,
@@ -211,6 +219,8 @@ function toJobDto(j: any): JobDto {
     status: j.status,
     invoiceReadyAt: j.invoiceReadyAt ?? null,
     isInvoiceReady: !!j.invoiceReadyAt,
+    computedInvoiceReady: computedReadiness?.readyForInvoice ?? undefined,
+    computedInvoiceReadinessReason: computedReadiness?.reason ?? null,
     notes: j.notes ?? null,
 
     createdByUserId: j.createdByUserId ?? null,
@@ -3144,6 +3154,8 @@ export class OpsJobsService {
       actorUserId,
     );
 
+    await this.recalculateJobStatusFromTrips(tenantId, jobId);
+
     return this.getOne(tenantId, jobId, user);
   }
 
@@ -4131,7 +4143,7 @@ export class OpsJobsService {
   private async recalculateJobStatusFromTrips(tenantId: string, jobId: string): Promise<void> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, invoiceReadyAt: true },
     });
     if (!job || job.status === JobStatus.CANCELLED || job.status === JobStatus.COMPLETED) {
       return;
@@ -4139,21 +4151,24 @@ export class OpsJobsService {
 
     const trips = await this.prisma.trip.findMany({
       where: { tenantId, jobId },
-      select: { status: true },
+      select: { id: true, status: true },
     });
     if (!trips.length) return;
 
-    const nonCancelledTrips = trips.filter((t) => t.status !== TripStatus.CANCELLED);
-    const hasBillableTrips = nonCancelledTrips.length > 0;
-    const allBillableTripsReady =
-      hasBillableTrips && nonCancelledTrips.every((t) => isInvoiceReadyTripStatus(t.status));
-    const nextStatus = allBillableTripsReady
+    const readiness = evaluateJobInvoiceReadiness(
+      trips.map((trip) => ({ id: trip.id, status: trip.status })),
+    );
+    const nextStatus = readiness.readyForInvoice
       ? JobStatus.READY_FOR_INVOICE
       : JobStatus.ONGOING;
-    if (job.status !== nextStatus) {
+    const shouldClearInvoiceReadyAt = !readiness.readyForInvoice && !!job.invoiceReadyAt;
+    if (job.status !== nextStatus || shouldClearInvoiceReadyAt) {
       await this.prisma.job.update({
         where: { id: jobId },
-        data: { status: nextStatus },
+        data: {
+          status: nextStatus,
+          ...(shouldClearInvoiceReadyAt ? { invoiceReadyAt: null } : {}),
+        },
       });
     }
   }
@@ -4264,16 +4279,11 @@ export class OpsJobsService {
       );
     }
 
-    const billableTrips = trips.filter((t) => t.status !== TripStatus.CANCELLED);
-    if (billableTrips.length === 0) {
-      throw new BadRequestException("No completed trips available for invoicing.");
-    }
-
-    const blockingTrips = billableTrips.filter((t) => !isInvoiceReadyTripStatus(t.status));
-    if (blockingTrips.length > 0) {
-      throw new BadRequestException(
-        "All non-cancelled trips must be completed or done before invoicing.",
-      );
+    const readiness = evaluateJobInvoiceReadiness(
+      trips.map((trip) => ({ id: trip.id, status: trip.status })),
+    );
+    if (!readiness.readyForInvoice) {
+      throw new BadRequestException(readiness.reason);
     }
 
     // Ensure lifecycle status is derived by centralized recalculation.

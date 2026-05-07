@@ -17,6 +17,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
+    "jobs:recalculate-readiness": "ts-node scripts/recalculate-job-readiness.ts",
     "start": "node dist/main",
     "gen:api": "openapi-typescript https://opsflow-erp-api.onrender.com/api/docs-json -o src/api/generated.ts"
   },

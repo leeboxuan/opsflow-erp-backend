@@ -258,6 +258,8 @@ export class JobDto {
   status: JobStatus;
   invoiceReadyAt?: Date | null;
   isInvoiceReady?: boolean;
+  computedInvoiceReady?: boolean;
+  computedInvoiceReadinessReason?: string | null;
   notes?: string | null;
 
   createdByUserId?: string | null;
