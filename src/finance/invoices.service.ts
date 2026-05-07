@@ -1590,9 +1590,15 @@ export class InvoicesService {
     const reference = sourceJob?.internalRef
       ? `${sourceJob.internalRef}${sourceJob.externalRef ? ` // ${sourceJob.externalRef}` : ""}`
       : null;
+    const templateCode = String((inv as any).templateCode ?? "").trim().toUpperCase();
+    const resolvedTemplateCode =
+      templateCode === "WISDOM_FORCE" ||
+      ((inv as any).sourceJobId && (inv as any).customerCompanyId)
+        ? "WISDOM_FORCE"
+        : "DB_WISDOM";
     return {
       invoiceNo: inv.invoiceNo,
-      templateCode: (inv as any).templateCode ?? "DB_WISDOM",
+      templateCode: resolvedTemplateCode,
       sellerName: "Wisdom Force Logistics Pte Ltd",
       sellerUen: "202606497W",
       sellerAddress: "Singapore",
@@ -1628,7 +1634,8 @@ export class InvoicesService {
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const logoBytes = loadInvoiceAssetBuffer("WF-logo.jpeg");
-    const qrBytes = loadInvoiceAssetBuffer("WF-QR.jpeg");
+    const qrBytes =
+      loadInvoiceAssetBuffer("WF-QR.png") ?? loadInvoiceAssetBuffer("WF-QR.jpeg");
     const marginX = 42;
     const pageWidth = 595.28;
     const contentRight = pageWidth - marginX;
@@ -1677,19 +1684,61 @@ export class InvoicesService {
     page.drawText("Qty", { x: 352, y, size: 10, font: bold });
     page.drawText("Unit Price", { x: 390, y, size: 10, font: bold });
     page.drawText("Tax", { x: 470, y, size: 10, font: bold });
-    page.drawText("Amount SGD", { x: 520, y, size: 10, font: bold });
+    page.drawText("Amount", { x: 520, y, size: 10, font: bold });
     y -= 8;
     page.drawLine({ start: { x: marginX, y }, end: { x: contentRight, y }, thickness: 0.8 });
 
+    const wrapLine = (text: string, maxWidth: number): string[] => {
+      const wrapped: string[] = [];
+      for (const paragraph of String(text ?? "").split("\n")) {
+        const words = paragraph.split(/\s+/).filter(Boolean);
+        if (words.length === 0) {
+          wrapped.push("");
+          continue;
+        }
+        let current = "";
+        for (const word of words) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (font.widthOfTextAtSize(candidate, 9.2) <= maxWidth) {
+            current = candidate;
+          } else {
+            if (current) wrapped.push(current);
+            if (font.widthOfTextAtSize(word, 9.2) <= maxWidth) {
+              current = word;
+            } else {
+              let chunk = "";
+              for (const ch of word) {
+                const next = chunk + ch;
+                if (font.widthOfTextAtSize(next, 9.2) <= maxWidth) {
+                  chunk = next;
+                } else {
+                  if (chunk) wrapped.push(chunk);
+                  chunk = ch;
+                }
+              }
+              current = chunk;
+            }
+          }
+        }
+        if (current) wrapped.push(current);
+      }
+      return wrapped.length > 0 ? wrapped : [""];
+    };
+
     for (const line of renderData.lines.slice(0, 16)) {
-      y -= 15;
+      const wrappedDescription = wrapLine(String(line.description ?? ""), 300);
+      const rowHeight = Math.max(14, wrappedDescription.length * 11 + 4);
+      y -= rowHeight;
+      if (y < 120) break;
       const amount = (Number(line.amountCents || 0) / 100).toFixed(2);
       const unit = (Number(line.unitPriceCents || 0) / 100).toFixed(2);
-      page.drawText(String(line.description).replace(/\n/g, " | ").slice(0, 58), { x: marginX, y, size: 9.2, font });
-      page.drawText(String(line.qty), { x: 355, y, size: 9.5, font });
-      page.drawText(unit, { x: 396, y, size: 9.5, font });
-      page.drawText(String(line.taxLabel ?? ""), { x: 472, y, size: 9.5, font });
-      page.drawText(amount, { x: 520, y, size: 9.5, font });
+      wrappedDescription.forEach((descLine, idx) => {
+        page.drawText(descLine, { x: marginX, y: y + rowHeight - 12 - idx * 11, size: 9.2, font });
+      });
+      page.drawText(String(line.qty), { x: 355, y: y + rowHeight - 12, size: 9.5, font });
+      page.drawText(unit, { x: 396, y: y + rowHeight - 12, size: 9.5, font });
+      page.drawText(String(line.taxLabel ?? ""), { x: 472, y: y + rowHeight - 12, size: 9.5, font });
+      page.drawText(amount, { x: 520, y: y + rowHeight - 12, size: 9.5, font });
     }
     y -= 12;
     page.drawLine({ start: { x: 338, y }, end: { x: contentRight, y }, thickness: 0.8 });
@@ -1704,13 +1753,13 @@ export class InvoicesService {
     page.drawText(`GST ${renderData.taxRatePercent}%`, { x: 370, y, size: 10, font });
     page.drawText(`SGD ${gst}`, { x: 500, y, size: 10, font });
     y -= 13;
-    page.drawText("Invoice Total SGD", { x: 370, y, size: 10.5, font: bold });
+    page.drawText("Invoice Total", { x: 370, y, size: 10.5, font: bold });
     page.drawText(`SGD ${total}`, { x: 500, y, size: 10.5, font: bold });
     y -= 13;
     page.drawText("Total Net Payments", { x: 370, y, size: 10, font });
     page.drawText("SGD 0.00", { x: 500, y, size: 10, font });
     y -= 14;
-    page.drawText("Amount Due SGD", { x: 370, y, size: 11, font: bold });
+    page.drawText("Amount Due", { x: 370, y, size: 11, font: bold });
     page.drawText(`SGD ${due}`, { x: 500, y, size: 11, font: bold });
 
     const page2 = pdfDoc.addPage([595.28, 841.89]);

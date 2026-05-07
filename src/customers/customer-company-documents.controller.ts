@@ -40,7 +40,7 @@ export class CustomerCompanyDocumentsController {
 
   @Get(":customerCompanyId/documents")
   @ApiOperation({
-    summary: "List generic customer company documents (excludes quotation files)",
+    summary: "List customer company documents (includes generated invoice PDFs; excludes quotation files)",
   })
   async listDocuments(
     @Request() req: any,

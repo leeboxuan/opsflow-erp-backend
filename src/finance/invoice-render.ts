@@ -79,6 +79,12 @@ export function loadInvoiceAssetDataUri(
   return `data:${mimeType};base64,${buf.toString("base64")}`;
 }
 
+function loadPreferredQrDataUri(): string | null {
+  const pngQr = loadInvoiceAssetDataUri("WF-QR.png", "image/png");
+  if (pngQr) return pngQr;
+  return loadInvoiceAssetDataUri("WF-QR.jpeg", "image/jpeg");
+}
+
 export function renderDbWisdomInvoiceHtml(data: InvoiceRenderData): string {
   const rows = data.lines.map((l) => `
     <tr>
@@ -122,7 +128,7 @@ td:first-child{white-space:pre-line}
 
 export function renderWisdomForceInvoiceHtml(data: InvoiceRenderData): string {
   const logoDataUri = loadInvoiceAssetDataUri("WF-logo.jpeg", "image/jpeg");
-  const qrDataUri = loadInvoiceAssetDataUri("WF-QR.jpeg", "image/jpeg");
+  const qrDataUri = loadPreferredQrDataUri();
   const logoBlock = logoDataUri
     ? `<img src="${logoDataUri}" alt="Wisdom Force Logo" style="width:200px;height:auto;object-fit:contain"/>`
     : `<strong style="font-size:18px;letter-spacing:0.4px">WISDOM FORCE LOGISTICS PTE LTD</strong>`;
@@ -132,7 +138,7 @@ export function renderWisdomForceInvoiceHtml(data: InvoiceRenderData): string {
 
   const rows = data.lines.map((l) => `
     <tr>
-      <td>${esc(l.description)}</td>
+      <td class="desc">${esc(l.description)}</td>
       <td class="n">${l.qty}</td>
       <td class="n">${money(l.unitPriceCents, data.currency)}</td>
       <td class="n">${esc(l.taxLabel)}</td>
@@ -142,14 +148,14 @@ export function renderWisdomForceInvoiceHtml(data: InvoiceRenderData): string {
   return `
 <!doctype html>
 <html><head><meta charset="utf-8"><style>
-@page{size:A4;margin:18mm}
+@page{size:A4;margin:12mm}
 *{box-sizing:border-box}
 body{font-family:Arial,sans-serif;color:#1f2937;font-size:12px;line-height:1.35}
 h1{font-size:24px;margin:0}
 h2{font-size:13px;margin:0 0 8px;color:#111827;letter-spacing:0.2px}
 table{width:100%;border-collapse:collapse}
 th,td{padding:8px 10px;border-bottom:1px solid #d1d5db}
-td:first-child{white-space:pre-line}
+td.desc{white-space:pre-line;word-break:break-word;overflow-wrap:anywhere}
 th{background:#f9fafb;color:#374151;border-top:1px solid #d1d5db}
 .n{text-align:right}
 .wf-header{display:grid;grid-template-columns:1fr 270px;gap:22px;align-items:start;padding-bottom:14px;border-bottom:2px solid #e5e7eb}
@@ -163,7 +169,7 @@ th{background:#f9fafb;color:#374151;border-top:1px solid #d1d5db}
 .meta-row div:first-child{background:#f9fafb;color:#6b7280}
 .meta-row+ .meta-row{border-top:1px solid #e5e7eb}
 .billto{margin-top:16px;border:1px solid #e5e7eb;border-radius:6px;padding:10px 12px;background:#fff}
-.table-wrap{margin-top:16px;border:1px solid #d1d5db;border-radius:6px;overflow:hidden}
+.table-wrap{margin-top:16px;border:1px solid #d1d5db;border-radius:6px}
 .totals{margin-top:14px;width:360px;margin-left:auto;border:1px solid #d1d5db;border-radius:6px;padding:10px 12px}
 .totals div{display:flex;justify-content:space-between;padding:4px 0}
 .totals .due{font-size:14px;font-weight:700;color:#0f172a;border-top:1px solid #d1d5db;margin-top:6px;padding-top:8px}
@@ -174,6 +180,7 @@ th{background:#f9fafb;color:#374151;border-top:1px solid #d1d5db}
 .qr-card{border:1px solid #d1d5db;border-radius:8px;padding:10px;text-align:center;background:#fff}
 .qr-title{font-weight:700;margin-bottom:4px}
 .qr-sub{font-size:11px;color:#6b7280;margin-bottom:8px}
+.qr-card img{width:190px;height:auto;object-fit:contain;background:#fff}
 </style></head><body>
 <div class="wf-header">
   <div>
@@ -202,16 +209,16 @@ th{background:#f9fafb;color:#374151;border-top:1px solid #d1d5db}
 </div>
 <div class="table-wrap">
   <table>
-    <thead><tr><th style="width:48%">Description</th><th class="n" style="width:10%">Qty</th><th class="n" style="width:16%">Unit Price</th><th class="n" style="width:10%">Tax</th><th class="n" style="width:16%">Amount SGD</th></tr></thead>
+    <thead><tr><th style="width:56%">Description</th><th class="n" style="width:8%">Qty</th><th class="n" style="width:14%">Unit Price</th><th class="n" style="width:8%">Tax</th><th class="n" style="width:14%">Amount</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
 </div>
 <div class="totals">
   <div><span>Subtotal</span><span>${money(data.subtotalCents, data.currency)}</span></div>
   <div><span>GST / local supply of goods and services ${data.taxRatePercent}%</span><span>${money(data.taxCents, data.currency)}</span></div>
-  <div><strong>Invoice Total SGD</strong><strong>${money(data.totalCents, data.currency)}</strong></div>
+  <div><strong>Invoice Total</strong><strong>${money(data.totalCents, data.currency)}</strong></div>
   <div><span>Total Net Payments</span><span>${money(data.amountPaidCents, data.currency)}</span></div>
-  <div class="due"><span>Amount Due SGD</span><span>${money(data.amountDueCents, data.currency)}</span></div>
+  <div class="due"><span>Amount Due</span><span>${money(data.amountDueCents, data.currency)}</span></div>
 </div>
 <div style="margin-top:12px"><strong>Payment Instructions</strong><br/>${esc(data.paymentInstructions ?? "Please arrange payment by due date.")}</div>
 <div class="page-break">

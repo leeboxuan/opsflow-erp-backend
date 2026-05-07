@@ -29,6 +29,7 @@ import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
 
 const COMPANY_DOCS_BUCKET = "job-documents";
+const INVOICE_DOCUMENTS_BUCKET = "invoice-documents";
 
 const CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS = 60 * 60;
 
@@ -666,13 +667,17 @@ export class CustomersService {
     generatedAt?: Date | null;
     sourceJobId?: string | null;
     sourceInvoiceId?: string | null;
+    storageBucket?: string | null;
+    storageKey?: string | null;
     uploadedBy?: { name: string | null } | null;
     generatedBy?: { name: string | null; email?: string | null } | null;
   }): Promise<CustomerCompanyDocumentDto> {
+    const bucket = this.resolveCustomerDocumentBucket(row as any);
+    const objectKey = row.storageKey ?? row.fileUrl;
     const supabase = this.supabaseService.getClient();
     const { data, error } = await supabase.storage
-      .from(COMPANY_DOCS_BUCKET)
-      .createSignedUrl(row.fileUrl, CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS);
+      .from(bucket)
+      .createSignedUrl(objectKey, CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS);
 
     return {
       id: row.id,
@@ -694,6 +699,24 @@ export class CustomersService {
     };
   }
 
+  private resolveCustomerDocumentBucket(row: {
+    type?: string | null;
+    sourceInvoiceId?: string | null;
+    storageBucket?: string | null;
+  }): string {
+    const explicit = String((row as any)?.storageBucket ?? "").trim();
+    if (explicit) return explicit;
+    const type = String(row?.type ?? "").toUpperCase();
+    if (
+      type === "INVOICE" ||
+      type === "COMPANY_INVOICE" ||
+      String(row?.sourceInvoiceId ?? "").trim()
+    ) {
+      return INVOICE_DOCUMENTS_BUCKET;
+    }
+    return COMPANY_DOCS_BUCKET;
+  }
+
   async listCustomerCompanyDocuments(
     tenantId: string,
     customerCompanyId: string,
@@ -702,39 +725,7 @@ export class CustomersService {
     data: CustomerCompanyDocumentDto[];
     meta: { page: number; pageSize: number; total: number };
   }> {
-    await this.assertCustomerCompanyExists(tenantId, customerCompanyId);
-    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
-
-    const where: any = {
-      tenantId,
-      customerCompanyId,
-      type: "CUSTOMER_DOCUMENT",
-      status: "ACTIVE",
-    };
-    applyQSearch(where, query.q, ["fileName"]);
-
-    const orderBy = buildOrderBy(
-      query.sortBy,
-      query.sortDir,
-      ["uploadedAt", "createdAt", "fileName"],
-      { uploadedAt: "desc" },
-    );
-
-    const [rows, total] = await this.prisma.$transaction([
-      this.prisma.customerCompanyDocument.findMany({
-        where,
-        orderBy,
-        skip,
-        take,
-        include: { uploadedBy: { select: { name: true } } },
-      }),
-      this.prisma.customerCompanyDocument.count({ where }),
-    ]);
-
-    return {
-      data: await Promise.all(rows.map((r) => this.attachCustomerDocumentSignedUrl(r))),
-      meta: buildPaginationMeta(page, pageSize, total),
-    };
+    return this.listCompanyDocuments(tenantId, customerCompanyId, query);
   }
 
   async listCompanyDocuments(
@@ -840,13 +831,15 @@ export class CustomersService {
         id: documentId,
         tenantId,
         customerCompanyId,
-        type: "CUSTOMER_DOCUMENT",
         status: "ACTIVE",
       },
-      include: { uploadedBy: { select: { name: true } } },
+      include: {
+        uploadedBy: { select: { name: true } },
+        generatedBy: { select: { name: true, email: true } },
+      },
     });
     if (!row) throw new NotFoundException("Customer company document not found");
-    return this.attachCustomerDocumentSignedUrl(row);
+    return this.attachCustomerDocumentSignedUrl(row as any);
   }
 
   async getCompanyDocument(
@@ -881,15 +874,16 @@ export class CustomersService {
         id: documentId,
         tenantId,
         customerCompanyId,
-        type: "CUSTOMER_DOCUMENT",
         status: "ACTIVE",
       },
-      select: { id: true, storageKey: true },
+      select: { id: true, type: true, sourceInvoiceId: true, storageKey: true },
     });
     if (!row) throw new NotFoundException("Customer company document not found");
 
     const supabase = this.supabaseService.getClient();
-    await supabase.storage.from(COMPANY_DOCS_BUCKET).remove([row.storageKey]);
+    await supabase.storage
+      .from(this.resolveCustomerDocumentBucket(row as any))
+      .remove([row.storageKey]);
 
     await this.prisma.customerCompanyDocument.update({
       where: { id: row.id },
@@ -921,12 +915,14 @@ export class CustomersService {
         customerCompanyId,
         status: "ACTIVE",
       },
-      select: { id: true, storageKey: true },
+      select: { id: true, type: true, sourceInvoiceId: true, storageKey: true },
     });
     if (!row) throw new NotFoundException("Company document not found");
 
     const supabase = this.supabaseService.getClient();
-    await supabase.storage.from(COMPANY_DOCS_BUCKET).remove([row.storageKey]);
+    await supabase.storage
+      .from(this.resolveCustomerDocumentBucket(row as any))
+      .remove([row.storageKey]);
     await this.prisma.customerCompanyDocument.update({
       where: { id: row.id },
       data: { status: "DELETED", deletedAt: new Date() },
@@ -952,17 +948,18 @@ export class CustomersService {
         id: documentId,
         tenantId,
         customerCompanyId,
-        type: "CUSTOMER_DOCUMENT",
         status: "ACTIVE",
       },
-      select: { fileUrl: true },
+      select: { type: true, sourceInvoiceId: true, storageKey: true, fileUrl: true },
     });
     if (!row) throw new NotFoundException("Customer company document not found");
 
     const supabase = this.supabaseService.getClient();
+    const bucket = this.resolveCustomerDocumentBucket(row as any);
+    const objectKey = row.storageKey ?? row.fileUrl;
     const { data, error } = await supabase.storage
-      .from(COMPANY_DOCS_BUCKET)
-      .createSignedUrl(row.fileUrl, CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS);
+      .from(bucket)
+      .createSignedUrl(objectKey, CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS);
 
     return {
       url: error ? null : (data?.signedUrl ?? null),
@@ -982,13 +979,15 @@ export class CustomersService {
         customerCompanyId,
         status: "ACTIVE",
       },
-      select: { fileUrl: true },
+      select: { type: true, sourceInvoiceId: true, storageKey: true, fileUrl: true },
     });
     if (!row) throw new NotFoundException("Company document not found");
     const supabase = this.supabaseService.getClient();
+    const bucket = this.resolveCustomerDocumentBucket(row as any);
+    const objectKey = row.storageKey ?? row.fileUrl;
     const { data, error } = await supabase.storage
-      .from(COMPANY_DOCS_BUCKET)
-      .createSignedUrl(row.fileUrl, CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS);
+      .from(bucket)
+      .createSignedUrl(objectKey, CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS);
     return {
       url: error ? null : (data?.signedUrl ?? null),
       expiresInSeconds: CUSTOMER_COMPANY_DOCUMENT_SIGNED_URL_TTL_SECONDS,

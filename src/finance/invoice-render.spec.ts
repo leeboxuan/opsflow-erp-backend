@@ -36,10 +36,25 @@ describe("invoice-render assets", () => {
   };
 
   it("WISDOM_FORCE rendered HTML contains logo and QR base64 data URIs", () => {
-    const html = renderWisdomForceInvoiceHtml(baseData as any);
-    const matches = html.match(/data:image\/jpeg;base64,/g) ?? [];
-    expect(matches.length).toBeGreaterThanOrEqual(2);
-    expect(html).toContain("Amount Due SGD");
+    const html = renderWisdomForceInvoiceHtml({
+      ...baseData,
+      lines: [
+        {
+          description:
+            "WF-0002-IMP-T01\nFrom: JURONG_PORT - Jurong Port\nTo: Cogent 1.Logistics Hub, 1 Buroh Crescent",
+          qty: 1,
+          unitPriceCents: 10000,
+          amountCents: 10000,
+          taxLabel: "9%",
+        },
+      ],
+    } as any);
+    expect(html).toContain("data:image/jpeg;base64,");
+    expect(html).toMatch(/data:image\/(png|jpeg);base64,/);
+    expect(html).toContain("white-space:pre-line");
+    expect(html).toContain("Amount Due</span><span>SGD 109.00");
+    expect(html).not.toContain("Amount Due SGD SGD");
+    expect(html).not.toContain("Invoice Total SGD SGD");
     expect(html).toContain("PayNow / SGQR");
   });
 
