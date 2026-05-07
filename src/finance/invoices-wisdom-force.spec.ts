@@ -86,7 +86,7 @@ describe("InvoicesService Wisdom Force flow", () => {
     return { svc, prisma };
   }
 
-  it("builds invoice prefill from job with job line and quotation master lines", async () => {
+  it("builds invoice prefill from billable trips (completed/done only)", async () => {
     const { svc } = makeService();
     const result = await svc.getInvoicePrefillFromJob("t1", "job1", {
       userId: "u1",
@@ -94,9 +94,13 @@ describe("InvoicesService Wisdom Force flow", () => {
     });
     expect(result.invoiceTemplate).toBe("WISDOM_FORCE");
     expect(result.internalJobReference).toBe("WFL-LCL-2604-0077");
-    expect(result.lineItems[0].sourceType).toBe("JOB");
-    expect(result.lineItems.some((l) => l.sourceType === "QUOTATION_MASTER")).toBe(true);
+    expect(result.lineItems.length).toBe(1);
+    expect(result.lineItems[0].sourceType).toBe("TRIP");
+    expect(result.lineItems[0].description).toContain("From:");
+    expect(result.lineItems[0].description).toContain("To:");
+    expect(result.lineItems[0].requiresManualAmount).toBe(true);
     expect(Array.isArray(result.quotationOptions)).toBe(true);
+    expect(result.job?.billableTripCount).toBe(1);
   });
 
   it("lists invoiceable jobs for company and excludes cancelled/not-ready/generated", async () => {
@@ -147,6 +151,40 @@ describe("InvoicesService Wisdom Force flow", () => {
       role: "OPS",
     });
     expect(res.items).toEqual([]);
+  });
+
+  it("invoiceable jobs returns billableTripCount", async () => {
+    const { svc } = makeService({
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1" }),
+      },
+      job: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "job-ready",
+            internalRef: "WFL-READY",
+            externalRef: "REF-1",
+            jobType: "LCL",
+            status: "READY_FOR_INVOICE",
+            invoiceReadyAt: new Date("2026-05-01T00:00:00.000Z"),
+            trips: [
+              { id: "t1", status: "DONE" },
+              { id: "t2", status: "COMPLETED" },
+              { id: "t3", status: "CANCELLED" },
+            ],
+          },
+        ]),
+      },
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    });
+    const res = await svc.listInvoiceableJobsByCompany("t1", "c1", {
+      userId: "u1",
+      role: "OPS",
+    });
+    expect(res.items.length).toBe(1);
+    expect(res.items[0].billableTripCount).toBe(2);
   });
 
   it("lists quotation options without DRIVER_PAYOUT usage", async () => {
@@ -308,6 +346,78 @@ describe("InvoicesService Wisdom Force flow", () => {
               taxCode: "SR",
               taxRate: 900,
               sourceType: "MANUAL",
+            },
+          ],
+        } as any,
+        { userId: "u1", role: "OPS" },
+      ),
+    ).resolves.toBeTruthy();
+    expect(prisma.invoice.create).toHaveBeenCalled();
+  });
+
+  it("accepts TRIP source line without quotation master item", async () => {
+    const { svc, prisma } = makeService({
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: "trip-1", status: "DONE" }),
+      },
+      invoice: {
+        ...makeService().prisma.invoice,
+        create: jest.fn().mockResolvedValue({
+          id: "inv-d2",
+          invoiceNo: "INV-202605-0002",
+          customerName: "Customer A",
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          templateCode: "WISDOM_FORCE",
+          currency: "SGD",
+          status: "Draft",
+          issueDate: new Date("2026-05-07T00:00:00.000Z"),
+          dueDate: null,
+          notes: null,
+          subtotalCents: 0,
+          taxCents: 0,
+          totalCents: 0,
+          lineItems: [
+            {
+              id: "li2",
+              description: "WF-0002-IMP-T01\nFrom: A\nTo: B",
+              qty: 1,
+              unitPriceCents: 0,
+              amountCents: 0,
+              taxCode: "SR",
+              taxRate: 900,
+              taxCents: 0,
+              sourceType: "TRIP",
+              sourceMasterItemId: null,
+              sourceTripId: "trip-1",
+              tripDisplayRefSnapshot: "WF-0002-IMP-T01",
+              requiresManualAmount: true,
+            },
+          ],
+          orders: [],
+          snapshot: { orderIds: [], sourceJobIds: [] },
+        }),
+      },
+    });
+    await expect(
+      svc.createDraftInvoice(
+        "t1",
+        {
+          customerName: "Customer A",
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          templateCode: "WISDOM_FORCE",
+          lineItems: [
+            {
+              description: "WF-0002-IMP-T01\nFrom: A\nTo: B",
+              qty: 1,
+              unitPriceCents: null,
+              taxCode: "SR",
+              taxRate: 900,
+              sourceType: "TRIP",
+              sourceTripId: "trip-1",
+              tripDisplayRef: "WF-0002-IMP-T01",
+              requiresManualAmount: true,
             },
           ],
         } as any,

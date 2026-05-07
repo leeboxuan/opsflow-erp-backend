@@ -20,10 +20,11 @@ export class CreateInvoiceLineItemDto {
   @Min(1)
   qty: number;
 
-  @ApiProperty({ description: 'Unit price in cents', example: 38000 })
+  @ApiPropertyOptional({ description: 'Unit price in cents', example: 38000, nullable: true })
+  @IsOptional()
   @IsInt()
   @Min(0)
-  unitPriceCents: number;
+  unitPriceCents?: number | null;
 
   @ApiProperty({ description: 'SR or ZR', example: 'SR' })
   @IsString()
@@ -46,6 +47,31 @@ export class CreateInvoiceLineItemDto {
   @IsOptional()
   @IsString()
   sourceMasterItemId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sourceJobId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sourceTripId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tripDisplayRef?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  fromLabel?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  toLabel?: string | null;
 
   @ApiPropertyOptional({ default: false })
   @IsOptional()
@@ -130,7 +156,10 @@ export class InvoiceLineItemDto {
   @ApiProperty() taxRate: number;
   @ApiProperty() taxCents: number;
   @ApiPropertyOptional() sourceType?: string | null;
+  @ApiPropertyOptional() sourceJobId?: string | null;
   @ApiPropertyOptional() sourceMasterItemId?: string | null;
+  @ApiPropertyOptional() sourceTripId?: string | null;
+  @ApiPropertyOptional() tripDisplayRef?: string | null;
   @ApiPropertyOptional() requiresManualAmount?: boolean;
 }
 
@@ -199,6 +228,19 @@ export class InvoicePrefillResponseDto {
   @ApiProperty() totalCents: number;
   @ApiProperty() amountDueCents: number;
   @ApiPropertyOptional() existingDraftInvoiceId?: string | null;
+  @ApiPropertyOptional({ type: [Object] }) billableTrips?: Array<{
+    tripId: string;
+    tripDisplayRef: string;
+    fromLabel: string;
+    toLabel: string;
+  }>;
+  @ApiPropertyOptional({ type: Object }) job?: {
+    id: string;
+    internalJobReference: string;
+    customerReference: string | null;
+    jobType: string;
+    billableTripCount: number;
+  };
   @ApiPropertyOptional({ type: [Object] }) quotationOptions?: Array<{
     id: string;
     code: string;
@@ -223,6 +265,7 @@ export class InvoiceableJobDto {
   @ApiPropertyOptional() invoiceReadyAt?: Date | null;
   @ApiProperty() tripCount: number;
   @ApiProperty() completedTripCount: number;
+  @ApiProperty() billableTripCount: number;
   @ApiPropertyOptional() existingInvoiceId?: string | null;
   @ApiPropertyOptional() existingInvoiceStatus?: string | null;
   @ApiProperty() label: string;

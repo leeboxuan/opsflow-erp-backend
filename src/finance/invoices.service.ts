@@ -21,6 +21,7 @@ import { AuditService } from "../audit/audit.service";
 import { loadInvoiceAssetBuffer, renderInvoiceHtml } from "./invoice-render";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { evaluateJobInvoiceReadiness } from "../ops/job-invoice-readiness";
+import { buildTripDisplayRef } from "../common/trip-display-ref";
 
 function toBasisPoints(rate: number) {
   return Math.round(rate);
@@ -43,6 +44,14 @@ function normalizeCustomerCompanyName(name: string): string {
     .trim()
     .replace(/\s+/g, " ")
     .toLowerCase();
+}
+
+function firstText(...values: Array<string | null | undefined>): string | null {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return null;
 }
 @Injectable()
 export class InvoicesService {
@@ -105,19 +114,48 @@ export class InvoicesService {
 
   private computeInvoiceTotals(lineItems: Array<{
     qty: number;
-    unitPriceCents: number;
+    unitPriceCents: number | null | undefined;
     taxRate: number;
   }>) {
     const normalized = lineItems.map((l) => {
-      const amountCents = l.qty * l.unitPriceCents;
+      const unitPriceCents = Number(l.unitPriceCents ?? 0);
+      const amountCents = l.qty * unitPriceCents;
       const taxCents =
         l.taxRate > 0 ? Math.round((amountCents * l.taxRate) / 10000) : 0;
-      return { ...l, amountCents, taxCents };
+      return { ...l, unitPriceCents, amountCents, taxCents };
     });
     const subtotalCents = normalized.reduce((s, l) => s + l.amountCents, 0);
     const taxCents = normalized.reduce((s, l) => s + l.taxCents, 0);
     const totalCents = subtotalCents + taxCents;
     return { normalized, subtotalCents, taxCents, totalCents };
+  }
+
+  private isBillableTripStatus(status: TripStatus): boolean {
+    return status === TripStatus.COMPLETED || status === TripStatus.DONE;
+  }
+
+  private buildTripLineLabels(trip: any): { fromLabel: string; toLabel: string } {
+    const fromLabel = firstText(
+      trip?.originLabel,
+      trip?.originAddressLine1,
+      trip?.originAddressLine2,
+      "Origin",
+    ) as string;
+    const toLabel = firstText(
+      trip?.destinationLabel,
+      trip?.destinationAddressLine1,
+      trip?.destinationAddressLine2,
+      "Destination",
+    ) as string;
+    return { fromLabel, toLabel };
+  }
+
+  private buildTripLineDescription(
+    tripDisplayRef: string,
+    fromLabel: string,
+    toLabel: string,
+  ): string {
+    return `${tripDisplayRef}\nFrom: ${fromLabel}\nTo: ${toLabel}`;
   }
 
   private async resolveQuotationOptionsForCompany(
@@ -240,6 +278,7 @@ export class InvoicesService {
 
       const completedTripCount = (job.trips ?? []).filter((t: any) =>
         t.status === TripStatus.COMPLETED || t.status === TripStatus.DONE).length;
+      const billableTripCount = completedTripCount;
 
       items.push({
         id: job.id,
@@ -250,6 +289,7 @@ export class InvoicesService {
         invoiceReadyAt: job.invoiceReadyAt ?? null,
         tripCount: (job.trips ?? []).length,
         completedTripCount,
+        billableTripCount,
         existingInvoiceId: existingInvoice?.id ?? null,
         existingInvoiceStatus: existingInvoice?.status ?? null,
         label: `${job.internalRef} · ${job.externalRef ?? "-"} · ${job.jobType}`,
@@ -266,7 +306,8 @@ export class InvoicesService {
   ): Promise<void> {
     for (const line of lineItems) {
       const sourceType = String(line.sourceType ?? "MANUAL").toUpperCase();
-      if (!["MANUAL", "JOB", "QUOTATION_MASTER"].includes(sourceType)) {
+      const resolvedSourceJobId = String(line.sourceJobId ?? sourceJobId ?? "").trim() || null;
+      if (!["MANUAL", "JOB", "QUOTATION_MASTER", "TRIP"].includes(sourceType)) {
         throw new BadRequestException(`Unsupported sourceType: ${sourceType}`);
       }
       if (sourceType === "QUOTATION_MASTER") {
@@ -311,8 +352,31 @@ export class InvoicesService {
           }
         }
       }
-      if (sourceType === "JOB" && !sourceJobId) {
+      if (sourceType === "JOB" && !resolvedSourceJobId) {
         throw new BadRequestException("sourceJobId is required for JOB line items");
+      }
+      if (sourceType === "TRIP") {
+        if (!resolvedSourceJobId) {
+          throw new BadRequestException("sourceJobId is required for TRIP line items");
+        }
+        const sourceTripId = String(line.sourceTripId ?? "").trim();
+        if (!sourceTripId) {
+          throw new BadRequestException("sourceTripId is required for TRIP line items");
+        }
+        const trip = await this.prisma.trip.findFirst({
+          where: {
+            id: sourceTripId,
+            tenantId,
+            jobId: resolvedSourceJobId,
+          },
+          select: { id: true, status: true },
+        });
+        if (!trip) {
+          throw new BadRequestException("sourceTripId must belong to sourceJobId");
+        }
+        if (trip.status === TripStatus.CANCELLED) {
+          throw new BadRequestException("Cancelled trips cannot be invoiced");
+        }
       }
     }
   }
@@ -327,7 +391,20 @@ export class InvoicesService {
       where: { tenantId, id: jobId },
       include: {
         customerCompany: true,
-        trips: { select: { id: true, status: true, displayTitle: true } },
+        trips: {
+          select: {
+            id: true,
+            status: true,
+            tripSequence: true,
+            jobSequence: true,
+            originLabel: true,
+            originAddressLine1: true,
+            originAddressLine2: true,
+            destinationLabel: true,
+            destinationAddressLine1: true,
+            destinationAddressLine2: true,
+          },
+        },
       },
     });
     if (!job) throw new BadRequestException("Job not found");
@@ -364,10 +441,30 @@ export class InvoicesService {
       tenantId,
       job.customerCompanyId,
     );
+    const billableTrips = (job.trips ?? []).filter((t: any) =>
+      this.isBillableTripStatus(t.status as TripStatus),
+    );
+    const billableTripSummaries = billableTrips.map((trip: any) => {
+      const tripDisplayRef = buildTripDisplayRef({
+        jobInternalRef: job.internalRef,
+        tripSequence: trip.tripSequence,
+        jobSequence: trip.jobSequence,
+        tripId: trip.id,
+      });
+      const { fromLabel, toLabel } = this.buildTripLineLabels(trip);
+      return { tripId: trip.id, tripDisplayRef, fromLabel, toLabel };
+    });
 
     if (existingDraft) {
       const amountDueCents = existingDraft.totalCents;
       return {
+        job: {
+          id: job.id,
+          internalJobReference: job.internalRef,
+          customerReference: job.externalRef ?? null,
+          jobType: job.jobType,
+          billableTripCount: billableTrips.length,
+        },
         jobId,
         internalJobReference: job.internalRef,
         customerCompanyId: job.customerCompanyId,
@@ -379,6 +476,7 @@ export class InvoicesService {
         currency: existingDraft.currency ?? "SGD",
         taxRate: taxRate / 10000,
         lineItems: existingDraft.lineItems.map((li: any) => ({
+          sourceJobId: (existingDraft as any).sourceJobId ?? job.id,
           description: li.description,
           qty: li.qty,
           unitPriceCents: li.unitPriceCents,
@@ -386,6 +484,8 @@ export class InvoicesService {
           taxRate: li.taxRate,
           sourceType: li.sourceType ?? "MANUAL",
           sourceMasterItemId: li.sourceMasterItemId ?? null,
+          sourceTripId: li.sourceTripId ?? null,
+          tripDisplayRef: li.tripDisplayRefSnapshot ?? null,
           requiresManualAmount: li.requiresManualAmount ?? false,
         })),
         subtotalCents: existingDraft.subtotalCents,
@@ -393,39 +493,49 @@ export class InvoicesService {
         totalCents: existingDraft.totalCents,
         amountDueCents,
         existingDraftInvoiceId: existingDraft.id,
+        billableTrips: billableTripSummaries,
         quotationOptions,
       };
     }
 
     const templateCode = "WISDOM_FORCE";
-    const sourceLines = quotationOptions;
-
-    const prefillLineItems: Array<any> = [
-      {
-        sourceType: "JOB",
+    const prefillLineItems: Array<any> = billableTripSummaries.map((trip) => {
+      return {
+        sourceType: "TRIP",
+        sourceJobId: job.id,
         sourceMasterItemId: null,
-        description: `${job.internalRef} - Job billing`,
+        sourceTripId: trip.tripId,
+        tripDisplayRef: trip.tripDisplayRef,
+        fromLabel: trip.fromLabel,
+        toLabel: trip.toLabel,
+        description: this.buildTripLineDescription(
+          trip.tripDisplayRef,
+          trip.fromLabel,
+          trip.toLabel,
+        ),
         qty: 1,
-        unitPriceCents: 0,
+        unitPriceCents: null,
         taxCode: "SR",
         taxRate,
         requiresManualAmount: true,
-      },
-      ...sourceLines.map((r: any) => ({
-        sourceType: "QUOTATION_MASTER",
-        sourceMasterItemId: r.id,
-        description: `${r.code} - ${r.label}`,
-        qty: 1,
-        unitPriceCents: r.unitPriceCents ?? 0,
-        taxCode: "SR",
-        taxRate,
-        requiresManualAmount: Boolean(r.requiresManualAmount || r.unitPriceCents == null),
-      })),
-    ];
+        isEditable: true,
+      };
+    });
+
+    if (prefillLineItems.length === 0) {
+      throw new BadRequestException("No billable trips found for invoice prefill");
+    }
 
     const totals = this.computeInvoiceTotals(prefillLineItems);
 
     return {
+      job: {
+        id: job.id,
+        internalJobReference: job.internalRef,
+        customerReference: job.externalRef ?? null,
+        jobType: job.jobType,
+        billableTripCount: billableTrips.length,
+      },
       jobId,
       internalJobReference: job.internalRef,
       customerCompanyId: job.customerCompanyId,
@@ -442,6 +552,7 @@ export class InvoicesService {
       totalCents: totals.totalCents,
       amountDueCents: totals.totalCents,
       existingDraftInvoiceId: null,
+      billableTrips: billableTripSummaries,
       quotationOptions,
     };
   }
@@ -600,11 +711,13 @@ export class InvoicesService {
 
     // Compute totals from manual line items
     const normalized = dto.lineItems.map((l) => {
-      const amountCents = l.qty * l.unitPriceCents;
+      const unitPriceCents = Number(l.unitPriceCents ?? 0);
+      const amountCents = l.qty * unitPriceCents;
       const taxCents =
         l.taxRate > 0 ? Math.round((amountCents * l.taxRate) / 10000) : 0; // basis points
       return {
         ...l,
+        unitPriceCents,
         amountCents,
         taxCents,
         taxRate: toBasisPoints(l.taxRate),
@@ -654,6 +767,8 @@ export class InvoicesService {
               taxCents: l.taxCents,
               sourceType: (l as any).sourceType ?? "MANUAL",
               sourceMasterItemId: (l as any).sourceMasterItemId ?? null,
+              sourceTripId: (l as any).sourceTripId ?? null,
+              tripDisplayRefSnapshot: (l as any).tripDisplayRef ?? null,
               requiresManualAmount: Boolean((l as any).requiresManualAmount),
             })),
           },
@@ -756,7 +871,10 @@ export class InvoicesService {
         taxRate: l.taxRate,
         taxCents: l.taxCents,
         sourceType: l.sourceType ?? null,
+        sourceJobId: (inv as any).sourceJobId ?? null,
         sourceMasterItemId: l.sourceMasterItemId ?? null,
+        sourceTripId: l.sourceTripId ?? null,
+        tripDisplayRef: l.tripDisplayRefSnapshot ?? null,
         requiresManualAmount: l.requiresManualAmount ?? false,
       })),
       orderIds,
@@ -929,10 +1047,17 @@ export class InvoicesService {
     );
 
     const normalized = dto.lineItems.map((l) => {
-      const amountCents = l.qty * l.unitPriceCents;
+      const unitPriceCents = Number(l.unitPriceCents ?? 0);
+      const amountCents = l.qty * unitPriceCents;
       const taxCents =
         l.taxRate > 0 ? Math.round((amountCents * l.taxRate) / 10000) : 0;
-      return { ...l, amountCents, taxCents, taxRate: toBasisPoints(l.taxRate) };
+      return {
+        ...l,
+        unitPriceCents,
+        amountCents,
+        taxCents,
+        taxRate: toBasisPoints(l.taxRate),
+      };
     });
 
     const subtotalCents = normalized.reduce((s, l) => s + l.amountCents, 0);
@@ -976,6 +1101,8 @@ export class InvoicesService {
             taxCents: l.taxCents,
             sourceType: (l as any).sourceType ?? "MANUAL",
             sourceMasterItemId: (l as any).sourceMasterItemId ?? null,
+            sourceTripId: (l as any).sourceTripId ?? null,
+            tripDisplayRefSnapshot: (l as any).tripDisplayRef ?? null,
             requiresManualAmount: Boolean((l as any).requiresManualAmount),
           })),
         },
@@ -1267,11 +1394,13 @@ export class InvoicesService {
 
       // Compute totals from manual line items
       const normalized = dto.lineItems.map((l) => {
-        const amountCents = l.qty * l.unitPriceCents;
+        const unitPriceCents = Number(l.unitPriceCents ?? 0);
+        const amountCents = l.qty * unitPriceCents;
         const taxCents =
           l.taxRate > 0 ? Math.round((amountCents * l.taxRate) / 10000) : 0;
         return {
           ...l,
+          unitPriceCents,
           amountCents,
           taxCents,
           taxRate: toBasisPoints(l.taxRate),
@@ -1338,6 +1467,8 @@ export class InvoicesService {
               taxCents: l.taxCents,
               sourceType: (l as any).sourceType ?? "MANUAL",
               sourceMasterItemId: (l as any).sourceMasterItemId ?? null,
+              sourceTripId: (l as any).sourceTripId ?? null,
+              tripDisplayRefSnapshot: (l as any).tripDisplayRef ?? null,
               requiresManualAmount: Boolean((l as any).requiresManualAmount),
             })),
           },

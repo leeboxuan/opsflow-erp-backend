@@ -96,6 +96,7 @@ body{font-family:Arial,sans-serif;color:#222;padding:24px}
 h1{margin:0 0 8px;font-size:20px}
 table{width:100%;border-collapse:collapse;margin-top:16px}
 th,td{border:1px solid #ddd;padding:8px;font-size:12px}
+td:first-child{white-space:pre-line}
 .n{text-align:right}
 .meta{display:flex;justify-content:space-between;gap:16px}
 </style></head><body>
@@ -148,6 +149,7 @@ h1{font-size:24px;margin:0}
 h2{font-size:13px;margin:0 0 8px;color:#111827;letter-spacing:0.2px}
 table{width:100%;border-collapse:collapse}
 th,td{padding:8px 10px;border-bottom:1px solid #d1d5db}
+td:first-child{white-space:pre-line}
 th{background:#f9fafb;color:#374151;border-top:1px solid #d1d5db}
 .n{text-align:right}
 .wf-header{display:grid;grid-template-columns:1fr 270px;gap:22px;align-items:start;padding-bottom:14px;border-bottom:2px solid #e5e7eb}

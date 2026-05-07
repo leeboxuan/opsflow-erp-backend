@@ -1687,6 +1687,8 @@ model InvoiceLineItem {
   taxCents Int
   sourceType String? // JOB | QUOTATION_MASTER | MANUAL
   sourceMasterItemId String?
+  sourceTripId String?
+  tripDisplayRefSnapshot String?
   requiresManualAmount Boolean @default(false)
 
   createdAt DateTime @default(now())
