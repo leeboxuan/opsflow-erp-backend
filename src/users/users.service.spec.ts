@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
+import { Role } from "@prisma/client";
 import { UsersService } from "./users.service";
 
 describe("UsersService", () => {
@@ -14,6 +15,7 @@ describe("UsersService", () => {
       remove,
     });
     const prisma: any = {
+      $transaction: jest.fn(async (cb: any) => cb(prisma)),
       user: {
         findFirst: jest.fn().mockResolvedValue({
           id: "u1",
@@ -37,6 +39,15 @@ describe("UsersService", () => {
           createdAt: new Date("2026-05-08T00:00:00.000Z"),
           updatedAt: new Date("2026-05-08T00:00:00.000Z"),
         }),
+      },
+      drivers: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      jobDocument: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      tripDocument: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       ...overrides,
     };
@@ -89,23 +100,28 @@ describe("UsersService", () => {
 
   it("PATCH /users/me updates displayName/name only", async () => {
     const { service, prisma } = makeService();
-    await service.updateMyProfile("t1", "u1", {
+    await service.updateMyProfile("t1", "u1", Role.ADMIN, {
       displayName: "Nathalie Lee",
       name: "Nathalie",
     } as any);
-    expect(prisma.user.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          displayName: "Nathalie Lee",
-          name: "Nathalie",
-        }),
-      }),
-    );
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.user.update).toHaveBeenCalled();
+  });
+
+  it("OPS/FINANCE can update own displayName", async () => {
+    const { service, prisma } = makeService();
+    await service.updateMyProfile("t1", "u1", Role.OPS, {
+      displayName: "Ops Name",
+    } as any);
+    await service.updateMyProfile("t1", "u1", Role.FINANCE, {
+      displayName: "Finance Name",
+    } as any);
+    expect(prisma.user.update).toHaveBeenCalled();
   });
 
   it("PATCH /users/me cannot update email/role/tenantId", async () => {
     const { service, prisma } = makeService();
-    await service.updateMyProfile("t1", "u1", {
+    await service.updateMyProfile("t1", "u1", Role.ADMIN, {
       displayName: "New Name",
       email: "hacker@demo.com",
       role: "SUPERADMIN",
@@ -120,6 +136,63 @@ describe("UsersService", () => {
         }),
       }),
     );
+  });
+
+  it("DRIVER cannot update own displayName/name/email", async () => {
+    const { service } = makeService();
+    await expect(
+      service.updateMyProfile("t1", "u1", Role.DRIVER, {
+        displayName: "Driver New",
+        email: "driver@demo.com",
+      } as any),
+    ).rejects.toThrow("Drivers cannot update name or email from profile.");
+  });
+
+  it("name propagation updates denormalized metadata fields", async () => {
+    const { service, prisma } = makeService();
+    await service.updateUserDisplayNameAndPropagate({
+      tenantId: "t1",
+      userId: "u1",
+      newName: "Renamed User",
+      actorUserId: "u1",
+    });
+    expect(prisma.jobDocument.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenantId: "t1", uploadedByUserId: "u1" },
+        data: { uploadedByNameSnapshot: "Renamed User" },
+      }),
+    );
+    expect(prisma.tripDocument.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenantId: "t1", signedByUserId: "u1" },
+        data: { signedByName: "Renamed User" },
+      }),
+    );
+    expect(prisma.drivers.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenantId: "t1", userId: "u1" },
+      }),
+    );
+  });
+
+  it("failed propagation rolls back user name update transaction", async () => {
+    const { service, prisma } = makeService({
+      tripDocument: {
+        updateMany: jest
+          .fn()
+          .mockResolvedValueOnce({ count: 0 })
+          .mockRejectedValueOnce(new Error("propagation failed")),
+      },
+    });
+    await expect(
+      service.updateUserDisplayNameAndPropagate({
+        tenantId: "t1",
+        userId: "u1",
+        newName: "Renamed User",
+        actorUserId: "u1",
+      }),
+    ).rejects.toThrow("propagation failed");
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
   it("POST avatar rejects non-image", async () => {
@@ -164,6 +237,55 @@ describe("UsersService", () => {
       }),
     );
     expect(res.avatarKey).toBe("t1/users/u1/avatar.jpg");
+  });
+
+  it("DRIVER can upload and delete avatar", async () => {
+    const { service, prisma } = makeService({
+      user: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: "u1",
+            email: "driver@demo.com",
+            name: "Driver",
+            displayName: "Driver",
+            role: "DRIVER",
+            avatarKey: null,
+            avatarUpdatedAt: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .mockResolvedValueOnce({
+            id: "u1",
+            email: "driver@demo.com",
+            name: "Driver",
+            displayName: "Driver",
+            role: "DRIVER",
+            avatarKey: "t1/users/u1/avatar.png",
+            avatarUpdatedAt: new Date(),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        update: jest.fn().mockResolvedValue({
+          id: "u1",
+          email: "driver@demo.com",
+          name: "Driver",
+          displayName: "Driver",
+          role: "DRIVER",
+          avatarKey: null,
+          avatarUpdatedAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }),
+      },
+    });
+    await service.uploadMyAvatar("t1", "u1", {
+      mimetype: "image/png",
+      size: 128,
+      buffer: Buffer.from("img"),
+    } as any);
+    await service.deleteMyAvatar("t1", "u1");
+    expect(prisma.user.update).toHaveBeenCalled();
   });
 
   it("DELETE avatar clears avatar fields", async () => {

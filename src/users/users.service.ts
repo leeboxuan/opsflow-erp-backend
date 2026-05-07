@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
+import { Role } from "@prisma/client";
 import {
   UpdateMyAvatarResponseDto,
   UpdateMyProfileDto,
@@ -77,6 +78,49 @@ export class UsersService {
     return user;
   }
 
+  async updateUserDisplayNameAndPropagate(params: {
+    tenantId: string;
+    userId: string;
+    newName: string;
+    actorUserId: string | null;
+  }): Promise<any> {
+    const normalizedName = String(params.newName ?? "").trim();
+    if (!normalizedName) {
+      throw new BadRequestException("displayName cannot be empty");
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.update({
+        where: { id: params.userId },
+        data: {
+          name: normalizedName,
+          displayName: normalizedName,
+        },
+      });
+
+      // Driver-centric display names
+      await tx.drivers.updateMany({
+        where: { tenantId: params.tenantId, userId: params.userId },
+        data: { name: normalizedName, updatedAt: new Date() },
+      });
+
+      // Snapshot name propagation for uploaded/signed documents
+      await tx.jobDocument.updateMany({
+        where: { tenantId: params.tenantId, uploadedByUserId: params.userId },
+        data: { uploadedByNameSnapshot: normalizedName },
+      });
+      await tx.tripDocument.updateMany({
+        where: { tenantId: params.tenantId, uploadedByUserId: params.userId },
+        data: { uploadedByNameSnapshot: normalizedName },
+      });
+      await tx.tripDocument.updateMany({
+        where: { tenantId: params.tenantId, signedByUserId: params.userId },
+        data: { signedByName: normalizedName },
+      });
+
+      return user;
+    });
+  }
+
   private async toMeDto(tenantId: string, user: any): Promise<UserMeDto> {
     const avatarUrl = await this.createAvatarSignedUrl(user.avatarKey);
     return {
@@ -102,18 +146,28 @@ export class UsersService {
   async updateMyProfile(
     tenantId: string,
     userId: string,
+    tenantRole: Role,
     dto: UpdateMyProfileDto,
   ): Promise<UserMeDto> {
-    await this.loadTenantScopedUserOrThrow(tenantId, userId);
-    const updated = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        ...(dto.name !== undefined ? { name: String(dto.name ?? "").trim() || null } : {}),
-        ...(dto.displayName !== undefined
-          ? { displayName: String(dto.displayName ?? "").trim() || null }
-          : {}),
-      },
-    });
+    const currentUser = await this.loadTenantScopedUserOrThrow(tenantId, userId);
+    const requestedName = dto.displayName ?? dto.name;
+    const hasNameUpdate = requestedName !== undefined;
+    if (tenantRole === Role.DRIVER && hasNameUpdate) {
+      throw new BadRequestException("Drivers cannot update name or email from profile.");
+    }
+    let updated = currentUser;
+    if (hasNameUpdate) {
+      const newName = String(requestedName ?? "").trim();
+      if (!newName) {
+        throw new BadRequestException("displayName cannot be empty");
+      }
+      updated = await this.updateUserDisplayNameAndPropagate({
+        tenantId,
+        userId,
+        newName,
+        actorUserId: userId,
+      });
+    }
     return this.toMeDto(tenantId, updated);
   }
 

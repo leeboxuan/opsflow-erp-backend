@@ -43,7 +43,12 @@ export class AdminDriversController {
     @Param("driverId") driverId: string,
     @Body() dto: AdminUpdateDriverDto,
   ): Promise<AdminDriverDto> {
-    return this.adminDriversService.updateDriver(req.tenant.tenantId, driverId, dto);
+    return this.adminDriversService.updateDriver(
+      req.tenant.tenantId,
+      driverId,
+      dto,
+      req.user?.userId ?? null,
+    );
   }
 
   @Patch(":driverId/suspend")

@@ -50,6 +50,7 @@ export class UsersController {
     return this.usersService.updateMyProfile(
       req.tenant.tenantId,
       req.user.userId,
+      req.tenant.role,
       dto,
     );
   }

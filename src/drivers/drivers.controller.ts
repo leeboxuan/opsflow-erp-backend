@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Patch,
@@ -83,6 +84,11 @@ export class DriversController {
     @Request() req: any,
     @Body() dto: UpdateDriverDto,
   ): Promise<DriverDto> {
+    if (dto.name !== undefined) {
+      throw new BadRequestException(
+        "Drivers cannot update name or email from profile.",
+      );
+    }
     const userId = req.user.userId;
     const tenantId = req.tenant.tenantId;
 

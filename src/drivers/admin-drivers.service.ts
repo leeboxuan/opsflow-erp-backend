@@ -6,6 +6,7 @@ import {
 import { MembershipStatus, Role, UserRole } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
+import { UsersService } from "../users/users.service";
 import {
   parsePaginationFromQuery,
   buildPaginationMeta,
@@ -25,6 +26,7 @@ export class AdminDriversService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
+    private readonly usersService: UsersService,
   ) {}
 
   async listDrivers(
@@ -286,6 +288,7 @@ export class AdminDriversService {
     tenantId: string,
     driverUserId: string,
     dto: AdminUpdateDriverDto,
+    actorUserId: string | null,
   ): Promise<AdminDriverDto> {
     const membership = await this.prisma.tenantMembership.findUnique({
       where: { tenantId_userId: { tenantId, userId: driverUserId } },
@@ -296,13 +299,20 @@ export class AdminDriversService {
       throw new NotFoundException("Driver not found");
     }
 
-    const user = await this.prisma.user.update({
-      where: { id: driverUserId },
-      data: {
-        ...(dto.name !== undefined && { name: dto.name }),
-        ...(dto.phone !== undefined && { phone: dto.phone }),
-      },
-    });
+    const user =
+      dto.name !== undefined
+        ? await this.usersService.updateUserDisplayNameAndPropagate({
+            tenantId,
+            userId: driverUserId,
+            newName: dto.name,
+            actorUserId,
+          })
+        : await this.prisma.user.update({
+            where: { id: driverUserId },
+            data: {
+              ...(dto.phone !== undefined && { phone: dto.phone }),
+            },
+          });
 
     const name = (dto.name ?? user.name ?? "").trim() || user.email;
     const phone =
