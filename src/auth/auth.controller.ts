@@ -19,6 +19,7 @@ import { LoginResponseDto } from './dto/login-response.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RefreshResponseDto } from './dto/refresh-response.dto';
 import { PrismaService } from '../prisma/prisma.service';
+import { getUserAvatarSignedUrl } from '../users/user-avatar';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -232,11 +233,22 @@ export class AuthController {
       },
     }));
 
+    const avatarUrl = await getUserAvatarSignedUrl({
+      supabaseService: this.supabaseService,
+      avatarKey: (user as any).avatarKey ?? null,
+    });
+
     return {
       id: user.id,
       email: user.email,
+      name: (user as any).name ?? null,
+      displayName: (user as any).displayName ?? (user as any).name ?? user.email,
       role: effectiveRole,                // global app role, never null
       authUserId: (user as any).authUserId, // Supabase auth user id
+      tenantId: req.tenant?.tenantId ?? undefined,
+      avatarUrl,
+      avatarKey: (user as any).avatarKey ?? null,
+      avatarUpdatedAt: (user as any).avatarUpdatedAt ?? null,
       tenantMemberships,
     };
   }

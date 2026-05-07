@@ -7,9 +7,9 @@ import {
   UpdateMyProfileDto,
   UserMeDto,
 } from "./dto/users.dto";
+import { getUserAvatarSignedUrl } from "./user-avatar";
 
 const USER_PROFILE_PICTURES_BUCKET = "user-profile-pictures";
-const USER_AVATAR_SIGNED_URL_TTL_SECONDS = 60 * 60;
 const MAX_AVATAR_FILE_SIZE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_AVATAR_MIME_TYPES = new Set([
   "image/jpeg",
@@ -50,17 +50,11 @@ export class UsersService {
   async getUserAvatarSignedUrl(
     avatarKey: string | null | undefined,
   ): Promise<string | null> {
-    const key = String(avatarKey ?? "").trim();
-    if (!key) return null;
-    const { data, error } = await this.supabaseService
-      .getClient()
-      .storage.from(USER_PROFILE_PICTURES_BUCKET)
-      .createSignedUrl(key, USER_AVATAR_SIGNED_URL_TTL_SECONDS);
-    if (error || !data?.signedUrl) {
-      if (error) this.mapStorageError(error);
-      return null;
-    }
-    return data.signedUrl;
+    return getUserAvatarSignedUrl({
+      supabaseService: this.supabaseService,
+      avatarKey,
+      onError: (error) => this.mapStorageError(error),
+    });
   }
 
   private async loadTenantScopedUserOrThrow(tenantId: string, userId: string) {
