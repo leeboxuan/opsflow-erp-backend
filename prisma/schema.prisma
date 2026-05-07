@@ -70,7 +70,11 @@ model User {
   authUserId String? @unique
   email      String  @unique
   name       String?
+  displayName String?
   phone      String?
+  avatarKey  String?
+  avatarUrl  String?
+  avatarUpdatedAt DateTime?
 
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt

@@ -26,6 +26,7 @@ Use `.env.local` for local development (the app loads `.env.local` then `.env`).
 
 Required Supabase Storage bucket:
 - `invoice-documents`
+- `user-profile-pictures`
 
 | Variable | Required | Where to get it |
 |----------|----------|-----------------|
