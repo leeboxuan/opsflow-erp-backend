@@ -336,7 +336,7 @@ export class OpsJobsController {
   }
 
   @Post(":jobId/cancel")
-  @ApiOperation({ summary: "Cancel job with reason" })
+  @ApiOperation({ summary: "Cancel empty job with reason (blocked when trips exist)" })
   async cancel(
     @Req() req: any,
     @Param("jobId") jobId: string,
@@ -352,7 +352,7 @@ export class OpsJobsController {
   }
 
   @Delete(":jobId")
-  @ApiOperation({ summary: "Delete job (only if ONGOING and not started/assigned)" })
+  @ApiOperation({ summary: "Delete empty job (blocked when trips exist)" })
   async delete(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {

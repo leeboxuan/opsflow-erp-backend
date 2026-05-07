@@ -2342,12 +2342,22 @@ export class OpsJobsService {
     const actorUserId: string | null = user?.userId ?? null;
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
+      select: {
+        id: true,
+        status: true,
+        _count: { select: { trips: true } },
+      },
     });
 
     if (!job) throw new NotFoundException("Job not found");
 
     if (job.status === JobStatus.COMPLETED) {
       throw new BadRequestException("Cannot cancel a COMPLETED job");
+    }
+    if ((job as any)._count?.trips > 0) {
+      throw new BadRequestException(
+        "This job has trips. Cancel trips individually from the Trips tab.",
+      );
     }
 
     const updated = await this.prisma.job.update({
@@ -2388,9 +2398,22 @@ export class OpsJobsService {
     const actorUserId: string | null = user?.userId ?? null;
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
+      select: {
+        id: true,
+        status: true,
+        startedAt: true,
+        assignedDriverId: true,
+        _count: { select: { trips: true } },
+      },
     });
 
     if (!job) throw new NotFoundException("Job not found");
+
+    if ((job as any)._count?.trips > 0) {
+      throw new BadRequestException(
+        "This job has trips. Delete or cancel the trips before deleting the job.",
+      );
+    }
 
     const canDelete =
       job.status === JobStatus.ONGOING &&
