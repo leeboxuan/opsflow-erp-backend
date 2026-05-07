@@ -47,7 +47,7 @@ export class UsersService {
     throw new BadRequestException(`Storage operation failed: ${message || "unknown error"}`);
   }
 
-  private async createAvatarSignedUrl(
+  async getUserAvatarSignedUrl(
     avatarKey: string | null | undefined,
   ): Promise<string | null> {
     const key = String(avatarKey ?? "").trim();
@@ -122,7 +122,7 @@ export class UsersService {
   }
 
   private async toMeDto(tenantId: string, user: any): Promise<UserMeDto> {
-    const avatarUrl = await this.createAvatarSignedUrl(user.avatarKey);
+    const avatarUrl = await this.getUserAvatarSignedUrl(user.avatarKey);
     return {
       id: user.id,
       email: user.email,
@@ -215,7 +215,7 @@ export class UsersService {
     });
     return {
       avatarKey: nextKey,
-      avatarUrl: await this.createAvatarSignedUrl(nextKey),
+      avatarUrl: await this.getUserAvatarSignedUrl(nextKey),
       avatarUpdatedAt: updatedAt,
     };
   }

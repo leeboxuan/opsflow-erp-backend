@@ -16,12 +16,19 @@ import { Roles } from '../auth/guards/role.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { Role } from '@prisma/client';
 import { UpdateDriverDto } from './dto/update-driver.dto';
+import { UsersService } from '../users/users.service';
 
 export interface DriverDto {
   id: string;
+  userId: string;
   email: string;
   name: string | null;
+  displayName?: string | null;
+  userName?: string | null;
+  userEmail?: string | null;
   role: Role;
+  avatarUrl?: string | null;
+  avatarUpdatedAt?: Date | null;
   defaultVehicleId?: string | null;
   defaultFleetVehicleId?: string | null;
   createdAt: Date;
@@ -33,7 +40,10 @@ export interface DriverDto {
 @UseGuards(AuthGuard, TenantGuard)
 @ApiBearerAuth('JWT-auth')
 export class DriversController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly usersService: UsersService,
+  ) {}
 
   @Get('me')
   @ApiOperation({ summary: 'Get current user driver profile' })
@@ -67,10 +77,25 @@ export class DriversController {
     });
 
     return {
+      userId: membership.user.id,
       id: membership.user.id,
       email: membership.user.email,
-      name: membership.user.name,
+      name:
+        (profile as any)?.name ??
+        (membership.user as any).displayName ??
+        membership.user.name ??
+        membership.user.email,
+      displayName:
+        (membership.user as any).displayName ??
+        membership.user.name ??
+        membership.user.email,
+      userName: membership.user.name ?? null,
+      userEmail: membership.user.email ?? null,
       role: membership.role,
+      avatarUrl: await this.usersService.getUserAvatarSignedUrl(
+        (membership.user as any).avatarKey ?? null,
+      ),
+      avatarUpdatedAt: (membership.user as any).avatarUpdatedAt ?? null,
       defaultVehicleId: profile?.assignedVehicleId ?? null,
       defaultFleetVehicleId: profile?.assignedFleetVehicleId ?? null,
       createdAt: membership.user.createdAt,

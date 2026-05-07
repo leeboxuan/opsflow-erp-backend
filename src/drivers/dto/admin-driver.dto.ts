@@ -3,6 +3,9 @@ import { MembershipStatus } from "@prisma/client";
 
 export class AdminDriverDto {
   @ApiProperty()
+  userId: string;
+
+  @ApiProperty()
   id: string;
 
   @ApiProperty()
@@ -10,6 +13,15 @@ export class AdminDriverDto {
 
   @ApiProperty({ nullable: true })
   name: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
+  displayName?: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
+  userName?: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
+  userEmail?: string | null;
 
   @ApiProperty({ nullable: true })
   phone: string | null;
@@ -28,6 +40,12 @@ export class AdminDriverDto {
 
   @ApiProperty()
   updatedAt: Date;
+
+  @ApiProperty({ nullable: true, required: false })
+  avatarUrl?: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
+  avatarUpdatedAt?: Date | null;
 
   @ApiProperty({ nullable: true, required: false })
   defaultVehicleId?: string | null;

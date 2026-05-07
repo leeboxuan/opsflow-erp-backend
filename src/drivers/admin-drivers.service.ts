@@ -101,6 +101,7 @@ export class AdminDriversService {
         where: { tenantId, userId: { in: userIds } },
         select: {
           userId: true,
+          name: true,
           assignedVehicleId: true,
           assignedFleetVehicleId: true,
         },
@@ -133,7 +134,12 @@ export class AdminDriversService {
 
     const profileByUserId = new Map<
       string | null,
-      { userId: string | null; assignedVehicleId: string | null; assignedFleetVehicleId: string | null }
+      {
+        userId: string | null;
+        name: string | null;
+        assignedVehicleId: string | null;
+        assignedFleetVehicleId: string | null;
+      }
     >(driverProfiles.map((p) => [p.userId, p]));
 
     const vehicleByDriverId = new Map<
@@ -151,21 +157,36 @@ export class AdminDriversService {
       if (v.driverId) fleetVehicleByDriverId.set(v.driverId, v);
     }
 
-    const data = memberships.map((m) => {
+    const data = await Promise.all(memberships.map(async (m) => {
       const v = vehicleByDriverId.get(m.userId) ?? null;
       const fv = fleetVehicleByDriverId.get(m.userId) ?? null;
       const profile = profileByUserId.get(m.userId);
+      const displayName =
+        profile?.name ??
+        (m.user as any).displayName ??
+        m.user.name ??
+        m.user.email ??
+        null;
+      const avatarUrl = await this.usersService.getUserAvatarSignedUrl(
+        (m.user as any).avatarKey ?? null,
+      );
 
       return {
+        userId: m.user.id,
         id: m.user.id,
         email: m.user.email,
-        name: m.user.name,
+        name: displayName,
+        displayName,
+        userName: m.user.name ?? null,
+        userEmail: m.user.email ?? null,
         phone: (m.user as any).phone ?? null,
         status: m.status,
         isSuspended: m.status === MembershipStatus.Suspended,
         membershipId: m.id,
         createdAt: m.user.createdAt,
         updatedAt: m.user.updatedAt,
+        avatarUrl,
+        avatarUpdatedAt: (m.user as any).avatarUpdatedAt ?? null,
 
         defaultVehicleId: profile?.assignedVehicleId ?? null,
         defaultFleetVehicleId: profile?.assignedFleetVehicleId ?? null,
@@ -176,7 +197,7 @@ export class AdminDriversService {
         assignedFleetVehiclePlateNo: fv?.plateNo ?? null,
         assignedFleetVehicleType: fv?.type ?? null,
       };
-    });
+    }));
 
     return {
       data,
@@ -272,15 +293,23 @@ export class AdminDriversService {
     });
 
     return {
+      userId: result.user.id,
       id: result.user.id,
       email: result.user.email,
       name: result.user.name,
+      displayName: (result.user as any).displayName ?? result.user.name ?? result.user.email,
+      userName: result.user.name ?? null,
+      userEmail: result.user.email ?? null,
       phone: (result.user as any).phone ?? null,
       status: result.membership.status,
       isSuspended: result.membership.status === MembershipStatus.Suspended,
       membershipId: result.membership.id,
       createdAt: result.user.createdAt,
       updatedAt: result.user.updatedAt,
+      avatarUrl: await this.usersService.getUserAvatarSignedUrl(
+        (result.user as any).avatarKey ?? null,
+      ),
+      avatarUpdatedAt: (result.user as any).avatarUpdatedAt ?? null,
     };
   }
 
@@ -389,15 +418,23 @@ export class AdminDriversService {
     });
 
     return {
+      userId: user.id,
       id: user.id,
       email: user.email,
-      name: user.name,
+      name: profile?.name ?? (user as any).displayName ?? user.name ?? user.email,
+      displayName: (user as any).displayName ?? user.name ?? user.email,
+      userName: user.name ?? null,
+      userEmail: user.email ?? null,
       phone: (user as any).phone ?? null,
       status: membership.status,
       isSuspended: membership.status === MembershipStatus.Suspended,
       membershipId: membership.id,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
+      avatarUrl: await this.usersService.getUserAvatarSignedUrl(
+        (user as any).avatarKey ?? null,
+      ),
+      avatarUpdatedAt: (user as any).avatarUpdatedAt ?? null,
       defaultVehicleId: profile?.assignedVehicleId ?? null,
       defaultFleetVehicleId: profile?.assignedFleetVehicleId ?? null,
     };
