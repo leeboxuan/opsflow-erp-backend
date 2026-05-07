@@ -15,5 +15,6 @@ import { AuditModule } from "../audit/audit.module";
   imports: [AuthModule, AuditModule],
   controllers: [FinanceController, InvoicesController, PortalInvoicesController],
   providers: [FinanceService, InvoicesService, PrismaService],
+  exports: [InvoicesService],
 })
 export class FinanceModule {}
