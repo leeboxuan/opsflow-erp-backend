@@ -43,6 +43,9 @@ describe("InvoicesService Wisdom Force flow", () => {
       customerQuotationRateLine: {
         findMany: jest.fn().mockResolvedValue([]),
       },
+      masterRateDatasetRow: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({
           id: "c1",
@@ -199,6 +202,53 @@ describe("InvoicesService Wisdom Force flow", () => {
     });
     expect(res.items.length).toBeGreaterThan(0);
     expect(prisma.driverPayoutItem).toBeUndefined();
+  });
+
+  it("falls back to tenant quotation dataset when company sources are empty", async () => {
+    const { svc } = makeService({
+      customer_companies: { findFirst: jest.fn().mockResolvedValue({ id: "c1" }) },
+      customerRateMasterLine: { findMany: jest.fn().mockResolvedValue([]) },
+      customerQuotationRateLine: { findMany: jest.fn().mockResolvedValue([]) },
+      masterRateDatasetRow: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "dq1",
+            code: "A_1",
+            label: "Round Trip Charges",
+            description: null,
+            unit: null,
+            rateCents: null,
+            requiresManualAmount: true,
+            rawRateText: "140\n170",
+            dataset: { id: "dataset-q-1" },
+          },
+        ]),
+      },
+    });
+    const res = await svc.listQuotationOptionsByCompany("t1", "c1", {
+      userId: "u1",
+      role: "OPS",
+    });
+    expect(res.items.length).toBe(1);
+    expect(res.items[0]).toMatchObject({
+      id: "dq1",
+      code: "A_1",
+      unitPriceCents: null,
+      requiresManualAmount: true,
+      sourceMasterFileId: "dataset-q-1",
+    });
+  });
+
+  it("enforces tenant-scoped company validation for quotation options", async () => {
+    const { svc } = makeService({
+      customer_companies: { findFirst: jest.fn().mockResolvedValue(null) },
+    });
+    await expect(
+      svc.listQuotationOptionsByCompany("t1", "c999", {
+        userId: "u1",
+        role: "OPS",
+      }),
+    ).rejects.toThrow("Customer company not found");
   });
 
   it("blocks prefill when job is not ready for invoice", async () => {

@@ -214,19 +214,60 @@ export class InvoicesService {
       orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
     });
 
-    return fallback.map((r: any) => ({
-      id: r.id,
-      code: r.code,
-      label: r.label,
-      description: r.description ?? null,
-      unit: r.unit ?? null,
-      rateCents: r.rateCents ?? null,
-      unitPriceCents: r.rateCents ?? null,
-      requiresManualAmount: Boolean(r.requiresManualAmount || r.rateCents == null),
-      taxRate: 0.09,
-      rawRateText: r.rawRateText ?? null,
-      sourceMasterFileId: r.quotation?.id ?? null,
-    }));
+    if (fallback.length > 0) {
+      return fallback.map((r: any) => ({
+        id: r.id,
+        code: r.code,
+        label: r.label,
+        description: r.description ?? null,
+        unit: r.unit ?? null,
+        rateCents: r.rateCents ?? null,
+        unitPriceCents: r.rateCents ?? null,
+        requiresManualAmount: Boolean(r.requiresManualAmount || r.rateCents == null),
+        taxRate: 0.09,
+        rawRateText: r.rawRateText ?? null,
+        sourceMasterFileId: r.quotation?.id ?? null,
+      }));
+    }
+
+    const tenantQuotationRows = await this.prisma.masterRateDatasetRow.findMany({
+      where: {
+        tenantId,
+        isActive: true,
+        dataset: {
+          tenantId,
+          type: "QUOTATION",
+          status: "ACTIVE",
+        },
+      },
+      include: {
+        dataset: { select: { id: true } },
+      },
+      orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
+    });
+
+    return tenantQuotationRows.map((r: any) => {
+      const rateCents = Number.isInteger(r.rateCents) ? r.rateCents : null;
+      return {
+        id: r.id,
+        code: String(r.code ?? "").trim(),
+        label:
+          firstText(
+            r.label,
+            r.description,
+            r.code,
+            "Quotation item",
+          ) ?? "Quotation item",
+        description: firstText(r.description, r.label) ?? null,
+        unit: firstText(r.unit, "trip"),
+        rateCents,
+        unitPriceCents: rateCents,
+        requiresManualAmount: Boolean(r.requiresManualAmount || rateCents == null),
+        taxRate: 0.09,
+        rawRateText: r.rawRateText ?? null,
+        sourceMasterFileId: r.dataset?.id ?? null,
+      };
+    });
   }
 
   async listQuotationOptionsByCompany(tenantId: string, companyId: string, user: any) {
