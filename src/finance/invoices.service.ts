@@ -23,6 +23,8 @@ import { PDFDocument, StandardFonts } from "pdf-lib";
 import { evaluateJobInvoiceReadiness } from "../ops/job-invoice-readiness";
 import { buildTripDisplayRef } from "../common/trip-display-ref";
 
+const INVOICE_DOCUMENTS_BUCKET = "invoice-documents";
+
 function toBasisPoints(rate: number) {
   return Math.round(rate);
 }
@@ -61,7 +63,6 @@ export class InvoicesService {
     private readonly audit: AuditService,
   ) {}
 
-  private readonly INVOICE_PDFS_BUCKET = "invoice-documents";
   private readonly PDF_SIGNED_URL_TTL_SECONDS = 60 * 10;
 
   private safeFileName(value: string) {
@@ -1731,6 +1732,179 @@ export class InvoicesService {
     return { invoiceId: inv.id, templateCode: (inv as any).templateCode ?? "DB_WISDOM", html, renderData };
   }
 
+  private buildInvoicePdfFileName(
+    sourceJobInternalRef: string | null | undefined,
+    fallbackInvoiceNo: string | null | undefined,
+    invoiceId: string,
+  ): string {
+    const safeRef = this.safeFileName(
+      sourceJobInternalRef || fallbackInvoiceNo || invoiceId,
+    );
+    return `${safeRef}-INVOICE.pdf`;
+  }
+
+  private buildInvoicePdfStorageKey(
+    tenantId: string,
+    invoiceId: string,
+    fileName: string,
+  ): string {
+    return `${tenantId}/invoices/${invoiceId}/${fileName}`;
+  }
+
+  private toInvoicePdfUploadError(error: { message?: string } | null | undefined) {
+    const message = String(error?.message ?? "");
+    if (
+      message.toLowerCase().includes("bucket") &&
+      message.toLowerCase().includes("not found")
+    ) {
+      return new BadRequestException(
+        "Storage bucket 'invoice-documents' does not exist. Create it in Supabase Storage.",
+      );
+    }
+    return new BadRequestException(`Failed to upload invoice PDF: ${message || "unknown error"}`);
+  }
+
+  private async persistInvoicePdfSnapshot(params: {
+    tenantId: string;
+    invoice: any;
+    customerCompanyId: string;
+    sourceJobId: string | null;
+    sourceJobInternalRef: string | null;
+    actorUserId: string | null;
+    pdfBuffer: Buffer;
+  }): Promise<{ updatedInvoice: any; document: any }> {
+    const {
+      tenantId,
+      invoice,
+      customerCompanyId,
+      sourceJobId,
+      sourceJobInternalRef,
+      actorUserId,
+      pdfBuffer,
+    } = params;
+    const fileName = this.buildInvoicePdfFileName(
+      sourceJobInternalRef,
+      invoice.invoiceNo,
+      invoice.id,
+    );
+    const storageKey = this.buildInvoicePdfStorageKey(tenantId, invoice.id, fileName);
+    const supabase = this.supabaseService.getClient();
+    const { error: uploadError } = await supabase.storage
+      .from(INVOICE_DOCUMENTS_BUCKET)
+      .upload(storageKey, pdfBuffer, {
+        contentType: "application/pdf",
+        upsert: true,
+      });
+    if (uploadError) {
+      throw this.toInvoicePdfUploadError(uploadError);
+    }
+
+    const generatedAt = new Date();
+    const obsoleteStorageKeys = new Set<string>();
+
+    try {
+      const { updatedInvoice, document } = await this.prisma.$transaction(async (tx) => {
+        const existingDocuments = await tx.customerCompanyDocument.findMany({
+          where: {
+            tenantId,
+            sourceInvoiceId: invoice.id,
+            type: { in: ["INVOICE", "COMPANY_INVOICE"] },
+          },
+          orderBy: [{ createdAt: "desc" }],
+          select: { id: true, storageKey: true, status: true },
+        });
+
+        existingDocuments.forEach((row: any) => {
+          if (row.storageKey && row.storageKey !== storageKey) {
+            obsoleteStorageKeys.add(row.storageKey);
+          }
+        });
+        if (invoice.pdfKey && invoice.pdfKey !== storageKey) {
+          obsoleteStorageKeys.add(invoice.pdfKey);
+        }
+
+        const primaryDocument = existingDocuments[0] ?? null;
+        const document = primaryDocument
+          ? await tx.customerCompanyDocument.update({
+              where: { id: primaryDocument.id },
+              data: {
+                customerCompanyId,
+                type: "INVOICE",
+                fileName,
+                fileUrl: storageKey,
+                storageKey,
+                mimeType: "application/pdf",
+                fileSizeBytes: pdfBuffer.length,
+                uploadedByUserId: actorUserId ?? null,
+                generatedByUserId: actorUserId ?? null,
+                generatedAt,
+                sourceJobId,
+                sourceInvoiceId: invoice.id,
+                status: "ACTIVE",
+                deletedAt: null,
+              },
+              include: { generatedBy: { select: { name: true, email: true } } },
+            })
+          : await tx.customerCompanyDocument.create({
+              data: {
+                tenantId,
+                customerCompanyId,
+                type: "INVOICE",
+                fileName,
+                fileUrl: storageKey,
+                storageKey,
+                mimeType: "application/pdf",
+                fileSizeBytes: pdfBuffer.length,
+                uploadedByUserId: actorUserId ?? null,
+                generatedByUserId: actorUserId ?? null,
+                generatedAt,
+                sourceJobId,
+                sourceInvoiceId: invoice.id,
+                status: "ACTIVE",
+              },
+              include: { generatedBy: { select: { name: true, email: true } } },
+            });
+
+        const supersededDocumentIds = existingDocuments
+          .map((row: any) => row.id)
+          .filter((id: string) => id !== document.id);
+        if (supersededDocumentIds.length > 0) {
+          await tx.customerCompanyDocument.updateMany({
+            where: { id: { in: supersededDocumentIds } },
+            data: {
+              status: "DELETED",
+              deletedAt: generatedAt,
+            },
+          });
+        }
+
+        const updatedInvoice = await tx.invoice.update({
+          where: { id: invoice.id },
+          data: {
+            pdfKey: storageKey,
+            pdfGeneratedAt: generatedAt,
+          },
+          include: {
+            lineItems: true,
+            orders: { select: { id: true, customerCompanyId: true } },
+          },
+        });
+
+        return { updatedInvoice, document };
+      });
+
+      const keysToDelete = Array.from(obsoleteStorageKeys);
+      if (keysToDelete.length > 0) {
+        await supabase.storage.from(INVOICE_DOCUMENTS_BUCKET).remove(keysToDelete);
+      }
+
+      return { updatedInvoice, document };
+    } catch (error) {
+      await supabase.storage.from(INVOICE_DOCUMENTS_BUCKET).remove([storageKey]);
+      throw error;
+    }
+  }
+
   async generateInvoicePdf(tenantId: string, invoiceId: string, user: any) {
     this.assertCustomerCanOnlyRead(user);
     const actorUserId: string | null = user?.userId ?? null;
@@ -1745,51 +1919,25 @@ export class InvoicesService {
     if (missing) throw new BadRequestException("Missing manual invoice amount");
 
     const renderData = await this.buildInvoiceRenderData(tenantId, inv);
+    if (!renderData.customerCompanyId) {
+      throw new BadRequestException(
+        "Invoice must have a customerCompanyId before generating a PDF",
+      );
+    }
     const pdfBuffer = await this.createInvoicePdfBuffer(renderData);
-    const safeRef = this.safeFileName(renderData.sourceJobInternalRef || inv.invoiceNo || inv.id);
-    const fileName = `${safeRef}-INVOICE.pdf`;
-    const storageKey = `${tenantId}/companies/${renderData.customerCompanyId || "unknown"}/documents/${Date.now()}-${fileName}`;
-    const supabase = this.supabaseService.getClient();
-    const { error } = await supabase.storage
-      .from("company-documents")
-      .upload(storageKey, pdfBuffer, { contentType: "application/pdf", upsert: false });
-    if (error) throw new BadRequestException(`Failed to upload invoice PDF: ${error.message}`);
-
-    const generatedAt = new Date();
-    const document = await this.prisma.customerCompanyDocument.create({
-      data: {
-        tenantId,
-        customerCompanyId: renderData.customerCompanyId,
-        type: "INVOICE",
-        fileName,
-        fileUrl: storageKey,
-        storageKey,
-        mimeType: "application/pdf",
-        fileSizeBytes: pdfBuffer.length,
-        uploadedByUserId: actorUserId ?? null,
-        generatedByUserId: actorUserId ?? null,
-        generatedAt,
-        sourceJobId: renderData.sourceJobId,
-        sourceInvoiceId: inv.id,
-        status: "ACTIVE",
-      },
-      include: { generatedBy: { select: { name: true, email: true } } },
-    });
-
-    await this.prisma.invoice.update({
-      where: { id: inv.id },
-      data: {
-        status: "Issued",
-        issuedAt: generatedAt,
-        issuedByUserId: actorUserId ?? null,
-        pdfKey: storageKey,
-        pdfGeneratedAt: generatedAt,
-      },
+    const { updatedInvoice, document } = await this.persistInvoicePdfSnapshot({
+      tenantId,
+      invoice: inv,
+      customerCompanyId: renderData.customerCompanyId,
+      sourceJobId: renderData.sourceJobId,
+      sourceJobInternalRef: renderData.sourceJobInternalRef,
+      actorUserId,
+      pdfBuffer,
     });
 
     return {
       invoiceId: inv.id,
-      status: "Issued",
+      status: updatedInvoice.status,
       document: {
         id: document.id,
         customerCompanyId: document.customerCompanyId,
@@ -1814,6 +1962,7 @@ export class InvoicesService {
     user: any,
   ) {
     this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
 
     if (file.mimetype !== "application/pdf") {
       throw new BadRequestException("Only PDF files are allowed");
@@ -1832,46 +1981,30 @@ export class InvoicesService {
 
     await this.assertCanAccessInvoice(tenantId, inv, user);
 
-    const safeInvoiceNo = this.safeFileName(
-      inv.invoiceNo || `invoice-${inv.id}`,
-    );
-    const fileName = `${safeInvoiceNo}.pdf`;
-    const storageKey = `${tenantId}/invoices/${invoiceId}/${Date.now()}-${fileName}`;
-
-    const supabase = this.supabaseService.getClient();
-
-    if (inv.pdfKey) {
-      await supabase.storage
-        .from(this.INVOICE_PDFS_BUCKET)
-        .remove([inv.pdfKey]);
-    }
-
-    const { error: uploadError } = await supabase.storage
-      .from(this.INVOICE_PDFS_BUCKET)
-      .upload(storageKey, file.buffer, {
-        contentType: "application/pdf",
-        upsert: false,
-      });
-
-    if (uploadError) {
+    if (!inv.customerCompanyId) {
       throw new BadRequestException(
-        `Failed to upload invoice PDF: ${uploadError.message}`,
+        "Invoice must have a customerCompanyId before uploading a PDF",
       );
     }
 
-    const updated = await this.prisma.invoice.update({
-      where: { id: inv.id },
-      data: {
-        pdfKey: storageKey,
-        pdfGeneratedAt: new Date(),
-      },
-      include: {
-        lineItems: true,
-        orders: { select: { id: true, customerCompanyId: true } },
-      },
+    const sourceJob = inv.sourceJobId
+      ? await this.prisma.job.findFirst({
+          where: { tenantId, id: inv.sourceJobId },
+          select: { internalRef: true },
+        })
+      : null;
+    const sourceJobInternalRef = sourceJob?.internalRef ?? null;
+    const { updatedInvoice } = await this.persistInvoicePdfSnapshot({
+      tenantId,
+      invoice: inv,
+      customerCompanyId: inv.customerCompanyId,
+      sourceJobId: inv.sourceJobId ?? null,
+      sourceJobInternalRef,
+      actorUserId,
+      pdfBuffer: file.buffer,
     });
 
-    return this.toDtoWithNames(updated);
+    return this.toDtoWithNames(updatedInvoice);
   }
 
   private buildPortalInvoiceWhere(params: {
@@ -1947,7 +2080,7 @@ export class InvoicesService {
     // If the object does not exist, Supabase returns an error.
     try {
       const { data, error } = await supabase.storage
-        .from(this.INVOICE_PDFS_BUCKET)
+        .from(INVOICE_DOCUMENTS_BUCKET)
         .createSignedUrl(key, 60);
 
       return !error && !!data?.signedUrl;
@@ -2068,7 +2201,7 @@ export class InvoicesService {
 
     const supabase = this.supabaseService.getClient();
     const { data, error } = await supabase.storage
-      .from(this.INVOICE_PDFS_BUCKET)
+      .from(INVOICE_DOCUMENTS_BUCKET)
       .download(inv.pdfKey);
 
     if (error || !data) {
@@ -2113,7 +2246,7 @@ export class InvoicesService {
 
     const { data, error } = await this.supabaseService
       .getClient()
-      .storage.from(this.INVOICE_PDFS_BUCKET)
+      .storage.from(INVOICE_DOCUMENTS_BUCKET)
       .createSignedUrl(inv.pdfKey, this.PDF_SIGNED_URL_TTL_SECONDS);
 
     if (error || !data?.signedUrl) {

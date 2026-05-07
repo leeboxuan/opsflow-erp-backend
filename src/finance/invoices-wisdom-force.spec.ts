@@ -4,7 +4,32 @@ import { InvoicesService } from "./invoices.service";
 
 describe("InvoicesService Wisdom Force flow", () => {
   function makeService(overrides?: Partial<any>) {
+    const uploadedFiles: Array<{ bucket: string; key: string }> = [];
+    const removedFiles: string[][] = [];
+    const upload = jest.fn().mockResolvedValue({ error: null });
+    const remove = jest.fn().mockImplementation((keys: string[]) => {
+      removedFiles.push(keys);
+      return Promise.resolve({ error: null });
+    });
+    const createSignedUrl = jest.fn().mockResolvedValue({
+      data: { signedUrl: "https://example.com/signed" },
+      error: null,
+    });
+    const download = jest
+      .fn()
+      .mockResolvedValue({ data: Buffer.from("pdf"), error: null });
+    const from = jest.fn().mockImplementation((bucket: string) => ({
+      upload: (key: string, ...args: any[]) => {
+        uploadedFiles.push({ bucket, key });
+        return upload(key, ...args);
+      },
+      remove,
+      createSignedUrl,
+      download,
+    }));
+
     const prisma: any = {
+      $transaction: jest.fn(async (callback: any) => callback(prisma)),
       job: {
         findFirst: jest.fn().mockResolvedValue({
           id: "job1",
@@ -26,7 +51,14 @@ describe("InvoicesService Wisdom Force flow", () => {
           .mockResolvedValueOnce(null) // generated
           .mockResolvedValueOnce(null), // draft
         findMany: jest.fn(),
-        update: jest.fn().mockResolvedValue({}),
+        update: jest.fn().mockResolvedValue({
+          id: "inv1",
+          status: "Draft",
+          pdfKey: "t1/invoices/inv1/WFL-LCL-2604-0077-INVOICE.pdf",
+          pdfGeneratedAt: new Date("2026-05-07T01:00:00.000Z"),
+          lineItems: [],
+          orders: [],
+        }),
       },
       customerRateMasterLine: {
         findMany: jest.fn().mockResolvedValue([
@@ -58,6 +90,22 @@ describe("InvoicesService Wisdom Force flow", () => {
         }),
       },
       customerCompanyDocument: {
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn().mockResolvedValue({
+          id: "doc1",
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          sourceInvoiceId: "inv1",
+          type: "INVOICE",
+          fileName: "WFL-LCL-2604-0077-INVOICE.pdf",
+          mimeType: "application/pdf",
+          storageKey: "t1/invoices/inv1/WFL-LCL-2604-0077-INVOICE.pdf",
+          generatedByUserId: "u1",
+          generatedAt: new Date("2026-05-07T01:00:00.000Z"),
+          createdAt: new Date("2026-05-07T01:00:00.000Z"),
+          generatedBy: { name: "Ops User", email: "ops@example.com" },
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         create: jest.fn().mockResolvedValue({
           id: "doc1",
           customerCompanyId: "c1",
@@ -66,27 +114,52 @@ describe("InvoicesService Wisdom Force flow", () => {
           type: "INVOICE",
           fileName: "WFL-LCL-2604-0077-INVOICE.pdf",
           mimeType: "application/pdf",
-          storageKey: "t1/companies/c1/documents/x.pdf",
+          storageKey: "t1/invoices/inv1/WFL-LCL-2604-0077-INVOICE.pdf",
           generatedByUserId: "u1",
           generatedAt: new Date("2026-05-07T01:00:00.000Z"),
           createdAt: new Date("2026-05-07T01:00:00.000Z"),
           generatedBy: { name: "Ops User", email: "ops@example.com" },
         }),
       },
-      ...overrides,
     };
+    if (overrides) {
+      for (const [key, value] of Object.entries(overrides)) {
+        if (
+          value &&
+          typeof value === "object" &&
+          !Array.isArray(value) &&
+          prisma[key] &&
+          typeof prisma[key] === "object" &&
+          !Array.isArray(prisma[key])
+        ) {
+          prisma[key] = { ...prisma[key], ...value };
+        } else {
+          prisma[key] = value;
+        }
+      }
+    }
     const supabaseService: any = {
       getClient: jest.fn().mockReturnValue({
         storage: {
-          from: jest.fn().mockReturnValue({
-            upload: jest.fn().mockResolvedValue({ error: null }),
-          }),
+          from,
         },
       }),
     };
     const audit: any = { log: jest.fn().mockResolvedValue(undefined) };
     const svc = new InvoicesService(prisma, supabaseService, audit);
-    return { svc, prisma };
+    return {
+      svc,
+      prisma,
+      supabase: {
+        from,
+        upload,
+        remove,
+        createSignedUrl,
+        download,
+        uploadedFiles,
+        removedFiles,
+      },
+    };
   }
 
   it("builds invoice prefill from billable trips (completed/done only)", async () => {
@@ -302,7 +375,107 @@ describe("InvoicesService Wisdom Force flow", () => {
     ).rejects.toThrow(BadRequestException);
   });
 
-  it("generates PDF and stores company document with job-ref filename", async () => {
+  it("generates PDF into invoice-documents and stores invoice metadata record", async () => {
+    const { svc, prisma, supabase } = makeService({
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "inv1",
+          tenantId: "t1",
+          invoiceNo: "INV-1",
+          customerName: "Customer",
+          currency: "SGD",
+          issueDate: new Date("2026-05-07T00:00:00.000Z"),
+          dueDate: null,
+          lineItems: [
+            {
+              description: "Item",
+              qty: 1,
+              unitPriceCents: 18000,
+              amountCents: 18000,
+              taxRate: 900,
+              requiresManualAmount: false,
+            },
+          ],
+          subtotalCents: 18000,
+          taxCents: 1620,
+          totalCents: 19620,
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          templateCode: "WISDOM_FORCE",
+          orders: [],
+        }),
+      },
+    });
+    const result = await svc.generateInvoicePdf("t1", "inv1", {
+      userId: "u1",
+      role: "OPS",
+    });
+    expect(result.document.fileName).toBe("WFL-LCL-2604-0077-INVOICE.pdf");
+    expect(result.document.storageKey).toBe(
+      "t1/invoices/inv1/WFL-LCL-2604-0077-INVOICE.pdf",
+    );
+    expect(supabase.uploadedFiles).toContainEqual({
+      bucket: "invoice-documents",
+      key: "t1/invoices/inv1/WFL-LCL-2604-0077-INVOICE.pdf",
+    });
+    expect(supabase.from).not.toHaveBeenCalledWith("company-documents");
+    expect(supabase.from).not.toHaveBeenCalledWith("job-documents");
+    expect(prisma.customerCompanyDocument.create).toHaveBeenCalled();
+    expect(prisma.invoice.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          pdfKey: "t1/invoices/inv1/WFL-LCL-2604-0077-INVOICE.pdf",
+          pdfGeneratedAt: expect.any(Date),
+        }),
+      }),
+    );
+  });
+
+  it("returns a clear bucket-missing error and does not update invoice metadata", async () => {
+    const { svc, prisma, supabase } = makeService({
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "inv1",
+          tenantId: "t1",
+          invoiceNo: "INV-1",
+          customerName: "Customer",
+          currency: "SGD",
+          issueDate: new Date("2026-05-07T00:00:00.000Z"),
+          dueDate: null,
+          lineItems: [
+            {
+              description: "Item",
+              qty: 1,
+              unitPriceCents: 18000,
+              amountCents: 18000,
+              taxRate: 900,
+              requiresManualAmount: false,
+            },
+          ],
+          subtotalCents: 18000,
+          taxCents: 1620,
+          totalCents: 19620,
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          templateCode: "WISDOM_FORCE",
+          orders: [],
+        }),
+      },
+    });
+    supabase.upload.mockResolvedValueOnce({
+      error: { message: "Bucket not found" },
+    });
+
+    await expect(
+      svc.generateInvoicePdf("t1", "inv1", { userId: "u1", role: "OPS" }),
+    ).rejects.toThrow(
+      "Storage bucket 'invoice-documents' does not exist. Create it in Supabase Storage.",
+    );
+    expect(prisma.customerCompanyDocument.create).not.toHaveBeenCalled();
+    expect(prisma.invoice.update).not.toHaveBeenCalled();
+  });
+
+  it("does not update invoice pdf fields when document metadata creation fails", async () => {
     const { svc, prisma } = makeService({
       invoice: {
         findFirst: jest.fn().mockResolvedValue({
@@ -331,15 +504,142 @@ describe("InvoicesService Wisdom Force flow", () => {
           templateCode: "WISDOM_FORCE",
           orders: [],
         }),
-        update: jest.fn().mockResolvedValue({}),
+      },
+      customerCompanyDocument: {
+        findMany: jest.fn().mockResolvedValue([]),
+        create: jest
+          .fn()
+          .mockRejectedValue(new Error("document insert failed")),
+        update: jest.fn(),
+        updateMany: jest.fn(),
       },
     });
-    const result = await svc.generateInvoicePdf("t1", "inv1", {
-      userId: "u1",
-      role: "OPS",
+
+    await expect(
+      svc.generateInvoicePdf("t1", "inv1", { userId: "u1", role: "OPS" }),
+    ).rejects.toThrow("document insert failed");
+    expect(prisma.invoice.update).not.toHaveBeenCalled();
+  });
+
+  it("uploadInvoicePdf uses invoice-documents with stable invoice path and filename", async () => {
+    const { svc, prisma, supabase } = makeService({
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "inv1",
+          tenantId: "t1",
+          invoiceNo: "INV-1",
+          customerName: "Customer",
+          currency: "SGD",
+          issueDate: new Date("2026-05-07T00:00:00.000Z"),
+          dueDate: null,
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          templateCode: "WISDOM_FORCE",
+          orders: [],
+        }),
+        update: jest.fn().mockResolvedValue({
+          id: "inv1",
+          invoiceNo: "INV-1",
+          customerName: "Customer",
+          currency: "SGD",
+          status: "Draft",
+          issueDate: new Date("2026-05-07T00:00:00.000Z"),
+          dueDate: null,
+          notes: null,
+          subtotalCents: 0,
+          taxCents: 0,
+          totalCents: 0,
+          lineItems: [],
+          orders: [],
+          snapshot: {},
+          pdfKey: "t1/invoices/inv1/WFL-LCL-2604-0077-INVOICE.pdf",
+          pdfGeneratedAt: new Date("2026-05-07T01:00:00.000Z"),
+        }),
+      },
     });
-    expect(result.document.fileName).toBe("WFL-LCL-2604-0077-INVOICE.pdf");
+
+    await svc.uploadInvoicePdf(
+      "t1",
+      "inv1",
+      {
+        mimetype: "application/pdf",
+        buffer: Buffer.from("pdf"),
+      } as any,
+      { userId: "u1", role: "OPS" },
+    );
+
+    expect(supabase.uploadedFiles).toContainEqual({
+      bucket: "invoice-documents",
+      key: "t1/invoices/inv1/WFL-LCL-2604-0077-INVOICE.pdf",
+    });
+    expect(supabase.from).not.toHaveBeenCalledWith("company-documents");
+    expect(supabase.from).not.toHaveBeenCalledWith("job-documents");
     expect(prisma.customerCompanyDocument.create).toHaveBeenCalled();
+    expect(prisma.invoice.update).toHaveBeenCalled();
+  });
+
+  it("regenerating a PDF updates existing invoice document instead of creating duplicates", async () => {
+    const { svc, prisma } = makeService({
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "inv1",
+          tenantId: "t1",
+          invoiceNo: "INV-1",
+          customerName: "Customer",
+          currency: "SGD",
+          issueDate: new Date("2026-05-07T00:00:00.000Z"),
+          dueDate: null,
+          lineItems: [
+            {
+              description: "Item",
+              qty: 1,
+              unitPriceCents: 18000,
+              amountCents: 18000,
+              taxRate: 900,
+              requiresManualAmount: false,
+            },
+          ],
+          subtotalCents: 18000,
+          taxCents: 1620,
+          totalCents: 19620,
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          templateCode: "WISDOM_FORCE",
+          orders: [],
+          pdfKey: "t1/invoices/inv1/old-INVOICE.pdf",
+        }),
+      },
+      customerCompanyDocument: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "doc-existing",
+            storageKey: "t1/invoices/inv1/old-INVOICE.pdf",
+            status: "ACTIVE",
+          },
+        ]),
+        update: jest.fn().mockResolvedValue({
+          id: "doc-existing",
+          customerCompanyId: "c1",
+          sourceJobId: "job1",
+          sourceInvoiceId: "inv1",
+          type: "INVOICE",
+          fileName: "WFL-LCL-2604-0077-INVOICE.pdf",
+          mimeType: "application/pdf",
+          storageKey: "t1/invoices/inv1/WFL-LCL-2604-0077-INVOICE.pdf",
+          generatedByUserId: "u1",
+          generatedAt: new Date("2026-05-07T01:00:00.000Z"),
+          createdAt: new Date("2026-05-07T01:00:00.000Z"),
+          generatedBy: { name: "Ops User", email: "ops@example.com" },
+        }),
+        create: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    });
+
+    await svc.generateInvoicePdf("t1", "inv1", { userId: "u1", role: "OPS" });
+
+    expect(prisma.customerCompanyDocument.update).toHaveBeenCalled();
+    expect(prisma.customerCompanyDocument.create).not.toHaveBeenCalled();
   });
 
   it("create draft accepts MANUAL line item sourceType", async () => {

@@ -24,6 +24,9 @@ API runs on `http://localhost:3001` (or `PORT`).
 
 Use `.env.local` for local development (the app loads `.env.local` then `.env`). On Render, set the same vars in the service **Environment** tab (see `render.yaml` for the list).
 
+Required Supabase Storage bucket:
+- `invoice-documents`
+
 | Variable | Required | Where to get it |
 |----------|----------|-----------------|
 | `DATABASE_URL` | Yes | Supabase pooled/session URL (port 5432), recommended params: `pgbouncer=true&connection_limit=5&pool_timeout=30` |
