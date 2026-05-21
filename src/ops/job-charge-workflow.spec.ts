@@ -1,4 +1,4 @@
-import { JobType, Role } from "@prisma/client";
+import { JobTripTemplate, JobType, Role } from "@prisma/client";
 import { OpsJobsService } from "./ops-jobs.service";
 import { InvoicesService } from "../finance/invoices.service";
 
@@ -168,6 +168,160 @@ describe("job charge workflow hardening", () => {
         ]),
       }),
     );
+  });
+
+  it("create LCL job seeds trip origin from pickupAddress1 and pickupPostal", async () => {
+    const tripUpdate = jest.fn().mockResolvedValue({});
+    const syncJob = {
+      id: "job1",
+      tenantId: "t1",
+      jobType: JobType.LCL,
+      pickupAddress1: "7 Gul Cir, 7 Gul Circle",
+      pickupAddress2: null,
+      pickupPostal: "629563",
+      deliveryAddress1: "8 Gul Cir, 8 Gul Circle",
+      deliveryAddress2: null,
+      deliveryPostal: "629564",
+      pickupPortCode: null,
+      returningDepotCode: null,
+      exportPortCode: null,
+      exportOriginDepotCode: null,
+      trips: [{ id: "trip1", jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY }],
+    };
+    const freshJob = {
+      ...syncJob,
+      customerCompanyId: "comp1",
+      internalRef: "WF-2026-05-0001-LCL",
+      externalRef: "TEST-REF",
+      status: "ONGOING",
+      notes: null,
+      createdByUserId: "u1",
+      pickupDate: new Date("2026-05-21"),
+      pickupContactName: null,
+      pickupContactPhone: null,
+      receiverName: "Derek",
+      receiverPhone: "91234565",
+      assignedDriverId: null,
+      assignedAt: null,
+      assignedVehicleId: null,
+      assignedFleetVehicleId: null,
+      startedAt: null,
+      completedAt: null,
+      deliveredAt: null,
+      invoiceReadyAt: null,
+      podRecipientName: null,
+      cancelledReason: null,
+      cancelledAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      customerCompany: { id: "comp1", name: "Customer A" },
+      assignedDriver: null,
+      createdBy: null,
+      items: [{ id: "i1", itemCode: "01", description: "Metal", qty: 5 }],
+      trips: [],
+      charges: [],
+      documents: [],
+    };
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
+      },
+      job_internal_ref_counters: {
+        upsert: jest.fn().mockResolvedValue({ nextSeq: 1 }),
+      },
+      job: {
+        create: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "comp1",
+          internalRef: "WF-2026-05-0001-LCL",
+          externalRef: "TEST-REF",
+          jobType: JobType.LCL,
+          status: "ONGOING",
+          vesselName: null,
+          customerCompany: { id: "comp1", name: "Customer A" },
+          assignedDriver: null,
+          items: [{ id: "i1", itemCode: "01", description: "Metal", qty: 5 }],
+        }),
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(syncJob)
+          .mockResolvedValueOnce(freshJob),
+      },
+      trip: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([{ id: "trip1" }]),
+        update: tripUpdate,
+      },
+      masterLogisticsLocation: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const svc = new OpsJobsService(prisma, audit, {} as any);
+    jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
+    jest
+      .spyOn(svc as any, "getNextInternalRef")
+      .mockResolvedValue("WF-2026-05-0001-LCL");
+    jest
+      .spyOn(svc as any, "attachTripAssignedDriverNamesForJobs")
+      .mockResolvedValue(undefined);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.LCL,
+        customerCompanyId: "comp1",
+        externalRef: "TEST-REF",
+        pickupDate: "2026-05-21",
+        pickupAddress1: "7 Gul Cir, 7 Gul Circle",
+        pickupPostal: "629563",
+        deliveryAddress1: "8 Gul Cir, 8 Gul Circle",
+        deliveryPostal: "629564",
+        deliveryPlaceId: "ChIJdest",
+        deliveryLat: 1.3136718,
+        deliveryLng: 103.6730866,
+        receiverName: "Derek",
+        receiverPhone: "91234565",
+        items: [{ itemCode: "01", description: "Metal", qty: 5 }],
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    expect(prisma.trip.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [
+          expect.objectContaining({
+            originLabel: "7 Gul Cir, 7 Gul Circle",
+            originAddressLine1: "7 Gul Cir, 7 Gul Circle",
+            originPostalCode: "629563",
+            originCountry: "SG",
+            originLat: null,
+            originLng: null,
+            originPlaceId: null,
+            destinationLabel: "8 Gul Cir, 8 Gul Circle",
+            destinationAddressLine1: "8 Gul Cir, 8 Gul Circle",
+            destinationPostalCode: "629564",
+            destinationCountry: "SG",
+            destinationPlaceId: "ChIJdest",
+            destinationLat: 1.3136718,
+            destinationLng: 103.6730866,
+          }),
+        ],
+      }),
+    );
+
+    expect(tripUpdate).toHaveBeenCalledWith({
+      where: { id: "trip1" },
+      data: expect.objectContaining({
+        originLabel: "7 Gul Cir, 7 Gul Circle",
+        originAddressLine1: "7 Gul Cir, 7 Gul Circle",
+        originPostalCode: "629563",
+        originCountry: "SG",
+        destinationLabel: "8 Gul Cir, 8 Gul Circle",
+        destinationAddressLine1: "8 Gul Cir, 8 Gul Circle",
+        destinationPostalCode: "629564",
+        destinationCountry: "SG",
+      }),
+    });
   });
 
   it("driver trip rate options for ops come from trucking dataset rows", async () => {

@@ -261,6 +261,48 @@ function tripCargoShippingSeedForJobType(
   };
 }
 
+export type JobAddressRouteInput = {
+  pickupAddress1: string;
+  pickupAddress2?: string | null;
+  pickupPostal?: string | null;
+  pickupPlaceId?: string | null;
+  pickupLat?: number | null;
+  pickupLng?: number | null;
+  deliveryAddress1: string;
+  deliveryAddress2?: string | null;
+  deliveryPostal?: string | null;
+  deliveryPlaceId?: string | null;
+  deliveryLat?: number | null;
+  deliveryLng?: number | null;
+};
+
+/** LCL PICKUP_TO_DELIVERY leg: job pickup/delivery addresses → trip origin/destination snapshots. */
+export function lclPickupToDeliveryRouteSnapshot(
+  input: JobAddressRouteInput,
+): Partial<Prisma.TripCreateManyInput> {
+  const pickupLabel = String(input.pickupAddress1 ?? "").trim() || null;
+  const deliveryLabel = String(input.deliveryAddress1 ?? "").trim() || null;
+
+  return {
+    originLabel: pickupLabel,
+    originAddressLine1: pickupLabel,
+    originAddressLine2: String(input.pickupAddress2 ?? "").trim() || null,
+    originPostalCode: String(input.pickupPostal ?? "").trim() || null,
+    originCountry: "SG",
+    originLat: input.pickupLat ?? null,
+    originLng: input.pickupLng ?? null,
+    originPlaceId: String(input.pickupPlaceId ?? "").trim() || null,
+    destinationLabel: deliveryLabel,
+    destinationAddressLine1: deliveryLabel,
+    destinationAddressLine2: String(input.deliveryAddress2 ?? "").trim() || null,
+    destinationPostalCode: String(input.deliveryPostal ?? "").trim() || null,
+    destinationCountry: "SG",
+    destinationLat: input.deliveryLat ?? null,
+    destinationLng: input.deliveryLng ?? null,
+    destinationPlaceId: String(input.deliveryPlaceId ?? "").trim() || null,
+  };
+}
+
 export function tripCreateManyForJob(
   tenantId: string,
   jobId: string,

@@ -250,6 +250,21 @@ export class CreateJobDto {
   @IsString()
   pickupContactPhone?: string;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pickupPlaceId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  pickupLat?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  pickupLng?: number;
+
   @ApiProperty()
   @IsString()
   @MinLength(1)

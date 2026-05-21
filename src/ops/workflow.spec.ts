@@ -1,6 +1,7 @@
 import { JobTripTemplate, JobType, TripDocumentType } from "@prisma/client";
 import {
   completionRuleForTemplate,
+  lclPickupToDeliveryRouteSnapshot,
   tripCreateManyForJob,
   TRIP_COMPLETION_RULES,
 } from "./job-workflow.helpers";
@@ -93,6 +94,67 @@ describe("workflow helpers", () => {
     });
     expect(rows[0].status).toBe("DRAFT");
     expect(rows[1].status).toBe("DRAFT");
+  });
+
+  it("lclPickupToDeliveryRouteSnapshot maps pickup and delivery text without geo", () => {
+    const snap = lclPickupToDeliveryRouteSnapshot({
+      pickupAddress1: "7 Gul Cir, 7 Gul Circle",
+      pickupPostal: "629563",
+      deliveryAddress1: "8 Gul Cir, 8 Gul Circle",
+      deliveryPostal: "629564",
+    });
+    expect(snap).toEqual({
+      originLabel: "7 Gul Cir, 7 Gul Circle",
+      originAddressLine1: "7 Gul Cir, 7 Gul Circle",
+      originAddressLine2: null,
+      originPostalCode: "629563",
+      originCountry: "SG",
+      originLat: null,
+      originLng: null,
+      originPlaceId: null,
+      destinationLabel: "8 Gul Cir, 8 Gul Circle",
+      destinationAddressLine1: "8 Gul Cir, 8 Gul Circle",
+      destinationAddressLine2: null,
+      destinationPostalCode: "629564",
+      destinationCountry: "SG",
+      destinationLat: null,
+      destinationLng: null,
+      destinationPlaceId: null,
+    });
+  });
+
+  it("tripCreateManyForJob LCL applies pickup/delivery route snapshot on generated leg", () => {
+    const route = lclPickupToDeliveryRouteSnapshot({
+      pickupAddress1: "7 Gul Cir, 7 Gul Circle",
+      pickupPostal: "629563",
+      deliveryAddress1: "8 Gul Cir, 8 Gul Circle",
+      deliveryPostal: "629564",
+      deliveryPlaceId: "ChIJdest",
+      deliveryLat: 1.31,
+      deliveryLng: 103.67,
+    });
+    const rows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.LCL,
+      new Date("2026-05-21"),
+      null,
+      null,
+      { [JobTripTemplate.PICKUP_TO_DELIVERY]: route },
+    );
+    expect(rows[0]).toMatchObject({
+      originLabel: "7 Gul Cir, 7 Gul Circle",
+      originAddressLine1: "7 Gul Cir, 7 Gul Circle",
+      originPostalCode: "629563",
+      originCountry: "SG",
+      destinationLabel: "8 Gul Cir, 8 Gul Circle",
+      destinationAddressLine1: "8 Gul Cir, 8 Gul Circle",
+      destinationPostalCode: "629564",
+      destinationCountry: "SG",
+      destinationPlaceId: "ChIJdest",
+      destinationLat: 1.31,
+      destinationLng: 103.67,
+    });
   });
 
   it("tripCreateManyForJob creates one LCL leg with expected completion rule", () => {

@@ -77,6 +77,7 @@ import {
 } from "./dto/job-trip.dto";
 import {
   tripCreateManyForJob,
+  lclPickupToDeliveryRouteSnapshot,
   completionRuleForTemplate,
 } from "./job-workflow.helpers";
 import type {
@@ -1294,7 +1295,14 @@ export class OpsJobsService {
   private async syncTripRouteSnapshotForJob(
     tenantId: string,
     jobId: string,
-    options?: { deliveryLat?: number | null; deliveryLng?: number | null; deliveryPlaceId?: string | null },
+    options?: {
+      pickupLat?: number | null;
+      pickupLng?: number | null;
+      pickupPlaceId?: string | null;
+      deliveryLat?: number | null;
+      deliveryLng?: number | null;
+      deliveryPlaceId?: string | null;
+    },
   ): Promise<void> {
     if (
       !(this.prisma as any).job?.findFirst ||
@@ -1338,7 +1346,20 @@ export class OpsJobsService {
       let origin: any = null;
       let destination: any = null;
       if (trip.jobTripTemplate === JobTripTemplate.PICKUP_TO_DELIVERY) {
-        origin = this.locationSnapshotFromMaster(pickupPort);
+        if (job.jobType === JobType.LCL) {
+          origin = this.buildAddressSnapshot(
+            job.pickupAddress1 ?? "Pickup location",
+            job,
+            "pickup",
+            {
+              lat: options?.pickupLat ?? null,
+              lng: options?.pickupLng ?? null,
+              placeId: options?.pickupPlaceId ?? null,
+            },
+          );
+        } else {
+          origin = this.locationSnapshotFromMaster(pickupPort);
+        }
         destination = this.buildAddressSnapshot(
           job.deliveryAddress1 ?? "Delivery location",
           job,
@@ -1849,6 +1870,26 @@ export class OpsJobsService {
       shipper: null,
       vessel: String((job as any)?.vesselName ?? "").trim() || null,
     };
+    const lclRouteSnapshots =
+      dto.jobType === JobType.LCL
+        ? {
+            [JobTripTemplate.PICKUP_TO_DELIVERY]: lclPickupToDeliveryRouteSnapshot({
+              pickupAddress1: dto.pickupAddress1,
+              pickupAddress2: dto.pickupAddress2 ?? null,
+              pickupPostal: dto.pickupPostal ?? null,
+              pickupPlaceId: dto.pickupPlaceId ?? null,
+              pickupLat: dto.pickupLat ?? null,
+              pickupLng: dto.pickupLng ?? null,
+              deliveryAddress1: dto.deliveryAddress1,
+              deliveryAddress2: dto.deliveryAddress2 ?? null,
+              deliveryPostal: dto.deliveryPostal ?? null,
+              deliveryPlaceId: dto.deliveryPlaceId ?? null,
+              deliveryLat: dto.deliveryLat ?? null,
+              deliveryLng: dto.deliveryLng ?? null,
+            }),
+          }
+        : undefined;
+
     await this.prisma.trip.createMany({
       data: tripCreateManyForJob(
         tenantId,
@@ -1857,7 +1898,7 @@ export class OpsJobsService {
         pickupDateParsed,
         seededContainerNumber,
         seededShippingRefs,
-        undefined,
+        lclRouteSnapshots,
         actorUserId,
       ),
     });
@@ -1868,6 +1909,9 @@ export class OpsJobsService {
     });
     if ((this.prisma as any).masterLogisticsLocation) {
       await this.syncTripRouteSnapshotForJob(tenantId, job.id, {
+        pickupLat: dto.pickupLat ?? null,
+        pickupLng: dto.pickupLng ?? null,
+        pickupPlaceId: dto.pickupPlaceId ?? null,
         deliveryLat: dto.deliveryLat ?? null,
         deliveryLng: dto.deliveryLng ?? null,
         deliveryPlaceId: dto.deliveryPlaceId ?? null,
