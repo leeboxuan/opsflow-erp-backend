@@ -70,8 +70,7 @@ describe("AuthController getMe", () => {
   it("returns name/displayName and tenantMemberships", async () => {
     const { controller } = makeController();
     const res = await controller.getMe({
-      user: { authUserId: "auth-u1", email: "admin@demo.com" },
-      tenant: { tenantId: "t1" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
     } as any);
 
     expect(res.name).toBe("Nat Admin");
@@ -89,8 +88,7 @@ describe("AuthController getMe", () => {
   it("returns avatarUrl when avatarKey exists", async () => {
     const { controller, createSignedUrl } = makeController();
     const res = await controller.getMe({
-      user: { authUserId: "auth-u1", email: "admin@demo.com" },
-      tenant: { tenantId: "t1" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
     } as any);
 
     expect(createSignedUrl).toHaveBeenCalledWith("t1/users/u1/avatar.jpg", 3600);
@@ -115,8 +113,7 @@ describe("AuthController getMe", () => {
       },
     });
     const res = await controller.getMe({
-      user: { authUserId: "auth-u1", email: "admin@demo.com" },
-      tenant: { tenantId: "t1" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
     } as any);
 
     expect(res.avatarUrl).toBeNull();
@@ -126,11 +123,19 @@ describe("AuthController getMe", () => {
   it("does not expose sensitive fields", async () => {
     const { controller } = makeController();
     const res = await controller.getMe({
-      user: { authUserId: "auth-u1", email: "admin@demo.com" },
-      tenant: { tenantId: "t1" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
     } as any);
 
     expect((res as any).passwordHash).toBeUndefined();
     expect((res as any).password).toBeUndefined();
+  });
+
+  it("does not require tenant context for auth bootstrap", async () => {
+    const { controller } = makeController();
+    const res = await controller.getMe({
+      user: { sub: "auth-u1", email: "admin@demo.com" },
+    } as any);
+    expect(res.tenantId).toBeUndefined();
+    expect(Array.isArray(res.tenantMemberships)).toBe(true);
   });
 });

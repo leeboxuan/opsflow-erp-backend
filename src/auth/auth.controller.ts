@@ -20,6 +20,7 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RefreshResponseDto } from './dto/refresh-response.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { getUserAvatarSignedUrl } from '../users/user-avatar';
+import { SkipTenantGuard } from './guards/skip-tenant-guard.decorator';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -79,22 +80,29 @@ export class AuthController {
       );
     }
 
-    // Get the user's first active tenant membership (if any)
-    const membership = await this.prisma.tenantMembership.findFirst({
+    // Get active memberships for bootstrap (frontend may choose current tenant)
+    const memberships = await this.prisma.tenantMembership.findMany({
       where: {
         userId: authUser.userId,
         status: 'Active',
       },
       include: {
-        tenant: true,
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
       },
+      orderBy: { createdAt: 'desc' },
     });
+    const activeMembership = memberships[0];
 
     const user = {
       id: authUser.userId,
       email: authUser.email,
-      role: membership?.role ?? null,
-      tenantId: membership?.tenantId ?? undefined,
+      role: activeMembership?.role ?? null,
+      tenantId: activeMembership?.tenantId ?? undefined,
     };
 
     return {
@@ -102,6 +110,16 @@ export class AuthController {
       refreshToken,
       expiresAt,
       user,
+      activeTenantId: activeMembership?.tenantId ?? null,
+      tenantMemberships: memberships.map((membership) => ({
+        tenantId: membership.tenantId,
+        role: membership.role,
+        status: membership.status,
+        tenant: {
+          id: membership.tenant.id,
+          name: membership.tenant.name,
+        },
+      })),
     };
   }
 
@@ -143,10 +161,11 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(AuthGuard, TenantGuard)
+  @SkipTenantGuard()
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Get current user and tenant information' })
   async getMe(@Request() req: any) {
-    const authUserId: string | undefined = req.user.authUserId;
+    const authUserId: string | undefined = req.user.sub ?? req.user.authUserId;
 
     if (!authUserId) {
       throw new UnauthorizedException('Missing auth user id');
@@ -205,24 +224,6 @@ export class AuthController {
         createdAt: 'desc',
       },
     });
-    // Auto-activate membership on successful login
-    if (req.tenant?.tenantId) {
-      const activeMembership = await this.prisma.tenantMembership.findFirst({
-        where: {
-          tenantId: req.tenant.tenantId,
-          userId: user.id,
-        },
-      });
-
-      if (activeMembership && activeMembership.status === 'Invited') {
-        await this.prisma.tenantMembership.update({
-          where: { id: activeMembership.id },
-          data: { status: { in: ['Active', 'Invited'] },
-        },
-        });
-      }
-    }
-
     const tenantMemberships = memberships.map((membership) => ({
       tenantId: membership.tenantId,
       role: membership.role,
@@ -245,7 +246,7 @@ export class AuthController {
       displayName: (user as any).displayName ?? (user as any).name ?? user.email,
       role: effectiveRole,                // global app role, never null
       authUserId: (user as any).authUserId, // Supabase auth user id
-      tenantId: req.tenant?.tenantId ?? undefined,
+      tenantId: undefined,
       avatarUrl,
       avatarKey: (user as any).avatarKey ?? null,
       avatarUpdatedAt: (user as any).avatarUpdatedAt ?? null,

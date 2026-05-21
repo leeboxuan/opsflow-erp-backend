@@ -9,6 +9,10 @@ describe("UsersService", () => {
       .mockResolvedValue({ data: { signedUrl: "https://signed/avatar" }, error: null });
     const upload = jest.fn().mockResolvedValue({ error: null });
     const remove = jest.fn().mockResolvedValue({ error: null });
+    const updateUserById = jest.fn().mockResolvedValue({
+      data: { user: { id: "auth-u1" } },
+      error: null,
+    });
     const from = jest.fn().mockReturnValue({
       createSignedUrl,
       upload,
@@ -23,6 +27,7 @@ describe("UsersService", () => {
           name: "Admin",
           displayName: "Admin",
           role: "ADMIN",
+          authUserId: "auth-u1",
           avatarKey: null,
           avatarUpdatedAt: null,
           createdAt: new Date("2026-05-08T00:00:00.000Z"),
@@ -34,6 +39,7 @@ describe("UsersService", () => {
           name: "Admin",
           displayName: "Admin Updated",
           role: "ADMIN",
+          authUserId: "auth-u1",
           avatarKey: null,
           avatarUpdatedAt: null,
           createdAt: new Date("2026-05-08T00:00:00.000Z"),
@@ -54,6 +60,11 @@ describe("UsersService", () => {
     const supabaseService: any = {
       getClient: jest.fn().mockReturnValue({
         storage: { from },
+        auth: {
+          admin: {
+            updateUserById,
+          },
+        },
       }),
     };
     return {
@@ -63,6 +74,7 @@ describe("UsersService", () => {
       createSignedUrl,
       upload,
       remove,
+      updateUserById,
     };
   }
 
@@ -149,7 +161,7 @@ describe("UsersService", () => {
   });
 
   it("name propagation updates denormalized metadata fields", async () => {
-    const { service, prisma } = makeService();
+    const { service, prisma, updateUserById } = makeService();
     await service.updateUserDisplayNameAndPropagate({
       tenantId: "t1",
       userId: "u1",
@@ -173,6 +185,35 @@ describe("UsersService", () => {
         where: { tenantId: "t1", userId: "u1" },
       }),
     );
+    expect(updateUserById).toHaveBeenCalledWith("auth-u1", {
+      user_metadata: {
+        name: "Renamed User",
+        displayName: "Renamed User",
+      },
+    });
+  });
+
+  it("supabase auth metadata sync failure does not fail db update", async () => {
+    const { service, prisma } = makeService({
+      $transaction: jest.fn(async (cb: any) => cb(prisma)),
+    });
+    const warn = jest.spyOn((service as any).logger, "warn").mockImplementation(() => undefined);
+    const client = (service as any).supabaseService.getClient();
+    client.auth.admin.updateUserById.mockResolvedValueOnce({
+      data: null,
+      error: { message: "supabase failed" },
+    });
+
+    await expect(
+      service.updateUserDisplayNameAndPropagate({
+        tenantId: "t1",
+        userId: "u1",
+        newName: "Renamed User",
+        actorUserId: "u1",
+      }),
+    ).resolves.toBeTruthy();
+    expect(prisma.user.update).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
   });
 
   it("failed propagation rolls back user name update transaction", async () => {
@@ -207,7 +248,7 @@ describe("UsersService", () => {
   });
 
   it("POST avatar uploads image and updates avatarKey", async () => {
-    const { service, prisma, upload } = makeService({
+    const { service, prisma, upload, updateUserById } = makeService({
       user: {
         findFirst: jest.fn().mockResolvedValue({
           id: "u1",
@@ -237,6 +278,7 @@ describe("UsersService", () => {
       }),
     );
     expect(res.avatarKey).toBe("t1/users/u1/avatar.jpg");
+    expect(updateUserById).not.toHaveBeenCalled();
   });
 
   it("DRIVER can upload and delete avatar", async () => {

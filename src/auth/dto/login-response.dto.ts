@@ -18,4 +18,18 @@ export class LoginResponseDto {
     role: Role | null;
     tenantId?: string;
   };
+
+  @ApiProperty({ nullable: true, required: false })
+  activeTenantId?: string | null;
+
+  @ApiProperty({ required: false, type: [Object] })
+  tenantMemberships?: Array<{
+    tenantId: string;
+    role: Role;
+    status: string;
+    tenant: {
+      id: string;
+      name: string;
+    };
+  }>;
 }

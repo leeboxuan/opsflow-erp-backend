@@ -2403,17 +2403,11 @@ export class OpsJobsService {
         status: true,
         startedAt: true,
         assignedDriverId: true,
-        _count: { select: { trips: true } },
+        trips: { select: { id: true, status: true } },
       },
     });
 
     if (!job) throw new NotFoundException("Job not found");
-
-    if ((job as any)._count?.trips > 0) {
-      throw new BadRequestException(
-        "This job has trips. Delete or cancel the trips before deleting the job.",
-      );
-    }
 
     const canDelete =
       job.status === JobStatus.ONGOING &&
@@ -2426,8 +2420,39 @@ export class OpsJobsService {
       );
     }
 
-    await this.prisma.job.delete({
-      where: { id: jobId },
+    const trips = job.trips ?? [];
+    const hasNonDraftTrip = trips.some((t) => t.status !== TripStatus.DRAFT);
+    if (hasNonDraftTrip) {
+      throw new BadRequestException(
+        "This job can only be deleted while all trips are still draft. Cancel the job instead.",
+      );
+    }
+
+    const tripIds = trips.map((t) => t.id);
+
+    await this.prisma.$transaction(async (tx) => {
+      if (tripIds.length > 0) {
+        await tx.driverWalletTransaction.deleteMany({
+          where: { tenantId, tripId: { in: tripIds } },
+        });
+        await tx.tripPayoutLine.deleteMany({
+          where: { tenantId, tripId: { in: tripIds } },
+        });
+        await tx.tripDocument.deleteMany({
+          where: { tenantId, tripId: { in: tripIds } },
+        });
+        await tx.tripDocumentRequirement.deleteMany({
+          where: { tenantId, tripId: { in: tripIds } },
+        });
+        await tx.trip.deleteMany({
+          where: { tenantId, jobId },
+        });
+      }
+
+      await tx.jobCharge.deleteMany({ where: { tenantId, jobId } });
+      await tx.jobDocument.deleteMany({ where: { tenantId, jobId } });
+      await tx.jobItem.deleteMany({ where: { tenantId, jobId } });
+      await tx.job.delete({ where: { id: jobId } });
     });
 
     await this.audit.log(tenantId, "DELETE", "JOB", jobId, {}, actorUserId);

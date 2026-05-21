@@ -5,14 +5,27 @@ import {
   BadRequestException,
   ForbiddenException,
 } from "@nestjs/common";
+import { Reflector } from "@nestjs/core";
 import { PrismaService } from "../../prisma/prisma.service";
 import { MembershipStatus, Role } from "@prisma/client";
+import { SKIP_TENANT_GUARD_KEY } from "./skip-tenant-guard.decorator";
 
 @Injectable()
 export class TenantGuard implements CanActivate {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly reflector: Reflector,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    const skipTenantGuard = this.reflector.getAllAndOverride<boolean>(
+      SKIP_TENANT_GUARD_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    if (skipTenantGuard) {
+      return true;
+    }
+
     const request = context.switchToHttp().getRequest();
     const tenantIdHeader = request.headers["x-tenant-id"];
     const user = request.user;

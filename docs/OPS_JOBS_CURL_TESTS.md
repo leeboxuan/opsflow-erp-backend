@@ -150,7 +150,7 @@ curl -s -X POST "$BASE/ops/jobs/$JOB_ID/cancel" \
 
 ---
 
-## 11. Ops: Delete job (only Draft or unassigned Assigned)
+## 11. Ops: Delete job (ONGOING, unassigned; all trips must be DRAFT)
 
 ```bash
 curl -s -X DELETE "$BASE/ops/jobs/$JOB_ID" \

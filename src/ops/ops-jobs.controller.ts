@@ -369,7 +369,10 @@ export class OpsJobsController {
   }
 
   @Delete(":jobId")
-  @ApiOperation({ summary: "Delete empty job (blocked when trips exist)" })
+  @ApiOperation({
+    summary:
+      "Hard-delete draft job (ONGOING, unassigned); trips must all be DRAFT",
+  })
   async delete(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {

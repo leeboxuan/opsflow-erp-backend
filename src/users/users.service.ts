@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
 import { Role } from "@prisma/client";
@@ -19,6 +19,8 @@ const ALLOWED_AVATAR_MIME_TYPES = new Set([
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
@@ -82,7 +84,7 @@ export class UsersService {
     if (!normalizedName) {
       throw new BadRequestException("displayName cannot be empty");
     }
-    return this.prisma.$transaction(async (tx) => {
+    const updatedUser = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.update({
         where: { id: params.userId },
         data: {
@@ -113,6 +115,35 @@ export class UsersService {
 
       return user;
     });
+
+    const authUserId = String((updatedUser as any)?.authUserId ?? "").trim();
+    if (authUserId) {
+      try {
+        const { error } = await this.supabaseService
+          .getClient()
+          .auth.admin.updateUserById(authUserId, {
+          user_metadata: {
+            name: normalizedName,
+            displayName: normalizedName,
+          },
+        });
+        if (error) {
+          this.logger.warn("Failed to sync Supabase auth user metadata after profile update", {
+            userId: params.userId,
+            authUserId,
+            error: error.message ?? "unknown error",
+          } as any);
+        }
+      } catch (error) {
+        this.logger.warn("Failed to sync Supabase auth user metadata after profile update", {
+          userId: params.userId,
+          authUserId,
+          error: (error as Error)?.message ?? String(error),
+        } as any);
+      }
+    }
+
+    return updatedUser;
   }
 
   private async toMeDto(tenantId: string, user: any): Promise<UserMeDto> {
