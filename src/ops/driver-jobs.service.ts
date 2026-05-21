@@ -20,6 +20,11 @@ import { buildDocumentFileDisplayFields } from "../common/document-file-display"
 import { buildTripDisplayRef } from "../common/trip-display-ref";
 import { JobLocationDto } from "./dto/location.dto";
 import { JobDto, JobDocumentDto } from "./dto/job.dto";
+import {
+  evaluateJobInvoiceReadiness,
+  syncJobInvoiceReadiness,
+  type JobInvoiceSyncPrisma,
+} from "./job-invoice-readiness";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
 const DEFAULT_TENANT_TIMEZONE = "Asia/Singapore";
@@ -144,6 +149,14 @@ function toJobDto(j: any): JobDto {
     ?? trips[0]
     ?? null;
 
+  const computedReadiness = trips.length > 0
+    ? evaluateJobInvoiceReadiness(
+      trips
+        .filter((trip: any) => trip?.id && trip?.status)
+        .map((trip: any) => ({ id: trip.id as string, status: trip.status as TripStatus })),
+    )
+    : null;
+
   return {
     id: j.id,
     tenantId: j.tenantId,
@@ -155,7 +168,11 @@ function toJobDto(j: any): JobDto {
     jobType: j.jobType,
     status: j.status,
     invoiceReadyAt: j.invoiceReadyAt ?? null,
-    isInvoiceReady: !!j.invoiceReadyAt,
+    isInvoiceReady: j.status === JobStatus.READY_FOR_INVOICE,
+    computedInvoiceReady:
+      computedReadiness?.readyForInvoice ??
+      (j.status === JobStatus.READY_FOR_INVOICE ? true : trips.length > 0 ? false : undefined),
+    computedInvoiceReadinessReason: computedReadiness?.reason ?? null,
     notes: j.notes ?? null,
 
     pickupDate: j.pickupDate ?? null,
@@ -1692,14 +1709,13 @@ export class DriverJobsService {
           status: TripStatus.ONGOING,
         },
       });
-
-      await tx.job.update({
-        where: { id: jobId },
-        data: {
-          status: JobStatus.ONGOING,
-        },
-      });
     });
+
+    await syncJobInvoiceReadiness(
+      this.prisma as unknown as JobInvoiceSyncPrisma,
+      tenantId,
+      jobId,
+    );
 
     await this.audit.log(
       tenantId,
@@ -1969,31 +1985,11 @@ export class DriverJobsService {
       );
     }
 
-    const openTrips = await this.prisma.trip.count({
-      where: {
-        tenantId,
-        jobId,
-        status: {
-          notIn: [
-            TripStatus.COMPLETED,
-            TripStatus.DONE,
-            TripStatus.CANCELLED,
-          ],
-        },
-      },
-    });
-
-    if (openTrips === 0) {
-      const newStatus: JobStatus = JobStatus.ONGOING;
-      const completedAt: Date | null = null;
-      await this.prisma.job.update({
-        where: { id: jobId },
-        data: {
-          status: newStatus,
-          completedAt,
-        },
-      });
-    }
+    await syncJobInvoiceReadiness(
+      this.prisma as unknown as JobInvoiceSyncPrisma,
+      tenantId,
+      jobId,
+    );
 
     const refreshedJob = await this.getOneForDriver(tenantId, jobId, driverUserId);
     const refreshedTrip = refreshedJob.trips.find((t) => t.id === tripId) ?? null;

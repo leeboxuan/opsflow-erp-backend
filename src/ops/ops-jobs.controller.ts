@@ -353,7 +353,9 @@ export class OpsJobsController {
   }
 
   @Post(":jobId/cancel")
-  @ApiOperation({ summary: "Cancel empty job with reason (blocked when trips exist)" })
+  @ApiOperation({
+    summary: "Cancel job with reason (blocked when job has any trips)",
+  })
   async cancel(
     @Req() req: any,
     @Param("jobId") jobId: string,
@@ -370,8 +372,7 @@ export class OpsJobsController {
 
   @Delete(":jobId")
   @ApiOperation({
-    summary:
-      "Hard-delete draft job (ONGOING, unassigned); trips must all be DRAFT",
+    summary: "Hard-delete job with no trips (ONGOING, unassigned)",
   })
   async delete(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;

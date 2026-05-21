@@ -49,7 +49,9 @@ import { buildTripDisplayRef } from "../common/trip-display-ref";
 import { suggestTripOrderByNearestNeighbour } from "../common/trip-order-suggest";
 import {
   evaluateJobInvoiceReadiness,
-  isInvoiceReadyTripStatus,
+  assertJobHasNoTripsForCancelOrDelete,
+  syncJobInvoiceReadiness,
+  type JobInvoiceSyncPrisma,
 } from "./job-invoice-readiness";
 
 import { CreateJobDto } from "./dto/create-job.dto";
@@ -219,8 +221,10 @@ function toJobDto(j: any): JobDto {
     jobType: j.jobType,
     status: j.status,
     invoiceReadyAt: j.invoiceReadyAt ?? null,
-    isInvoiceReady: !!j.invoiceReadyAt,
-    computedInvoiceReady: computedReadiness?.readyForInvoice ?? undefined,
+    isInvoiceReady: j.status === JobStatus.READY_FOR_INVOICE,
+    computedInvoiceReady:
+      computedReadiness?.readyForInvoice ??
+      (j.status === JobStatus.READY_FOR_INVOICE ? true : trips.length > 0 ? false : undefined),
     computedInvoiceReadinessReason: computedReadiness?.reason ?? null,
     notes: j.notes ?? null,
 
@@ -1918,6 +1922,8 @@ export class OpsJobsService {
       });
     }
 
+    await this.syncJobInvoiceReadinessForJob(tenantId, job.id);
+
     // Best-effort: auto-generate trip-level DELIVERY_DO for each created trip.
     // We do not fail whole job creation when document generation/storage fails.
     for (const trip of createdTrips) {
@@ -2398,11 +2404,10 @@ export class OpsJobsService {
     if (job.status === JobStatus.COMPLETED) {
       throw new BadRequestException("Cannot cancel a COMPLETED job");
     }
-    if ((job as any)._count?.trips > 0) {
-      throw new BadRequestException(
-        "This job has trips. Cancel trips individually from the Trips tab.",
-      );
-    }
+    const tripCount =
+      (job as any)._count?.trips ??
+      (await this.prisma.trip.count({ where: { tenantId, jobId } }));
+    assertJobHasNoTripsForCancelOrDelete(tripCount);
 
     const updated = await this.prisma.job.update({
       where: { id: jobId },
@@ -2447,11 +2452,13 @@ export class OpsJobsService {
         status: true,
         startedAt: true,
         assignedDriverId: true,
-        trips: { select: { id: true, status: true } },
+        _count: { select: { trips: true } },
       },
     });
 
     if (!job) throw new NotFoundException("Job not found");
+
+    assertJobHasNoTripsForCancelOrDelete((job as any)._count?.trips ?? 0);
 
     const canDelete =
       job.status === JobStatus.ONGOING &&
@@ -2464,35 +2471,7 @@ export class OpsJobsService {
       );
     }
 
-    const trips = job.trips ?? [];
-    const hasNonDraftTrip = trips.some((t) => t.status !== TripStatus.DRAFT);
-    if (hasNonDraftTrip) {
-      throw new BadRequestException(
-        "This job can only be deleted while all trips are still draft. Cancel the job instead.",
-      );
-    }
-
-    const tripIds = trips.map((t) => t.id);
-
     await this.prisma.$transaction(async (tx) => {
-      if (tripIds.length > 0) {
-        await tx.driverWalletTransaction.deleteMany({
-          where: { tenantId, tripId: { in: tripIds } },
-        });
-        await tx.tripPayoutLine.deleteMany({
-          where: { tenantId, tripId: { in: tripIds } },
-        });
-        await tx.tripDocument.deleteMany({
-          where: { tenantId, tripId: { in: tripIds } },
-        });
-        await tx.tripDocumentRequirement.deleteMany({
-          where: { tenantId, tripId: { in: tripIds } },
-        });
-        await tx.trip.deleteMany({
-          where: { tenantId, jobId },
-        });
-      }
-
       await tx.jobCharge.deleteMany({ where: { tenantId, jobId } });
       await tx.jobDocument.deleteMany({ where: { tenantId, jobId } });
       await tx.jobItem.deleteMany({ where: { tenantId, jobId } });
@@ -3246,7 +3225,7 @@ export class OpsJobsService {
       actorUserId,
     );
 
-    await this.recalculateJobStatusFromTrips(tenantId, jobId);
+    await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
 
     return this.getOne(tenantId, jobId, user);
   }
@@ -3311,7 +3290,7 @@ export class OpsJobsService {
         { jobId, oldStatus: trip.status, deletedByUserId: actorUserId },
         actorUserId,
       );
-      await this.recalculateJobStatusFromTrips(tenantId, jobId);
+      await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
       return { success: true, mode: "deleted", tripId };
     }
 
@@ -3331,7 +3310,7 @@ export class OpsJobsService {
         { jobId, oldStatus: trip.status, cancelledByUserId: actorUserId, reason: "Deleted by ops" },
         actorUserId,
       );
-      await this.recalculateJobStatusFromTrips(tenantId, jobId);
+      await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
     }
 
     return { success: true, mode: "cancelled", tripId, status: TripStatus.CANCELLED };
@@ -3739,6 +3718,8 @@ export class OpsJobsService {
       },
       actorUserId,
     );
+
+    await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
 
     return {
       ok: true,
@@ -4150,6 +4131,7 @@ export class OpsJobsService {
       actorUserId,
     );
 
+    await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
     return this.getOne(tenantId, jobId, user);
   }
 
@@ -4224,6 +4206,8 @@ export class OpsJobsService {
       actorUserId,
     );
 
+    await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
+
     return {
       ok: true,
       tripId,
@@ -4232,37 +4216,15 @@ export class OpsJobsService {
     };
   }
 
-  private async recalculateJobStatusFromTrips(tenantId: string, jobId: string): Promise<void> {
-    const job = await this.prisma.job.findFirst({
-      where: { id: jobId, tenantId },
-      select: { id: true, status: true, invoiceReadyAt: true },
-    });
-    if (!job || job.status === JobStatus.CANCELLED || job.status === JobStatus.COMPLETED) {
-      return;
-    }
-
-    const trips = await this.prisma.trip.findMany({
-      where: { tenantId, jobId },
-      select: { id: true, status: true },
-    });
-    if (!trips.length) return;
-
-    const readiness = evaluateJobInvoiceReadiness(
-      trips.map((trip) => ({ id: trip.id, status: trip.status })),
+  private async syncJobInvoiceReadinessForJob(
+    tenantId: string,
+    jobId: string,
+  ): Promise<void> {
+    await syncJobInvoiceReadiness(
+      this.prisma as unknown as JobInvoiceSyncPrisma,
+      tenantId,
+      jobId,
     );
-    const nextStatus = readiness.readyForInvoice
-      ? JobStatus.READY_FOR_INVOICE
-      : JobStatus.ONGOING;
-    const shouldClearInvoiceReadyAt = !readiness.readyForInvoice && !!job.invoiceReadyAt;
-    if (job.status !== nextStatus || shouldClearInvoiceReadyAt) {
-      await this.prisma.job.update({
-        where: { id: jobId },
-        data: {
-          status: nextStatus,
-          ...(shouldClearInvoiceReadyAt ? { invoiceReadyAt: null } : {}),
-        },
-      });
-    }
   }
 
   async markTripDone(
@@ -4286,7 +4248,7 @@ export class OpsJobsService {
       where: { id: tripId },
       data: { status: TripStatus.DONE, pendingState: TripPendingState.NONE },
     });
-    await this.recalculateJobStatusFromTrips(tenantId, jobId);
+    await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
     await this.audit.log(
       tenantId,
       "TRIP_MARK_DONE",
@@ -4342,7 +4304,15 @@ export class OpsJobsService {
     tenantId: string,
     jobId: string,
     user: any,
-  ): Promise<JobDto> {
+  ): Promise<{
+    job: JobDto;
+    readyForInvoice: boolean;
+    alreadyReady: boolean;
+    message: string;
+    invoiceReadyAt: Date | null;
+    existingInvoiceId: string | null;
+    redirectTo: string;
+  }> {
     this.assertCustomerCanOnlyRead(user);
     const actorUserId: string | null = user?.userId ?? null;
     const job = await this.prisma.job.findFirst({
@@ -4356,83 +4326,58 @@ export class OpsJobsService {
     if (job.status === JobStatus.COMPLETED) {
       throw new BadRequestException("COMPLETED jobs cannot be sent to invoice");
     }
-    if (job.status === JobStatus.READY_FOR_INVOICE && job.invoiceReadyAt) {
-      const existingInvoice = await this.prisma.invoice.findFirst({
-        where: { tenantId, sourceJobId: jobId },
-        orderBy: { createdAt: "desc" },
-        select: { id: true },
-      });
-      return {
-        jobId,
-        invoiceReady: true,
-        invoiceReadyAt: job.invoiceReadyAt,
-        existingInvoiceId: existingInvoice?.id ?? null,
-        redirectTo: `/invoices/create?jobId=${jobId}`,
-      } as any;
-    }
 
-    const trips = await this.prisma.trip.findMany({
-      where: { tenantId, jobId },
-      select: { id: true, status: true },
-      orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
-    });
-    if (trips.length === 0) {
+    const tripCount = await this.prisma.trip.count({ where: { tenantId, jobId } });
+    if (tripCount === 0) {
       throw new BadRequestException(
         "Job must have at least one trip before sending to invoice",
       );
     }
 
-    const readiness = evaluateJobInvoiceReadiness(
-      trips.map((trip) => ({ id: trip.id, status: trip.status })),
-    );
-    if (!readiness.readyForInvoice) {
-      throw new BadRequestException(readiness.reason);
-    }
+    const wasAlreadyReady =
+      job.status === JobStatus.READY_FOR_INVOICE && !!job.invoiceReadyAt;
 
-    // Ensure lifecycle status is derived by centralized recalculation.
-    await this.recalculateJobStatusFromTrips(tenantId, jobId);
-    const refreshedJob = await this.prisma.job.findFirst({
-      where: { id: jobId, tenantId },
-      select: { id: true, status: true, invoiceReadyAt: true },
-    });
-    if (!refreshedJob) throw new NotFoundException("Job not found");
-    if (refreshedJob.status !== JobStatus.READY_FOR_INVOICE) {
+    const syncResult = await syncJobInvoiceReadiness(
+      this.prisma as unknown as JobInvoiceSyncPrisma,
+      tenantId,
+      jobId,
+    );
+    if (!syncResult?.readyForInvoice) {
       throw new BadRequestException(
-        "Job is not READY_FOR_INVOICE yet. Please recheck trip completion.",
+        syncResult?.reason ?? "Job is not ready for invoice.",
       );
     }
 
-    if (refreshedJob.invoiceReadyAt) {
-      const existingInvoice = await this.prisma.invoice.findFirst({
-        where: { tenantId, sourceJobId: jobId },
-        orderBy: { createdAt: "desc" },
-        select: { id: true },
-      });
-      return {
+    if (!wasAlreadyReady) {
+      await this.audit.log(
+        tenantId,
+        "JOB_SEND_TO_INVOICE",
+        "JOB",
         jobId,
-        invoiceReady: true,
-        invoiceReadyAt: refreshedJob.invoiceReadyAt,
-        existingInvoiceId: existingInvoice?.id ?? null,
-        redirectTo: `/invoices/create?jobId=${jobId}`,
-      } as any;
+        {
+          tripCount,
+          sentAt: (syncResult.invoiceReadyAt ?? new Date()).toISOString(),
+        },
+        actorUserId,
+      );
     }
 
-    const now = new Date();
-    await this.prisma.job.update({
-      where: { id: jobId },
-      data: { invoiceReadyAt: now },
+    const existingInvoice = await this.prisma.invoice.findFirst({
+      where: { tenantId, sourceJobId: jobId },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
     });
+    const jobDto = await this.getOne(tenantId, jobId, user);
 
-    await this.audit.log(
-      tenantId,
-      "JOB_SEND_TO_INVOICE",
-      "JOB",
-      jobId,
-      { tripCount: trips.length, sentAt: now.toISOString() },
-      actorUserId,
-    );
-
-    return this.getOne(tenantId, jobId, user);
+    return {
+      job: jobDto,
+      readyForInvoice: true,
+      alreadyReady: wasAlreadyReady,
+      message: "Job is ready for invoice",
+      invoiceReadyAt: syncResult.invoiceReadyAt,
+      existingInvoiceId: existingInvoice?.id ?? null,
+      redirectTo: `/invoices/create?jobId=${jobId}`,
+    };
   }
 
   async getTracking(

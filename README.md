@@ -67,6 +67,24 @@ Set all env vars in Render dashboard (Environment) so they match your `.env.loca
    - Swagger: `https://opsflow-erp-api.onrender.com/api/docs`.  
    - If auth fails, verify Supabase project URL and keys on Render match the project that owns the DB.
 
+## Backfill job invoice readiness (one-time)
+
+After deploying trip-driven `syncJobInvoiceReadiness`, align existing jobs whose trips are already complete:
+
+```bash
+# Staging/local: preview only
+pnpm jobs:backfill-invoice-readiness -- --dry-run --verbose
+
+# Single tenant
+pnpm jobs:backfill-invoice-readiness -- --dry-run --tenant-id=<tenantId>
+
+# Apply (staging first, then production)
+pnpm jobs:backfill-invoice-readiness -- --tenant-id=<tenantId>
+pnpm jobs:backfill-invoice-readiness
+```
+
+Skips `CANCELLED` and `COMPLETED` jobs. Logs totals: checked, promoted to `READY_FOR_INVOICE`, demoted to `ONGOING`, errors.
+
 ## Prisma and schema
 
 - **Client generation:** `pnpm prisma:generate` (runs in build; uses `DATABASE_URL`).

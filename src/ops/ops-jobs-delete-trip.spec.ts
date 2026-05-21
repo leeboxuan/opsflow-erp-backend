@@ -153,7 +153,10 @@ describe("OpsJobsService.deleteTrip", () => {
 
     expect(prisma.job.update).toHaveBeenCalledWith({
       where: { id: "job1" },
-      data: { status: "READY_FOR_INVOICE" },
+      data: {
+        status: "READY_FOR_INVOICE",
+        invoiceReadyAt: expect.any(Date),
+      },
     });
   });
 });

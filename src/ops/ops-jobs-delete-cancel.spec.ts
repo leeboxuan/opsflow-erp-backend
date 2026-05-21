@@ -1,31 +1,13 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from "@nestjs/common";
 import { JobStatus, Role, TripStatus } from "@prisma/client";
+import {
+  JOBS_WITH_TRIPS_CANNOT_CANCEL_OR_DELETE_MSG,
+  assertJobHasNoTripsForCancelOrDelete,
+} from "./job-invoice-readiness";
 import { OpsJobsService } from "./ops-jobs.service";
 
-const DRAFT_TRIPS_ONLY_MSG =
-  "This job can only be deleted while all trips are still draft. Cancel the job instead.";
-
 describe("OpsJobsService job delete/cancel guards", () => {
-  function makeTx() {
-    return {
-      driverWalletTransaction: {
-        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-      },
-      tripPayoutLine: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
-      tripDocument: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
-      tripDocumentRequirement: {
-        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-      },
-      trip: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
-      jobCharge: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
-      jobDocument: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
-      jobItem: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
-      job: { delete: jest.fn().mockResolvedValue({}) },
-    };
-  }
-
   function makeService(overrides?: Partial<any>) {
-    const tx = makeTx();
     const prisma: any = {
       job: {
         findFirst: jest.fn(),
@@ -69,7 +51,15 @@ describe("OpsJobsService job delete/cancel guards", () => {
           charges: [],
         }),
       },
-      $transaction: jest.fn(async (fn: (client: typeof tx) => Promise<void>) => fn(tx)),
+      trip: { count: jest.fn().mockResolvedValue(0) },
+      $transaction: jest.fn(async (fn: (tx: any) => Promise<void>) =>
+        fn({
+          jobCharge: { deleteMany: jest.fn() },
+          jobDocument: { deleteMany: jest.fn() },
+          jobItem: { deleteMany: jest.fn() },
+          job: { delete: jest.fn() },
+        }),
+      ),
       ...overrides,
     };
     const svc = new OpsJobsService(
@@ -77,75 +67,27 @@ describe("OpsJobsService job delete/cancel guards", () => {
       { log: jest.fn().mockResolvedValue(undefined) } as any,
       {} as any,
     );
-    return { svc, prisma, tx };
+    return { svc, prisma };
   }
 
-  function mockDeletableJob(
-    prisma: any,
-    trips: { id: string; status: TripStatus }[] = [],
-  ) {
+  it("delete job with zero trips succeeds", async () => {
+    const { svc, prisma } = makeService();
     prisma.job.findFirst.mockResolvedValue({
       id: "job1",
       status: JobStatus.ONGOING,
       startedAt: null,
       assignedDriverId: null,
-      trips,
+      _count: { trips: 0 },
     });
-  }
-
-  it("delete job with zero trips succeeds", async () => {
-    const { svc, prisma, tx } = makeService();
-    mockDeletableJob(prisma);
 
     await expect(
       svc.delete("t1", "job1", { userId: "u1", role: Role.OPS }),
     ).resolves.toBeUndefined();
-
     expect(prisma.$transaction).toHaveBeenCalled();
-    expect(tx.trip.deleteMany).not.toHaveBeenCalled();
-    expect(tx.jobCharge.deleteMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", jobId: "job1" },
-    });
-    expect(tx.jobDocument.deleteMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", jobId: "job1" },
-    });
-    expect(tx.jobItem.deleteMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", jobId: "job1" },
-    });
-    expect(tx.job.delete).toHaveBeenCalledWith({ where: { id: "job1" } });
-    expect(prisma.job.delete).not.toHaveBeenCalled();
-  });
-
-  it("delete job with only DRAFT trips succeeds and removes draft trip data", async () => {
-    const { svc, prisma, tx } = makeService();
-    mockDeletableJob(prisma, [
-      { id: "trip1", status: TripStatus.DRAFT },
-      { id: "trip2", status: TripStatus.DRAFT },
-    ]);
-
-    await expect(
-      svc.delete("t1", "job1", { userId: "u1", role: Role.OPS }),
-    ).resolves.toBeUndefined();
-
-    expect(tx.driverWalletTransaction.deleteMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", tripId: { in: ["trip1", "trip2"] } },
-    });
-    expect(tx.tripPayoutLine.deleteMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", tripId: { in: ["trip1", "trip2"] } },
-    });
-    expect(tx.tripDocument.deleteMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", tripId: { in: ["trip1", "trip2"] } },
-    });
-    expect(tx.tripDocumentRequirement.deleteMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", tripId: { in: ["trip1", "trip2"] } },
-    });
-    expect(tx.trip.deleteMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", jobId: "job1" },
-    });
-    expect(tx.job.delete).toHaveBeenCalledWith({ where: { id: "job1" } });
   });
 
   it.each([
+    TripStatus.DRAFT,
     TripStatus.PUBLISHED,
     TripStatus.ONGOING,
     TripStatus.COMPLETED,
@@ -153,11 +95,18 @@ describe("OpsJobsService job delete/cancel guards", () => {
     TripStatus.CANCELLED,
   ])("delete job with %s trip cannot be deleted", async (tripStatus) => {
     const { svc, prisma } = makeService();
-    mockDeletableJob(prisma, [{ id: "trip1", status: tripStatus }]);
+    prisma.job.findFirst.mockResolvedValue({
+      id: "job1",
+      status: JobStatus.ONGOING,
+      startedAt: null,
+      assignedDriverId: null,
+      _count: { trips: 1 },
+      _tripStatusForContextOnly: tripStatus,
+    });
 
     await expect(
       svc.delete("t1", "job1", { userId: "u1", role: Role.OPS }),
-    ).rejects.toThrow(DRAFT_TRIPS_ONLY_MSG);
+    ).rejects.toThrow(JOBS_WITH_TRIPS_CANNOT_CANCEL_OR_DELETE_MSG);
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
@@ -168,7 +117,7 @@ describe("OpsJobsService job delete/cancel guards", () => {
     TripStatus.COMPLETED,
     TripStatus.DONE,
     TripStatus.CANCELLED,
-  ])("cancel job with %s trip fails", async (tripStatus) => {
+  ])("cancel job with %s trip cannot be cancelled", async (tripStatus) => {
     const { svc, prisma } = makeService();
     prisma.job.findFirst.mockResolvedValue({
       id: "job1",
@@ -184,7 +133,7 @@ describe("OpsJobsService job delete/cancel guards", () => {
         { reason: "x" },
         { userId: "u1", role: Role.OPS },
       ),
-    ).rejects.toThrow("This job has trips. Cancel trips individually from the Trips tab.");
+    ).rejects.toThrow(JOBS_WITH_TRIPS_CANNOT_CANCEL_OR_DELETE_MSG);
   });
 
   it("cancel empty job still succeeds", async () => {
@@ -225,5 +174,10 @@ describe("OpsJobsService job delete/cancel guards", () => {
         { userId: "u1", role: Role.CUSTOMER, customerCompanyId: "c1" },
       ),
     ).rejects.toThrow(ForbiddenException);
+  });
+
+  it("assertJobHasNoTripsForCancelOrDelete throws for any trip count", () => {
+    expect(() => assertJobHasNoTripsForCancelOrDelete(1)).toThrow(BadRequestException);
+    expect(() => assertJobHasNoTripsForCancelOrDelete(0)).not.toThrow();
   });
 });

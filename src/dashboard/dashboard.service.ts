@@ -1,6 +1,11 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
+import { JobStatus, InventoryUnitStatus, OrderStatus, TripStatus } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
-import { InventoryUnitStatus, OrderStatus, TripStatus } from "@prisma/client";
+import {
+  INVOICED_INVOICE_STATUSES,
+  buildDashboardJobMetrics,
+  buildJobStatusCountMap,
+} from "./dashboard-job-metrics";
 
 function toCountMap<T extends string>(
   rows: Array<{ key: T; count: number }>,
@@ -24,7 +29,56 @@ export class DashboardService {
     const now = new Date();
     const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-    // ---- Orders ----
+    // ---- Jobs (OpsFlow domain: Job → Trip → Invoice) ----
+    const jobTotal = await this.prisma.job.count({ where: { tenantId } });
+
+    const jobByStatusRaw = await this.prisma.job.groupBy({
+      by: ["status"],
+      where: { tenantId },
+      _count: { _all: true },
+    });
+
+    const jobByStatus = buildJobStatusCountMap(
+      jobByStatusRaw.map((r) => ({
+        status: r.status,
+        count: r._count._all,
+      })),
+    );
+
+    const readyJobs = await this.prisma.job.findMany({
+      where: { tenantId, status: JobStatus.READY_FOR_INVOICE },
+      select: { id: true },
+    });
+
+    const readyForInvoiceBroadCount = await this.prisma.job.count({
+      where: {
+        tenantId,
+        status: { notIn: [JobStatus.CANCELLED, JobStatus.COMPLETED] },
+        OR: [
+          { status: JobStatus.READY_FOR_INVOICE },
+          { invoiceReadyAt: { not: null } },
+        ],
+      },
+    });
+
+    const invoicedForJobs = await this.prisma.invoice.findMany({
+      where: {
+        tenantId,
+        sourceJobId: { not: null },
+        status: { in: [...INVOICED_INVOICE_STATUSES] },
+      },
+      select: { sourceJobId: true },
+    });
+
+    const jobs = buildDashboardJobMetrics({
+      total: jobTotal,
+      byStatus: jobByStatus,
+      readyJobIds: readyJobs.map((j) => j.id),
+      invoicedSourceJobIds: invoicedForJobs.map((i) => i.sourceJobId),
+      readyForInvoiceBroadCount,
+    });
+
+    // ---- Orders (legacy transport orders; kept for FE compatibility) ----
     const orderTotal = await this.prisma.transportOrder.count({
       where: { tenantId },
     });
@@ -46,13 +100,8 @@ export class DashboardService {
       (orderByStatus.Dispatched ?? 0) +
       (orderByStatus.InTransit ?? 0);
 
-      const ordersAwaitingInvoice = await this.prisma.transportOrder.count({
-        where: {
-          tenantId,
-          status: OrderStatus.Delivered,
-          invoiceId: null,
-        },
-      });
+    // Deprecated: use jobs.readyForInvoiceNotInvoiced (READY_FOR_INVOICE jobs without Sent/Issued/Paid invoice).
+    const ordersAwaitingInvoice = jobs.readyForInvoiceNotInvoiced;
 
     // ---- Trips ----
     const tripTotal = await this.prisma.trip.count({ where: { tenantId } });
@@ -128,6 +177,8 @@ export class DashboardService {
     });
 
     return {
+      jobs,
+
       orders: {
         total: orderTotal,
         inProgress: ordersInProgress,
