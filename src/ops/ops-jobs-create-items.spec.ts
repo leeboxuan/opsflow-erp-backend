@@ -4,9 +4,20 @@ import {
   assertCreateJobItemsRequiredForJobType,
   OpsJobsService,
   readCreateJobItemsInput,
+  readUpdateJobItemsInput,
 } from "./ops-jobs.service";
 
 describe("create job items (LCL optional)", () => {
+  describe("readUpdateJobItemsInput", () => {
+    it("returns null when items and cargoItems are omitted", () => {
+      expect(readUpdateJobItemsInput({})).toBeNull();
+    });
+
+    it("returns [] when items is explicitly empty", () => {
+      expect(readUpdateJobItemsInput({ items: [] })).toEqual([]);
+    });
+  });
+
   describe("readCreateJobItemsInput", () => {
     it("defaults missing items to []", () => {
       expect(readCreateJobItemsInput({ jobType: JobType.LCL } as any)).toEqual([]);
@@ -207,6 +218,134 @@ describe("create job items (LCL optional)", () => {
       ).rejects.toThrow("At least one item is required");
 
       expect(prisma.job.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("OpsJobsService.update", () => {
+    const jobRow = {
+      id: "job1",
+      tenantId: "t1",
+      status: "ONGOING",
+      jobType: JobType.LCL,
+      customerCompanyId: "comp1",
+    };
+
+    const freshAfterUpdate = () => ({
+      ...jobRow,
+      internalRef: "WF-2026-05-0001-LCL",
+      externalRef: null,
+      notes: null,
+      createdByUserId: "u1",
+      pickupDate: null,
+      pickupAddress1: "A",
+      pickupAddress2: null,
+      pickupPostal: null,
+      pickupContactName: null,
+      pickupContactPhone: null,
+      deliveryAddress1: "B",
+      deliveryAddress2: null,
+      deliveryPostal: null,
+      receiverName: "R",
+      receiverPhone: "1",
+      assignedDriverId: null,
+      assignedVehicleId: null,
+      assignedFleetVehicleId: null,
+      assignedVehiclePlateNo: null,
+      assignedAt: null,
+      startedAt: null,
+      completedAt: null,
+      deliveredAt: null,
+      podRecipientName: null,
+      cancelledReason: null,
+      cancelledAt: null,
+      cancelledByUserId: null,
+      lastLat: null,
+      lastLng: null,
+      lastLocationAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      pickupPortCode: null,
+      returningDepotCode: null,
+      exportPortCode: null,
+      exportOriginDepotCode: null,
+      vesselName: null,
+      customerCompany: { id: "comp1", name: "ACME" },
+      assignedDriver: null,
+      createdBy: null,
+      items: [],
+      trips: [],
+      charges: [],
+      documents: [],
+    });
+
+    function makeUpdatePrisma(jobType: JobType = JobType.LCL) {
+      const jobItemDeleteMany = jest.fn().mockResolvedValue({ count: 0 });
+      const jobItemCreateMany = jest.fn().mockResolvedValue({ count: 0 });
+      return {
+        job: {
+          findFirst: jest
+            .fn()
+            .mockResolvedValueOnce({ ...jobRow, jobType })
+            .mockResolvedValue(freshAfterUpdate()),
+          update: jest.fn().mockResolvedValue({ id: "job1" }),
+        },
+        jobItem: {
+          deleteMany: jobItemDeleteMany,
+          createMany: jobItemCreateMany,
+        },
+        $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>) =>
+          fn({
+            job: {
+              update: jest.fn().mockResolvedValue({ id: "job1" }),
+              findFirst: jest.fn().mockResolvedValue(freshAfterUpdate()),
+            },
+            jobItem: {
+              deleteMany: jobItemDeleteMany,
+              createMany: jobItemCreateMany,
+            },
+          }),
+        ),
+        jobItemDeleteMany,
+        jobItemCreateMany,
+      };
+    }
+
+    it("allows LCL PATCH with items: [] to clear cargo lines", async () => {
+      const prisma = makeUpdatePrisma();
+      const svc = new OpsJobsService(
+        prisma as any,
+        { log: jest.fn() } as any,
+        {} as any,
+      );
+      jest.spyOn(svc as any, "attachTripAssignedDriverNamesForJobs").mockResolvedValue(undefined);
+
+      await expect(
+        svc.update(
+          "t1",
+          "job1",
+          { receiverName: "Updated", items: [] } as any,
+          { userId: "u1", role: Role.OPS },
+        ),
+      ).resolves.toBeTruthy();
+
+      expect(prisma.jobItemDeleteMany).toHaveBeenCalled();
+      expect(prisma.jobItemCreateMany).not.toHaveBeenCalled();
+    });
+
+    it("rejects IMPORT PATCH with items: []", async () => {
+      const prisma = makeUpdatePrisma(JobType.IMPORT);
+      const svc = new OpsJobsService(
+        prisma as any,
+        { log: jest.fn() } as any,
+        {} as any,
+      );
+
+      await expect(
+        svc.update("t1", "job1", { items: [] } as any, {
+          userId: "u1",
+          role: Role.OPS,
+        }),
+      ).rejects.toThrow("At least one item is required");
     });
   });
 });

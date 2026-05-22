@@ -108,12 +108,26 @@ export class UpdateJobDto {
   @IsString()
   externalRef?: string | null;
 
-  @ApiPropertyOptional({ type: [UpdateJobItemDto] })
+  @ApiPropertyOptional({
+    type: [UpdateJobItemDto],
+    description:
+      "Replace all cargo lines when sent. Omit to leave unchanged. LCL may use [] to clear lines; Import/Export require at least one valid line.",
+  })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => UpdateJobItemDto)
   items?: UpdateJobItemDto[];
+
+  @ApiPropertyOptional({
+    type: [UpdateJobItemDto],
+    description: "Alias for items on PATCH (same rules).",
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => UpdateJobItemDto)
+  cargoItems?: UpdateJobItemDto[];
 
   @ApiPropertyOptional()
   @IsOptional()

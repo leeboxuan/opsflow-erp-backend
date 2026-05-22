@@ -205,6 +205,17 @@ export function readCreateJobItemsInput(dto: {
   return Array.isArray(raw) ? raw : [];
 }
 
+/** PATCH: only when `items` or `cargoItems` is present in the body (omit = leave unchanged). */
+export function readUpdateJobItemsInput(dto: {
+  items?: unknown;
+  cargoItems?: unknown;
+}): unknown[] | null {
+  if (dto.items === undefined && dto.cargoItems === undefined) {
+    return null;
+  }
+  return readCreateJobItemsInput(dto);
+}
+
 export function parseValidJobItemsFromInput(rawItems: unknown[]): Array<{
   itemCode: string;
   description: string | null;
@@ -2256,9 +2267,11 @@ export class OpsJobsService {
       data.exportPortCode = dto.exportPortCode?.trim() || null;
     }
 
-    const inputItems = Array.isArray((dto as any).items)
-      ? (dto as any).items
-      : null;
+    const inputItems = readUpdateJobItemsInput(dto as {
+      items?: unknown;
+      cargoItems?: unknown;
+    });
+    const effectiveJobType = (dto.jobType ?? job.jobType) as JobType;
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const updatedJob = await tx.job.update({
@@ -2267,31 +2280,28 @@ export class OpsJobsService {
       });
 
       if (inputItems !== null) {
-        const validItems = inputItems
-          .filter((i: any) => i?.itemCode?.trim())
-          .map((i: any) => ({
-            itemCode: i.itemCode.trim(),
-            description: i.description?.trim() || null,
-            qty: Math.max(1, Number(i.qty) || 1),
-          }));
-
-        if (!validItems.length) {
-          throw new BadRequestException("At least one valid item is required");
-        }
+        const validItems = parseValidJobItemsFromInput(inputItems);
+        assertCreateJobItemsRequiredForJobType(
+          effectiveJobType,
+          inputItems,
+          validItems,
+        );
 
         await tx.jobItem.deleteMany({
           where: { tenantId, jobId },
         });
 
-        await tx.jobItem.createMany({
-          data: validItems.map((item: any) => ({
-            tenantId,
-            jobId,
-            itemCode: item.itemCode,
-            description: item.description,
-            qty: item.qty,
-          })),
-        });
+        if (validItems.length > 0) {
+          await tx.jobItem.createMany({
+            data: validItems.map((item) => ({
+              tenantId,
+              jobId,
+              itemCode: item.itemCode,
+              description: item.description,
+              qty: item.qty,
+            })),
+          });
+        }
       }
 
       return tx.job.findFirst({
