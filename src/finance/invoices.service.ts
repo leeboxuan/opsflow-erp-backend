@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -22,6 +23,8 @@ import { loadInvoiceAssetBuffer, renderInvoiceHtml } from "./invoice-render";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { evaluateJobInvoiceReadiness } from "../ops/job-invoice-readiness";
 import { buildTripDisplayRef } from "../common/trip-display-ref";
+import { RealtimeEventsService } from "../realtime/realtime-events.service";
+import * as rt from "../realtime/realtime-publish";
 
 const INVOICE_DOCUMENTS_BUCKET = "invoice-documents";
 
@@ -61,6 +64,7 @@ export class InvoicesService {
     private prisma: PrismaService,
     private supabaseService: SupabaseService,
     private readonly audit: AuditService,
+    @Optional() private readonly realtime?: RealtimeEventsService,
   ) {}
 
   private readonly PDF_SIGNED_URL_TTL_SECONDS = 60 * 10;
@@ -847,6 +851,10 @@ export class InvoicesService {
       return invWithOrders;
     });
 
+    rt.publishInvoiceEvent(this.realtime, "invoice.created", tenantId, created.id, {
+      jobId: dto.sourceJobId ?? null,
+    });
+
     return this.toDtoWithNames(created);
   }
 
@@ -1564,6 +1572,9 @@ export class InvoicesService {
     // PDF: regenerated on the client after edits; upload via POST .../pdf.
     const snap = updated.snapshot as any;
     const snapshotOrderIds = Array.isArray(snap?.orderIds) ? snap.orderIds : [];
+    rt.publishInvoiceEvent(this.realtime, "invoice.updated", tenantId, invoiceId, {
+      jobId: (updated as any).sourceJobId ?? dto.sourceJobId ?? null,
+    });
     return this.toDtoWithNames(updated, snapshotOrderIds);
   }
 
@@ -2012,6 +2023,10 @@ export class InvoicesService {
       pdfBuffer,
     });
 
+    rt.publishInvoiceEvent(this.realtime, "invoice.generated", tenantId, inv.id, {
+      jobId: renderData.sourceJobId ?? null,
+    });
+
     return {
       invoiceId: inv.id,
       status: updatedInvoice.status,
@@ -2079,6 +2094,10 @@ export class InvoicesService {
       sourceJobInternalRef,
       actorUserId,
       pdfBuffer: file.buffer,
+    });
+
+    rt.publishInvoiceEvent(this.realtime, "invoice.generated", tenantId, invoiceId, {
+      jobId: inv.sourceJobId ?? null,
     });
 
     return this.toDtoWithNames(updatedInvoice);

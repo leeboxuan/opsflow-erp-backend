@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Optional,
 } from "@nestjs/common";
 import { VehicleStatus, VehicleType } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -19,6 +20,8 @@ import {
   VEHICLE_SORT_FIELDS,
 } from "./dto/list-vehicles.query.dto";
 import type { VehicleDto, ListVehiclesResult } from "./vehicles.types";
+import { RealtimeEventsService } from "../realtime/realtime-events.service";
+import * as rt from "../realtime/realtime-publish";
 
 function toVehicleDto(v: any): VehicleDto {
   return {
@@ -41,7 +44,10 @@ function toVehicleDto(v: any): VehicleDto {
 }
 @Injectable()
 export class VehiclesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtime?: RealtimeEventsService,
+  ) {}
 
   /** Normalize plate: trim, collapse spaces, uppercase */
   normalizePlateNo(plateNo: string): string {
@@ -88,6 +94,7 @@ export class VehiclesService {
         coeExpiryDate: dto.coeExpiryDate ? new Date(dto.coeExpiryDate) : null,
       },
     });
+    rt.publishVehicleEvent(this.realtime, "vehicle.created", tenantId, vehicle.id);
     return toVehicleDto(vehicle);
   }
 
@@ -233,6 +240,7 @@ export class VehiclesService {
         }),
       },
     });
+    rt.publishVehicleEvent(this.realtime, "vehicle.updated", tenantId, id);
     return toVehicleDto(updated);
   }
 
@@ -266,6 +274,7 @@ export class VehiclesService {
     });
     if (!vehicle) throw new NotFoundException("Vehicle not found");
     await this.prisma.vehicle.delete({ where: { id } });
+    rt.publishVehicleEvent(this.realtime, "vehicle.deleted", tenantId, id);
     return { id };
   }
 

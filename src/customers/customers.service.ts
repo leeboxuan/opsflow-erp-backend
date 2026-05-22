@@ -3,6 +3,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import {
   MembershipStatus,
@@ -27,6 +28,8 @@ import { createClient } from "@supabase/supabase-js";
 import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
+import { RealtimeEventsService } from "../realtime/realtime-events.service";
+import * as rt from "../realtime/realtime-publish";
 
 const COMPANY_DOCS_BUCKET = "job-documents";
 const INVOICE_DOCUMENTS_BUCKET = "invoice-documents";
@@ -42,6 +45,7 @@ export class CustomersService {
     private readonly supabaseService: SupabaseService,
     private readonly configService: ConfigService,
     private readonly audit: AuditService,
+    @Optional() private readonly realtime?: RealtimeEventsService,
   ) {
     const supabaseUrl =
       this.configService.get<string>("SUPABASE_PROJECT_URL") ||
@@ -185,6 +189,11 @@ export class CustomersService {
     const normalizedName = this.normalizeCompanyName(companyName);
     const billingSameAs = !!dto.billingSameAsAddress;
 
+    const existingCompany = await this.prisma.customer_companies.findUnique({
+      where: { tenantId_normalizedName: { tenantId, normalizedName } },
+      select: { id: true },
+    });
+
     const company = await this.prisma.customer_companies.upsert({
       where: { tenantId_normalizedName: { tenantId, normalizedName } },
       update: {
@@ -277,6 +286,13 @@ export class CustomersService {
         _count: { select: { contacts: true, users: true } },
       },
     });
+
+    rt.publishCustomerEvent(
+      this.realtime,
+      existingCompany ? "customer.updated" : "customer.created",
+      tenantId,
+      company.id,
+    );
 
     return {
       ...company,
@@ -541,6 +557,8 @@ export class CustomersService {
         _count: { select: { contacts: true, users: true } },
       },
     });
+
+    rt.publishCustomerEvent(this.realtime, "customer.updated", tenantId, companyId);
 
     return {
       ...updated,

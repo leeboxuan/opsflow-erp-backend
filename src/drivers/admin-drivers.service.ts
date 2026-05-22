@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { MembershipStatus, Role, UserRole } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -20,6 +21,8 @@ import type {
   DriverWalletDto,
   DriverWalletTransactionDto,
 } from "../driver/dto/driver-trip.dto";
+import { RealtimeEventsService } from "../realtime/realtime-events.service";
+import * as rt from "../realtime/realtime-publish";
 
 @Injectable()
 export class AdminDriversService {
@@ -27,6 +30,7 @@ export class AdminDriversService {
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
     private readonly usersService: UsersService,
+    @Optional() private readonly realtime?: RealtimeEventsService,
   ) {}
 
   async listDrivers(
@@ -292,6 +296,13 @@ export class AdminDriversService {
       return { user, membership };
     });
 
+    rt.publishDriverEvent(
+      this.realtime,
+      "driver.created",
+      tenantId,
+      result.user.id,
+    );
+
     return {
       userId: result.user.id,
       id: result.user.id,
@@ -417,6 +428,8 @@ export class AdminDriversService {
       },
     });
 
+    rt.publishDriverEvent(this.realtime, "driver.updated", tenantId, driverUserId);
+
     return {
       userId: user.id,
       id: user.id,
@@ -451,6 +464,8 @@ export class AdminDriversService {
       data: { status: MembershipStatus.Suspended },
     });
 
+    rt.publishDriverEvent(this.realtime, "driver.updated", tenantId, driverUserId);
+
     return { id: driverUserId, status: MembershipStatus.Suspended };
   }
 
@@ -464,6 +479,8 @@ export class AdminDriversService {
       where: { id: membership.id },
       data: { status: MembershipStatus.Active },
     });
+
+    rt.publishDriverEvent(this.realtime, "driver.updated", tenantId, driverUserId);
 
     return { id: driverUserId, status: MembershipStatus.Active };
   }

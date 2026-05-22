@@ -1,6 +1,29 @@
-import { JobTripTemplate, JobType, Role } from "@prisma/client";
+import { JobTripTemplate, JobStatus, JobType, Role } from "@prisma/client";
 import { OpsJobsService } from "./ops-jobs.service";
 import { InvoicesService } from "../finance/invoices.service";
+
+/** Minimal job row for syncJobInvoiceReadinessForJob after create/publish/unpublish. */
+const jobInvoiceSyncRow = {
+  id: "job1",
+  status: JobStatus.ONGOING,
+  invoiceReadyAt: null,
+};
+
+function withJobInvoiceSyncMocks(prisma: any): any {
+  const trip = { ...(prisma.trip ?? {}) };
+  return {
+    ...prisma,
+    job: {
+      findFirst: jest.fn().mockResolvedValue(jobInvoiceSyncRow),
+      update: jest.fn().mockResolvedValue({}),
+      ...(prisma.job ?? {}),
+    },
+    trip: {
+      findMany: jest.fn().mockResolvedValue([]),
+      ...trip,
+    },
+  };
+}
 
 describe("job charge workflow hardening", () => {
   it("create job ignores chargeSnapshot-like payload and does not persist charges", async () => {
@@ -57,6 +80,7 @@ describe("job charge workflow hardening", () => {
         }),
         findFirst: jest
           .fn()
+          .mockResolvedValueOnce(jobInvoiceSyncRow)
           .mockResolvedValueOnce({
             id: "job1",
             tenantId: "t1",
@@ -246,6 +270,7 @@ describe("job charge workflow hardening", () => {
         findFirst: jest
           .fn()
           .mockResolvedValueOnce(syncJob)
+          .mockResolvedValueOnce(jobInvoiceSyncRow)
           .mockResolvedValueOnce(freshJob),
       },
       trip: {
@@ -922,7 +947,7 @@ describe("job charge workflow hardening", () => {
   });
 
   it("publishTrip moves DRAFT trip to PUBLISHED when payout exists", async () => {
-    const prisma: any = {
+    const prisma: any = withJobInvoiceSyncMocks({
       trip: {
         findFirst: jest.fn().mockResolvedValue({
           id: "trip1",
@@ -937,7 +962,7 @@ describe("job charge workflow hardening", () => {
       tripDocument: {
         findFirst: jest.fn().mockResolvedValue({ id: "doc1" }),
       },
-    };
+    });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new OpsJobsService(prisma, audit, supabaseService);
@@ -988,7 +1013,7 @@ describe("job charge workflow hardening", () => {
   });
 
   it("publishTrip succeeds when payout lines total is positive", async () => {
-    const prisma: any = {
+    const prisma: any = withJobInvoiceSyncMocks({
       trip: {
         findFirst: jest.fn().mockResolvedValue({
           id: "trip1",
@@ -1025,7 +1050,7 @@ describe("job charge workflow hardening", () => {
           },
         ]),
       },
-    };
+    });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new OpsJobsService(prisma, audit, supabaseService);
@@ -1038,7 +1063,7 @@ describe("job charge workflow hardening", () => {
   });
 
   it("publishTrip allows manual payout line when amount and total are positive", async () => {
-    const prisma: any = {
+    const prisma: any = withJobInvoiceSyncMocks({
       trip: {
         findFirst: jest.fn().mockResolvedValue({
           id: "trip1",
@@ -1062,7 +1087,7 @@ describe("job charge workflow hardening", () => {
           },
         ]),
       },
-    };
+    });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new OpsJobsService(prisma, audit, supabaseService);
@@ -1168,7 +1193,7 @@ describe("job charge workflow hardening", () => {
   });
 
   it("publishTrip succeeds without Collection Docs when assignment and earning exist", async () => {
-    const prisma: any = {
+    const prisma: any = withJobInvoiceSyncMocks({
       trip: {
         findFirst: jest.fn().mockResolvedValue({
           id: "trip1",
@@ -1182,7 +1207,7 @@ describe("job charge workflow hardening", () => {
         update: jest.fn().mockResolvedValue({ id: "trip1" }),
       },
       tripPayoutLine: { findMany: jest.fn().mockResolvedValue([]) },
-    };
+    });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new OpsJobsService(prisma, audit, supabaseService);

@@ -5,12 +5,15 @@ import {
   SetMetadata,
   ForbiddenException,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { Role } from '@prisma/client';
 
 export const Roles = (...roles: Role[]) => SetMetadata('roles', roles);
 
 @Injectable()
 export class RoleGuard implements CanActivate {
+  constructor(private readonly reflector: Reflector) {}
+
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest();
     const requiredRoles = this.getRoles(context);
@@ -37,6 +40,11 @@ export class RoleGuard implements CanActivate {
   }
 
   private getRoles(context: ExecutionContext): Role[] {
-    return Reflect.getMetadata('roles', context.getHandler()) || [];
+    return (
+      this.reflector.getAllAndOverride<Role[]>('roles', [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? []
+    );
   }
 }

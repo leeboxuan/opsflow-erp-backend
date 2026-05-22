@@ -60,6 +60,8 @@ model Tenant {
   tripDocuments                TripDocument[]
   tripPayoutLines              TripPayoutLine[]
   tripDocumentRequirements     TripDocumentRequirement[]
+  notifications                Notification[]
+  pushDevices                  PushDevice[]
 
   @@map("tenants")
 }
@@ -1721,4 +1723,87 @@ model transport_internal_ref_counters {
   @@id([tenantId, yyyymm])
   @@index([tenantId])
   @@map("transport_internal_ref_counters")
+}
+
+enum NotificationAudience {
+  USER
+  ROLE
+  TENANT
+}
+
+enum NotificationSeverity {
+  INFO
+  SUCCESS
+  WARNING
+  DANGER
+}
+
+model Notification {
+  id           String               @id @default(cuid())
+  tenantId     String
+  userId       String?
+  role         Role?
+  audience     NotificationAudience
+  type         String
+  title        String
+  description  String?
+  severity     NotificationSeverity @default(INFO)
+  entityType   String?
+  entityId     String?
+  jobId        String?
+  tripId       String?
+  driverUserId String?
+  metadata     Json?
+  createdAt    DateTime             @default(now())
+
+  tenant     Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  recipients NotificationRecipient[]
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, userId, createdAt])
+  @@index([tenantId, role, createdAt])
+  @@index([tenantId, type, entityId])
+  @@map("notifications")
+}
+
+model NotificationRecipient {
+  id             String    @id @default(cuid())
+  notificationId String
+  tenantId       String
+  userId         String
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([tenantId, userId, readAt, createdAt])
+  @@index([tenantId, userId, createdAt])
+  @@map("notification_recipients")
+}
+
+enum PushPlatform {
+  ios
+  android
+  unknown
+}
+
+model PushDevice {
+  id            String       @id @default(cuid())
+  tenantId      String
+  userId        String
+  platform      PushPlatform @default(unknown)
+  expoPushToken String       @unique
+  deviceId      String?
+  appVersion    String?
+  lastSeenAt    DateTime     @default(now())
+  disabledAt    DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId])
+  @@index([disabledAt])
+  @@map("push_devices")
 }

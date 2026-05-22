@@ -34,16 +34,15 @@ describe("createCachedJobDocumentSignedUrl", () => {
       storage: { from: () => ({ createSignedUrl }) },
     };
 
-    jest.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0);
+    const dateNowSpy = jest.spyOn(Date, "now");
+    dateNowSpy.mockReturnValue(0);
     await createCachedJobDocumentSignedUrl(supabase as any, "key1");
 
-    jest
-      .spyOn(Date, "now")
-      .mockReturnValue(JOB_DOCUMENT_SIGNED_URL_CACHE_MS + 1);
+    dateNowSpy.mockReturnValue(JOB_DOCUMENT_SIGNED_URL_CACHE_MS + 1);
     const refreshed = await createCachedJobDocumentSignedUrl(supabase as any, "key1");
 
     expect(refreshed).toBe("https://signed.example/new");
     expect(createSignedUrl).toHaveBeenCalledTimes(2);
-    jest.restoreAllMocks();
+    dateNowSpy.mockRestore();
   });
 });

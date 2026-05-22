@@ -6,6 +6,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Optional,
 } from "@nestjs/common";
 import {
   JobStatus,
@@ -63,6 +64,8 @@ import {
   syncJobInvoiceReadiness,
   type JobInvoiceSyncPrisma,
 } from "./job-invoice-readiness";
+import { RealtimeEventsService } from "../realtime/realtime-events.service";
+import * as rt from "../realtime/realtime-publish";
 
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
@@ -822,6 +825,7 @@ export class OpsJobsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly supabaseService: SupabaseService,
+    @Optional() private readonly realtime?: RealtimeEventsService,
   ) {}
 
   private getCustomerCompanyIdOrThrow(user: any): string {
@@ -2082,6 +2086,8 @@ export class OpsJobsService {
       );
     }
 
+    rt.publishJobEvent(this.realtime, "job.created", tenantId, freshJob.id);
+
     return jobDto;
   }
 
@@ -2319,6 +2325,8 @@ export class OpsJobsService {
       throw new NotFoundException("Job not found after update");
     }
 
+    rt.publishJobEvent(this.realtime, "job.updated", tenantId, jobId);
+
     return toJobDto(updated);
   }
 
@@ -2471,6 +2479,10 @@ export class OpsJobsService {
       actorUserId,
     );
 
+    rt.publishJobEvent(this.realtime, "job.updated", tenantId, jobId, {
+      driverUserId: dto.driverId,
+    });
+
     return toJobDto(updated);
   }
 
@@ -2531,6 +2543,10 @@ export class OpsJobsService {
       actorUserId,
     );
 
+    rt.publishJobEvent(this.realtime, "job.cancelled", tenantId, jobId, {
+      reason: dto.reason,
+    });
+
     return toJobDto(updated);
   }
 
@@ -2571,6 +2587,7 @@ export class OpsJobsService {
     });
 
     await this.audit.log(tenantId, "DELETE", "JOB", jobId, {}, actorUserId);
+    rt.publishJobEvent(this.realtime, "job.deleted", tenantId, jobId);
   }
 
   async verifyDepot(
@@ -2697,6 +2714,10 @@ export class OpsJobsService {
       actorUserId,
     );
 
+    rt.publishDocumentEvent(this.realtime, "document.uploaded", tenantId, doc.id, {
+      jobId,
+    });
+
     return this.attachSignedUrl(doc);
   }
 
@@ -2761,6 +2782,10 @@ export class OpsJobsService {
       { documentId: doc.id, type: "OTHER" },
       actorUserId,
     );
+
+    rt.publishDocumentEvent(this.realtime, "document.uploaded", tenantId, doc.id, {
+      jobId,
+    });
 
     return this.attachSignedUrl(doc);
   }
@@ -3322,6 +3347,10 @@ export class OpsJobsService {
 
     await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
 
+    rt.publishTripEvent(this.realtime, "trip.created", tenantId, jobId, trip.id, {
+      driverUserId: trip.assignedDriverUserId,
+    });
+
     return this.getOne(tenantId, jobId, user);
   }
 
@@ -3386,6 +3415,17 @@ export class OpsJobsService {
         actorUserId,
       );
       await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
+      rt.publishTripEvent(this.realtime, "trip.updated", tenantId, jobId, tripId, {
+        driverUserId: trip.assignedDriverUserId,
+        reason: "deleted",
+      });
+      if (trip.assignedDriverUserId) {
+        rt.publishDriverActiveJobsUpdated(
+          this.realtime,
+          tenantId,
+          trip.assignedDriverUserId,
+        );
+      }
       return { success: true, mode: "deleted", tripId };
     }
 
@@ -3406,6 +3446,18 @@ export class OpsJobsService {
         actorUserId,
       );
       await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
+    }
+
+    rt.publishTripEvent(this.realtime, "trip.cancelled", tenantId, jobId, tripId, {
+      driverUserId: trip.assignedDriverUserId,
+      reason: "Deleted by ops",
+    });
+    if (trip.assignedDriverUserId) {
+      rt.publishDriverActiveJobsUpdated(
+        this.realtime,
+        tenantId,
+        trip.assignedDriverUserId,
+      );
     }
 
     return { success: true, mode: "cancelled", tripId, status: TripStatus.CANCELLED };
@@ -3478,6 +3530,11 @@ export class OpsJobsService {
       { order: requestedOrder },
       actorUserId,
     );
+
+    this.realtime?.publishDispatchAndDashboard(tenantId, {
+      jobId,
+      reason: "trip.reordered",
+    });
 
     return this.getOne(tenantId, jobId, user);
   }
@@ -4070,6 +4127,10 @@ export class OpsJobsService {
       );
     }
 
+    rt.publishTripEvent(this.realtime, "trip.updated", tenantId, jobId, tripId, {
+      driverUserId: trip.assignedDriverUserId,
+    });
+
     return this.getOne(tenantId, jobId, user);
   }
 
@@ -4167,6 +4228,13 @@ export class OpsJobsService {
       },
       actorUserId,
     );
+    rt.publishTripEvent(this.realtime, "trip.assigned", tenantId, jobId, tripId, {
+      driverUserId: dto.driverId,
+    });
+    rt.publishDriverActiveJobsUpdated(this.realtime, tenantId, dto.driverId);
+    if (oldDriverUserId && oldDriverUserId !== dto.driverId) {
+      rt.publishDriverActiveJobsUpdated(this.realtime, tenantId, oldDriverUserId);
+    }
     return this.getOne(tenantId, jobId, user);
   }
 
@@ -4227,6 +4295,16 @@ export class OpsJobsService {
     );
 
     await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
+    rt.publishTripEvent(this.realtime, "trip.published", tenantId, jobId, tripId, {
+      driverUserId: trip.assignedDriverUserId,
+    });
+    if (trip.assignedDriverUserId) {
+      rt.publishDriverActiveJobsUpdated(
+        this.realtime,
+        tenantId,
+        trip.assignedDriverUserId,
+      );
+    }
     return this.getOne(tenantId, jobId, user);
   }
 
@@ -4246,6 +4324,7 @@ export class OpsJobsService {
         status: true,
         tripSequence: true,
         jobSequence: true,
+        assignedDriverUserId: true,
         job: { select: { internalRef: true } },
       },
     });
@@ -4303,6 +4382,17 @@ export class OpsJobsService {
 
     await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
 
+    rt.publishTripEvent(this.realtime, "trip.unpublished", tenantId, jobId, tripId, {
+      driverUserId: trip.assignedDriverUserId,
+    });
+    if (trip.assignedDriverUserId) {
+      rt.publishDriverActiveJobsUpdated(
+        this.realtime,
+        tenantId,
+        trip.assignedDriverUserId,
+      );
+    }
+
     return {
       ok: true,
       tripId,
@@ -4352,6 +4442,13 @@ export class OpsJobsService {
       { jobId },
       actorUserId,
     );
+    const tripForEmit = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId },
+      select: { assignedDriverUserId: true },
+    });
+    rt.publishTripEvent(this.realtime, "trip.done", tenantId, jobId, tripId, {
+      driverUserId: tripForEmit?.assignedDriverUserId,
+    });
     return this.getOne(tenantId, jobId, user);
   }
 
@@ -4366,7 +4463,7 @@ export class OpsJobsService {
     const actorUserId: string | null = user?.userId ?? null;
     const trip = await this.prisma.trip.findFirst({
       where: { id: tripId, tenantId, jobId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, assignedDriverUserId: true },
     });
     if (!trip) throw new NotFoundException("Trip not found");
 
@@ -4392,6 +4489,10 @@ export class OpsJobsService {
       { jobId, pendingState },
       actorUserId,
     );
+    rt.publishTripEvent(this.realtime, "trip.updated", tenantId, jobId, tripId, {
+      driverUserId: trip.assignedDriverUserId,
+      reason: `pendingState:${pendingState}`,
+    });
     return this.getOne(tenantId, jobId, user);
   }
 
@@ -4805,6 +4906,11 @@ export class OpsJobsService {
       },
       actorUserId,
     );
+    rt.publishDocumentEvent(this.realtime, "document.uploaded", tenantId, doc.id, {
+      jobId,
+      tripId,
+      driverUserId: trip.assignedDriverUserId,
+    });
     return this.attachSignedUrl(doc);
   }
 
@@ -4847,6 +4953,11 @@ export class OpsJobsService {
       { jobId, documentId },
       actorUserId,
     );
+    rt.publishDocumentEvent(this.realtime, "document.signed", tenantId, documentId, {
+      jobId,
+      tripId,
+      driverUserId: trip.assignedDriverUserId,
+    });
     return this.attachSignedUrl(updated);
   }
 

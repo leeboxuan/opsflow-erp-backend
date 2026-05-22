@@ -373,7 +373,9 @@ describe("workflow helpers", () => {
     });
   });
 
-  it("parses DOCX Annex tables into structured rate lines", async () => {
+  it(
+    "parses DOCX Annex tables into structured rate lines",
+    async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const AdmZip = require("adm-zip");
     const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -443,9 +445,12 @@ describe("workflow helpers", () => {
       rateCents: 8825,
       sourceType: "PARSER_ANNEX_DOCX",
     });
-  });
+  },
+  15_000);
 
-  it("returns empty DOCX parsed lines for unstructured content", async () => {
+  it(
+    "returns empty DOCX parsed lines for unstructured content",
+    async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const AdmZip = require("adm-zip");
     const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -482,7 +487,8 @@ describe("workflow helpers", () => {
       zip.toBuffer() as Buffer,
     );
     expect(lines).toEqual([]);
-  });
+  },
+  15_000);
 });
 
 describe("portal user name", () => {

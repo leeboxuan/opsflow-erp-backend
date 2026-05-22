@@ -20,7 +20,16 @@ describe("OpsJobsService.unpublishTrip", () => {
           earningLabelSnapshot: "Rate",
           trailerNumber: "T-1",
         }),
+        findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn().mockResolvedValue({ id: "trip1", status: TripStatus.DRAFT }),
+      },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          status: "ONGOING",
+          invoiceReadyAt: null,
+        }),
+        update: jest.fn().mockResolvedValue({}),
       },
       ...overrides,
     };

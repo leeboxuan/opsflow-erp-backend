@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Optional,
 } from "@nestjs/common";
 import {
   JobStatus,
@@ -34,6 +35,8 @@ import {
   syncJobInvoiceReadiness,
   type JobInvoiceSyncPrisma,
 } from "./job-invoice-readiness";
+import { RealtimeEventsService } from "../realtime/realtime-events.service";
+import * as rt from "../realtime/realtime-publish";
 
 const DEFAULT_TENANT_TIMEZONE = "Asia/Singapore";
 const TENANT_TIMEZONE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -274,6 +277,7 @@ export class DriverJobsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly supabaseService: SupabaseService,
+    @Optional() private readonly realtime?: RealtimeEventsService,
   ) {}
 
   private publishedTripVisibilityWhere() {
@@ -1733,6 +1737,11 @@ export class DriverJobsService {
       driverUserId,
     );
 
+    rt.publishTripEvent(this.realtime, "trip.started", tenantId, jobId, tripId, {
+      driverUserId,
+    });
+    rt.publishDriverActiveJobsUpdated(this.realtime, tenantId, driverUserId);
+
     return this.getOneForDriver(tenantId, jobId, driverUserId);
   }
 
@@ -1764,6 +1773,10 @@ export class DriverJobsService {
         lng: dto.lng,
         capturedAt: now,
       },
+    });
+
+    this.realtime?.publishDriverLocationUpdated(tenantId, driverUserId, {
+      jobId,
     });
   }
 
@@ -1992,6 +2005,12 @@ export class DriverJobsService {
 
     const refreshedJob = await this.getOneForDriver(tenantId, jobId, driverUserId);
     const refreshedTrip = refreshedJob.trips.find((t) => t.id === tripId) ?? null;
+
+    rt.publishTripEvent(this.realtime, "trip.completed", tenantId, jobId, tripId, {
+      driverUserId,
+    });
+    rt.publishDriverActiveJobsUpdated(this.realtime, tenantId, driverUserId);
+
     return {
       requiresTrailerCheckout,
       trip: refreshedTrip,
@@ -2348,6 +2367,12 @@ export class DriverJobsService {
       driverUserId,
     );
 
+    rt.publishDocumentEvent(this.realtime, "document.uploaded", tenantId, doc.id, {
+      jobId,
+      tripId,
+      driverUserId,
+    });
+
     return this.attachTripDocumentSignedUrl(doc);
   }
 
@@ -2405,6 +2430,12 @@ export class DriverJobsService {
       driverUserId,
     );
 
+    rt.publishDocumentEvent(this.realtime, "document.deleted", tenantId, doc.id, {
+      jobId,
+      tripId,
+      driverUserId,
+    });
+
     return { success: true, documentId: doc.id };
   }
 
@@ -2446,6 +2477,11 @@ export class DriverJobsService {
       { jobId, documentId },
       driverUserId,
     );
+    rt.publishDocumentEvent(this.realtime, "document.signed", tenantId, documentId, {
+      jobId,
+      tripId,
+      driverUserId,
+    });
     return this.attachTripDocumentSignedUrl(updated);
   }
 }

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException, Optional } from "@nestjs/common";
 import { MembershipStatus, Role, TripDocumentType, TripStatus } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
@@ -16,6 +16,7 @@ import {
   DispatchOptimiseRouteDto,
   DispatchReorderTripsDto,
 } from "./dto/dispatch.dto";
+import { RealtimeEventsService } from "../realtime/realtime-events.service";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
 const GOOGLE_ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes";
@@ -32,6 +33,7 @@ export class DispatchService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
+    @Optional() private readonly realtime?: RealtimeEventsService,
   ) {}
 
   private haversineMeters(fromLat: number, fromLng: number, toLat: number, toLng: number): number {
@@ -609,6 +611,10 @@ export class DispatchService {
           },
         })),
     );
+    this.realtime?.publishDispatchAndDashboard(tenantId, {
+      driverUserId,
+      reason: "dispatch.trips.reordered",
+    });
     return { ok: true, tripIdsInOrder: requestedIds };
   }
 

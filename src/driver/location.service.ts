@@ -1,13 +1,17 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parsePaginationFromQuery, buildPaginationMeta } from '../common/pagination';
 import { buildOrderBy } from '../common/listing/listing.sort';
 import { UpdateLocationDto } from './dto/update-location.dto';
 import { LocationDto, DriverLocationDto } from './dto/location.dto';
+import { RealtimeEventsService } from '../realtime/realtime-events.service';
 
 @Injectable()
 export class LocationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly realtime?: RealtimeEventsService,
+  ) {}
 
   private distanceMeters(
     aLat: number,
@@ -104,6 +108,8 @@ export class LocationService {
         lastMovedLng: dto.lng,
       },
     });
+
+    this.realtime?.publishDriverLocationUpdated(tenantId, driverUserId);
 
     return this.toLocationDto(location);
   }

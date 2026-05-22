@@ -20,6 +20,9 @@ import { MasterModule } from './master/master.module';
 import { FleetVehiclesModule } from "./fleet-vehicles/fleet-vehicles.module";
 import { PlacesModule } from './places/places.module';
 import { UsersModule } from "./users/users.module";
+import { RealtimeModule } from "./realtime/realtime.module";
+import { NotificationsModule } from "./notifications/notifications.module";
+import { PushModule } from "./push/push.module";
 
 @Module({
   imports: [
@@ -46,6 +49,9 @@ import { UsersModule } from "./users/users.module";
     MasterModule,
     PlacesModule,
     UsersModule,
+    NotificationsModule,
+    PushModule,
+    RealtimeModule,
   ],
   controllers: [AppController],
 })
