@@ -9,6 +9,12 @@ import { Reflector } from "@nestjs/core";
 import { PrismaService } from "../../prisma/prisma.service";
 import { MembershipStatus, Role } from "@prisma/client";
 import { SKIP_TENANT_GUARD_KEY } from "./skip-tenant-guard.decorator";
+import {
+  readTenantContextCache,
+  tenantContextCacheKey,
+  writeTenantContextCache,
+  type CachedTenantContext,
+} from "../tenant-context.cache";
 
 @Injectable()
 export class TenantGuard implements CanActivate {
@@ -34,7 +40,6 @@ export class TenantGuard implements CanActivate {
       throw new ForbiddenException("User must be authenticated first");
     }
 
-    // Superadmin (from JWT app_metadata) is not tenant-bound: X-Tenant-Id is optional
     if (user.isSuperadmin) {
       if (!tenantIdHeader) {
         request.tenant = {
@@ -45,7 +50,13 @@ export class TenantGuard implements CanActivate {
         return true;
       }
 
-      // Superadmin with tenant header: act in that tenant's context
+      const cacheKey = tenantContextCacheKey(user.userId, tenantIdHeader);
+      const cached = readTenantContextCache(cacheKey);
+      if (cached) {
+        request.tenant = cached;
+        return true;
+      }
+
       const tenant = await this.prisma.tenant.findFirst({
         where: { id: tenantIdHeader },
       });
@@ -53,8 +64,6 @@ export class TenantGuard implements CanActivate {
         throw new BadRequestException("Tenant not found");
       }
 
-      // NOTE: superadmin can act even without membership,
-      // but if membership exists, we attach role (and enforce suspension if present)
       const membership = await this.prisma.tenantMembership.findFirst({
         where: {
           tenantId: tenantIdHeader,
@@ -67,22 +76,27 @@ export class TenantGuard implements CanActivate {
         throw new ForbiddenException("Account suspended");
       }
 
-      request.tenant = {
+      const tenantContext: CachedTenantContext = {
         tenantId: tenantIdHeader,
         role: membership?.role ?? Role.ADMIN,
         isSuperadmin: true,
       };
+      writeTenantContextCache(cacheKey, tenantContext);
+      request.tenant = tenantContext;
       return true;
     }
 
-    // Non-superadmin: X-Tenant-Id required
     if (!tenantIdHeader) {
       throw new BadRequestException("X-Tenant-Id header is required");
     }
 
-    // IMPORTANT CHANGE:
-    // - Do NOT filter by status: Active here.
-    // - We want to detect Suspended and give a specific error immediately.
+    const cacheKey = tenantContextCacheKey(user.userId, tenantIdHeader);
+    const cached = readTenantContextCache(cacheKey);
+    if (cached) {
+      request.tenant = cached;
+      return true;
+    }
+
     const membership = await this.prisma.tenantMembership.findFirst({
       where: {
         tenantId: tenantIdHeader,
@@ -98,20 +112,17 @@ export class TenantGuard implements CanActivate {
     }
 
     if (membership.status !== MembershipStatus.Active) {
-      // This is your “instant kick”
       throw new ForbiddenException(
         `Membership is not Active (${membership.status})`,
       );
     }
 
-    const tenantContext: any = {
+    const tenantContext: CachedTenantContext = {
       tenantId: tenantIdHeader,
       role: membership.role,
       isSuperadmin: false,
     };
 
-    // ✅ If CUSTOMER, attach customerCompanyId (+ enforce it exists)
-    // ✅ ALSO enforce company isActive = true (company suspension = instant kick)
     if (membership.role === Role.CUSTOMER) {
       const u = await this.prisma.user.findUnique({
         where: { id: user.userId },
@@ -137,6 +148,7 @@ export class TenantGuard implements CanActivate {
       tenantContext.customerContactId = u.customerContactId ?? null;
     }
 
+    writeTenantContextCache(cacheKey, tenantContext);
     request.tenant = tenantContext;
     return true;
   }

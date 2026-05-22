@@ -53,6 +53,12 @@ export class JobDocumentDto {
   uploadedByName?: string | null;
 
   @ApiPropertyOptional()
+  uploadedByEmail?: string | null;
+
+  @ApiPropertyOptional({ description: "Alias for createdAt on upload timestamp." })
+  uploadedAt?: Date;
+
+  @ApiPropertyOptional()
   generatedBySystem?: boolean | null;
 
   @ApiPropertyOptional()
@@ -244,6 +250,33 @@ export class JobChargeResponseDto {
   taxRateBasisPoints!: number | null;
   sortOrder!: number;
   metadataJson?: Record<string, unknown> | null;
+}
+
+/** Slim row for GET /api/jobs list (table view). Full detail: GET /api/jobs/:id. */
+export class JobListItemDto {
+  id!: string;
+  tenantId!: string;
+  customerCompanyId!: string;
+  companyName?: string | null;
+  internalRef!: string;
+  externalRef?: string | null;
+  jobType!: JobType;
+  status!: JobStatus;
+  pickupDate!: Date | null;
+  createdAt!: Date;
+  updatedAt!: Date;
+  assignedDriverId?: string | null;
+  assignedDriverName?: string | null;
+  tripCount!: number;
+  itemCount!: number;
+  /** Active job-level documents (quotation/other); trip photos are separate. */
+  documentCount!: number;
+}
+
+export class DocumentSignedUrlDto {
+  previewUrl!: string | null;
+  downloadUrl!: string | null;
+  expiresInSeconds!: number;
 }
 
 export class JobDto {

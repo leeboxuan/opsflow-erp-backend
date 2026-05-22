@@ -66,53 +66,90 @@ describe("driver jobs published-trip visibility", () => {
 });
 
 describe("driver trip completion requirements", () => {
-  it("fails completion when required trip document is missing", async () => {
-    const prisma: any = {
-      tenant: { findUnique: jest.fn().mockResolvedValue({ timezone: "Asia/Singapore" }) },
-      job: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: "job1",
-          tenantId: "t1",
-          customerCompanyId: "c1",
-          assignedDriverId: "u1",
-          jobType: "IMPORT",
-          status: "ONGOING",
-          documents: [],
-        }),
-      },
-      trip: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: "trip1",
-          tenantId: "t1",
-          jobId: "job1",
-          status: "ONGOING",
-          assignedDriverUserId: "u1",
-          completionRuleJson: null,
-        }),
-        update: jest.fn(),
-        count: jest.fn(),
-      },
-      tripDocumentRequirement: {
-        findMany: jest.fn().mockResolvedValue([
-          {
-            id: "r1",
-            tripId: "trip1",
-            type: "DELIVERY_DO",
-            label: "Delivery DO",
-            isRequired: true,
-            requiresSignature: false,
-            minCount: 1,
-          },
-        ]),
-      },
-      tripDocument: {
-        findMany: jest.fn().mockResolvedValue([]),
-      },
+  function basePrismaForComplete(tripDocRows: any[], tripFindManyRows?: any[]) {
+    const tripUpdate = jest.fn();
+    const tx = {
+      trip: { update: tripUpdate },
+      tripDocument: { create: jest.fn() },
     };
-    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
-    const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new DriverJobsService(prisma, audit, supabaseService);
-    await expect(svc.completeTrip("t1", "job1", "trip1", "u1")).rejects.toThrow(
+    return {
+      prisma: {
+        tenant: { findUnique: jest.fn().mockResolvedValue({ timezone: "Asia/Singapore" }) },
+        job: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "job1",
+            tenantId: "t1",
+            customerCompanyId: "c1",
+            assignedDriverId: "u1",
+            jobType: "LCL",
+            status: "ONGOING",
+            documents: [],
+          }),
+          update: jest.fn().mockResolvedValue({ id: "job1", status: "ONGOING", completedAt: null }),
+        },
+        trip: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "trip1",
+            tenantId: "t1",
+            jobId: "job1",
+            status: "ONGOING",
+            assignedDriverUserId: "driver-1",
+            trailerNumber: null,
+            plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
+            createdAt: new Date("2026-04-30T08:00:00.000Z"),
+          }),
+          findMany: jest
+            .fn()
+            .mockResolvedValue(
+              tripFindManyRows ?? [
+                {
+                  id: "trip1",
+                  plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
+                  createdAt: new Date("2026-04-30T08:00:00.000Z"),
+                },
+                {
+                  id: "trip2",
+                  plannedStartAt: new Date("2026-04-30T09:00:00.000Z"),
+                  createdAt: new Date("2026-04-30T09:00:00.000Z"),
+                },
+              ],
+            ),
+          count: jest.fn().mockResolvedValue(0),
+        },
+        tripDocument: { findMany: jest.fn().mockResolvedValue(tripDocRows) },
+        masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
+        $transaction: jest.fn(async (cb: any) => cb(tx)),
+      },
+      tripUpdate,
+    };
+  }
+
+  it("allows completion when no active DELIVERY_DO exists", async () => {
+    const { prisma, tripUpdate } = basePrismaForComplete([]);
+    const svc = new DriverJobsService(
+      prisma as any,
+      { log: jest.fn().mockResolvedValue(undefined) } as any,
+      { getClient: jest.fn() } as any,
+    );
+    jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: "trip1" }] } as any);
+
+    await expect(
+      svc.completeTrip("t1", "job1", "trip1", "driver-1"),
+    ).resolves.toBeTruthy();
+    expect(tripUpdate).toHaveBeenCalled();
+  });
+
+  it("blocks completion when active DELIVERY_DO is unsigned", async () => {
+    const { prisma } = basePrismaForComplete([
+      { type: "DELIVERY_DO", signedAt: null, isSigned: false },
+    ]);
+    const svc = new DriverJobsService(
+      prisma as any,
+      { log: jest.fn().mockResolvedValue(undefined) } as any,
+      { getClient: jest.fn() } as any,
+    );
+
+    await expect(svc.completeTrip("t1", "job1", "trip1", "driver-1")).rejects.toThrow(
       "Missing required trip documents: DELIVERY_DO",
     );
   });
@@ -147,17 +184,25 @@ describe("completion requirements: customer signature vs DELIVERY_DO", () => {
     };
   }
 
-  it("unsigned DELIVERY_DO returns POD_SIGNATURE as missing (customer signature)", async () => {
+  it("does not require DELIVERY_DO when no active DELIVERY_DO document exists", async () => {
+    const prisma: any = basePrismaForRequirements([]);
+    const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+    const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+    expect(res.missingDocuments).not.toContain("DELIVERY_DO");
+    expect(res.canComplete).toBe(true);
+  });
+
+  it("unsigned active DELIVERY_DO returns DELIVERY_DO as missing", async () => {
     const prisma: any = basePrismaForRequirements([
       { type: "DELIVERY_DO", signedAt: null, isSigned: false },
     ]);
     const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
     const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
-    expect(res.missingDocuments).toContain("POD_SIGNATURE");
-    expect(res.missingDocuments).not.toContain("DELIVERY_DO");
+    expect(res.missingDocuments).toContain("DELIVERY_DO");
+    expect(res.canComplete).toBe(false);
   });
 
-  it("signed DELIVERY_DO (signedAt) does not list POD_SIGNATURE missing", async () => {
+  it("signed DELIVERY_DO (signedAt) is not missing", async () => {
     const prisma: any = basePrismaForRequirements([
       {
         type: "DELIVERY_DO",
@@ -167,26 +212,41 @@ describe("completion requirements: customer signature vs DELIVERY_DO", () => {
     ]);
     const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
     const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
-    expect(res.missingDocuments).not.toContain("POD_SIGNATURE");
+    expect(res.missingDocuments).not.toContain("DELIVERY_DO");
+    expect(res.canComplete).toBe(true);
   });
 
-  it("signed DELIVERY_DO (isSigned only) does not list POD_SIGNATURE missing", async () => {
+  it("signed DELIVERY_DO (isSigned only) is not missing", async () => {
     const prisma: any = basePrismaForRequirements([
       { type: "DELIVERY_DO", signedAt: null, isSigned: true },
     ]);
     const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
     const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
-    expect(res.missingDocuments).not.toContain("POD_SIGNATURE");
+    expect(res.missingDocuments).not.toContain("DELIVERY_DO");
+    expect(res.canComplete).toBe(true);
   });
 
-  it("active POD_SIGNATURE upload satisfies signature without signed DELIVERY_DO", async () => {
+  it("active POD_SIGNATURE upload satisfies DELIVERY_DO when DO is unsigned", async () => {
     const prisma: any = basePrismaForRequirements([
       { type: "DELIVERY_DO", signedAt: null, isSigned: false },
       { type: "POD_SIGNATURE", signedAt: null, isSigned: false },
     ]);
     const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
     const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
-    expect(res.missingDocuments).not.toContain("POD_SIGNATURE");
+    expect(res.missingDocuments).not.toContain("DELIVERY_DO");
+    expect(res.canComplete).toBe(true);
+  });
+
+  it("inactive DELIVERY_DO excluded by query is treated as no DELIVERY_DO", async () => {
+    const prisma: any = basePrismaForRequirements([]);
+    const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+    const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+    expect(res.missingDocuments).not.toContain("DELIVERY_DO");
+    expect(prisma.tripDocument.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ isActive: true }),
+      }),
+    );
   });
 
   it("queries only active trip documents for completion requirements", async () => {
@@ -213,9 +273,13 @@ describe("completion requirements: customer signature vs DELIVERY_DO", () => {
 
 describe("completeTrip completion docs visibility", () => {
   it("checks completion requirements using only active trip documents", async () => {
+    const tripUpdate = jest.fn();
     const prisma: any = {
       tenant: { findUnique: jest.fn().mockResolvedValue({ timezone: "Asia/Singapore" }) },
-      job: { findFirst: jest.fn().mockResolvedValue({ id: "job1", status: "ONGOING", documents: [] }) },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({ id: "job1", status: "ONGOING", documents: [] }),
+        update: jest.fn().mockResolvedValue({ id: "job1", status: "ONGOING", completedAt: null }),
+      },
       trip: {
         findFirst: jest.fn().mockResolvedValue({
           id: "trip1",
@@ -223,6 +287,7 @@ describe("completeTrip completion docs visibility", () => {
           jobId: "job1",
           status: "ONGOING",
           assignedDriverUserId: "driver-1",
+          trailerNumber: null,
           plannedStartAt: new Date("2026-04-30T01:00:00.000Z"),
           createdAt: new Date("2026-04-30T01:00:00.000Z"),
         }),
@@ -232,6 +297,11 @@ describe("completeTrip completion docs visibility", () => {
             plannedStartAt: new Date("2026-04-30T01:00:00.000Z"),
             createdAt: new Date("2026-04-30T01:00:00.000Z"),
           },
+          {
+            id: "trip2",
+            plannedStartAt: new Date("2026-04-30T02:00:00.000Z"),
+            createdAt: new Date("2026-04-30T02:00:00.000Z"),
+          },
         ]),
         count: jest.fn().mockResolvedValue(0),
       },
@@ -239,12 +309,14 @@ describe("completeTrip completion docs visibility", () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
       masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: jest.fn(async (cb: any) =>
+        cb({ trip: { update: tripUpdate }, tripDocument: { create: jest.fn() } }),
+      ),
     };
     const svc = new DriverJobsService(prisma, { log: jest.fn().mockResolvedValue(undefined) } as any, { getClient: jest.fn() } as any);
+    jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: "trip1" }] } as any);
 
-    await expect(svc.completeTrip("t1", "job1", "trip1", "driver-1")).rejects.toThrow(
-      "Missing required trip documents: DELIVERY_DO",
-    );
+    await expect(svc.completeTrip("t1", "job1", "trip1", "driver-1")).resolves.toBeTruthy();
     expect(prisma.tripDocument.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
@@ -838,8 +910,8 @@ describe("Driver trip detail endpoint service contract", () => {
     expect(res.tripDisplayRef).toBe("JOB-1-T01");
     expect(res.trailerNumber).toBe("TRL-1");
     expect(res.trailerLastLocationName).toBe("Gul 7");
-    expect(res.trailerStartPhotoUrl).toBe("https://signed/start");
-    expect(res.trailerEndPhotoUrl).toBe("https://signed/end");
+    expect(res.trailerStartPhotoUrl).toBeNull();
+    expect(res.trailerEndPhotoUrl).toBeNull();
     const startDoc = res.documents.find((d: any) => d.type === "TRAILER_START_PHOTO");
     expect(startDoc?.fileName).toBe("s.jpg");
     expect(startDoc?.originalFileName).toBe("s.jpg");

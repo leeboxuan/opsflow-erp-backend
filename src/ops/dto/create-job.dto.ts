@@ -314,12 +314,26 @@ export class CreateJobDto {
   @IsString()
   externalRef?: string | null;
 
-  @ApiPropertyOptional({ type: [CreateJobItemDto] })
+  @ApiPropertyOptional({
+    type: [CreateJobItemDto],
+    description:
+      "LCL cargo lines (optional for LCL; required for Import/Export). Empty array allowed for LCL.",
+  })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CreateJobItemDto)
   items?: CreateJobItemDto[];
+
+  @ApiPropertyOptional({
+    type: [CreateJobItemDto],
+    description: "Alias for items (same shape). Optional for LCL only.",
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateJobItemDto)
+  cargoItems?: CreateJobItemDto[];
 
   @ApiPropertyOptional()
   @IsOptional()

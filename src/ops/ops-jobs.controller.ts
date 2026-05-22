@@ -65,8 +65,54 @@ export class OpsJobsController {
     private readonly invoices: InvoicesService,
   ) {}
 
+  @Get(":jobId/documents/:documentId/signed-url")
+  @ApiOperation({ summary: "Get signed preview/download URLs for a job document" })
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+  async getJobDocumentSignedUrl(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("documentId") documentId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.getJobDocumentSignedUrl(
+      tenantId,
+      jobId,
+      documentId,
+      accessUser,
+    );
+  }
+
+  @Get(":jobId/trips/:tripId/documents/:documentId/signed-url")
+  @ApiOperation({ summary: "Get signed preview/download URLs for a trip document" })
+  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+  async getTripDocumentSignedUrl(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Param("documentId") documentId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.getTripDocumentSignedUrl(
+      tenantId,
+      jobId,
+      tripId,
+      documentId,
+      accessUser,
+    );
+  }
+
   @Get()
-  @ApiOperation({ summary: "List jobs with filters" })
+  @ApiOperation({ summary: "List jobs with filters (slim rows for table view)" })
   @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
   async list(@Req() req: any, @Query() query: JobListQueryDto) {
     const tenantId = req.tenant.tenantId;

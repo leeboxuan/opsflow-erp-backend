@@ -29,14 +29,99 @@ export class DashboardService {
     const now = new Date();
     const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-    // ---- Jobs (OpsFlow domain: Job → Trip → Invoice) ----
-    const jobTotal = await this.prisma.job.count({ where: { tenantId } });
-
-    const jobByStatusRaw = await this.prisma.job.groupBy({
-      by: ["status"],
-      where: { tenantId },
-      _count: { _all: true },
-    });
+    const [
+      jobTotal,
+      jobByStatusRaw,
+      readyJobs,
+      readyForInvoiceBroadCount,
+      invoicedForJobs,
+      orderTotal,
+      orderByStatusRaw,
+      tripTotal,
+      tripByStatusRaw,
+      tripsActiveToday,
+      unitsTotal,
+      unitsByStatusRaw,
+      driversTotal,
+      activeTrips,
+      activity,
+    ] = await Promise.all([
+      this.prisma.job.count({ where: { tenantId } }),
+      this.prisma.job.groupBy({
+        by: ["status"],
+        where: { tenantId },
+        _count: { _all: true },
+      }),
+      this.prisma.job.findMany({
+        where: { tenantId, status: JobStatus.READY_FOR_INVOICE },
+        select: { id: true },
+      }),
+      this.prisma.job.count({
+        where: {
+          tenantId,
+          status: { notIn: [JobStatus.CANCELLED, JobStatus.COMPLETED] },
+          OR: [
+            { status: JobStatus.READY_FOR_INVOICE },
+            { invoiceReadyAt: { not: null } },
+          ],
+        },
+      }),
+      this.prisma.invoice.findMany({
+        where: {
+          tenantId,
+          sourceJobId: { not: null },
+          status: { in: [...INVOICED_INVOICE_STATUSES] },
+        },
+        select: { sourceJobId: true },
+      }),
+      this.prisma.transportOrder.count({ where: { tenantId } }),
+      this.prisma.transportOrder.groupBy({
+        by: ["status"],
+        where: { tenantId },
+        _count: { _all: true },
+      }),
+      this.prisma.trip.count({ where: { tenantId } }),
+      this.prisma.trip.groupBy({
+        by: ["status"],
+        where: { tenantId },
+        _count: { _all: true },
+      }),
+      this.prisma.trip.count({
+        where: {
+          tenantId,
+          status: { in: [TripStatus.PUBLISHED, TripStatus.ONGOING] },
+          OR: [{ startedAt: { gte: last24h } }, { updatedAt: { gte: last24h } }],
+        },
+      }),
+      this.prisma.inventory_units.count({ where: { tenantId } }),
+      this.prisma.inventory_units.groupBy({
+        by: ["status"],
+        where: { tenantId },
+        _count: { _all: true },
+      }),
+      this.prisma.drivers.count({ where: { tenantId } }),
+      this.prisma.trip.findMany({
+        where: {
+          tenantId,
+          status: { in: [TripStatus.PUBLISHED, TripStatus.ONGOING] },
+        },
+        select: { driverId: true },
+        take: 500,
+      }),
+      this.prisma.eventLog.findMany({
+        where: { tenantId },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        select: {
+          id: true,
+          entityType: true,
+          entityId: true,
+          eventType: true,
+          createdAt: true,
+          payload: true,
+        },
+      }),
+    ]);
 
     const jobByStatus = buildJobStatusCountMap(
       jobByStatusRaw.map((r) => ({
@@ -45,48 +130,12 @@ export class DashboardService {
       })),
     );
 
-    const readyJobs = await this.prisma.job.findMany({
-      where: { tenantId, status: JobStatus.READY_FOR_INVOICE },
-      select: { id: true },
-    });
-
-    const readyForInvoiceBroadCount = await this.prisma.job.count({
-      where: {
-        tenantId,
-        status: { notIn: [JobStatus.CANCELLED, JobStatus.COMPLETED] },
-        OR: [
-          { status: JobStatus.READY_FOR_INVOICE },
-          { invoiceReadyAt: { not: null } },
-        ],
-      },
-    });
-
-    const invoicedForJobs = await this.prisma.invoice.findMany({
-      where: {
-        tenantId,
-        sourceJobId: { not: null },
-        status: { in: [...INVOICED_INVOICE_STATUSES] },
-      },
-      select: { sourceJobId: true },
-    });
-
     const jobs = buildDashboardJobMetrics({
       total: jobTotal,
       byStatus: jobByStatus,
       readyJobIds: readyJobs.map((j) => j.id),
       invoicedSourceJobIds: invoicedForJobs.map((i) => i.sourceJobId),
       readyForInvoiceBroadCount,
-    });
-
-    // ---- Orders (legacy transport orders; kept for FE compatibility) ----
-    const orderTotal = await this.prisma.transportOrder.count({
-      where: { tenantId },
-    });
-
-    const orderByStatusRaw = await this.prisma.transportOrder.groupBy({
-      by: ["status"],
-      where: { tenantId },
-      _count: { _all: true },
     });
 
     const orderByStatus = toCountMap<OrderStatus>(
@@ -100,41 +149,12 @@ export class DashboardService {
       (orderByStatus.Dispatched ?? 0) +
       (orderByStatus.InTransit ?? 0);
 
-    // Deprecated: use jobs.readyForInvoiceNotInvoiced (READY_FOR_INVOICE jobs without Sent/Issued/Paid invoice).
     const ordersAwaitingInvoice = jobs.readyForInvoiceNotInvoiced;
-
-    // ---- Trips ----
-    const tripTotal = await this.prisma.trip.count({ where: { tenantId } });
-
-    const tripByStatusRaw = await this.prisma.trip.groupBy({
-      by: ["status"],
-      where: { tenantId },
-      _count: { _all: true },
-    });
 
     const tripByStatus = toCountMap<TripStatus>(
       tripByStatusRaw.map((r) => ({ key: r.status, count: r._count._all })),
       Object.values(TripStatus),
     );
-
-    const tripsActiveToday = await this.prisma.trip.count({
-      where: {
-        tenantId,
-        status: { in: [TripStatus.PUBLISHED, TripStatus.ONGOING] },
-        OR: [{ startedAt: { gte: last24h } }, { updatedAt: { gte: last24h } }],
-      },
-    });
-
-    // ---- Inventory Units ----
-    const unitsTotal = await this.prisma.inventory_units.count({
-      where: { tenantId },
-    });
-
-    const unitsByStatusRaw = await this.prisma.inventory_units.groupBy({
-      by: ["status"],
-      where: { tenantId },
-      _count: { _all: true },
-    });
 
     const unitsByStatus = toCountMap<InventoryUnitStatus>(
       unitsByStatusRaw.map((r) => ({ key: r.status, count: r._count._all })),
@@ -143,38 +163,9 @@ export class DashboardService {
 
     const unitsAvailable = unitsByStatus.Available ?? 0;
 
-    // ---- Drivers ----
-    const driversTotal = await this.prisma.drivers.count({
-      where: { tenantId },
-    });
-
-    const activeTrips = await this.prisma.trip.findMany({
-      where: {
-        tenantId,
-        status: { in: [TripStatus.PUBLISHED, TripStatus.ONGOING] },
-      },
-      select: { driverId: true },
-      take: 500,
-    });
-
     const activeDriverIds = new Set(
       activeTrips.map((t) => t.driverId).filter(Boolean) as string[],
     );
-
-    // ---- Recent Activity ----
-    const activity = await this.prisma.eventLog.findMany({
-      where: { tenantId },
-      orderBy: { createdAt: "desc" },
-      take: 10,
-      select: {
-        id: true,
-        entityType: true,
-        entityId: true,
-        eventType: true,
-        createdAt: true,
-        payload: true,
-      },
-    });
 
     return {
       jobs,

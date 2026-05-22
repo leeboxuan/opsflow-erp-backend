@@ -45,6 +45,16 @@ import { applyMappedFilter } from "../common/listing/listing.filters";
 import { buildOrderBy } from "../common/listing/listing.sort";
 import { applyQSearch } from "../common/listing/listing.search";
 import { buildDocumentFileDisplayFields } from "../common/document-file-display";
+import {
+  buildDocumentSignedUrlResponse,
+  JOB_DOCUMENTS_BUCKET,
+} from "../common/job-document-signed-url";
+import {
+  documentUploadedByInclude,
+  loadUploadActorFields,
+  resolveDocumentUploadedByFields,
+} from "./document-uploader.utils";
+import { DocumentSignedUrlDto, JobListItemDto } from "./dto/job.dto";
 import { buildTripDisplayRef } from "../common/trip-display-ref";
 import { suggestTripOrderByNearestNeighbour } from "../common/trip-order-suggest";
 import {
@@ -106,7 +116,6 @@ import {
   validateJobBatchImportRowFields,
 } from "./job-batch-import.helpers";
 
-const JOB_DOCUMENTS_BUCKET = "job-documents";
 
 const QUOTATION_MIMES = [
   "application/pdf",
@@ -136,13 +145,7 @@ const OTHER_JOB_DOC_MIMES = new Set<string>([
 ]);
 
 function toDocDto(d: any): JobDocumentDto {
-  const uploadedByName = String(
-    d?.uploadedByName
-    ?? d?.uploadedBy?.name
-    ?? d?.uploadedByNameSnapshot
-    ?? "",
-  ).trim();
-  const uploadedByEmail = String(d?.uploadedBy?.email ?? d?.uploadedByEmail ?? "").trim();
+  const uploader = resolveDocumentUploadedByFields(d);
   const fileDisplay =
     typeof d.storageKey === "string" && d.storageKey
       ? buildDocumentFileDisplayFields(d)
@@ -158,8 +161,10 @@ function toDocDto(d: any): JobDocumentDto {
     createdAt: d.createdAt,
     updatedAt: d.updatedAt ?? null,
     url: d.url ?? null,
-    uploadedByUserId: d.uploadedByUserId ?? null,
-    uploadedByName: uploadedByName || uploadedByEmail || (d.generatedBySystem ? "System" : null),
+    uploadedByUserId: uploader.uploadedByUserId,
+    uploadedByName: uploader.uploadedByName,
+    uploadedByEmail: uploader.uploadedByEmail,
+    uploadedAt: uploader.uploadedAt,
     generatedBySystem: d.generatedBySystem ?? false,
     generatedSource: d.generatedSource ?? null,
     jobId: d.jobId ?? null,
@@ -186,6 +191,72 @@ function normalizeExternalRef(value: unknown): string | null {
   if (value == null) return null;
   const trimmed = String(value).trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+/** Accept `items` or FE alias `cargoItems`; default to [] when omitted. */
+export function readCreateJobItemsInput(dto: {
+  items?: unknown;
+  cargoItems?: unknown;
+}): unknown[] {
+  const raw = dto.items ?? dto.cargoItems ?? [];
+  return Array.isArray(raw) ? raw : [];
+}
+
+export function parseValidJobItemsFromInput(rawItems: unknown[]): Array<{
+  itemCode: string;
+  description: string | null;
+  qty: number;
+}> {
+  return rawItems
+    .filter((i: any) => i?.itemCode?.trim())
+    .map((i: any) => ({
+      itemCode: String(i.itemCode).trim(),
+      description: i.description?.trim() || null,
+      qty: Math.max(1, Number(i.qty) || 1),
+    }));
+}
+
+export function assertCreateJobItemsRequiredForJobType(
+  jobType: JobType,
+  rawItems: unknown[],
+  validItems: Array<{ itemCode: string }>,
+): void {
+  if (jobType === JobType.LCL) {
+    return;
+  }
+  if (!rawItems.length) {
+    throw new BadRequestException("At least one item is required");
+  }
+  if (!validItems.length) {
+    throw new BadRequestException("At least one valid item is required");
+  }
+}
+
+function toJobListItemDto(
+  j: any,
+  driverNameByUserId?: Map<string, string | null>,
+): JobListItemDto {
+  const primaryTrip = Array.isArray(j.trips) ? j.trips[0] : null;
+  const assignedDriverId = primaryTrip?.assignedDriverUserId ?? null;
+  return {
+    id: j.id,
+    tenantId: j.tenantId,
+    customerCompanyId: j.customerCompanyId,
+    companyName: j.customerCompany?.name ?? null,
+    internalRef: j.internalRef,
+    externalRef: j.externalRef ?? null,
+    jobType: j.jobType,
+    status: j.status,
+    pickupDate: j.pickupDate ?? null,
+    createdAt: j.createdAt,
+    updatedAt: j.updatedAt,
+    assignedDriverId,
+    assignedDriverName:
+      (assignedDriverId && driverNameByUserId?.get(assignedDriverId)) || null,
+    tripCount: j._count?.trips ?? 0,
+    itemCount: j._count?.items ?? 0,
+    documentCount: j._count?.documents ?? 0,
+  };
 }
 
 function toJobDto(j: any): JobDto {
@@ -1074,40 +1145,77 @@ export class OpsJobsService {
     return `WF-${yyyy}-${MM}-${seq}-${typeCode}`;
   }
 
-  private async attachSignedUrl(doc: any): Promise<JobDocumentDto> {
-    const supabase = this.supabaseService.getClient();
-    const { data, error } = await supabase.storage
-      .from(JOB_DOCUMENTS_BUCKET)
-      .createSignedUrl(doc.storageKey, 60 * 60);
-
-    const signedUrl = error ? null : (data?.signedUrl ?? null);
-    const isPodSignature = doc.type === TripDocumentType.POD_SIGNATURE;
-    const fileDisplay = buildDocumentFileDisplayFields(doc);
+  /** Metadata only — no Supabase round-trip. */
+  private toDocumentMetadataDto(doc: any): JobDocumentDto {
+    const base = toDocDto(doc);
     return {
-      id: doc.id,
-      type: doc.type,
-      originalName: doc.originalName,
-      mimeType: doc.mimeType,
-      sizeBytes: doc.sizeBytes ?? null,
-      ...fileDisplay,
-      isActive: doc.isActive ?? true,
-      createdAt: doc.createdAt,
-      updatedAt: doc.updatedAt ?? null,
-      uploadedByUserId: doc.uploadedByUserId ?? null,
-      uploadedByName: doc.uploadedByNameSnapshot ?? null,
-      generatedBySystem: doc.generatedBySystem ?? false,
-      generatedSource: doc.generatedSource ?? null,
-      jobId: doc.jobId ?? null,
-      tripId: doc.tripId ?? null,
-      requiresSignature: isPodSignature ? false : (doc.requiresSignature ?? false),
-      isSigned: isPodSignature ? false : (doc.isSigned ?? false),
-      signedAt: isPodSignature ? null : (doc.signedAt ?? null),
-      signedByUserId: isPodSignature ? null : (doc.signedByUserId ?? null),
-      signedByName: isPodSignature ? null : (doc.signedByName ?? null),
-      url: signedUrl,
-      downloadUrl: signedUrl,
-      previewUrl: signedUrl,
+      ...base,
+      url: null,
+      downloadUrl: null,
+      previewUrl: null,
     };
+  }
+
+  private async attachSignedUrl(doc: any): Promise<JobDocumentDto> {
+    const base = toDocDto(doc);
+    const signedUrl = await buildDocumentSignedUrlResponse(
+      this.supabaseService.getClient(),
+      doc.storageKey,
+    );
+    return {
+      ...base,
+      url: signedUrl.previewUrl,
+      downloadUrl: signedUrl.downloadUrl,
+      previewUrl: signedUrl.previewUrl,
+    };
+  }
+
+  async getJobDocumentSignedUrl(
+    tenantId: string,
+    jobId: string,
+    documentId: string,
+    user: any,
+  ): Promise<DocumentSignedUrlDto> {
+    const job = await this.prisma.job.findFirst({ where: { id: jobId, tenantId } });
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job, user);
+
+    const doc = await this.prisma.jobDocument.findFirst({
+      where: { id: documentId, tenantId, jobId, isActive: true },
+    });
+    if (!doc) throw new NotFoundException("Document not found");
+
+    return buildDocumentSignedUrlResponse(
+      this.supabaseService.getClient(),
+      doc.storageKey,
+    );
+  }
+
+  async getTripDocumentSignedUrl(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    documentId: string,
+    user: any,
+  ): Promise<DocumentSignedUrlDto> {
+    const job = await this.prisma.job.findFirst({ where: { id: jobId, tenantId } });
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job, user);
+
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    const doc = await this.prisma.tripDocument.findFirst({
+      where: { id: documentId, tenantId, tripId, isActive: true },
+    });
+    if (!doc) throw new NotFoundException("Document not found");
+
+    return buildDocumentSignedUrlResponse(
+      this.supabaseService.getClient(),
+      doc.storageKey,
+    );
   }
 
   private isAllowedTripDocument(file: Express.Multer.File): boolean {
@@ -1441,7 +1549,7 @@ export class OpsJobsService {
     tenantId: string,
     query: JobListQueryDto,
     user: any,
-  ): Promise<PaginatedResponse<JobDto>> {
+  ): Promise<PaginatedResponse<JobListItemDto>> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
 
     const where: any = this.applyJobAccessFilter(tenantId, user);
@@ -1534,54 +1642,48 @@ export class OpsJobsService {
         orderBy,
         skip,
         take,
-        include: {
-          customerCompany: {
-            select: { id: true, name: true },
-          },
-          assignedDriver: {
-            select: { id: true, name: true, email: true },
-          },
-          createdBy: {
-            select: { id: true, name: true, email: true },
-          },
-          items: {
-            orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          tenantId: true,
+          customerCompanyId: true,
+          internalRef: true,
+          externalRef: true,
+          jobType: true,
+          status: true,
+          pickupDate: true,
+          createdAt: true,
+          updatedAt: true,
+          customerCompany: { select: { name: true } },
+          _count: {
+            select: {
+              items: true,
+              trips: true,
+              documents: { where: { isActive: true } },
+            },
           },
           trips: {
+            where: { status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] } },
             orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
-            select: {
-              id: true,
-              createdAt: true,
-              assignedDriverUserId: true,
-              jobSequence: true,
-              jobTripTemplate: true,
-              title: true,
-              tripPICName: true,
-              tripPICContact: true,
-              containerNumber: true,
-              carrier: true,
-              shipper: true,
-              vessel: true,
-              status: true,
-              plannedStartAt: true,
-              startedAt: true,
-              closedAt: true,
-              trailerNumber: true,
-              trailerLastLocationCode: true,
-              driverEarningCents: true,
-              earningLabelSnapshot: true,
-              earningRateMasterId: true,
-            },
+            take: 1,
+            select: { assignedDriverUserId: true },
           },
         },
       }),
     ]);
 
-    const jobDtos = jobs.map(toJobDto);
-    await this.attachTripAssignedDriverNamesForJobs(tenantId, jobDtos);
+    const driverNameMap = await this.buildUserNameMapByIds(
+      tenantId,
+      Array.from(
+        new Set(
+          jobs
+            .map((j) => j.trips?.[0]?.assignedDriverUserId)
+            .filter(Boolean) as string[],
+        ),
+      ),
+    );
 
     return {
-      data: jobDtos,
+      data: jobs.map((j) => toJobListItemDto(j, driverNameMap)),
       meta: buildPaginationMeta(page, pageSize, total),
     };
   }
@@ -1601,23 +1703,9 @@ export class OpsJobsService {
       throw new BadRequestException("Customer company not found");
     }
 
-    const items = Array.isArray((dto as any).items) ? (dto as any).items : [];
-
-    if (!items.length) {
-      throw new BadRequestException("At least one item is required");
-    }
-
-    const validItems = items
-      .filter((i: any) => i?.itemCode?.trim())
-      .map((i: any) => ({
-        itemCode: i.itemCode.trim(),
-        description: i.description?.trim() || null,
-        qty: Math.max(1, Number(i.qty) || 1),
-      }));
-
-    if (!validItems.length) {
-      throw new BadRequestException("At least one valid item is required");
-    }
+    const rawItems = readCreateJobItemsInput(dto);
+    const validItems = parseValidJobItemsFromInput(rawItems);
+    assertCreateJobItemsRequiredForJobType(dto.jobType, rawItems, validItems);
 
     const importDetails = (dto as any).importDetails ?? {};
     const exportDetails = (dto as any).exportDetails ?? {};
@@ -1832,14 +1920,18 @@ export class OpsJobsService {
         returnLastDay: returnLastDay ? new Date(returnLastDay) : null,
         exportOriginDepotCode: exportOriginDepotCode || null,
         exportPortCode: exportPortCode || null,
-        items: {
-          create: validItems.map((item: any) => ({
-            tenantId,
-            itemCode: item.itemCode,
-            description: item.description,
-            qty: item.qty,
-          })),
-        },
+        ...(validItems.length > 0
+          ? {
+              items: {
+                create: validItems.map((item) => ({
+                  tenantId,
+                  itemCode: item.itemCode,
+                  description: item.description,
+                  qty: item.qty,
+                })),
+              },
+            }
+          : {}),
       },
       include: {
         customerCompany: {
@@ -1972,6 +2064,7 @@ export class OpsJobsService {
         documents: {
           where: { isActive: true },
           orderBy: { createdAt: "desc" },
+          include: documentUploadedByInclude,
         },
       },
     });
@@ -2017,6 +2110,7 @@ export class OpsJobsService {
         documents: {
           where: { isActive: true },
           orderBy: { createdAt: "desc" },
+          include: documentUploadedByInclude,
         },
       },
     });
@@ -2049,11 +2143,9 @@ export class OpsJobsService {
       dto.assignedVehiclePlateNo = vehicle?.plateNo ?? fleetVehicle?.plateNo ?? null;
     }
 
-    if (!job.documents?.length) return dto;
-
-    dto.documents = await Promise.all(
-      job.documents.map((doc: any) => this.attachSignedUrl(doc)),
-    );
+    if (job.documents?.length) {
+      dto.documents = job.documents.map((doc: any) => this.toDocumentMetadataDto(doc));
+    }
 
     return dto;
   }
@@ -2576,6 +2668,7 @@ export class OpsJobsService {
       file.mimetype ?? "application/octet-stream",
     );
 
+    const uploadActor = await loadUploadActorFields(this.prisma, actorUserId, user);
     const doc = await this.prisma.jobDocument.create({
       data: {
         tenantId,
@@ -2586,10 +2679,9 @@ export class OpsJobsService {
         originalName: file.originalname ?? "quotation",
         mimeType: file.mimetype ?? "application/octet-stream",
         sizeBytes: file.size ?? null,
-        uploadedByUserId: actorUserId ?? null,
-        uploadedByNameSnapshot:
-          user?.name?.trim() || user?.email?.trim() || null,
+        ...uploadActor,
       },
+      include: documentUploadedByInclude,
     });
 
     await this.audit.log(
@@ -2645,6 +2737,7 @@ export class OpsJobsService {
       file.mimetype ?? "application/octet-stream",
     );
 
+    const uploadActor = await loadUploadActorFields(this.prisma, actorUserId, user);
     const doc = await this.prisma.jobDocument.create({
       data: {
         tenantId,
@@ -2655,10 +2748,9 @@ export class OpsJobsService {
         originalName: file.originalname ?? "document",
         mimeType: file.mimetype ?? "application/octet-stream",
         sizeBytes: file.size ?? null,
-        uploadedByUserId: actorUserId ?? null,
-        uploadedByNameSnapshot:
-          user?.name?.trim() || user?.email?.trim() || null,
+        ...uploadActor,
       },
+      include: documentUploadedByInclude,
     });
 
     await this.audit.log(
@@ -2742,8 +2834,7 @@ export class OpsJobsService {
       );
     }
 
-    const uploadedByNameSnapshot =
-      user?.name?.trim() || user?.email?.trim() || null;
+    const uploadActor = await loadUploadActorFields(this.prisma, userId, user);
     const doc = await this.prisma.tripDocument.create({
       data: {
         tenantId,
@@ -2753,11 +2844,14 @@ export class OpsJobsService {
         originalName: fileName,
         mimeType: "application/pdf",
         sizeBytes: pdfBuffer.length,
-        uploadedByUserId: userId ?? null,
-        uploadedByNameSnapshot,
+        uploadedByUserId: uploadActor.uploadedByUserId,
+        uploadedByNameSnapshot:
+          uploadActor.uploadedByNameSnapshot
+          ?? (uploadActor.uploadedByUserId ? null : "System"),
         generatedBySystem: true,
         generatedSource: source,
       },
+      include: documentUploadedByInclude,
     });
 
     await this.audit.log(
@@ -2806,9 +2900,10 @@ export class OpsJobsService {
         type: { in: [JobDocumentType.QUOTATION, JobDocumentType.OTHER] },
       },
       orderBy: { createdAt: "desc" },
+      include: documentUploadedByInclude,
     });
 
-    return Promise.all(docs.map((doc) => this.attachSignedUrl(doc)));
+    return docs.map((doc) => this.toDocumentMetadataDto(doc));
   }
 
   async getAudit(
@@ -4464,7 +4559,11 @@ export class OpsJobsService {
       include: {
         vehicles: { select: { id: true, plateNo: true, type: true } },
         fleetVehicle: { select: { id: true, plateNo: true, type: true } },
-        documents: { where: { isActive: true }, orderBy: { createdAt: "desc" } },
+        documents: {
+          where: { isActive: true },
+          orderBy: { createdAt: "desc" },
+          include: documentUploadedByInclude,
+        },
         payoutLines: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       },
     });
@@ -4530,7 +4629,7 @@ export class OpsJobsService {
             .filter((line) => line.isSelectableForTripEarning)
             .reduce((sum, line) => sum + (line.amountCents ?? 0), 0)
         : (t.driverEarningCents ?? null);
-      const signedDocs = await Promise.all((t.documents ?? []).map((d) => this.attachSignedUrl(d)));
+      const tripDocs = (t.documents ?? []).map((d) => this.toDocumentMetadataDto(d));
       return {
       ...route,
       id: t.id,
@@ -4605,7 +4704,7 @@ export class OpsJobsService {
         destinationLat: destination?.lat ?? null,
         destinationLng: destination?.lng ?? null,
       },
-      documents: signedDocs,
+      documents: tripDocs,
       documentStatus: deriveTripDocumentStatus(t.documents ?? []),
       completionRuleJson:
         (t.completionRuleJson as Record<string, unknown> | null) ?? null,
@@ -4635,8 +4734,9 @@ export class OpsJobsService {
         },
       },
       orderBy: { createdAt: "desc" },
+      include: documentUploadedByInclude,
     });
-    return Promise.all(docs.map((d) => this.attachSignedUrl(d)));
+    return docs.map((d) => this.toDocumentMetadataDto(d));
   }
 
   async uploadTripDocument(
@@ -4671,6 +4771,7 @@ export class OpsJobsService {
     const previousDoc = singleActiveTripTypes.has(type)
       ? await this.replaceTripDocumentByType(tenantId, tripId, type)
       : null;
+    const uploadActor = await loadUploadActorFields(this.prisma, actorUserId, user);
     const doc = await this.prisma.tripDocument.create({
       data: {
         tenantId,
@@ -4681,14 +4782,13 @@ export class OpsJobsService {
         originalName: file.originalname ?? "trip-doc",
         mimeType: file.mimetype ?? "application/octet-stream",
         sizeBytes: file.size ?? null,
-        uploadedByUserId: actorUserId ?? null,
-        uploadedByNameSnapshot:
-          user?.name?.trim() || user?.email?.trim() || null,
+        ...uploadActor,
         requiresSignature:
           type === TripDocumentType.POD_SIGNATURE
             ? false
             : !!requiresSignature,
       },
+      include: documentUploadedByInclude,
     });
     await this.audit.log(
       tenantId,
@@ -4737,6 +4837,7 @@ export class OpsJobsService {
         signedByUserId: actorUserId ?? null,
         signedByName: signedByName?.trim() || null,
       },
+      include: documentUploadedByInclude,
     });
     await this.audit.log(
       tenantId,
@@ -4775,7 +4876,11 @@ export class OpsJobsService {
         },
         vehicles: { select: { id: true, plateNo: true, type: true } },
         fleetVehicle: { select: { id: true, plateNo: true, type: true } },
-        documents: { where: { isActive: true }, orderBy: { createdAt: "desc" } },
+        documents: {
+          where: { isActive: true },
+          orderBy: { createdAt: "desc" },
+          include: documentUploadedByInclude,
+        },
         payoutLines: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
         documentRequirements: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       },
@@ -4792,7 +4897,7 @@ export class OpsJobsService {
           },
         })
       : null;
-    const docs = await Promise.all((trip.documents ?? []).map((d) => this.attachSignedUrl(d)));
+    const docs = (trip.documents ?? []).map((d) => this.toDocumentMetadataDto(d));
     const driverNameMap = await this.buildUserNameMapByIds(
       tenantId,
       [

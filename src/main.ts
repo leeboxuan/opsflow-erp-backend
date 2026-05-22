@@ -15,13 +15,15 @@ function validateAuthEnv(): void {
   }
 }
 
+const isProduction = process.env.NODE_ENV === 'production';
+const enableSwagger =
+  process.env.ENABLE_SWAGGER === 'true' || !isProduction;
+
 async function bootstrap() {
   validateAuthEnv();
 
   const app = await NestFactory.create(AppModule);
   app.useGlobalFilters(new PrismaExceptionFilter(), new AllExceptionsFilter());
-  // Enable CORS for web app(s)
-  // WEB_APP_URLS supports comma-separated origins, e.g. "http://localhost:3000,https://opsflow-erp-web.onrender.com"
   const rawOrigins =
     process.env.WEB_APP_URLS || process.env.WEB_APP_URL || "http://localhost:3000";
 
@@ -32,16 +34,20 @@ async function bootstrap() {
 
     app.enableCors({
       origin: (origin, cb) => {
-        console.log("[CORS] origin:", origin);
-        console.log("[CORS] allowed:", allowedOrigins);
-    
+        if (!isProduction) {
+          console.log("[CORS] origin:", origin);
+          console.log("[CORS] allowed:", allowedOrigins);
+        }
+
         if (!origin) return cb(null, true);
-    
+
         const normalized = origin.replace(/\/$/, "");
         const ok = allowedOrigins.includes(normalized);
-    
-        console.log("[CORS] normalized:", normalized, "ok:", ok);
-    
+
+        if (!isProduction) {
+          console.log("[CORS] normalized:", normalized, "ok:", ok);
+        }
+
         return cb(null, ok);
       },
       credentials: true,
@@ -49,17 +55,14 @@ async function bootstrap() {
       allowedHeaders: ["Content-Type", "Authorization", "x-tenant-id"],
     });
 
-  // ✅ Handle CORS preflight globally (fixes OPTIONS 404)
   app.use((req: any, res: any, next: any) => {
     if (req.method === "OPTIONS") {
       return res.sendStatus(204);
     }
     next();
   });
-  // Set global prefix for all routes
   app.setGlobalPrefix('api');
 
-  // Enable validation
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -68,32 +71,32 @@ async function bootstrap() {
     }),
   );
 
-
-
-  // Swagger documentation setup
-  const config = new DocumentBuilder()
-    .setTitle('OpsFlow ERP API')
-    .setDescription('API documentation for OpsFlow ERP Transport Management System')
-    .setVersion('1.0')
-    .addBearerAuth(
-      {
-        type: 'http',
-        scheme: 'bearer',
-        bearerFormat: 'JWT',
-        name: 'JWT',
-        description: 'Enter JWT token',
-        in: 'header',
-      },
-      'JWT-auth',
-    )
-    .build();
-  // Use 'as any' to avoid type incompatibility issues across nested Node module resolutions
-  const document = SwaggerModule.createDocument(app as any, config);
-  SwaggerModule.setup('api/docs', app as any, document);
+  if (enableSwagger) {
+    const config = new DocumentBuilder()
+      .setTitle('OpsFlow ERP API')
+      .setDescription('API documentation for OpsFlow ERP Transport Management System')
+      .setVersion('1.0')
+      .addBearerAuth(
+        {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          name: 'JWT',
+          description: 'Enter JWT token',
+          in: 'header',
+        },
+        'JWT-auth',
+      )
+      .build();
+    const document = SwaggerModule.createDocument(app as any, config);
+    SwaggerModule.setup('api/docs', app as any, document);
+  }
 
   const port = process.env.PORT ?? 3001;
   await app.listen(port, '0.0.0.0');
   console.log(`API server running on http://localhost:${port}`);
-  console.log(`Swagger documentation available at http://localhost:${port}/api/docs`);
+  if (enableSwagger) {
+    console.log(`Swagger documentation available at http://localhost:${port}/api/docs`);
+  }
 }
 bootstrap();

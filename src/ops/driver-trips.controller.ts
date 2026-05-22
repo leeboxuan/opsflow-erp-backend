@@ -61,4 +61,21 @@ export class DriverTripsController {
     const userId = req.user.userId;
     return this.driverJobs.getTripDetailForDriver(tenantId, tripId, userId);
   }
+
+  @Get(":tripId/documents/:documentId/signed-url")
+  @ApiOperation({ summary: "Get signed preview/download URLs for a trip document (driver)" })
+  async getTripDocumentSignedUrl(
+    @Req() req: any,
+    @Param("tripId") tripId: string,
+    @Param("documentId") documentId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.getDriverTripDocumentSignedUrl(
+      tenantId,
+      tripId,
+      documentId,
+      userId,
+    );
+  }
 }

@@ -98,6 +98,8 @@ model User {
   customerCompanyDocumentsGenerated CustomerCompanyDocument[] @relation("CustomerCompanyDocumentGeneratedBy")
   jobChargesSelected JobCharge[]       @relation("JobChargeSelectedBy")
   masterFilesUploaded MasterFile[]      @relation("MasterFileUploadedBy")
+  jobDocumentsUploaded JobDocument[]   @relation("JobDocumentUploadedBy")
+  tripDocumentsUploaded TripDocument[] @relation("TripDocumentUploadedBy")
 
   @@index([customerCompanyId])
   @@index([customerContactId])
@@ -925,8 +927,9 @@ model JobDocument {
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
-  job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job        Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uploadedBy User?  @relation("JobDocumentUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, jobId])
   @@index([tenantId, type])
@@ -1158,8 +1161,9 @@ model TripDocument {
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip       Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  uploadedBy User?  @relation("TripDocumentUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, tripId])
   @@index([tenantId, type])

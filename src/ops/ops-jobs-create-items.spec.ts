@@ -1,0 +1,212 @@
+import { BadRequestException } from "@nestjs/common";
+import { JobType, Role } from "@prisma/client";
+import {
+  assertCreateJobItemsRequiredForJobType,
+  OpsJobsService,
+  readCreateJobItemsInput,
+} from "./ops-jobs.service";
+
+describe("create job items (LCL optional)", () => {
+  describe("readCreateJobItemsInput", () => {
+    it("defaults missing items to []", () => {
+      expect(readCreateJobItemsInput({ jobType: JobType.LCL } as any)).toEqual([]);
+    });
+
+    it("reads cargoItems alias", () => {
+      expect(
+        readCreateJobItemsInput({
+          cargoItems: [{ itemCode: "A01", qty: 2 }],
+        } as any),
+      ).toHaveLength(1);
+    });
+  });
+
+  describe("assertCreateJobItemsRequiredForJobType", () => {
+    it("allows empty items for LCL", () => {
+      expect(() =>
+        assertCreateJobItemsRequiredForJobType(JobType.LCL, [], []),
+      ).not.toThrow();
+    });
+
+    it("requires items for IMPORT", () => {
+      expect(() =>
+        assertCreateJobItemsRequiredForJobType(JobType.IMPORT, [], []),
+      ).toThrow(new BadRequestException("At least one item is required"));
+    });
+
+    it("requires valid item codes for EXPORT", () => {
+      expect(() =>
+        assertCreateJobItemsRequiredForJobType(
+          JobType.EXPORT,
+          [{ itemCode: "  " }],
+          [],
+        ),
+      ).toThrow(new BadRequestException("At least one valid item is required"));
+    });
+  });
+
+  describe("OpsJobsService.create", () => {
+    const freshJobShape = () => ({
+      id: "job1",
+      tenantId: "t1",
+      customerCompanyId: "comp1",
+      internalRef: "WF-2026-05-0001-LCL",
+      externalRef: null,
+      jobType: JobType.LCL,
+      status: "ONGOING",
+      notes: null,
+      createdByUserId: "u1",
+      pickupDate: null,
+      pickupAddress1: "7 Gul Cir",
+      pickupAddress2: null,
+      pickupPostal: null,
+      pickupContactName: null,
+      pickupContactPhone: null,
+      deliveryAddress1: "8 Gul Cir",
+      deliveryAddress2: null,
+      deliveryPostal: null,
+      receiverName: "Derek",
+      receiverPhone: "91234565",
+      assignedDriverId: null,
+      assignedVehicleId: null,
+      assignedFleetVehicleId: null,
+      assignedVehiclePlateNo: null,
+      assignedAt: null,
+      startedAt: null,
+      completedAt: null,
+      deliveredAt: null,
+      podRecipientName: null,
+      cancelledReason: null,
+      cancelledAt: null,
+      cancelledByUserId: null,
+      lastLat: null,
+      lastLng: null,
+      lastLocationAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      pickupPortCode: null,
+      returningDepotCode: null,
+      exportPortCode: null,
+      exportOriginDepotCode: null,
+      vesselName: null,
+      customerCompany: { id: "comp1", name: "ACME" },
+      assignedDriver: null,
+      createdBy: { id: "u1", name: "Ops", email: "ops@example.com" },
+      items: [],
+      trips: [],
+      charges: [],
+      documents: [],
+    });
+
+    function makeCreatePrisma() {
+      return {
+        customer_companies: {
+          findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
+        },
+        job_internal_ref_counters: {
+          upsert: jest.fn().mockResolvedValue({ nextSeq: 1 }),
+        },
+        job: {
+          create: jest.fn().mockImplementation(({ data }) =>
+            Promise.resolve({
+              ...freshJobShape(),
+              pickupAddress1: data.pickupAddress1,
+              deliveryAddress1: data.deliveryAddress1,
+            }),
+          ),
+          findFirst: jest.fn().mockResolvedValue(freshJobShape()),
+          update: jest.fn().mockResolvedValue({}),
+        },
+        trip: {
+          createMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findMany: jest
+            .fn()
+            .mockResolvedValueOnce([{ id: "trip1", status: "DRAFT" }])
+            .mockResolvedValueOnce([{ id: "trip1" }]),
+          update: jest.fn().mockResolvedValue({}),
+        },
+        masterLogisticsLocation: { findFirst: jest.fn().mockResolvedValue(null) },
+      };
+    }
+
+    function makeSvc(prisma: ReturnType<typeof makeCreatePrisma>) {
+      const svc = new OpsJobsService(
+        prisma as any,
+        { log: jest.fn().mockResolvedValue(undefined) } as any,
+        { getClient: jest.fn() } as any,
+      );
+      jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
+      jest.spyOn(svc as any, "attachTripAssignedDriverNamesForJobs").mockResolvedValue(undefined);
+      return svc;
+    }
+
+    const baseLclDto = {
+      jobType: JobType.LCL,
+      customerCompanyId: "comp1",
+      pickupAddress1: "7 Gul Cir",
+      deliveryAddress1: "8 Gul Cir",
+      receiverName: "Derek",
+      receiverPhone: "91234565",
+    };
+
+    it("creates LCL job without items", async () => {
+      const prisma = makeCreatePrisma();
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create("t1", baseLclDto as any, { userId: "u1", role: Role.OPS }),
+      ).resolves.toBeTruthy();
+
+      const createArg = prisma.job.create.mock.calls[0][0];
+      expect(createArg.data.items).toBeUndefined();
+    });
+
+    it("creates LCL job with empty items array", async () => {
+      const prisma = makeCreatePrisma();
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          { ...baseLclDto, items: [] } as any,
+          { userId: "u1", role: Role.OPS },
+        ),
+      ).resolves.toBeTruthy();
+    });
+
+    it("creates LCL job with cargoItems alias omitted when items absent", async () => {
+      const prisma = makeCreatePrisma();
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          { ...baseLclDto, cargoItems: [] } as any,
+          { userId: "u1", role: Role.OPS },
+        ),
+      ).resolves.toBeTruthy();
+    });
+
+    it("rejects IMPORT job without items", async () => {
+      const prisma = makeCreatePrisma();
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.IMPORT,
+            importDetails: {
+              pickupPortCode: "JURONG",
+              returningDepotCode: "GUL",
+            },
+          } as any,
+          { userId: "u1", role: Role.OPS },
+        ),
+      ).rejects.toThrow("At least one item is required");
+
+      expect(prisma.job.create).not.toHaveBeenCalled();
+    });
+  });
+});

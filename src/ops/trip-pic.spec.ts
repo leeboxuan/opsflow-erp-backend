@@ -129,73 +129,45 @@ describe("Trip PIC fields", () => {
 
   it("job detail trip list returns tripPICName/tripPICContact/container and shipping refs", async () => {
     const prisma: any = {
-      $transaction: jest.fn().mockResolvedValue([
-        1,
-        [{
-          id: "job1",
-          tenantId: "t1",
-          customerCompanyId: "c1",
-          customerCompany: { id: "c1", name: "ACME" },
-          internalRef: "WF-2026-04-0002-IMP",
-          externalRef: null,
-          jobType: JobType.IMPORT,
-          status: JobStatus.ONGOING,
-          pickupDate: new Date("2026-05-01T00:00:00.000Z"),
-          pickupAddress1: "A",
-          deliveryAddress1: "B",
-          receiverName: "Job PIC",
-          receiverPhone: "123",
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          trips: [{
-            id: "trip1",
-            createdAt: new Date(),
-            assignedDriverUserId: null,
-            jobSequence: 1,
-            tripSequence: 1,
-            jobTripTemplate: null,
-            title: "Trip 1",
-            status: TripStatus.PUBLISHED,
-            plannedStartAt: null,
-            startedAt: null,
-            closedAt: null,
-            trailerNumber: null,
-            trailerLastLocationCode: null,
-            driverEarningCents: null,
-            earningLabelSnapshot: null,
-            earningRateMasterId: null,
-            tripPICName: "Ops PIC",
-            tripPICContact: "999",
-            containerNumber: "CONT-001",
-            carrier: "Carrier A",
-            shipper: "Shipper A",
-            vessel: "Vessel A",
-          }],
-          items: [],
-          documents: [],
-          assignedDriver: null,
-          createdBy: null,
-        }],
-      ]),
-      tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: jest.fn((ops: any[]) => Promise.all(ops)),
+      tenantMembership: {
+        findMany: jest.fn().mockResolvedValue([
+          { userId: "driver-1", user: { name: "Driver One", email: "d@example.com" } },
+        ]),
+      },
       trip: { findMany: jest.fn().mockResolvedValue([]) },
       job: {
         count: jest.fn().mockResolvedValue(1),
-        findMany: jest.fn().mockResolvedValue([]),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "job1",
+            tenantId: "t1",
+            customerCompanyId: "c1",
+            internalRef: "WF-2026-04-0002-IMP",
+            externalRef: null,
+            jobType: JobType.IMPORT,
+            status: JobStatus.ONGOING,
+            pickupDate: new Date("2026-05-01T00:00:00.000Z"),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            customerCompany: { name: "ACME" },
+            _count: { items: 0, trips: 1, documents: 0 },
+            trips: [{ assignedDriverUserId: "driver-1" }],
+          },
+        ]),
       },
     };
     const svc = new OpsJobsService(prisma, { log: jest.fn() } as any, {} as any);
     const res = await svc.list("t1", {} as any, { role: Role.OPS, customerCompanyId: null });
-    expect(res.data[0].trips?.[0]).toEqual(
+    expect(res.data[0]).toEqual(
       expect.objectContaining({
-        tripPICName: "Ops PIC",
-        tripPICContact: "999",
-        containerNumber: "CONT-001",
-        carrier: "Carrier A",
-        shipper: "Shipper A",
-        vessel: "Vessel A",
+        id: "job1",
+        tripCount: 1,
+        itemCount: 0,
+        assignedDriverId: "driver-1",
       }),
     );
+    expect(res.data[0]).not.toHaveProperty("trips");
   });
 
   it("driver trip detail returns tripPICName/tripPICContact/container and shipping refs", async () => {
