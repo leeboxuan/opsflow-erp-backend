@@ -58,6 +58,20 @@ export const TRIP_COMPLETION_RULES: Record<JobTripTemplate, TripCompletionRule> 
       requiredUploadTypesExact: [TripDocumentType.POD_SIGNATURE],
     },
   },
+  [JobTripTemplate.CUSTOMER_TO_GUL]: {
+    requireGeneratedDoSigned: true,
+    tripUploads: {
+      minUploadCount: 1,
+      allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
+    },
+  },
+  [JobTripTemplate.GUL_TO_CUSTOMER]: {
+    requireGeneratedDoSigned: true,
+    tripUploads: {
+      minUploadCount: 1,
+      allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
+    },
+  },
   [JobTripTemplate.CUSTOM]: {
     requireGeneratedDoSigned: true,
     tripUploads: {
@@ -66,6 +80,127 @@ export const TRIP_COMPLETION_RULES: Record<JobTripTemplate, TripCompletionRule> 
     },
   },
 };
+
+/**
+ * Fixed 7 Gul Circle depot snapshot (GUL7 / GUL7_DEPOT master logistics location).
+ * Coordinates match prisma/seeds/master-logistics-locations.seed.ts.
+ */
+export const GUL_CIRCLE_ROUTE_DEFAULTS = {
+  label: "7 Gul Circle",
+  summary: "7 Gul Circle",
+  addressLine1: "7 Gul Circle",
+  postalCode: "629563",
+  country: "SG",
+  lat: 1.30995,
+  lng: 103.65573,
+  placeId: null as string | null,
+} as const;
+
+export type AppendTripRouteInput = {
+  originSummary?: string | null;
+  destinationSummary?: string | null;
+  originPostalCode?: string | null;
+  destinationPostalCode?: string | null;
+  originPlaceId?: string | null;
+  destinationPlaceId?: string | null;
+  originLat?: number | null;
+  originLng?: number | null;
+  destinationLat?: number | null;
+  destinationLng?: number | null;
+};
+
+export type ResolvedAppendTripRouteSnapshot = {
+  originLabel: string | null;
+  destinationLabel: string | null;
+  originAddressLine1: string | null;
+  destinationAddressLine1: string | null;
+  originPostalCode: string | null;
+  destinationPostalCode: string | null;
+  originCountry: string | null;
+  destinationCountry: string | null;
+  originPlaceId: string | null;
+  destinationPlaceId: string | null;
+  originLat: number | null;
+  originLng: number | null;
+  destinationLat: number | null;
+  destinationLng: number | null;
+};
+
+/** Resolve route snapshot for append-trip, including map-ready Gul Circle defaults. */
+export function resolveAppendTripRouteSnapshot(
+  template: JobTripTemplate,
+  dto: AppendTripRouteInput,
+): ResolvedAppendTripRouteSnapshot {
+  const g = GUL_CIRCLE_ROUTE_DEFAULTS;
+  let originLabel = dto.originSummary?.trim() || null;
+  let destinationLabel = dto.destinationSummary?.trim() || null;
+  let originAddressLine1 = originLabel;
+  let destinationAddressLine1 = destinationLabel;
+  let originPostalCode = dto.originPostalCode?.trim() || null;
+  let destinationPostalCode = dto.destinationPostalCode?.trim() || null;
+  let originCountry: string | null = originLabel ? "SG" : null;
+  let destinationCountry: string | null = destinationLabel ? "SG" : null;
+  let originPlaceId = dto.originPlaceId?.trim() || null;
+  let destinationPlaceId = dto.destinationPlaceId?.trim() || null;
+  let originLat = dto.originLat ?? null;
+  let originLng = dto.originLng ?? null;
+  let destinationLat = dto.destinationLat ?? null;
+  let destinationLng = dto.destinationLng ?? null;
+
+  if (template === JobTripTemplate.CUSTOMER_TO_GUL) {
+    if (!destinationLabel) destinationLabel = g.label;
+    if (!destinationAddressLine1) destinationAddressLine1 = g.addressLine1;
+    if (!destinationPostalCode) destinationPostalCode = g.postalCode;
+    destinationCountry = g.country;
+    if (destinationLat == null) destinationLat = g.lat;
+    if (destinationLng == null) destinationLng = g.lng;
+  } else if (template === JobTripTemplate.GUL_TO_CUSTOMER) {
+    if (!originLabel) originLabel = g.label;
+    if (!originAddressLine1) originAddressLine1 = g.addressLine1;
+    if (!originPostalCode) originPostalCode = g.postalCode;
+    originCountry = g.country;
+    if (originLat == null) originLat = g.lat;
+    if (originLng == null) originLng = g.lng;
+  }
+
+  return {
+    originLabel,
+    destinationLabel,
+    originAddressLine1,
+    destinationAddressLine1,
+    originPostalCode,
+    destinationPostalCode,
+    originCountry,
+    destinationCountry,
+    originPlaceId,
+    destinationPlaceId,
+    originLat,
+    originLng,
+    destinationLat,
+    destinationLng,
+  };
+}
+
+export function jobTripTemplateDisplayLabel(template: JobTripTemplate): string {
+  switch (template) {
+    case JobTripTemplate.PICKUP_TO_DELIVERY:
+      return "Pickup → Delivery";
+    case JobTripTemplate.DELIVERY_TO_DEPOT:
+      return "Delivery → Depot";
+    case JobTripTemplate.DEPOT_TO_DELIVERY:
+      return "Depot → Delivery";
+    case JobTripTemplate.DELIVERY_TO_PORT:
+      return "Delivery → Port";
+    case JobTripTemplate.CUSTOMER_TO_GUL:
+      return "Customer → Gul Circle";
+    case JobTripTemplate.GUL_TO_CUSTOMER:
+      return "Gul Circle → Customer";
+    case JobTripTemplate.CUSTOM:
+      return "Custom";
+    default:
+      return template;
+  }
+}
 
 /** Default JSON rule checked by driver trip completion (see DriverJobsService). */
 export function completionRuleForTemplate(

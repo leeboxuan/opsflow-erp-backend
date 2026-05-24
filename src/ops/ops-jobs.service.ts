@@ -94,6 +94,9 @@ import {
   tripCreateManyForJob,
   lclPickupToDeliveryRouteSnapshot,
   completionRuleForTemplate,
+  GUL_CIRCLE_ROUTE_DEFAULTS,
+  jobTripTemplateDisplayLabel,
+  resolveAppendTripRouteSnapshot,
 } from "./job-workflow.helpers";
 import type {
   ImportJobRowDto,
@@ -791,6 +794,24 @@ function deriveTripRouteSummaryFromJobAndTemplate(job: any, trip: any): {
         toAddress: portLabel,
         fromType: "DELIVERY",
         toType: "PORT",
+      };
+    case JobTripTemplate.CUSTOMER_TO_GUL:
+      return {
+        fromLabel: deliveryAddress ?? pickupAddress ?? "Customer site",
+        toLabel: GUL_CIRCLE_ROUTE_DEFAULTS.summary,
+        fromAddress: deliveryAddress ?? pickupAddress,
+        toAddress: GUL_CIRCLE_ROUTE_DEFAULTS.summary,
+        fromType: deliveryAddress ? "DELIVERY" : pickupAddress ? "PICKUP" : null,
+        toType: "GUL",
+      };
+    case JobTripTemplate.GUL_TO_CUSTOMER:
+      return {
+        fromLabel: GUL_CIRCLE_ROUTE_DEFAULTS.summary,
+        toLabel: deliveryAddress ?? pickupAddress ?? "Customer site",
+        fromAddress: GUL_CIRCLE_ROUTE_DEFAULTS.summary,
+        toAddress: deliveryAddress ?? pickupAddress,
+        fromType: "GUL",
+        toType: deliveryAddress ? "DELIVERY" : pickupAddress ? "PICKUP" : null,
       };
     default:
       return {
@@ -3284,6 +3305,9 @@ export class OpsJobsService {
       earningLabelSnapshot = master.label;
     }
 
+    const tripDisplayLabel = jobTripTemplateDisplayLabel(normalizedTemplate);
+    const route = resolveAppendTripRouteSnapshot(normalizedTemplate, dto);
+
     const trip = await this.prisma.trip.create({
       data: {
         tenantId,
@@ -3291,8 +3315,8 @@ export class OpsJobsService {
         jobSequence: nextSeq,
         tripSequence: nextSeq,
         jobTripTemplate: normalizedTemplate,
-        title: dto.title?.trim() || normalizedTemplate,
-        displayTitle: dto.title?.trim() || normalizedTemplate,
+        title: dto.title?.trim() || tripDisplayLabel,
+        displayTitle: dto.title?.trim() || tripDisplayLabel,
         tripPICName: dto.tripPICName?.trim() || null,
         tripPICContact: dto.tripPICContact?.trim() || null,
         containerNumber: dto.containerNumber?.trim() || null,
@@ -3300,16 +3324,20 @@ export class OpsJobsService {
         shipper: dto.shipper?.trim() || null,
         vessel: dto.vessel?.trim() || null,
         plannedStartAt,
-        originLabel: dto.originSummary?.trim() || null,
-        destinationLabel: dto.destinationSummary?.trim() || null,
-        originPostalCode: dto.originPostalCode?.trim() || null,
-        destinationPostalCode: dto.destinationPostalCode?.trim() || null,
-        originPlaceId: dto.originPlaceId?.trim() || null,
-        destinationPlaceId: dto.destinationPlaceId?.trim() || null,
-        originLat: dto.originLat ?? null,
-        originLng: dto.originLng ?? null,
-        destinationLat: dto.destinationLat ?? null,
-        destinationLng: dto.destinationLng ?? null,
+        originLabel: route.originLabel,
+        destinationLabel: route.destinationLabel,
+        originAddressLine1: route.originAddressLine1,
+        destinationAddressLine1: route.destinationAddressLine1,
+        originPostalCode: route.originPostalCode,
+        destinationPostalCode: route.destinationPostalCode,
+        originCountry: route.originCountry,
+        destinationCountry: route.destinationCountry,
+        originPlaceId: route.originPlaceId,
+        destinationPlaceId: route.destinationPlaceId,
+        originLat: route.originLat,
+        originLng: route.originLng,
+        destinationLat: route.destinationLat,
+        destinationLng: route.destinationLng,
         payoutItemId,
         earningRateMasterId: null,
         driverEarningCents,

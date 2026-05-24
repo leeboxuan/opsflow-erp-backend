@@ -3,6 +3,7 @@ import { validate } from "class-validator";
 import { JobStatus, JobTripTemplate } from "@prisma/client";
 import { OpsJobsService } from "./ops-jobs.service";
 import { AppendJobTripDto } from "./dto/job-trip.dto";
+import { GUL_CIRCLE_ROUTE_DEFAULTS } from "./job-workflow.helpers";
 
 describe("AppendJobTripDto validation", () => {
   it("accepts CUSTOM and operational route fields", async () => {
@@ -16,6 +17,36 @@ describe("AppendJobTripDto validation", () => {
       destinationLat: 1.2,
       destinationLng: 103.7,
       earningRateMasterId: "rate-1",
+    });
+    const errors = await validate(dto);
+    expect(errors).toHaveLength(0);
+  });
+
+  it("accepts CUSTOMER_TO_GUL and GUL_TO_CUSTOMER templates", async () => {
+    for (const jobTripTemplate of ["CUSTOMER_TO_GUL", "GUL_TO_CUSTOMER"]) {
+      const dto = plainToInstance(AppendJobTripDto, {
+        jobTripTemplate,
+        plannedStartAt: "2026-05-25T08:00:00.000Z",
+        originSummary: "8 Gul Cir, 8 Gul Circle",
+        destinationSummary: "7 Gul Circle",
+        originPostalCode: "629564",
+        destinationPostalCode: "629563",
+      });
+      const errors = await validate(dto);
+      expect(errors).toHaveLength(0);
+    }
+  });
+
+  it("accepts text-only Gul Circle route without lat/lng", async () => {
+    const dto = plainToInstance(AppendJobTripDto, {
+      jobTripTemplate: "CUSTOMER_TO_GUL",
+      plannedStartAt: "2026-05-25T08:00:00.000Z",
+      originSummary: "8 Gul Cir, 8 Gul Circle",
+      destinationSummary: "7 Gul Circle",
+      originPostalCode: "629564",
+      destinationPostalCode: "629563",
+      destinationLat: null,
+      destinationLng: null,
     });
     const errors = await validate(dto);
     expect(errors).toHaveLength(0);
@@ -153,6 +184,74 @@ describe("OpsJobsService.appendTrip", () => {
     expect(prisma.trip.create.mock.calls[0][0].data.jobTripTemplate).toBe(
       JobTripTemplate.DELIVERY_TO_PORT,
     );
+  });
+
+  it("accepts CUSTOMER_TO_GUL with FE-provided route fields", async () => {
+    const { svc, prisma } = makeService();
+    await svc.appendTrip(
+      "t1",
+      "job1",
+      {
+        jobTripTemplate: JobTripTemplate.CUSTOMER_TO_GUL,
+        plannedStartAt: "2026-05-25T08:00:00.000Z",
+        originSummary: "8 Gul Cir, 8 Gul Circle",
+        destinationSummary: "7 Gul Circle",
+        originPostalCode: "629564",
+        destinationPostalCode: "629563",
+        originPlaceId: "ChIJb88ZJpoF2jERlWtJ-VhHW2A",
+        destinationPlaceId: null,
+        originLat: 1.3136718,
+        originLng: 103.6730866,
+        destinationLat: null,
+        destinationLng: null,
+      },
+      { userId: "u1", role: "OPS" },
+    );
+    const data = prisma.trip.create.mock.calls[0][0].data;
+    expect(data.jobTripTemplate).toBe(JobTripTemplate.CUSTOMER_TO_GUL);
+    expect(data.displayTitle).toBe("Customer → Gul Circle");
+    expect(data.originLabel).toBe("8 Gul Cir, 8 Gul Circle");
+    expect(data.destinationLabel).toBe("7 Gul Circle");
+    expect(data.destinationPostalCode).toBe("629563");
+    expect(data.destinationAddressLine1).toBe("7 Gul Circle");
+    expect(data.destinationLat).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lat);
+    expect(data.destinationLng).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lng);
+  });
+
+  it("defaults Gul Circle destination for CUSTOMER_TO_GUL when omitted", async () => {
+    const { svc, prisma } = makeService();
+    await svc.appendTrip(
+      "t1",
+      "job1",
+      {
+        jobTripTemplate: JobTripTemplate.CUSTOMER_TO_GUL,
+        originSummary: "Customer site",
+      },
+      { userId: "u1", role: "OPS" },
+    );
+    const data = prisma.trip.create.mock.calls[0][0].data;
+    expect(data.destinationLabel).toBe("7 Gul Circle");
+    expect(data.destinationPostalCode).toBe("629563");
+    expect(data.destinationLat).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lat);
+    expect(data.destinationLng).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lng);
+  });
+
+  it("defaults Gul Circle origin for GUL_TO_CUSTOMER when omitted", async () => {
+    const { svc, prisma } = makeService();
+    await svc.appendTrip(
+      "t1",
+      "job1",
+      {
+        jobTripTemplate: JobTripTemplate.GUL_TO_CUSTOMER,
+        destinationSummary: "Customer site",
+      },
+      { userId: "u1", role: "OPS" },
+    );
+    const data = prisma.trip.create.mock.calls[0][0].data;
+    expect(data.originLabel).toBe("7 Gul Circle");
+    expect(data.originPostalCode).toBe("629563");
+    expect(data.originLat).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lat);
+    expect(data.originLng).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lng);
   });
 
   it("validates and saves earningRateMasterId through existing payout lookup", async () => {

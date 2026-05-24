@@ -1,7 +1,10 @@
 import { JobTripTemplate, JobType, TripDocumentType } from "@prisma/client";
 import {
   completionRuleForTemplate,
+  GUL_CIRCLE_ROUTE_DEFAULTS,
+  jobTripTemplateDisplayLabel,
   lclPickupToDeliveryRouteSnapshot,
+  resolveAppendTripRouteSnapshot,
   tripCreateManyForJob,
   TRIP_COMPLETION_RULES,
 } from "./job-workflow.helpers";
@@ -241,9 +244,50 @@ describe("workflow helpers", () => {
     expect(completionRuleForTemplate(JobTripTemplate.DELIVERY_TO_PORT)).toEqual(
       TRIP_COMPLETION_RULES[JobTripTemplate.DELIVERY_TO_PORT],
     );
+    expect(completionRuleForTemplate(JobTripTemplate.CUSTOMER_TO_GUL)).toEqual(
+      TRIP_COMPLETION_RULES[JobTripTemplate.CUSTOMER_TO_GUL],
+    );
+    expect(completionRuleForTemplate(JobTripTemplate.GUL_TO_CUSTOMER)).toEqual(
+      TRIP_COMPLETION_RULES[JobTripTemplate.GUL_TO_CUSTOMER],
+    );
     expect(completionRuleForTemplate(JobTripTemplate.CUSTOM)).toEqual(
       TRIP_COMPLETION_RULES[JobTripTemplate.CUSTOM],
     );
+  });
+
+  it("jobTripTemplateDisplayLabel maps Gul Circle shortcuts", () => {
+    expect(jobTripTemplateDisplayLabel(JobTripTemplate.CUSTOMER_TO_GUL)).toBe(
+      "Customer → Gul Circle",
+    );
+    expect(jobTripTemplateDisplayLabel(JobTripTemplate.GUL_TO_CUSTOMER)).toBe(
+      "Gul Circle → Customer",
+    );
+  });
+
+  it("resolveAppendTripRouteSnapshot fills map-ready Gul Circle coordinates", () => {
+    const toGul = resolveAppendTripRouteSnapshot(JobTripTemplate.CUSTOMER_TO_GUL, {
+      originSummary: "8 Gul Cir, 8 Gul Circle",
+      originPostalCode: "629564",
+      originLat: 1.3136718,
+      originLng: 103.6730866,
+      destinationSummary: "7 Gul Circle",
+      destinationPostalCode: "629563",
+      destinationLat: null,
+      destinationLng: null,
+    });
+    expect(toGul.originLabel).toBe("8 Gul Cir, 8 Gul Circle");
+    expect(toGul.destinationLabel).toBe("7 Gul Circle");
+    expect(toGul.destinationLat).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lat);
+    expect(toGul.destinationLng).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lng);
+    expect(toGul.destinationAddressLine1).toBe("7 Gul Circle");
+
+    const fromGul = resolveAppendTripRouteSnapshot(JobTripTemplate.GUL_TO_CUSTOMER, {
+      destinationSummary: "Customer site",
+    });
+    expect(fromGul.originLabel).toBe("7 Gul Circle");
+    expect(fromGul.originLat).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lat);
+    expect(fromGul.originLng).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lng);
+    expect(fromGul.destinationLat).toBeNull();
   });
 
   it("tripCreateManyForJob seeds containerNumber onto IMPORT-generated trips", () => {

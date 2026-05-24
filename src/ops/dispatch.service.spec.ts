@@ -49,6 +49,11 @@ describe("DispatchService", () => {
             tripSequence: 1,
             originLabel: "A",
             destinationLabel: "B",
+            originAddressLine1: "A Street",
+            originPostalCode: "111111",
+            destinationAddressLine1: "B Avenue",
+            destinationPostalCode: "222222",
+            jobTripTemplate: "CUSTOMER_TO_GUL",
             originLat: 1.11,
             originLng: 103.61,
             destinationLat: 1.19,
@@ -95,6 +100,13 @@ describe("DispatchService", () => {
     expect(trip.originLng).toBe(103.61);
     expect(trip.destinationLat).toBe(1.19);
     expect(trip.destinationLng).toBe(103.72);
+    expect(trip.jobTripTemplate).toBe("CUSTOMER_TO_GUL");
+    expect(trip.originSummary).toBe("A");
+    expect(trip.originAddressLine1).toBe("A Street");
+    expect(trip.originPostalCode).toBe("111111");
+    expect(trip.destinationSummary).toBe("B");
+    expect(trip.destinationAddressLine1).toBe("B Avenue");
+    expect(trip.destinationPostalCode).toBe("222222");
     expect(trip.publishedAt).toEqual(new Date("2026-04-30T07:50:00.000Z"));
     expect(trip.startedAt).toEqual(new Date("2026-04-30T08:05:00.000Z"));
     expect(trip.closedAt).toEqual(new Date("2026-04-30T12:15:00.000Z"));
