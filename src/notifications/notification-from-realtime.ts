@@ -4,11 +4,18 @@ import {
   Role,
 } from "@prisma/client";
 import type { RealtimeEvent } from "../realtime/realtime-event.types";
+import {
+  buildNotificationMetadataFromEvent,
+  documentNotificationDescription,
+  jobNotificationDescription,
+  tripNotificationDescription,
+} from "./notification-display-context";
 
 export const PERSISTED_NOTIFICATION_EVENT_TYPES = new Set([
   "job.created",
   "job.cancelled",
   "trip.assigned",
+  "trip.unassigned",
   "trip.published",
   "trip.updated",
   "trip.unpublished",
@@ -76,10 +83,8 @@ export function buildNotificationSpecsFromRealtimeEvent(
     jobId: event.jobId ?? null,
     tripId: event.tripId ?? null,
     driverUserId: event.driverUserId ?? null,
-    metadata: event.reason ? { reason: event.reason } : null,
+    metadata: buildNotificationMetadataFromEvent(event),
   };
-
-  const copy = event.reason ? ` (${event.reason})` : "";
 
   switch (event.type) {
     case "job.created":
@@ -87,7 +92,7 @@ export function buildNotificationSpecsFromRealtimeEvent(
         opsTenantSpec({
           ...base,
           title: "New job created",
-          description: event.jobId ? `Job ${event.jobId}` : null,
+          description: jobNotificationDescription(event),
           severity: NotificationSeverity.INFO,
         }),
       ];
@@ -97,12 +102,13 @@ export function buildNotificationSpecsFromRealtimeEvent(
         opsTenantSpec({
           ...base,
           title: "Job cancelled",
-          description: event.jobId ? `Job ${event.jobId}${copy}` : null,
+          description: appendReason(jobNotificationDescription(event), event.reason),
           severity: NotificationSeverity.WARNING,
         }),
       ];
 
     case "trip.assigned":
+    case "trip.unassigned":
     case "trip.published":
     case "trip.updated":
     case "trip.unpublished":
@@ -112,7 +118,7 @@ export function buildNotificationSpecsFromRealtimeEvent(
     case "trip.cancelled": {
       const specs: NotificationCreateSpec[] = [];
       const tripTitle = tripEventTitle(event.type);
-      const tripDesc = tripDescription(event);
+      const tripDesc = tripNotificationDescription(event);
 
       if (event.driverUserId) {
         specs.push({
@@ -150,7 +156,7 @@ export function buildNotificationSpecsFromRealtimeEvent(
           audience: NotificationAudience.USER,
           userId: event.driverUserId,
           title: docTitle.driver,
-          description: documentDescription(event),
+          description: documentNotificationDescription(event),
           severity: NotificationSeverity.INFO,
         });
       }
@@ -159,7 +165,7 @@ export function buildNotificationSpecsFromRealtimeEvent(
         ...opsAdminAndOpsRoleSpecs({
           ...base,
           title: docTitle.ops,
-          description: documentDescription(event),
+          description: documentNotificationDescription(event),
           severity: NotificationSeverity.INFO,
         }),
       );
@@ -260,6 +266,7 @@ function opsAdminAndOpsRoleSpecs(
 function tripEventTitle(type: string): { driver: string; ops: string } {
   const map: Record<string, { driver: string; ops: string }> = {
     "trip.assigned": { driver: "Trip assigned to you", ops: "Trip assigned" },
+    "trip.unassigned": { driver: "Trip unassigned from you", ops: "Trip unassigned" },
     "trip.published": { driver: "Trip published", ops: "Trip published" },
     "trip.updated": { driver: "Trip updated", ops: "Trip updated" },
     "trip.unpublished": { driver: "Trip unpublished", ops: "Trip unpublished" },
@@ -279,12 +286,10 @@ function tripSeverity(type: string): NotificationSeverity {
   return NotificationSeverity.INFO;
 }
 
-function tripDescription(event: RealtimeEvent): string | null {
-  const parts = [
-    event.tripId ? `Trip ${event.tripId}` : null,
-    event.jobId ? `Job ${event.jobId}` : null,
-  ].filter(Boolean);
-  return parts.length ? parts.join(" · ") : null;
+function appendReason(text: string | null, reason?: string): string | null {
+  const copy = reason?.trim() ? ` (${reason.trim()})` : "";
+  if (!text && !copy) return null;
+  return `${text ?? ""}${copy}`.trim() || null;
 }
 
 function documentEventTitle(type: string): { driver: string; ops: string } {
@@ -303,14 +308,6 @@ function documentEventTitle(type: string): { driver: string; ops: string } {
     },
   };
   return map[type] ?? { driver: "Document update", ops: "Document update" };
-}
-
-function documentDescription(event: RealtimeEvent): string | null {
-  const parts = [
-    event.tripId ? `Trip ${event.tripId}` : null,
-    event.jobId ? `Job ${event.jobId}` : null,
-  ].filter(Boolean);
-  return parts.length ? parts.join(" · ") : null;
 }
 
 function driverEventTitle(type: string): string {

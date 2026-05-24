@@ -1169,6 +1169,7 @@ describe("DriverJobsService.listActiveByDriver trip execution card", () => {
           jobId: "job1",
           jobSequence: 1,
           tripSequence: 1,
+          assignedDriverUserId: driverUserId,
           status: "PUBLISHED",
           pendingState: "NONE",
           plannedStartAt: new Date("2026-04-29T10:00:00.000Z"),
@@ -1213,6 +1214,7 @@ describe("DriverJobsService.listActiveByDriver trip execution card", () => {
     const trip = result.data[0].trips?.[0] as any;
     expect(trip.jobId).toBe("job1");
     expect(trip.tripSequence).toBe(1);
+    expect(trip.assignedDriverUserId).toBe(driverUserId);
     expect(trip.tripDisplayRef).toBe("INT-REF-1-T01");
     expect(trip.jobInternalRef).toBe("INT-REF-1");
     expect(trip.customerName).toBe("ACME Corp");

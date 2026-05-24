@@ -9,6 +9,10 @@ export function driverPushCopyForType(type: string): DriverPushCopy {
       title: "New trip assigned",
       body: "You have a new trip to review.",
     },
+    "trip.unassigned": {
+      title: "Trip unassigned",
+      body: "A trip is no longer assigned to you.",
+    },
     "trip.published": {
       title: "Trip ready to start",
       body: "A trip has been published for you.",

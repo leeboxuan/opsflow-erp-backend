@@ -16,6 +16,7 @@ import {
   dedupeKeyForSpec,
   type NotificationCreateSpec,
 } from "./notification-from-realtime";
+import { enrichRealtimeEventForNotifications } from "./notification-display-context";
 import {
   NotificationDto,
   NotificationsListResponseDto,
@@ -52,7 +53,16 @@ export class NotificationsService {
   }
 
   async createFromRealtimeEvent(event: RealtimeEvent): Promise<void> {
-    const specs = buildNotificationSpecsFromRealtimeEvent(event);
+    let enriched = event;
+    try {
+      enriched = await enrichRealtimeEventForNotifications(this.prisma, event);
+    } catch (err) {
+      this.logger.debug(
+        `Notification context enrichment skipped for ${event.type}: ${(err as Error).message}`,
+      );
+    }
+
+    const specs = buildNotificationSpecsFromRealtimeEvent(enriched);
     if (!specs.length) {
       return;
     }
@@ -280,6 +290,7 @@ export class NotificationsService {
     type: string;
     jobId: string | null;
     tripId: string | null;
+    metadata?: unknown;
   }): void {
     if (
       !shouldSendDriverPushForNotification({
@@ -291,6 +302,13 @@ export class NotificationsService {
       return;
     }
 
+    const metadata =
+      notification.metadata &&
+      typeof notification.metadata === "object" &&
+      !Array.isArray(notification.metadata)
+        ? (notification.metadata as Record<string, unknown>)
+        : null;
+
     this.pushNotifications?.sendForCreatedNotification({
       id: notification.id,
       tenantId: notification.tenantId,
@@ -299,6 +317,7 @@ export class NotificationsService {
       type: notification.type,
       jobId: notification.jobId,
       tripId: notification.tripId,
+      metadata,
     });
   }
 

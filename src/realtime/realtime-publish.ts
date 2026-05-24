@@ -1,5 +1,11 @@
 import type { RealtimeEventsService } from "./realtime-events.service";
-import type { RealtimeEntityType, RealtimeEventInput } from "./realtime-event.types";
+import type {
+  RealtimeEntityType,
+  RealtimeEventInput,
+  RealtimeNotificationContext,
+} from "./realtime-event.types";
+
+type PublishContextOpts = Partial<RealtimeNotificationContext>;
 
 function publish(
   svc: RealtimeEventsService | undefined,
@@ -13,7 +19,7 @@ export function publishJobEvent(
   type: string,
   tenantId: string,
   jobId: string,
-  opts?: { reason?: string; driverUserId?: string | null },
+  opts?: PublishContextOpts & { reason?: string; driverUserId?: string | null },
 ): void {
   publish(svc, {
     type,
@@ -23,6 +29,8 @@ export function publishJobEvent(
     jobId,
     driverUserId: opts?.driverUserId ?? undefined,
     reason: opts?.reason,
+    jobInternalRef: opts?.jobInternalRef,
+    customerCompanyName: opts?.customerCompanyName,
   });
   svc?.publishDispatchAndDashboard(tenantId, {
     jobId,
@@ -37,7 +45,7 @@ export function publishTripEvent(
   tenantId: string,
   jobId: string,
   tripId: string,
-  opts?: { driverUserId?: string | null; reason?: string },
+  opts?: PublishContextOpts & { driverUserId?: string | null; reason?: string },
 ): void {
   publish(svc, {
     type,
@@ -48,6 +56,11 @@ export function publishTripEvent(
     tripId,
     driverUserId: opts?.driverUserId ?? undefined,
     reason: opts?.reason,
+    jobInternalRef: opts?.jobInternalRef,
+    customerCompanyName: opts?.customerCompanyName,
+    tripDisplayRef: opts?.tripDisplayRef,
+    assignedDriverName: opts?.assignedDriverName,
+    vehicleNumber: opts?.vehicleNumber,
   });
   svc?.publishDispatchAndDashboard(tenantId, {
     jobId,
@@ -62,7 +75,7 @@ export function publishDocumentEvent(
   type: string,
   tenantId: string,
   documentId: string,
-  opts: {
+  opts: PublishContextOpts & {
     jobId?: string;
     tripId?: string;
     driverUserId?: string | null;
@@ -78,6 +91,11 @@ export function publishDocumentEvent(
     tripId: opts.tripId,
     driverUserId: opts.driverUserId ?? undefined,
     reason: opts.reason,
+    jobInternalRef: opts.jobInternalRef,
+    customerCompanyName: opts.customerCompanyName,
+    tripDisplayRef: opts.tripDisplayRef,
+    assignedDriverName: opts.assignedDriverName,
+    vehicleNumber: opts.vehicleNumber,
   });
   svc?.publishDispatchAndDashboard(tenantId, {
     jobId: opts.jobId,

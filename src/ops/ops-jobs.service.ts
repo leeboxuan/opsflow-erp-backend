@@ -2097,7 +2097,10 @@ export class OpsJobsService {
       );
     }
 
-    rt.publishJobEvent(this.realtime, "job.created", tenantId, freshJob.id);
+    rt.publishJobEvent(this.realtime, "job.created", tenantId, freshJob.id, {
+      jobInternalRef: freshJob.internalRef,
+      customerCompanyName: freshJob.customerCompany?.name ?? undefined,
+    });
 
     return jobDto;
   }
@@ -4241,6 +4244,11 @@ export class OpsJobsService {
     rt.publishTripEvent(this.realtime, "trip.assigned", tenantId, jobId, tripId, {
       driverUserId: dto.driverId,
     });
+    if (oldDriverUserId && oldDriverUserId !== dto.driverId) {
+      rt.publishTripEvent(this.realtime, "trip.unassigned", tenantId, jobId, tripId, {
+        driverUserId: oldDriverUserId,
+      });
+    }
     rt.publishDriverActiveJobsUpdated(this.realtime, tenantId, dto.driverId);
     if (oldDriverUserId && oldDriverUserId !== dto.driverId) {
       rt.publishDriverActiveJobsUpdated(this.realtime, tenantId, oldDriverUserId);

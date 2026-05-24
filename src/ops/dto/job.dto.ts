@@ -144,6 +144,8 @@ export class JobTripResponseDto {
   publishedByUserId!: string | null;
   assignedAt!: Date | null;
   assignedByUserId!: string | null;
+  /** Tenant user id of the assigned driver (for mobile trip filtering). */
+  @ApiPropertyOptional({ nullable: true })
   assignedDriverUserId!: string | null;
   assignedDriverName!: string | null;
   driverId!: string | null;

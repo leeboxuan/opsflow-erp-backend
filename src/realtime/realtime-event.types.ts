@@ -12,7 +12,18 @@ export const REALTIME_ENTITY_TYPES = [
 
 export type RealtimeEntityType = (typeof REALTIME_ENTITY_TYPES)[number];
 
-export interface RealtimeEvent {
+export interface RealtimeNotificationContext {
+  /** Human-readable job ref, e.g. WF-2026-05-0010-LCL */
+  jobInternalRef?: string;
+  customerCompanyName?: string;
+  /** Human-readable trip ref, e.g. WF-0010-LCL-T01 */
+  tripDisplayRef?: string;
+  assignedDriverName?: string;
+  /** Vehicle plate / number shown in UI */
+  vehicleNumber?: string;
+}
+
+export interface RealtimeEvent extends RealtimeNotificationContext {
   type: string;
   tenantId: string;
   entityType: RealtimeEntityType;

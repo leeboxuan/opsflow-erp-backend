@@ -245,6 +245,7 @@ function toJobDto(j: any): JobDto {
         shipper: t.shipper ?? null,
         vessel: t.vessel ?? null,
         status: t.status,
+        assignedDriverUserId: t.assignedDriverUserId ?? null,
         isPublished: t.status !== TripStatus.DRAFT && t.status !== TripStatus.CANCELLED,
         isCompleted:
           t.status === TripStatus.COMPLETED || t.status === TripStatus.DONE,

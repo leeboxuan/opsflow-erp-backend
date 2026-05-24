@@ -7,6 +7,7 @@ const DRIVER_TRIP_EVENT_TYPES = new Set([
   "trip.created",
   "trip.updated",
   "trip.assigned",
+  "trip.unassigned",
   "trip.published",
   "trip.unpublished",
   "trip.started",

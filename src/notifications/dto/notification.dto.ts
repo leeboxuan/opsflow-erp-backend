@@ -59,7 +59,10 @@ export class NotificationDto {
   @ApiProperty()
   createdAt!: Date;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      "Display-ready context (jobInternalRef, tripDisplayRef, customerCompanyName, displayType, etc.)",
+  })
   metadata?: Record<string, unknown> | null;
 }
 

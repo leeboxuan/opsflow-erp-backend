@@ -19,6 +19,7 @@ export interface CreatedNotificationPushInput {
   type: string;
   jobId: string | null;
   tripId: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 @Injectable()
@@ -85,6 +86,7 @@ export class PushNotificationsService {
     };
     if (input.jobId) data.jobId = input.jobId;
     if (input.tripId) data.tripId = input.tripId;
+    appendPushMetadata(data, input.metadata);
 
     const messages: ExpoPushMessage[] = devices.map((d) => ({
       to: d.expoPushToken,
@@ -110,5 +112,28 @@ export class PushNotificationsService {
       data: { disabledAt: new Date() },
     });
     this.logger.debug(`Disabled ${tokens.length} invalid Expo push token(s)`);
+  }
+}
+
+const PUSH_METADATA_KEYS = [
+  "displayType",
+  "jobInternalRef",
+  "tripDisplayRef",
+  "customerCompanyName",
+  "assignedDriverUserId",
+  "assignedDriverName",
+  "vehicleNumber",
+] as const;
+
+function appendPushMetadata(
+  data: Record<string, string>,
+  metadata?: Record<string, unknown> | null,
+): void {
+  if (!metadata || typeof metadata !== "object") return;
+  for (const key of PUSH_METADATA_KEYS) {
+    const value = metadata[key];
+    if (value != null && String(value).trim()) {
+      data[key] = String(value);
+    }
   }
 }

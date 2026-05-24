@@ -3,6 +3,7 @@ import { NotificationAudience } from "@prisma/client";
 /** Notification types that may trigger Expo push for DRIVER USER audience. */
 export const DRIVER_PUSH_NOTIFICATION_TYPES = new Set([
   "trip.assigned",
+  "trip.unassigned",
   "trip.published",
   "trip.updated",
   "trip.unpublished",
