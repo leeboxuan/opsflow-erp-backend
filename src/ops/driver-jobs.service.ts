@@ -1187,18 +1187,58 @@ export class DriverJobsService {
     },
   } as const;
 
-  private getTripCalendarDayKey(
-    trip: { plannedStartAt?: Date | null },
-    job: { pickupDate?: Date | null } | null | undefined,
+  private toCalendarDate(value: Date | string | null | undefined): Date | null {
+    if (value == null) return null;
+    const d = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  /** Calendar day from trip.plannedStartAt only (tenant timezone). */
+  private getTripPlannedCalendarDayKey(
+    trip: { plannedStartAt?: Date | string | null },
     timeZone: string,
   ): string | null {
-    if (trip.plannedStartAt) {
-      return this.getDateKeyInTimeZone(new Date(trip.plannedStartAt), timeZone);
-    }
-    if (job?.pickupDate) {
-      return this.getDateKeyInTimeZone(new Date(job.pickupDate), timeZone);
-    }
-    return null;
+    const d = this.toCalendarDate(trip.plannedStartAt ?? null);
+    return d ? this.getDateKeyInTimeZone(d, timeZone) : null;
+  }
+
+  /** Trip day for home grouping: plannedStartAt first, else job pickupDate. */
+  private getTripCalendarDayKey(
+    trip: { plannedStartAt?: Date | string | null },
+    job: { pickupDate?: Date | string | null } | null | undefined,
+    timeZone: string,
+  ): string | null {
+    const plannedDay = this.getTripPlannedCalendarDayKey(trip, timeZone);
+    if (plannedDay) return plannedDay;
+    const pickup = this.toCalendarDate(job?.pickupDate ?? null);
+    return pickup ? this.getDateKeyInTimeZone(pickup, timeZone) : null;
+  }
+
+  private buildDriverHomeActiveTripsWhere(
+    tenantId: string,
+    driverUserId: string,
+  ): Prisma.TripWhereInput {
+    return {
+      tenantId,
+      assignedDriverUserId: driverUserId,
+      status: { in: [TripStatus.PUBLISHED, TripStatus.ONGOING] },
+      job: {
+        tenantId,
+        status: { in: [JobStatus.ONGOING] },
+        ...this.publishedTripVisibilityWhere(),
+      },
+    };
+  }
+
+  private async fetchDriverHomeActiveAssignedTrips(
+    tenantId: string,
+    driverUserId: string,
+  ) {
+    return this.prisma.trip.findMany({
+      where: this.buildDriverHomeActiveTripsWhere(tenantId, driverUserId),
+      include: this.driverHomeTripInclude,
+      orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }],
+    });
   }
 
   private classifyOutsideTodayBucket(
@@ -1209,6 +1249,43 @@ export class DriverJobsService {
     if (dayKey < requestedDateKey) return "needsAttention";
     if (dayKey > requestedDateKey) return "upcoming";
     return null;
+  }
+
+  private isTripOnRequestedCalendarDay(
+    trip: { plannedStartAt?: Date | string | null },
+    job: { pickupDate?: Date | string | null } | null | undefined,
+    requestedDateKey: string,
+    timeZone: string,
+  ): boolean {
+    const plannedDay = this.getTripPlannedCalendarDayKey(trip, timeZone);
+    if (plannedDay) return plannedDay === requestedDateKey;
+    const pickup = this.toCalendarDate(job?.pickupDate ?? null);
+    const pickupDay = pickup ? this.getDateKeyInTimeZone(pickup, timeZone) : null;
+    return pickupDay === requestedDateKey;
+  }
+
+  private toDriverHomeJobCardFromTrips(job: any, trips: any[]) {
+    const primary = trips[0];
+    return {
+      jobId: job.id,
+      jobInternalRef: job.internalRef,
+      customerName: job.customerCompany?.name ?? null,
+      jobType: job.jobType,
+      status: JobStatus.ONGOING,
+      pickupDate: job.pickupDate ?? null,
+      originSummary:
+        firstNonEmptyText(
+          primary?.originLabel,
+          primary?.originAddressLine1,
+          job.pickupAddress1,
+        ) ?? null,
+      destinationSummary:
+        firstNonEmptyText(
+          primary?.destinationLabel,
+          primary?.destinationAddressLine1,
+          job.deliveryAddress1,
+        ) ?? null,
+    };
   }
 
   private toDriverHomeTripCard(t: any, j: any) {
@@ -1243,20 +1320,6 @@ export class DriverJobsService {
     };
   }
 
-  private toDriverHomeJobCard(job: JobDto) {
-    const primary = (job.trips ?? [])[0] as any;
-    return {
-      jobId: job.id,
-      jobInternalRef: job.internalRef,
-      customerName: primary?.customerName ?? null,
-      jobType: job.jobType,
-      status: job.status,
-      pickupDate: job.pickupDate,
-      originSummary: primary?.originSummary ?? null,
-      destinationSummary: primary?.destinationSummary ?? null,
-    };
-  }
-
   async getDriverHome(
     tenantId: string,
     driverUserId: string,
@@ -1264,7 +1327,7 @@ export class DriverJobsService {
   ): Promise<{
     date: string;
     today: {
-      jobs: ReturnType<DriverJobsService["toDriverHomeJobCard"]>[];
+      jobs: ReturnType<DriverJobsService["toDriverHomeJobCardFromTrips"]>[];
       trips: ReturnType<DriverJobsService["toDriverHomeTripCard"]>[];
       runSheet: any;
       summary: {
@@ -1293,90 +1356,66 @@ export class DriverJobsService {
         this.parseCalendarDateToUtcRangeInTimeZone(trimmed, tz);
         const requestedDateKey = trimmed;
 
-        const activeResult = await this.listActiveByDriverInner(tenantId, driverUserId, {
-          date: trimmed,
-          page: 1,
-          pageSize: 100,
-        });
-        const runSheet = activeResult.runSheet;
-
-        const todayTripIds = new Set<string>();
-        const todayTrips: ReturnType<DriverJobsService["toDriverHomeTripCard"]>[] = [];
-        const todayJobs = activeResult.data.map((job) => {
-          for (const trip of job.trips ?? []) {
-            todayTripIds.add(trip.id);
-            todayTrips.push(
-              this.toDriverHomeTripCard(
-                {
-                  ...trip,
-                  id: trip.id,
-                  jobId: trip.jobId,
-                  jobTripTemplate: trip.jobTripTemplate,
-                  title: trip.title,
-                  displayTitle: null,
-                  status: trip.status,
-                  pendingState: trip.pendingState,
-                  plannedStartAt: trip.plannedStartAt,
-                  startedAt: trip.startedAt,
-                  trailerNumber: trip.trailerNumber,
-                  tripSequence: trip.tripSequence,
-                  jobSequence: trip.jobSequence,
-                },
-                {
-                  id: job.id,
-                  internalRef: job.internalRef,
-                  pickupAddress1: job.pickupAddress1,
-                  pickupAddress2: job.pickupAddress2,
-                  pickupPostal: job.pickupPostal,
-                  deliveryAddress1: job.deliveryAddress1,
-                  deliveryAddress2: job.deliveryAddress2,
-                  deliveryPostal: job.deliveryPostal,
-                  notes: job.notes,
-                  jobType: job.jobType,
-                  customerCompany: { name: trip.customerName ?? null },
-                },
-              ),
-            );
-          }
-          return this.toDriverHomeJobCard(job);
-        });
-
-        for (const rs of runSheet?.trips ?? []) {
-          if (rs?.tripId) todayTripIds.add(rs.tripId);
-        }
-
-        const outsideWhere: Prisma.TripWhereInput = {
+        const runSheet = await this.buildDriverDailyRunSheet(
           tenantId,
-          assignedDriverUserId: driverUserId,
-          status: { in: [TripStatus.PUBLISHED, TripStatus.ONGOING] },
-          job: {
-            tenantId,
-            status: { in: [JobStatus.ONGOING] },
-            ...this.publishedTripVisibilityWhere(),
-          },
-        };
-        if (todayTripIds.size > 0) {
-          outsideWhere.id = { notIn: [...todayTripIds] };
-        }
+          driverUserId,
+          trimmed,
+        );
+        const allActiveTrips = await this.fetchDriverHomeActiveAssignedTrips(
+          tenantId,
+          driverUserId,
+        );
 
-        const outsideTrips = await this.prisma.trip.findMany({
-          where: outsideWhere,
-          include: this.driverHomeTripInclude,
-          orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }],
-        });
-
+        const todayTripCardsById = new Map<
+          string,
+          ReturnType<DriverJobsService["toDriverHomeTripCard"]>
+        >();
         const assignedOutsideToday = {
           needsAttention: [] as ReturnType<DriverJobsService["toDriverHomeTripCard"]>[],
           upcoming: [] as ReturnType<DriverJobsService["toDriverHomeTripCard"]>[],
           unscheduled: [] as ReturnType<DriverJobsService["toDriverHomeTripCard"]>[],
         };
+        const todayJobsByJobId = new Map<
+          string,
+          { job: any; trips: any[] }
+        >();
 
-        for (const t of outsideTrips) {
-          const dayKey = this.getTripCalendarDayKey(t, t.job, tz);
+        for (const t of allActiveTrips) {
+          const job = t.job;
+          if (!job) continue;
+          const dayKey = this.getTripCalendarDayKey(t, job, tz);
+          const card = this.toDriverHomeTripCard(t, job);
+
+          if (this.isTripOnRequestedCalendarDay(t, job, requestedDateKey, tz)) {
+            todayTripCardsById.set(t.id, card);
+            const existing = todayJobsByJobId.get(job.id);
+            if (existing) {
+              existing.trips.push(t);
+            } else {
+              todayJobsByJobId.set(job.id, { job, trips: [t] });
+            }
+            continue;
+          }
+
           const bucket = this.classifyOutsideTodayBucket(dayKey, requestedDateKey);
           if (!bucket) continue;
-          assignedOutsideToday[bucket].push(this.toDriverHomeTripCard(t, t.job));
+          assignedOutsideToday[bucket].push(card);
         }
+
+        const todayTrips: ReturnType<DriverJobsService["toDriverHomeTripCard"]>[] = [];
+        if (runSheet?.trips?.length) {
+          for (const rs of runSheet.trips) {
+            const card = rs?.tripId ? todayTripCardsById.get(rs.tripId) : undefined;
+            if (card) todayTrips.push(card);
+          }
+        }
+        if (!todayTrips.length) {
+          todayTrips.push(...todayTripCardsById.values());
+        }
+
+        const todayJobs = [...todayJobsByJobId.values()].map(({ job, trips }) =>
+          this.toDriverHomeJobCardFromTrips(job, trips),
+        );
 
         const summary = {
           total: runSheet?.totalTrips ?? 0,
