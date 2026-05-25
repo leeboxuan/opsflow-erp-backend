@@ -1,5 +1,6 @@
 import { JobStatus, TripStatus } from "@prisma/client";
 import { DriverJobsService } from "./driver-jobs.service";
+import { JOB_DOCUMENT_MOBILE_SELECT } from "./driver-mobile-document.select";
 
 describe("DriverJobsService.listActiveByDriver driver-scoped home list", () => {
   const tenantId = "tenant-1";
@@ -55,17 +56,12 @@ describe("DriverJobsService.listActiveByDriver driver-scoped home list", () => {
           sizeBytes: 1024,
           storageKey: "tenant/jobs/job-multi/photo.jpg",
           isActive: true,
-          requiresSignature: false,
-          isSigned: false,
-          signedAt: null,
-          signedByUserId: null,
-          signedByName: null,
           createdAt: new Date("2026-05-20T00:00:00.000Z"),
           updatedAt: new Date("2026-05-20T00:00:00.000Z"),
           jobId: "job-multi",
-          tripId: null,
-          generatedBySystem: false,
-          generatedSource: null,
+          uploadedByUserId: null,
+          uploadedByNameSnapshot: null,
+          uploadedBy: null,
         },
       ],
       trips,
@@ -164,6 +160,18 @@ describe("DriverJobsService.listActiveByDriver driver-scoped home list", () => {
     const tripIds = (res.data[0].trips ?? []).map((t: any) => t.id);
     expect(tripIds).toEqual(["trip-open"]);
     expect(tripIds).not.toContain("trip-done");
+  });
+
+  it("uses JobDocument-only Prisma select for job.documents (not TripDocument fields)", async () => {
+    const { svc, prisma } = makeService([baseJob([tripRow({ id: "trip-a" })])]);
+
+    await svc.listActiveByDriver(tenantId, driver1, { date, sortBy: "createdAt" });
+
+    const documentsInclude = prisma.job.findMany.mock.calls[0][0].include.documents;
+    expect(documentsInclude.select).toEqual(JOB_DOCUMENT_MOBILE_SELECT);
+    expect(documentsInclude.select).not.toHaveProperty("requiresSignature");
+    expect(documentsInclude.select).not.toHaveProperty("tripId");
+    expect(documentsInclude.select).not.toHaveProperty("generatedBySystem");
   });
 
   it("does not generate signed URLs on active jobs documents (metadata only)", async () => {

@@ -1,5 +1,6 @@
 import { JobStatus, TripStatus } from "@prisma/client";
 import { DriverJobsService } from "./driver-jobs.service";
+import { JOB_DOCUMENT_MOBILE_SELECT } from "./driver-mobile-document.select";
 
 describe("DriverJobsService.getDriverHome", () => {
   const tenantId = "tenant-1";
@@ -275,6 +276,55 @@ describe("DriverJobsService.getDriverHome", () => {
     expect(res.today.runSheet).not.toBeNull();
     expect(res.today.summary.completed).toBe(1);
     expect(res.today.summary.total).toBe(2);
+  });
+
+  it("uses JobDocument-only select when loading jobs (avoids Prisma validation on home)", async () => {
+    const { svc, prisma } = makeService({
+      todayJobs: [baseJob([tripRow({ id: "trip-a" })])],
+      runSheetTrips: [tripRow({ id: "trip-a" })],
+      outsideTrips: [],
+    });
+
+    await svc.getDriverHome(tenantId, driver1, date);
+
+    const documentsInclude = prisma.job.findMany.mock.calls[0][0].include.documents;
+    expect(documentsInclude.select).toEqual(JOB_DOCUMENT_MOBILE_SELECT);
+    expect(documentsInclude.select).not.toHaveProperty("requiresSignature");
+  });
+
+  it("succeeds with QUOTATION job document and returns metadata without signed URLs via active list path", async () => {
+    const quotationDoc = {
+      id: "doc-q",
+      type: "QUOTATION",
+      originalName: "quote.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 2048,
+      storageKey: "tenant/jobs/job-1/quote.pdf",
+      isActive: true,
+      jobId: "job-1",
+      uploadedByUserId: "u1",
+      uploadedByNameSnapshot: "Ops User",
+      createdAt: new Date("2026-05-20T00:00:00.000Z"),
+      updatedAt: new Date("2026-05-20T00:00:00.000Z"),
+      uploadedBy: { id: "u1", name: "Ops User", displayName: null, email: "ops@test.com" },
+    };
+    const jobWithDoc = { ...baseJob([tripRow({ id: "trip-a" })]), documents: [quotationDoc] };
+    const { svc } = makeService({
+      todayJobs: [jobWithDoc],
+      runSheetTrips: [tripRow({ id: "trip-a" })],
+      outsideTrips: [],
+    });
+
+    await expect(svc.getDriverHome(tenantId, driver1, date)).resolves.toBeDefined();
+
+    const active = await svc.listActiveByDriver(tenantId, driver1, { date, sortBy: "createdAt" });
+    const docs = active.data[0]?.documents ?? [];
+    expect(docs).toHaveLength(1);
+    expect(docs[0].originalName).toBe("quote.pdf");
+    expect(docs[0].url).toBeNull();
+    expect(docs[0].downloadUrl).toBeNull();
+    expect(docs[0].previewUrl).toBeNull();
+    expect(docs[0].requiresSignature).toBe(false);
   });
 
   it("returns slim trip cards without signed URLs or cargo items", async () => {

@@ -39,6 +39,7 @@ import {
 import { RealtimeEventsService } from "../realtime/realtime-events.service";
 import * as rt from "../realtime/realtime-publish";
 import { jobTripTemplateDisplayLabel } from "./job-workflow.helpers";
+import { DRIVER_ACTIVE_JOB_DOCUMENTS_INCLUDE } from "./driver-mobile-document.select";
 
 const DEFAULT_TENANT_TIMEZONE = "Asia/Singapore";
 const TENANT_TIMEZONE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -967,30 +968,7 @@ export class DriverJobsService {
         where: tripsWhereForDriverHome,
         orderBy: [{ plannedStartAt: "asc" as const }, { createdAt: "asc" as const }],
       },
-      documents: {
-        where: { isActive: true, type: { in: ["QUOTATION", "OTHER"] } },
-        orderBy: { createdAt: "desc" as const },
-        select: {
-          id: true,
-          type: true,
-          originalName: true,
-          mimeType: true,
-          sizeBytes: true,
-          storageKey: true,
-          isActive: true,
-          requiresSignature: true,
-          isSigned: true,
-          signedAt: true,
-          signedByUserId: true,
-          signedByName: true,
-          createdAt: true,
-          updatedAt: true,
-          jobId: true,
-          tripId: true,
-          generatedBySystem: true,
-          generatedSource: true,
-        },
-      },
+      documents: DRIVER_ACTIVE_JOB_DOCUMENTS_INCLUDE,
     };
 
     const total = await this.prisma.job.count({ where });
