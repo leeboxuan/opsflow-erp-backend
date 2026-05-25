@@ -12,6 +12,8 @@ describe("DispatchService", () => {
   });
 
   it("dispatch board includes coordinates, timeline, parked markers, and gps age", async () => {
+    delete process.env.GOOGLE_ROUTES_API_KEY;
+    delete process.env.GOOGLE_MAPS_API_KEY;
     const capturedAt = new Date(Date.now() - 5 * 60 * 1000);
     const prisma: any = {
       tenantMembership: {
@@ -124,6 +126,89 @@ describe("DispatchService", () => {
     expect(trip.carrier).toBe("Carrier A");
     expect(trip.shipper).toBe("Shipper A");
     expect(trip.vessel).toBe("Vessel A");
+    expect(trip.routePolyline).toBeNull();
+    expect(trip.routeError).toBe("Missing Google Routes API key");
+  });
+
+  it("activeTrip includes Google driving route polyline when Routes API succeeds", async () => {
+    process.env.GOOGLE_ROUTES_API_KEY = "test-key";
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        routes: [
+          {
+            distanceMeters: 4200,
+            duration: "600s",
+            staticDuration: "540s",
+            polyline: { encodedPolyline: "encoded-driving-route" },
+            routeLabels: ["DEFAULT_ROUTE"],
+          },
+        ],
+      }),
+    });
+
+    const prisma: any = {
+      tenantMembership: {
+        findMany: jest.fn().mockResolvedValue([
+          { user: { id: "driver-user-1", name: "Driver A", phone: "123" } },
+        ]),
+      },
+      driverLocationLatest: { findMany: jest.fn().mockResolvedValue([]) },
+      trip: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "trip-gul",
+            jobId: "job1",
+            assignedDriverUserId: "driver-user-1",
+            status: "ONGOING",
+            title: "Customer → Gul",
+            displayTitle: null,
+            plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
+            publishedAt: null,
+            startedAt: null,
+            closedAt: null,
+            jobSequence: 1,
+            tripSequence: 1,
+            jobTripTemplate: "CUSTOMER_TO_GUL",
+            originLabel: "8 Gul Cir",
+            destinationLabel: "7 Gul Circle",
+            originAddressLine1: "8 Gul Cir",
+            destinationAddressLine1: "7 Gul Circle",
+            originPostalCode: "629564",
+            destinationPostalCode: "629563",
+            originLat: 1.3136718,
+            originLng: 103.6730866,
+            destinationLat: 1.3107274,
+            destinationLng: 103.6749418,
+            trailerNumber: null,
+            trailerLastLocationCode: null,
+            trailerParkedAt: null,
+            trailerParkingLat: null,
+            trailerParkingLng: null,
+            containerNumber: null,
+            carrier: null,
+            shipper: null,
+            vessel: null,
+            job: { id: "job1", internalRef: "JOB-1", customerCompany: { name: "ACME" } },
+            documents: [],
+          },
+        ]),
+      },
+      masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
+      drivers: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "drv-1", userId: "driver-user-1", assignedVehicle: null, assignedFleetVehicle: null },
+        ]),
+      },
+    };
+    const svc = new DispatchService(prisma, { getClient: jest.fn() } as any);
+    const res = await svc.getBoard("tenant-1", "2026-04-30");
+    const trip = res.drivers[0].activeTrip;
+    expect(trip.routePolyline).toBe("encoded-driving-route");
+    expect(trip.routeProvider).toBe("GOOGLE_ROUTES");
+    expect(trip.routeDistanceMeters).toBe(4200);
+    expect(trip.routeDurationSeconds).toBe(600);
+    expect(trip.routeError).toBeNull();
   });
 
   it("returns nulls safely for optional route/timeline/gps fields", async () => {

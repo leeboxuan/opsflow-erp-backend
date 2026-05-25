@@ -272,21 +272,23 @@ describe("workflow helpers", () => {
       originLng: 103.6730866,
       destinationSummary: "7 Gul Circle",
       destinationPostalCode: "629563",
-      destinationLat: null,
-      destinationLng: null,
+      destinationLat: 1.30995,
+      destinationLng: 103.65573,
     });
     expect(toGul.originLabel).toBe("8 Gul Cir, 8 Gul Circle");
     expect(toGul.destinationLabel).toBe("7 Gul Circle");
     expect(toGul.destinationLat).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lat);
     expect(toGul.destinationLng).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lng);
     expect(toGul.destinationAddressLine1).toBe("7 Gul Circle");
+    expect(toGul.destinationLat).toBeCloseTo(1.3107274, 6);
+    expect(toGul.destinationLng).toBeCloseTo(103.6749418, 6);
 
     const fromGul = resolveAppendTripRouteSnapshot(JobTripTemplate.GUL_TO_CUSTOMER, {
       destinationSummary: "Customer site",
     });
     expect(fromGul.originLabel).toBe("7 Gul Circle");
-    expect(fromGul.originLat).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lat);
-    expect(fromGul.originLng).toBe(GUL_CIRCLE_ROUTE_DEFAULTS.lng);
+    expect(fromGul.originLat).toBeCloseTo(1.3107274, 6);
+    expect(fromGul.originLng).toBeCloseTo(103.6749418, 6);
     expect(fromGul.destinationLat).toBeNull();
   });
 

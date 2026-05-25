@@ -6,6 +6,7 @@ import {
   TripPendingState,
   TripStatus,
 } from "@prisma/client";
+import { GUL_CIRCLE_LOCATION } from "../common/gul-circle-location";
 
 export type TripCompletionRule = {
   requireGeneratedDoSigned: boolean;
@@ -81,19 +82,16 @@ export const TRIP_COMPLETION_RULES: Record<JobTripTemplate, TripCompletionRule> 
   },
 };
 
-/**
- * Fixed 7 Gul Circle depot snapshot (GUL7 / GUL7_DEPOT master logistics location).
- * Coordinates match prisma/seeds/master-logistics-locations.seed.ts.
- */
+/** Fixed 7 Gul Circle snapshot for Gul Circle trip templates (see gul-circle-location.ts). */
 export const GUL_CIRCLE_ROUTE_DEFAULTS = {
-  label: "7 Gul Circle",
-  summary: "7 Gul Circle",
-  addressLine1: "7 Gul Circle",
-  postalCode: "629563",
-  country: "SG",
-  lat: 1.30995,
-  lng: 103.65573,
-  placeId: null as string | null,
+  label: GUL_CIRCLE_LOCATION.label,
+  summary: GUL_CIRCLE_LOCATION.label,
+  addressLine1: GUL_CIRCLE_LOCATION.addressLine1,
+  postalCode: GUL_CIRCLE_LOCATION.postalCode,
+  country: GUL_CIRCLE_LOCATION.country,
+  lat: GUL_CIRCLE_LOCATION.lat,
+  lng: GUL_CIRCLE_LOCATION.lng,
+  placeId: GUL_CIRCLE_LOCATION.placeId,
 } as const;
 
 export type AppendTripRouteInput = {
@@ -152,15 +150,15 @@ export function resolveAppendTripRouteSnapshot(
     if (!destinationAddressLine1) destinationAddressLine1 = g.addressLine1;
     if (!destinationPostalCode) destinationPostalCode = g.postalCode;
     destinationCountry = g.country;
-    if (destinationLat == null) destinationLat = g.lat;
-    if (destinationLng == null) destinationLng = g.lng;
+    destinationLat = g.lat;
+    destinationLng = g.lng;
   } else if (template === JobTripTemplate.GUL_TO_CUSTOMER) {
     if (!originLabel) originLabel = g.label;
     if (!originAddressLine1) originAddressLine1 = g.addressLine1;
     if (!originPostalCode) originPostalCode = g.postalCode;
     originCountry = g.country;
-    if (originLat == null) originLat = g.lat;
-    if (originLng == null) originLng = g.lng;
+    originLat = g.lat;
+    originLng = g.lng;
   }
 
   return {

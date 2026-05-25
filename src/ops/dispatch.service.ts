@@ -385,6 +385,45 @@ export class DispatchService {
     };
   }
 
+  /** Attach Google driving route to a board trip (null polyline on failure — no straight-line fallback). */
+  private async attachBoardTripRoute(tenantId: string, trip: Record<string, any>) {
+    if (
+      trip.originLat == null
+      || trip.originLng == null
+      || trip.destinationLat == null
+      || trip.destinationLng == null
+    ) {
+      return {
+        ...trip,
+        routePolyline: null,
+        encodedPolyline: null,
+        routeProvider: null,
+        routeDistanceMeters: null,
+        routeDurationSeconds: null,
+        routeError: "Trip is missing route coordinates",
+      };
+    }
+
+    const route = await this.getDispatchRoute(tenantId, {
+      fromLat: trip.originLat,
+      fromLng: trip.originLng,
+      toLat: trip.destinationLat,
+      toLng: trip.destinationLng,
+      mode: DispatchRouteMode.DRIVE,
+      tripId: trip.id,
+    });
+
+    return {
+      ...trip,
+      routePolyline: route.polyline,
+      encodedPolyline: route.polyline,
+      routeProvider: route.provider,
+      routeDistanceMeters: route.distanceMeters,
+      routeDurationSeconds: route.durationSeconds,
+      routeError: route.error ?? null,
+    };
+  }
+
   async getBoard(tenantId: string, date?: string) {
     const selectedDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date))
       ? date
@@ -536,7 +575,12 @@ export class DispatchService {
         lastGpsAgeMinutes,
         stationaryMinutes,
         gpsStatus,
-        activeTrip: activeTrip ? await this.toBoardTrip(activeTrip, trailerLocationMap) : null,
+        activeTrip: activeTrip
+          ? await this.attachBoardTripRoute(
+            tenantId,
+            await this.toBoardTrip(activeTrip, trailerLocationMap),
+          )
+          : null,
         todayTrips: await Promise.all(
           driverTrips.map((trip) => this.toBoardTrip(trip, trailerLocationMap)),
         ),

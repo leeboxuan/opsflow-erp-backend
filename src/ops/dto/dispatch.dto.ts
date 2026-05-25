@@ -258,6 +258,26 @@ export class DispatchBoardTripDto {
 
   @ApiPropertyOptional({ type: () => DispatchBoardTrailerPhotoDto })
   trailerEndPhoto!: DispatchBoardTrailerPhotoDto | null;
+
+  @ApiPropertyOptional({
+    description: "Google Routes encoded polyline (null when route unavailable)",
+  })
+  routePolyline!: string | null;
+
+  @ApiPropertyOptional({ description: "Alias for routePolyline" })
+  encodedPolyline!: string | null;
+
+  @ApiPropertyOptional({ example: "GOOGLE_ROUTES" })
+  routeProvider!: string | null;
+
+  @ApiPropertyOptional()
+  routeDistanceMeters!: number | null;
+
+  @ApiPropertyOptional()
+  routeDurationSeconds!: number | null;
+
+  @ApiPropertyOptional({ description: "Set when driving route could not be computed" })
+  routeError!: string | null;
 }
 
 export class DispatchBoardLocationDto {

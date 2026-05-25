@@ -138,8 +138,8 @@ const SG_DEPOTS = [
     addressLine2: null,
     postalCode: "629563",
     country: "SG",
-    lat: 1.30995,
-    lng: 103.65573,
+    lat: 1.3107274,
+    lng: 103.6749418,
     placeId: null,
   },
   {
@@ -150,8 +150,8 @@ const SG_DEPOTS = [
     addressLine2: null,
     postalCode: "629563",
     country: "SG",
-    lat: 1.30995,
-    lng: 103.65573,
+    lat: 1.3107274,
+    lng: 103.6749418,
     placeId: null,
   },
   {
