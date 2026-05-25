@@ -335,6 +335,7 @@ model Trip {
   @@index([tenantId, status])
   @@index([tenantId, plannedStartAt])
   @@index([tenantId, assignedDriverUserId])
+  @@index([tenantId, assignedDriverUserId, status, plannedStartAt])
   @@index([tenantId, driverId])
   @@index([tenantId, vehicleId])
   @@index([tenantId, fleetVehicleId])
@@ -1169,6 +1170,7 @@ model TripDocument {
 
   @@index([tenantId, tripId])
   @@index([tenantId, type])
+  @@index([tenantId, tripId, isActive, type])
   @@map("trip_documents")
 }
 

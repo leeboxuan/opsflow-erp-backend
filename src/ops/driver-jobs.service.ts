@@ -28,6 +28,7 @@ import {
   resolveDocumentUploadedByFields,
 } from "./document-uploader.utils";
 import { buildTripDisplayRef } from "../common/trip-display-ref";
+import { withDriverEndpointPerf } from "../common/driver-endpoint-perf";
 import { JobLocationDto } from "./dto/location.dto";
 import { DocumentSignedUrlDto, JobDto, JobDocumentDto } from "./dto/job.dto";
 import {
@@ -269,6 +270,12 @@ function toJobDto(j: any): JobDto {
       })) ?? [],
   };
 }
+
+/** Trailer parking codes for completion UI (rarely changes). */
+const TRAILER_PARKING_LOCATIONS_CACHE_TTL_MS = 5 * 60 * 1000;
+let trailerParkingLocationsCache:
+  | { expiresAt: number; rows: Array<{ id: string; code: string; name: string }> }
+  | null = null;
 
 @Injectable()
 export class DriverJobsService {
@@ -864,6 +871,36 @@ export class DriverJobsService {
       pageSize?: unknown;
     },
   ): Promise<{ data: JobDto[]; meta: { page: number; pageSize: number; total: number }; runSheet?: any | null }> {
+    return withDriverEndpointPerf(
+      "GET /api/drivers/jobs/active",
+      {
+        date: query?.date ?? null,
+        month: query?.month ?? null,
+        page: query?.page ?? null,
+      },
+      () => this.listActiveByDriverInner(tenantId, driverUserId, query),
+      (res) => {
+        try {
+          return JSON.stringify(res).length;
+        } catch {
+          return undefined;
+        }
+      },
+    );
+  }
+
+  private async listActiveByDriverInner(
+    tenantId: string,
+    driverUserId: string,
+    query?: {
+      month?: string;
+      date?: string;
+      sortBy?: string;
+      sortDir?: string;
+      page?: unknown;
+      pageSize?: unknown;
+    },
+  ): Promise<{ data: JobDto[]; meta: { page: number; pageSize: number; total: number }; runSheet?: any | null }> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
 
     const statusFilter = {
@@ -910,6 +947,14 @@ export class DriverJobsService {
 
     const orderByFinal = [orderBy as any, tieBreaker];
 
+    const tripsWhereForDriverHome: Prisma.TripWhereInput = {
+      assignedDriverUserId: driverUserId,
+      status:
+        dateStr || month
+          ? { in: [TripStatus.PUBLISHED, TripStatus.ONGOING] }
+          : { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] },
+    };
+
     const includeActiveJobRelations = {
       customerCompany: {
         select: { id: true, name: true },
@@ -918,15 +963,32 @@ export class DriverJobsService {
         select: { id: true, name: true },
       },
       trips: {
-        where: { status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] } },
+        where: tripsWhereForDriverHome,
         orderBy: [{ plannedStartAt: "asc" as const }, { createdAt: "asc" as const }],
-      },
-      items: {
-        orderBy: { createdAt: "asc" as const },
       },
       documents: {
         where: { isActive: true, type: { in: ["QUOTATION", "OTHER"] } },
         orderBy: { createdAt: "desc" as const },
+        select: {
+          id: true,
+          type: true,
+          originalName: true,
+          mimeType: true,
+          sizeBytes: true,
+          storageKey: true,
+          isActive: true,
+          requiresSignature: true,
+          isSigned: true,
+          signedAt: true,
+          signedByUserId: true,
+          signedByName: true,
+          createdAt: true,
+          updatedAt: true,
+          jobId: true,
+          tripId: true,
+          generatedBySystem: true,
+          generatedSource: true,
+        },
       },
     };
 
@@ -1096,13 +1158,12 @@ export class DriverJobsService {
       ...fleetVehicles.map((v) => [v.id, v.plateNo] as const),
     ]);
 
-    const data = await Promise.all(jobs.map(async (job: any) => {
+    const data = jobs.map((job: any) => {
       const dto = toJobDto({
         ...job,
+        items: [],
         assignedVehiclePlateNo: (() => {
-          const primaryTrip = (job.trips ?? []).find(
-            (t: any) => t.status !== TripStatus.DRAFT && t.status !== TripStatus.CANCELLED,
-          );
+          const primaryTrip = (job.trips ?? [])[0];
           return (
             (primaryTrip?.vehicleId && vehicleMap.get(primaryTrip.vehicleId)) ||
             (primaryTrip?.fleetVehicleId && vehicleMap.get(primaryTrip.fleetVehicleId)) ||
@@ -1113,13 +1174,13 @@ export class DriverJobsService {
 
       return {
         ...dto,
-        documents: await Promise.all(
-          (job.documents ?? []).map((doc: any) => this.toDocumentMetadataDto(doc)),
-        ),
+        documents: (job.documents ?? []).map((doc: any) => this.toDocumentMetadataDto(doc)),
       };
-    }));
+    });
 
-    const runSheet = await this.buildDriverDailyRunSheet(tenantId, driverUserId, query?.date);
+    const runSheet = dateStr
+      ? await this.buildDriverDailyRunSheet(tenantId, driverUserId, dateStr)
+      : null;
 
     return {
       data,
@@ -2019,7 +2080,36 @@ export class DriverJobsService {
     };
   }
 
+  private async listTrailerParkingLocations() {
+    const now = Date.now();
+    if (
+      trailerParkingLocationsCache
+      && trailerParkingLocationsCache.expiresAt > now
+    ) {
+      return trailerParkingLocationsCache.rows;
+    }
+    const rows = await this.prisma.masterTrailerLocation.findMany({
+      orderBy: [{ code: "asc" }],
+      select: { id: true, code: true, name: true },
+    });
+    trailerParkingLocationsCache = { expiresAt: now + TRAILER_PARKING_LOCATIONS_CACHE_TTL_MS, rows };
+    return rows;
+  }
+
   async getTripCompletionRequirements(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    driverUserId: string,
+  ) {
+    return withDriverEndpointPerf(
+      "GET /api/drivers/jobs/:jobId/trips/:tripId/completion-requirements",
+      { jobId, tripId },
+      () => this.getTripCompletionRequirementsInner(tenantId, jobId, tripId, driverUserId),
+    );
+  }
+
+  private async getTripCompletionRequirementsInner(
     tenantId: string,
     jobId: string,
     tripId: string,
@@ -2063,10 +2153,7 @@ export class DriverJobsService {
     if (requiresTrailerCheckout) {
       missingTrailerCheckoutFields.push("trailerEndPhoto", "trailerParkingLocationCode");
     }
-    const parkingLocations = await this.prisma.masterTrailerLocation.findMany({
-      orderBy: [{ code: "asc" }],
-      select: { id: true, code: true, name: true },
-    });
+    const parkingLocations = await this.listTrailerParkingLocations();
 
     return {
       canComplete: trip.status === TripStatus.ONGOING && missingDocuments.length === 0,
@@ -2125,6 +2212,25 @@ export class DriverJobsService {
   }
 
   async getTripDetailForDriver(
+    tenantId: string,
+    tripId: string,
+    driverUserId: string,
+  ): Promise<any> {
+    return withDriverEndpointPerf(
+      "GET /api/drivers/trips/:tripId",
+      { tripId },
+      () => this.getTripDetailForDriverInner(tenantId, tripId, driverUserId),
+      (res) => {
+        try {
+          return JSON.stringify(res).length;
+        } catch {
+          return undefined;
+        }
+      },
+    );
+  }
+
+  private async getTripDetailForDriverInner(
     tenantId: string,
     tripId: string,
     driverUserId: string,

@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { withDriverEndpointPerf } from '../common/driver-endpoint-perf';
 import { parsePaginationFromQuery, buildPaginationMeta } from '../common/pagination';
 import { buildOrderBy } from '../common/listing/listing.sort';
 import { UpdateLocationDto } from './dto/update-location.dto';
@@ -31,6 +32,18 @@ export class LocationService {
   }
 
   async upsertLocation(
+    tenantId: string,
+    driverUserId: string,
+    dto: UpdateLocationDto,
+  ): Promise<LocationDto> {
+    return withDriverEndpointPerf(
+      "POST /api/driver/location",
+      { driverUserId },
+      () => this.upsertLocationInner(tenantId, driverUserId, dto),
+    );
+  }
+
+  private async upsertLocationInner(
     tenantId: string,
     driverUserId: string,
     dto: UpdateLocationDto,
