@@ -23,6 +23,46 @@ const GOOGLE_ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:comp
 const GPS_FRESHNESS_MINUTES = 5;
 const GPS_IDLE_MINUTES = 10;
 
+export type GoogleRoutesApiKeySource = "GOOGLE_ROUTES_API_KEY" | "GOOGLE_MAPS_API_KEY";
+
+export type GoogleRoutesApiKeyResolution = {
+  apiKey: string | null;
+  keySource: GoogleRoutesApiKeySource | null;
+  hasGoogleRoutesKey: boolean;
+  hasGoogleMapsKey: boolean;
+};
+
+/** Prefer GOOGLE_ROUTES_API_KEY; fall back to GOOGLE_MAPS_API_KEY (same GCP project/key is fine). */
+export function resolveGoogleRoutesApiKey(): GoogleRoutesApiKeyResolution {
+  const hasGoogleRoutesKey = Boolean(process.env.GOOGLE_ROUTES_API_KEY?.trim());
+  const hasGoogleMapsKey = Boolean(process.env.GOOGLE_MAPS_API_KEY?.trim());
+
+  if (hasGoogleRoutesKey) {
+    return {
+      apiKey: process.env.GOOGLE_ROUTES_API_KEY!.trim(),
+      keySource: "GOOGLE_ROUTES_API_KEY",
+      hasGoogleRoutesKey: true,
+      hasGoogleMapsKey,
+    };
+  }
+
+  if (hasGoogleMapsKey) {
+    return {
+      apiKey: process.env.GOOGLE_MAPS_API_KEY!.trim(),
+      keySource: "GOOGLE_MAPS_API_KEY",
+      hasGoogleRoutesKey: false,
+      hasGoogleMapsKey: true,
+    };
+  }
+
+  return {
+    apiKey: null,
+    keySource: null,
+    hasGoogleRoutesKey: false,
+    hasGoogleMapsKey: false,
+  };
+}
+
 @Injectable()
 export class DispatchService {
   private readonly dispatchRouteCache = new Map<string, {
@@ -80,9 +120,42 @@ export class DispatchService {
     return base;
   }
 
-  private getRouteApiKey(): string | null {
-    const key = process.env.GOOGLE_ROUTES_API_KEY?.trim() || process.env.GOOGLE_MAPS_API_KEY?.trim();
-    return key || null;
+  private resolveRouteApiKey(): GoogleRoutesApiKeyResolution {
+    return resolveGoogleRoutesApiKey();
+  }
+
+  private parseGoogleRoutesErrorMessage(status: number, bodyText: string): string {
+    try {
+      const parsed = JSON.parse(bodyText) as { error?: { message?: string } };
+      const message = parsed?.error?.message?.trim();
+      if (message) return `Google Routes error ${status}: ${message}`;
+    } catch {
+      // non-JSON body
+    }
+    const preview = bodyText?.trim().slice(0, 200);
+    return preview
+      ? `Google Routes error ${status}: ${preview}`
+      : `Google Routes error ${status}`;
+  }
+
+  private logGoogleRoutesFailure(
+    tenantId: string,
+    input: DispatchRouteQueryDto,
+    keyEnv: GoogleRoutesApiKeyResolution,
+    extra: { status?: number; error: string; bodyPreview?: string },
+  ): void {
+    console.error("Google Routes failed", {
+      tenantId,
+      keySource: keyEnv.keySource,
+      hasGoogleRoutesKey: keyEnv.hasGoogleRoutesKey,
+      hasGoogleMapsKey: keyEnv.hasGoogleMapsKey,
+      origin: { lat: input.fromLat, lng: input.fromLng },
+      destination: { lat: input.toLat, lng: input.toLng },
+      tripId: input.tripId ?? null,
+      status: extra.status ?? null,
+      error: extra.error,
+      bodyPreview: extra.bodyPreview?.slice(0, 500) ?? null,
+    });
   }
 
   private validateRouteInput(input: DispatchRouteQueryDto): void {
@@ -134,8 +207,12 @@ export class DispatchService {
       return { ...cached.value, cached: true };
     }
 
-    const apiKey = this.getRouteApiKey();
+    const keyEnv = this.resolveRouteApiKey();
+    const apiKey = keyEnv.apiKey;
     if (!apiKey) {
+      const error =
+        "Missing Google Maps/Routes API key (set GOOGLE_MAPS_API_KEY or GOOGLE_ROUTES_API_KEY)";
+      this.logGoogleRoutesFailure(tenantId, input, keyEnv, { error });
       return {
         provider: "GOOGLE_ROUTES",
         polyline: null,
@@ -145,7 +222,7 @@ export class DispatchService {
         staticDurationSeconds: null,
         routeLabels: [],
         cached: false,
-        error: "Missing Google Routes API key",
+        error,
       };
     }
 
@@ -187,7 +264,13 @@ export class DispatchService {
 
       if (!response.ok) {
         const text = await response.text();
-        const result: DispatchRouteResponseDto = {
+        const error = this.parseGoogleRoutesErrorMessage(response.status, text);
+        this.logGoogleRoutesFailure(tenantId, input, keyEnv, {
+          status: response.status,
+          error,
+          bodyPreview: text,
+        });
+        return {
           provider: "GOOGLE_ROUTES",
           polyline: null,
           polylineEncoding: "ENCODED_POLYLINE",
@@ -196,14 +279,8 @@ export class DispatchService {
           staticDurationSeconds: null,
           routeLabels: [],
           cached: false,
-          error: `Google Routes error ${response.status}`,
+          error,
         };
-        console.error("dispatch.routes google_error", {
-          tenantId,
-          status: response.status,
-          body: text?.slice(0, 500),
-        });
-        return result;
       }
 
       const payload = await response.json() as any;
@@ -224,10 +301,11 @@ export class DispatchService {
       });
       return result;
     } catch (error: any) {
-      console.error("dispatch.routes fetch_failed", {
-        tenantId,
-        message: error?.message ?? "unknown",
-      });
+      const errorMessage =
+        error?.message?.trim()
+          ? `Failed to compute route: ${error.message}`
+          : "Failed to compute route";
+      this.logGoogleRoutesFailure(tenantId, input, keyEnv, { error: errorMessage });
       return {
         provider: "GOOGLE_ROUTES",
         polyline: null,
@@ -237,7 +315,7 @@ export class DispatchService {
         staticDurationSeconds: null,
         routeLabels: [],
         cached: false,
-        error: "Failed to compute route",
+        error: errorMessage,
       };
     }
   }

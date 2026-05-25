@@ -1,5 +1,48 @@
-import { DispatchService } from "./dispatch.service";
+import { DispatchService, resolveGoogleRoutesApiKey } from "./dispatch.service";
 import { BadRequestException } from "@nestjs/common";
+
+describe("resolveGoogleRoutesApiKey", () => {
+  const originalRoutesKey = process.env.GOOGLE_ROUTES_API_KEY;
+  const originalMapsKey = process.env.GOOGLE_MAPS_API_KEY;
+
+  afterEach(() => {
+    process.env.GOOGLE_ROUTES_API_KEY = originalRoutesKey;
+    process.env.GOOGLE_MAPS_API_KEY = originalMapsKey;
+  });
+
+  it("prefers GOOGLE_ROUTES_API_KEY when both are set", () => {
+    process.env.GOOGLE_ROUTES_API_KEY = "routes-key";
+    process.env.GOOGLE_MAPS_API_KEY = "maps-key";
+    expect(resolveGoogleRoutesApiKey()).toEqual({
+      apiKey: "routes-key",
+      keySource: "GOOGLE_ROUTES_API_KEY",
+      hasGoogleRoutesKey: true,
+      hasGoogleMapsKey: true,
+    });
+  });
+
+  it("falls back to GOOGLE_MAPS_API_KEY when GOOGLE_ROUTES_API_KEY is missing", () => {
+    delete process.env.GOOGLE_ROUTES_API_KEY;
+    process.env.GOOGLE_MAPS_API_KEY = "maps-key";
+    expect(resolveGoogleRoutesApiKey()).toEqual({
+      apiKey: "maps-key",
+      keySource: "GOOGLE_MAPS_API_KEY",
+      hasGoogleRoutesKey: false,
+      hasGoogleMapsKey: true,
+    });
+  });
+
+  it("returns null when neither key is set", () => {
+    delete process.env.GOOGLE_ROUTES_API_KEY;
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    expect(resolveGoogleRoutesApiKey()).toEqual({
+      apiKey: null,
+      keySource: null,
+      hasGoogleRoutesKey: false,
+      hasGoogleMapsKey: false,
+    });
+  });
+});
 
 describe("DispatchService", () => {
   const originalRoutesKey = process.env.GOOGLE_ROUTES_API_KEY;
@@ -127,7 +170,36 @@ describe("DispatchService", () => {
     expect(trip.shipper).toBe("Shipper A");
     expect(trip.vessel).toBe("Vessel A");
     expect(trip.routePolyline).toBeNull();
-    expect(trip.routeError).toBe("Missing Google Routes API key");
+    expect(trip.routeError).toContain("GOOGLE_MAPS_API_KEY");
+  });
+
+  it("getDispatchRoute uses GOOGLE_MAPS_API_KEY when GOOGLE_ROUTES_API_KEY is unset", async () => {
+    delete process.env.GOOGLE_ROUTES_API_KEY;
+    process.env.GOOGLE_MAPS_API_KEY = "maps-only-key";
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        routes: [{
+          distanceMeters: 2500,
+          duration: "400s",
+          staticDuration: "380s",
+          polyline: { encodedPolyline: "maps-key-polyline" },
+          routeLabels: ["DEFAULT_ROUTE"],
+        }],
+      }),
+    });
+    const svc = new DispatchService({} as any, { getClient: jest.fn() } as any);
+    const res = await svc.getDispatchRoute("tenant-1", {
+      fromLat: 1.31,
+      fromLng: 103.67,
+      toLat: 1.32,
+      toLng: 103.68,
+      mode: "DRIVE" as any,
+    });
+    expect(res.polyline).toBe("maps-key-polyline");
+    expect(res.error).toBeUndefined();
+    const fetchCall = (global as any).fetch.mock.calls[0];
+    expect(fetchCall[1].headers["X-Goog-Api-Key"]).toBe("maps-only-key");
   });
 
   it("activeTrip includes Google driving route polyline when Routes API succeeds", async () => {
@@ -854,11 +926,19 @@ describe("DispatchService", () => {
   });
 
   it("handles google route failure gracefully", async () => {
+    const logSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
     process.env.GOOGLE_ROUTES_API_KEY = "test-key";
     (global as any).fetch = jest.fn().mockResolvedValue({
       ok: false,
-      status: 500,
-      text: async () => "google error",
+      status: 403,
+      text: async () =>
+        JSON.stringify({
+          error: {
+            code: 403,
+            message: "Routes API has not been used in project before or it is disabled.",
+            status: "PERMISSION_DENIED",
+          },
+        }),
     });
     const svc = new DispatchService({} as any, { getClient: jest.fn() } as any);
     const res = await svc.getDispatchRoute("tenant-1", {
@@ -869,7 +949,19 @@ describe("DispatchService", () => {
       mode: "DRIVE" as any,
     });
     expect(res.polyline).toBeNull();
-    expect(res.error).toContain("Google Routes error");
+    expect(res.error).toContain("Google Routes error 403");
+    expect(res.error).toContain("Routes API");
+    expect(logSpy).toHaveBeenCalledWith(
+      "Google Routes failed",
+      expect.objectContaining({
+        keySource: "GOOGLE_ROUTES_API_KEY",
+        hasGoogleRoutesKey: true,
+        status: 403,
+        origin: { lat: 1.29, lng: 103.85 },
+        destination: { lat: 1.3, lng: 103.86 },
+      }),
+    );
+    logSpy.mockRestore();
   });
 
   it("parses encoded polyline and durations", async () => {
