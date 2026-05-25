@@ -238,6 +238,100 @@ describe("DriverJobsService.getDriverHome", () => {
     expect(res.today.summary.total).toBe(2);
   });
 
+  describe("driver earning on trip cards", () => {
+    it("includes driverEarningCents on today trip when payout is set", async () => {
+      const today = tripRow({
+        id: "trip-today",
+        driverEarningCents: 45000,
+        payoutLines: [{ totalCents: 50000 }],
+      });
+      const { svc } = makeService({
+        runSheetTrips: [today],
+        activeAssignedTrips: [today],
+      });
+
+      const res = await svc.getDriverHome(tenantId, driver1, date);
+
+      expect(res.today.trips[0].driverEarningCents).toBe(45000);
+      expect(res.today.trips[0].driverEarningCurrency).toBe("SGD");
+      expect(res.today.runSheet.trips[0].driverEarningCents).toBe(45000);
+      expect(res.today.runSheet.trips[0].driverEarningCurrency).toBe("SGD");
+    });
+
+    it("includes driverEarningCents on needsAttention trip from payout lines", async () => {
+      const overdue = tripRow({
+        id: "trip-overdue",
+        plannedStartAt: new Date("2026-05-22T00:00:00.000Z"),
+        driverEarningCents: null,
+        payoutLines: [{ totalCents: 12000 }],
+      });
+      const today = tripRow({ id: "trip-today", driverEarningCents: 1000 });
+      const { svc } = makeService({
+        runSheetTrips: [today],
+        activeAssignedTrips: [overdue, today],
+      });
+
+      const res = await svc.getDriverHome(tenantId, driver1, date);
+
+      expect(res.assignedOutsideToday.needsAttention[0].driverEarningCents).toBe(12000);
+      expect(res.assignedOutsideToday.needsAttention[0].driverEarningCurrency).toBe("SGD");
+    });
+
+    it("includes driverEarningCents on upcoming trip", async () => {
+      const upcoming = tripRow({
+        id: "trip-upcoming",
+        plannedStartAt: new Date("2026-05-26T08:00:00.000Z"),
+        driverEarningCents: 8800,
+      });
+      const today = tripRow({ id: "trip-today" });
+      const { svc } = makeService({
+        runSheetTrips: [today],
+        activeAssignedTrips: [today, upcoming],
+      });
+
+      const res = await svc.getDriverHome(tenantId, driver1, date);
+
+      expect(res.assignedOutsideToday.upcoming[0].driverEarningCents).toBe(8800);
+      expect(res.assignedOutsideToday.upcoming[0].driverEarningCurrency).toBe("SGD");
+    });
+
+    it("returns null driverEarningCents when no payout is configured", async () => {
+      const today = tripRow({
+        id: "trip-today",
+        driverEarningCents: null,
+        payoutLines: [],
+      });
+      const { svc } = makeService({
+        runSheetTrips: [today],
+        activeAssignedTrips: [today],
+      });
+
+      const res = await svc.getDriverHome(tenantId, driver1, date);
+
+      expect(res.today.trips[0].driverEarningCents).toBeNull();
+      expect(res.today.trips[0].driverEarningCurrency).toBe("SGD");
+    });
+
+    it("does not expose payout line details in home response", async () => {
+      const today = tripRow({
+        id: "trip-today",
+        driverEarningCents: 3000,
+        payoutLines: [{ totalCents: 9999, label: "Should not leak" }],
+      });
+      const { svc } = makeService({
+        runSheetTrips: [today],
+        activeAssignedTrips: [today],
+      });
+
+      const res = await svc.getDriverHome(tenantId, driver1, date);
+      const serialized = JSON.stringify(res);
+
+      expect(serialized).not.toContain("payoutLines");
+      expect(serialized).not.toContain("totalCents");
+      expect(serialized).not.toContain("Should not leak");
+    });
+  });
+
   it("returns slim trip cards without signed URLs or cargo items", async () => {
     const today = tripRow({ id: "trip-a" });
     const future = tripRow({

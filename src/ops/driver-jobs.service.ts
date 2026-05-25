@@ -42,6 +42,21 @@ import { jobTripTemplateDisplayLabel } from "./job-workflow.helpers";
 import { DRIVER_ACTIVE_JOB_DOCUMENTS_INCLUDE } from "./driver-mobile-document.select";
 
 const DEFAULT_TENANT_TIMEZONE = "Asia/Singapore";
+const DEFAULT_DRIVER_EARNING_CURRENCY = "SGD";
+
+/** Driver payout total for mobile cards: persisted cents, else sum of payout lines. */
+function resolveDriverTripEarningCents(trip: {
+  driverEarningCents?: number | null;
+  payoutLines?: Array<{ totalCents?: number | null }> | null;
+}): number | null {
+  if (Number.isInteger(trip.driverEarningCents)) {
+    return trip.driverEarningCents as number;
+  }
+  const lines = trip.payoutLines ?? [];
+  if (!lines.length) return null;
+  const total = lines.reduce((sum, line) => sum + (line.totalCents ?? 0), 0);
+  return total > 0 ? total : null;
+}
 const TENANT_TIMEZONE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DRIVER_NON_DELETABLE_TRIP_DOC_TYPES = new Set<TripDocumentType>([
   TripDocumentType.TRAILER_START_PHOTO,
@@ -494,6 +509,9 @@ export class DriverJobsService {
           ],
         },
         include: {
+          payoutLines: {
+            select: { totalCents: true },
+          },
           job: {
             select: {
               id: true,
@@ -603,6 +621,8 @@ export class DriverJobsService {
         isNextActionable: nextTripId === t.id && !isCurrent,
         isLockedBySequence,
         routeVersion: t.routeVersion ?? null,
+        driverEarningCents: resolveDriverTripEarningCents(t),
+        driverEarningCurrency: DEFAULT_DRIVER_EARNING_CURRENCY,
       };
     });
 
@@ -1216,6 +1236,9 @@ export class DriverJobsService {
   }
 
   private readonly driverHomeTripInclude = {
+    payoutLines: {
+      select: { totalCents: true },
+    },
     job: {
       select: {
         id: true,
@@ -1364,6 +1387,8 @@ export class DriverJobsService {
       deliveryAddress1: exec.deliveryAddress1,
       deliveryPostal: exec.deliveryPostal,
       trailerNumber: t.trailerNumber ?? null,
+      driverEarningCents: resolveDriverTripEarningCents(t),
+      driverEarningCurrency: DEFAULT_DRIVER_EARNING_CURRENCY,
     };
   }
 
@@ -1830,11 +1855,7 @@ export class DriverJobsService {
     });
 
     const tripRows = trips.map((trip) => {
-      const payoutTotal = (trip.payoutLines ?? []).reduce(
-        (sum, line) => sum + (line.totalCents ?? 0),
-        0,
-      );
-      const earning = trip.driverEarningCents ?? payoutTotal;
+      const earning = resolveDriverTripEarningCents(trip);
       return {
         tripId: trip.id,
         jobId: trip.jobId ?? null,
