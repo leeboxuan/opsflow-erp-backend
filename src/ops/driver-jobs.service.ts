@@ -38,6 +38,7 @@ import {
 } from "./job-invoice-readiness";
 import { RealtimeEventsService } from "../realtime/realtime-events.service";
 import * as rt from "../realtime/realtime-publish";
+import { jobTripTemplateDisplayLabel } from "./job-workflow.helpers";
 
 const DEFAULT_TENANT_TIMEZONE = "Asia/Singapore";
 const TENANT_TIMEZONE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -1187,6 +1188,259 @@ export class DriverJobsService {
       meta: buildPaginationMeta(page, pageSize, total),
       runSheet,
     };
+  }
+
+  private readonly driverHomeTripInclude = {
+    job: {
+      select: {
+        id: true,
+        internalRef: true,
+        pickupDate: true,
+        pickupAddress1: true,
+        pickupAddress2: true,
+        pickupPostal: true,
+        deliveryAddress1: true,
+        deliveryAddress2: true,
+        deliveryPostal: true,
+        notes: true,
+        jobType: true,
+        customerCompany: { select: { name: true } },
+      },
+    },
+  } as const;
+
+  private getTripCalendarDayKey(
+    trip: { plannedStartAt?: Date | null },
+    job: { pickupDate?: Date | null } | null | undefined,
+    timeZone: string,
+  ): string | null {
+    if (trip.plannedStartAt) {
+      return this.getDateKeyInTimeZone(new Date(trip.plannedStartAt), timeZone);
+    }
+    if (job?.pickupDate) {
+      return this.getDateKeyInTimeZone(new Date(job.pickupDate), timeZone);
+    }
+    return null;
+  }
+
+  private classifyOutsideTodayBucket(
+    dayKey: string | null,
+    requestedDateKey: string,
+  ): "needsAttention" | "upcoming" | "unscheduled" | null {
+    if (!dayKey) return "unscheduled";
+    if (dayKey < requestedDateKey) return "needsAttention";
+    if (dayKey > requestedDateKey) return "upcoming";
+    return null;
+  }
+
+  private toDriverHomeTripCard(t: any, j: any) {
+    const exec = buildDriverTripExecutionCard(t, j);
+    const template = t.jobTripTemplate ?? null;
+    const title = t.title ?? t.displayTitle ?? null;
+    return {
+      tripId: t.id,
+      jobId: t.jobId ?? j?.id ?? null,
+      tripDisplayRef: buildTripDisplayRef({
+        jobInternalRef: j?.internalRef ?? exec.jobInternalRef ?? null,
+        tripSequence: t.tripSequence ?? null,
+        jobSequence: t.jobSequence ?? null,
+        tripId: t.id,
+      }),
+      jobInternalRef: j?.internalRef ?? exec.jobInternalRef ?? null,
+      customerName: exec.customerName,
+      title,
+      routeLabel: template ? jobTripTemplateDisplayLabel(template) : title,
+      jobTripTemplate: template,
+      status: t.status,
+      pendingState: t.pendingState ?? TripPendingState.NONE,
+      plannedStartAt: t.plannedStartAt ?? null,
+      startedAt: t.startedAt ?? null,
+      originSummary: exec.originSummary,
+      destinationSummary: exec.destinationSummary,
+      pickupAddress1: exec.pickupAddress1,
+      pickupPostal: exec.pickupPostal,
+      deliveryAddress1: exec.deliveryAddress1,
+      deliveryPostal: exec.deliveryPostal,
+      trailerNumber: t.trailerNumber ?? null,
+    };
+  }
+
+  private toDriverHomeJobCard(job: JobDto) {
+    const primary = (job.trips ?? [])[0] as any;
+    return {
+      jobId: job.id,
+      jobInternalRef: job.internalRef,
+      customerName: primary?.customerName ?? null,
+      jobType: job.jobType,
+      status: job.status,
+      pickupDate: job.pickupDate,
+      originSummary: primary?.originSummary ?? null,
+      destinationSummary: primary?.destinationSummary ?? null,
+    };
+  }
+
+  async getDriverHome(
+    tenantId: string,
+    driverUserId: string,
+    dateStr: string,
+  ): Promise<{
+    date: string;
+    today: {
+      jobs: ReturnType<DriverJobsService["toDriverHomeJobCard"]>[];
+      trips: ReturnType<DriverJobsService["toDriverHomeTripCard"]>[];
+      runSheet: any;
+      summary: {
+        total: number;
+        completed: number;
+        ongoing: number;
+        nextTripId: string | null;
+        currentTripId: string | null;
+      };
+    };
+    assignedOutsideToday: {
+      needsAttention: ReturnType<DriverJobsService["toDriverHomeTripCard"]>[];
+      upcoming: ReturnType<DriverJobsService["toDriverHomeTripCard"]>[];
+      unscheduled: ReturnType<DriverJobsService["toDriverHomeTripCard"]>[];
+    };
+  }> {
+    return withDriverEndpointPerf(
+      "GET /api/drivers/home",
+      { date: dateStr },
+      async () => {
+        const trimmed = String(dateStr ?? "").trim();
+        if (!trimmed) {
+          throw new BadRequestException("date query param is required");
+        }
+        const tz = await this.getTenantTimeZone(tenantId);
+        this.parseCalendarDateToUtcRangeInTimeZone(trimmed, tz);
+        const requestedDateKey = trimmed;
+
+        const activeResult = await this.listActiveByDriverInner(tenantId, driverUserId, {
+          date: trimmed,
+          page: 1,
+          pageSize: 100,
+        });
+        const runSheet = activeResult.runSheet;
+
+        const todayTripIds = new Set<string>();
+        const todayTrips: ReturnType<DriverJobsService["toDriverHomeTripCard"]>[] = [];
+        const todayJobs = activeResult.data.map((job) => {
+          for (const trip of job.trips ?? []) {
+            todayTripIds.add(trip.id);
+            todayTrips.push(
+              this.toDriverHomeTripCard(
+                {
+                  ...trip,
+                  id: trip.id,
+                  jobId: trip.jobId,
+                  jobTripTemplate: trip.jobTripTemplate,
+                  title: trip.title,
+                  displayTitle: null,
+                  status: trip.status,
+                  pendingState: trip.pendingState,
+                  plannedStartAt: trip.plannedStartAt,
+                  startedAt: trip.startedAt,
+                  trailerNumber: trip.trailerNumber,
+                  tripSequence: trip.tripSequence,
+                  jobSequence: trip.jobSequence,
+                },
+                {
+                  id: job.id,
+                  internalRef: job.internalRef,
+                  pickupAddress1: job.pickupAddress1,
+                  pickupAddress2: job.pickupAddress2,
+                  pickupPostal: job.pickupPostal,
+                  deliveryAddress1: job.deliveryAddress1,
+                  deliveryAddress2: job.deliveryAddress2,
+                  deliveryPostal: job.deliveryPostal,
+                  notes: job.notes,
+                  jobType: job.jobType,
+                  customerCompany: { name: trip.customerName ?? null },
+                },
+              ),
+            );
+          }
+          return this.toDriverHomeJobCard(job);
+        });
+
+        for (const rs of runSheet?.trips ?? []) {
+          if (rs?.tripId) todayTripIds.add(rs.tripId);
+        }
+
+        const outsideWhere: Prisma.TripWhereInput = {
+          tenantId,
+          assignedDriverUserId: driverUserId,
+          status: { in: [TripStatus.PUBLISHED, TripStatus.ONGOING] },
+          job: {
+            tenantId,
+            status: { in: [JobStatus.ONGOING] },
+            ...this.publishedTripVisibilityWhere(),
+          },
+        };
+        if (todayTripIds.size > 0) {
+          outsideWhere.id = { notIn: [...todayTripIds] };
+        }
+
+        const outsideTrips = await this.prisma.trip.findMany({
+          where: outsideWhere,
+          include: this.driverHomeTripInclude,
+          orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }],
+        });
+
+        const assignedOutsideToday = {
+          needsAttention: [] as ReturnType<DriverJobsService["toDriverHomeTripCard"]>[],
+          upcoming: [] as ReturnType<DriverJobsService["toDriverHomeTripCard"]>[],
+          unscheduled: [] as ReturnType<DriverJobsService["toDriverHomeTripCard"]>[],
+        };
+
+        for (const t of outsideTrips) {
+          const dayKey = this.getTripCalendarDayKey(t, t.job, tz);
+          const bucket = this.classifyOutsideTodayBucket(dayKey, requestedDateKey);
+          if (!bucket) continue;
+          assignedOutsideToday[bucket].push(this.toDriverHomeTripCard(t, t.job));
+        }
+
+        const summary = {
+          total: runSheet?.totalTrips ?? 0,
+          completed: runSheet?.completedTrips ?? 0,
+          ongoing: runSheet?.ongoingTrips ?? 0,
+          nextTripId: runSheet?.nextTripId ?? null,
+          currentTripId: runSheet?.currentTripId ?? null,
+        };
+
+        return {
+          date: requestedDateKey,
+          today: {
+            jobs: todayJobs,
+            trips: todayTrips,
+            runSheet: runSheet ?? {
+              runDate: requestedDateKey,
+              driverId: driverUserId,
+              driverName: null,
+              totalTrips: 0,
+              completedTrips: 0,
+              ongoingTrips: 0,
+              nextTripId: null,
+              currentTripId: null,
+              routeVersion: null,
+              routeOptimisedAt: null,
+              routeOptimisedByUserId: null,
+              routeOptimisedByName: null,
+              trips: [],
+            },
+            summary,
+          },
+          assignedOutsideToday,
+        };
+      },
+      (res) => {
+        try {
+          return JSON.stringify(res).length;
+        } catch {
+          return undefined;
+        }
+      },
+    );
   }
 
   async listHistoryByDriver(
