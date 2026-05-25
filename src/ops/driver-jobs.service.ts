@@ -355,6 +355,53 @@ export class DriverJobsService {
     return missing;
   }
 
+  private buildMissingTrailerCheckoutFields(
+    requiresTrailerCheckout: boolean,
+    input: {
+      hasTrailerEndPhoto: boolean;
+      trailerParkingLocationCode?: string | null;
+    },
+  ): string[] {
+    if (!requiresTrailerCheckout) return [];
+    const missing: string[] = [];
+    if (!input.hasTrailerEndPhoto) {
+      missing.push("trailerEndPhoto");
+    }
+    if (!String(input.trailerParkingLocationCode ?? "").trim()) {
+      missing.push("trailerParkingLocationCode");
+    }
+    return missing;
+  }
+
+  private resolveTripCanComplete(
+    tripStatus: TripStatus,
+    missingBaseCompletionDocuments: string[],
+    requiresTrailerCheckout: boolean,
+    missingTrailerCheckoutFields: string[],
+  ): boolean {
+    if (tripStatus !== TripStatus.ONGOING) return false;
+    const hasMissingBaseDocuments = missingBaseCompletionDocuments.length > 0;
+    const hasMissingTrailerCheckout =
+      requiresTrailerCheckout && missingTrailerCheckoutFields.length > 0;
+    return !hasMissingBaseDocuments && !hasMissingTrailerCheckout;
+  }
+
+  private async driverTripHasActiveTrailerEndPhoto(
+    tenantId: string,
+    tripId: string,
+  ): Promise<boolean> {
+    const doc = await this.prisma.tripDocument.findFirst({
+      where: {
+        tenantId,
+        tripId,
+        isActive: true,
+        type: TripDocumentType.TRAILER_END_PHOTO,
+      },
+      select: { id: true },
+    });
+    return !!doc;
+  }
+
   private parseMonthToRange(month: string): { gte: Date; lt: Date } {
     const m = month.trim().match(/^(\d{4})-(\d{2})$/);
     if (!m) throw new BadRequestException("month must be YYYY-MM");
@@ -2221,18 +2268,18 @@ export class DriverJobsService {
       dayWindow,
     );
     const requiresTrailerCheckout = driverDayOpenTrips.length === 1;
-    const missingTrailerCheckoutFields: string[] = [];
+    const missingTrailerCheckoutFields = this.buildMissingTrailerCheckoutFields(
+      requiresTrailerCheckout,
+      {
+        hasTrailerEndPhoto: !!payload?.trailerEndPhoto?.buffer?.length,
+        trailerParkingLocationCode: payload?.trailerParkingLocationCode,
+      },
+    );
 
     let trailerLocation: { code: string; name: string } | null = null;
     if (requiresTrailerCheckout) {
       const trailerEndPhoto = payload?.trailerEndPhoto;
       const trailerParkingLocationCode = payload?.trailerParkingLocationCode?.trim();
-      if (!trailerEndPhoto?.buffer?.length) {
-        missingTrailerCheckoutFields.push("trailerEndPhoto");
-      }
-      if (!trailerParkingLocationCode) {
-        missingTrailerCheckoutFields.push("trailerParkingLocationCode");
-      }
       if (missingTrailerCheckoutFields.length > 0) {
         throw new BadRequestException(
           `Missing trailer checkout fields: ${missingTrailerCheckoutFields.join(", ")}`,
@@ -2392,7 +2439,7 @@ export class DriverJobsService {
       throw new BadRequestException("You are not assigned to this trip");
     }
 
-    const [completionDocs, tenantTimeZone] = await Promise.all([
+    const [completionDocs, tenantTimeZone, hasTrailerEndPhoto] = await Promise.all([
       this.prisma.tripDocument.findMany({
         where: {
           tenantId,
@@ -2409,6 +2456,7 @@ export class DriverJobsService {
         select: { type: true, signedAt: true, isSigned: true },
       }),
       this.getTenantTimeZone(tenantId),
+      this.driverTripHasActiveTrailerEndPhoto(tenantId, tripId),
     ]);
     const missingDocuments = this.buildTripCompletionDocumentGaps(completionDocs);
 
@@ -2420,14 +2468,22 @@ export class DriverJobsService {
       dayWindow,
     );
     const requiresTrailerCheckout = driverDayOpenTrips.length === 1;
-    const missingTrailerCheckoutFields: string[] = [];
-    if (requiresTrailerCheckout) {
-      missingTrailerCheckoutFields.push("trailerEndPhoto", "trailerParkingLocationCode");
-    }
+    const missingTrailerCheckoutFields = this.buildMissingTrailerCheckoutFields(
+      requiresTrailerCheckout,
+      {
+        hasTrailerEndPhoto,
+        trailerParkingLocationCode: trip.trailerLastLocationCode,
+      },
+    );
     const parkingLocations = await this.listTrailerParkingLocations();
 
     return {
-      canComplete: trip.status === TripStatus.ONGOING && missingDocuments.length === 0,
+      canComplete: this.resolveTripCanComplete(
+        trip.status,
+        missingDocuments,
+        requiresTrailerCheckout,
+        missingTrailerCheckoutFields,
+      ),
       missingDocuments,
       requiresTrailerCheckout,
       missingBaseCompletionDocuments: missingDocuments,

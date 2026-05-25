@@ -168,6 +168,7 @@ describe("completion requirements: customer signature vs DELIVERY_DO", () => {
           status: "ONGOING",
           assignedDriverUserId: "driver-1",
           trailerNumber: "T1",
+          trailerLastLocationCode: null,
           plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
           createdAt: new Date("2026-04-30T08:00:00.000Z"),
         }),
@@ -177,9 +178,17 @@ describe("completion requirements: customer signature vs DELIVERY_DO", () => {
             plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
             createdAt: new Date("2026-04-30T08:00:00.000Z"),
           },
+          {
+            id: "trip2",
+            plannedStartAt: new Date("2026-04-30T09:00:00.000Z"),
+            createdAt: new Date("2026-04-30T09:00:00.000Z"),
+          },
         ]),
       },
-      tripDocument: { findMany: jest.fn().mockResolvedValue(tripDocRows) },
+      tripDocument: {
+        findMany: jest.fn().mockResolvedValue(tripDocRows),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
     };
   }
@@ -559,12 +568,131 @@ describe("DriverJobsService trip assignment and trailer checkout", () => {
           },
         ]),
       },
-      tripDocument: { findMany: jest.fn().mockResolvedValue([{ type: "DELIVERY_DO" }, { type: "POD_SIGNATURE" }]) },
+      tripDocument: {
+        findMany: jest.fn().mockResolvedValue([{ type: "DELIVERY_DO" }, { type: "POD_SIGNATURE" }]),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
     const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
     expect(res.requiresTrailerCheckout).toBe(true);
+    expect(res.missingTrailerCheckoutFields).toEqual(
+      expect.arrayContaining(["trailerEndPhoto", "trailerParkingLocationCode"]),
+    );
+    expect(res.canComplete).toBe(false);
+  });
+
+  describe("canComplete respects trailer checkout on last trip of day", () => {
+    function lastTripPrisma(overrides: {
+      tripDocRows?: any[];
+      trailerEndPhotoDoc?: { id: string } | null;
+      trailerLastLocationCode?: string | null;
+      openTripsCount?: number;
+    }) {
+      const openTrips =
+        overrides.openTripsCount === 1
+          ? [
+              {
+                id: "trip1",
+                plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
+                createdAt: new Date("2026-04-30T08:00:00.000Z"),
+              },
+            ]
+          : [
+              {
+                id: "trip1",
+                plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
+                createdAt: new Date("2026-04-30T08:00:00.000Z"),
+              },
+              {
+                id: "trip2",
+                plannedStartAt: new Date("2026-04-30T09:00:00.000Z"),
+                createdAt: new Date("2026-04-30T09:00:00.000Z"),
+              },
+            ];
+
+      return {
+        tenant: { findUnique: jest.fn().mockResolvedValue({ timezone: "Asia/Singapore" }) },
+        job: { findFirst: jest.fn().mockResolvedValue({ id: "job1", status: "ONGOING", documents: [] }) },
+        trip: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "trip1",
+            tenantId: "t1",
+            jobId: "job1",
+            status: "ONGOING",
+            assignedDriverUserId: "driver-1",
+            trailerNumber: "TR666D",
+            trailerLastLocationCode: overrides.trailerLastLocationCode ?? null,
+            plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
+            createdAt: new Date("2026-04-30T08:00:00.000Z"),
+          }),
+          findMany: jest.fn().mockResolvedValue(openTrips),
+        },
+        tripDocument: {
+          findMany: jest.fn().mockResolvedValue(overrides.tripDocRows ?? []),
+          findFirst: jest.fn().mockImplementation((args: any) => {
+            if (args?.where?.type === "TRAILER_END_PHOTO") {
+              return Promise.resolve(overrides.trailerEndPhotoDoc ?? null);
+            }
+            return Promise.resolve(null);
+          }),
+        },
+        masterTrailerLocation: {
+          findMany: jest.fn().mockResolvedValue([{ id: "loc1", code: "GUL-7", name: "7 Gul Circle" }]),
+        },
+      };
+    }
+
+    it("canComplete is false when trailer checkout required and trailerEndPhoto missing", async () => {
+      const prisma: any = lastTripPrisma({ openTripsCount: 1 });
+      const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+      const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+      expect(res.requiresTrailerCheckout).toBe(true);
+      expect(res.missingTrailerCheckoutFields).toContain("trailerEndPhoto");
+      expect(res.canComplete).toBe(false);
+    });
+
+    it("canComplete is false when trailer checkout required and trailerParkingLocationCode missing", async () => {
+      const prisma: any = lastTripPrisma({
+        openTripsCount: 1,
+        trailerEndPhotoDoc: { id: "photo-1" },
+      });
+      const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+      const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+      expect(res.missingTrailerCheckoutFields).toContain("trailerParkingLocationCode");
+      expect(res.missingTrailerCheckoutFields).not.toContain("trailerEndPhoto");
+      expect(res.canComplete).toBe(false);
+    });
+
+    it("canComplete is true when trailer checkout satisfied and base docs satisfied", async () => {
+      const prisma: any = lastTripPrisma({
+        openTripsCount: 1,
+        trailerEndPhotoDoc: { id: "photo-1" },
+        trailerLastLocationCode: "GUL-7",
+        tripDocRows: [
+          { type: "DELIVERY_DO", signedAt: new Date(), isSigned: true },
+          { type: "POD_SIGNATURE", signedAt: null, isSigned: false },
+        ],
+      });
+      const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+      const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+      expect(res.missingTrailerCheckoutFields).toHaveLength(0);
+      expect(res.missingBaseCompletionDocuments).toHaveLength(0);
+      expect(res.canComplete).toBe(true);
+    });
+
+    it("canComplete is true when trailer checkout not required and base docs satisfied", async () => {
+      const prisma: any = lastTripPrisma({
+        openTripsCount: 2,
+        tripDocRows: [],
+      });
+      const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+      const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
+      expect(res.requiresTrailerCheckout).toBe(false);
+      expect(res.missingTrailerCheckoutFields).toHaveLength(0);
+      expect(res.canComplete).toBe(true);
+    });
   });
 
   it("uses tenant timezone day window for boundary at UTC edge", async () => {
@@ -598,6 +726,7 @@ describe("DriverJobsService trip assignment and trailer checkout", () => {
       },
       tripDocument: {
         findMany: jest.fn().mockResolvedValue([{ type: "DELIVERY_DO" }, { type: "POD_SIGNATURE" }]),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
     };
@@ -625,7 +754,10 @@ describe("DriverJobsService trip assignment and trailer checkout", () => {
         }),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      tripDocument: { findMany: jest.fn().mockResolvedValue([]) },
+      tripDocument: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
@@ -658,7 +790,10 @@ describe("DriverJobsService trip assignment and trailer checkout", () => {
           },
         ]),
       },
-      tripDocument: { findMany: jest.fn().mockResolvedValue([{ type: "DELIVERY_DO" }, { type: "POD_SIGNATURE" }]) },
+      tripDocument: {
+        findMany: jest.fn().mockResolvedValue([{ type: "DELIVERY_DO" }, { type: "POD_SIGNATURE" }]),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
@@ -686,7 +821,10 @@ describe("DriverJobsService trip assignment and trailer checkout", () => {
         }),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      tripDocument: { findMany: jest.fn().mockResolvedValue([{ type: "DELIVERY_DO" }, { type: "POD_SIGNATURE" }]) },
+      tripDocument: {
+        findMany: jest.fn().mockResolvedValue([{ type: "DELIVERY_DO" }, { type: "POD_SIGNATURE" }]),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
