@@ -33,7 +33,10 @@ import { TenantGuard } from "../auth/guards/tenant.guard";
 import { RoleGuard } from "../auth/guards/role.guard";
 import { Roles } from "../auth/guards/role.guard";
 import { Role } from "@prisma/client";
-import { DriverJobsService } from "./driver-jobs.service";
+import {
+  DriverJobsService,
+  DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPES,
+} from "./driver-jobs.service";
 import { JobDocumentDto } from "./dto/job.dto";
 import { DriverJobsListQueryDto } from "./dto/driver-jobs-list-query.dto";
 import { DriverJobsHistoryListQueryDto } from "./dto/driver-jobs-history-list-query.dto";
@@ -266,7 +269,15 @@ export class DriverJobsController {
         type: {
           type: "string",
           example: "OTHER",
-          enum: ["PICKUP_DO", "DELIVERY_DO", "POD_PHOTO", "POD_SIGNATURE", "OTHER"],
+          enum: [
+            "PICKUP_DO",
+            "DELIVERY_DO",
+            "POD_PHOTO",
+            "POD_SIGNATURE",
+            "OTHER",
+            "TRAILER_START_PHOTO",
+            "TRAILER_END_PHOTO",
+          ],
         },
         requiresSignature: { type: "boolean" },
         file: { type: "string", format: "binary" },
@@ -284,10 +295,18 @@ export class DriverJobsController {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
     const body = req.body as Record<string, string>;
-    const typeRaw = (body?.type ?? "").trim().toUpperCase();
-    const allowed = Object.values(TripDocumentType) as string[];
+    const typeRaw = String(body?.type ?? body?.documentType ?? "")
+      .trim()
+      .toUpperCase();
+    const allowed = DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPES as readonly string[];
     if (!typeRaw || !allowed.includes(typeRaw)) {
-      throw new BadRequestException("type must be a valid TripDocumentType");
+      console.warn("driver_trip_doc_upload_rejected", {
+        receivedType: typeRaw || null,
+        supportedTypes: [...allowed],
+        tripId,
+        userId,
+      });
+      throw new BadRequestException("Unsupported trip document type");
     }
     const type = typeRaw as TripDocumentType;
     const requiresSignature = String(body?.requiresSignature ?? "").toLowerCase() === "true";

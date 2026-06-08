@@ -1157,6 +1157,9 @@ export class OpsJobsService {
     }
   }
 
+  /** Prefix for newly allocated job internal refs (e.g. WFL-2026-05-0001-LCL). */
+  private static readonly JOB_INTERNAL_REF_PREFIX = "WFL";
+
   private async getNextInternalRef(
     tenantId: string,
     jobType: JobType,
@@ -1178,7 +1181,7 @@ export class OpsJobsService {
 
     const seq = String(row.nextSeq).padStart(4, "0");
     const typeCode = this.getJobTypeCode(jobType);
-    return `WF-${yyyy}-${MM}-${seq}-${typeCode}`;
+    return `${OpsJobsService.JOB_INTERNAL_REF_PREFIX}-${yyyy}-${MM}-${seq}-${typeCode}`;
   }
 
   /** Metadata only — no Supabase round-trip. */

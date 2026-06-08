@@ -62,6 +62,29 @@ const DRIVER_NON_DELETABLE_TRIP_DOC_TYPES = new Set<TripDocumentType>([
   TripDocumentType.TRAILER_START_PHOTO,
   TripDocumentType.TRAILER_END_PHOTO,
 ]);
+
+/** Trip document types drivers may upload via POST .../trips/:tripId/documents */
+export const DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPES = [
+  TripDocumentType.PICKUP_DO,
+  TripDocumentType.DELIVERY_DO,
+  TripDocumentType.POD_PHOTO,
+  TripDocumentType.POD_SIGNATURE,
+  TripDocumentType.OTHER,
+  TripDocumentType.TRAILER_START_PHOTO,
+  TripDocumentType.TRAILER_END_PHOTO,
+] as const;
+
+const DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPE_SET = new Set<TripDocumentType>(
+  DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPES,
+);
+
+const DRIVER_SINGLE_ACTIVE_TRIP_DOCUMENT_TYPES = new Set<TripDocumentType>([
+  TripDocumentType.PICKUP_DO,
+  TripDocumentType.DELIVERY_DO,
+  TripDocumentType.POD_SIGNATURE,
+  TripDocumentType.TRAILER_START_PHOTO,
+  TripDocumentType.TRAILER_END_PHOTO,
+]);
 const DRIVER_NON_DELETABLE_TRIP_STATUSES = new Set<TripStatus>([
   TripStatus.COMPLETED,
   TripStatus.DONE,
@@ -2744,21 +2767,15 @@ export class DriverJobsService {
       throw new BadRequestException("Trip document file is required");
     }
 
-    const allowedTypes = new Set<TripDocumentType>([
-      TripDocumentType.PICKUP_DO,
-      TripDocumentType.DELIVERY_DO,
-      TripDocumentType.POD_PHOTO,
-      TripDocumentType.POD_SIGNATURE,
-      TripDocumentType.OTHER,
-    ]);
-    if (!allowedTypes.has(type)) {
+    if (!DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPE_SET.has(type)) {
+      console.warn("driver_trip_doc_upload_rejected", {
+        receivedType: type,
+        supportedTypes: [...DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPES],
+        tripId,
+        userId: driverUserId,
+      });
       throw new BadRequestException("Unsupported trip document type");
     }
-    const singleActiveTripTypes = new Set<TripDocumentType>([
-      TripDocumentType.PICKUP_DO,
-      TripDocumentType.DELIVERY_DO,
-      TripDocumentType.POD_SIGNATURE,
-    ]);
 
     const mime = String(file.mimetype ?? "").toLowerCase();
     if (
@@ -2783,7 +2800,7 @@ export class DriverJobsService {
     if (error) {
       throw new BadRequestException(`Storage upload failed: ${error.message}`);
     }
-    if (singleActiveTripTypes.has(type)) {
+    if (DRIVER_SINGLE_ACTIVE_TRIP_DOCUMENT_TYPES.has(type)) {
       await this.prisma.tripDocument.updateMany({
         where: { tenantId, tripId, type, isActive: true },
         data: { isActive: false },

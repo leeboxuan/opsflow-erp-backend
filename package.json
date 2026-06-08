@@ -19,6 +19,7 @@
     "test:cov": "jest --coverage",
     "jobs:recalculate-readiness": "dotenv -e .env.local -- ts-node scripts/recalculate-job-readiness.ts",
     "jobs:backfill-invoice-readiness": "dotenv -e .env.local -- ts-node scripts/backfill-job-invoice-readiness.ts",
+    "drivers:reset-passwords": "dotenv -e .env.local -- ts-node scripts/reset-driver-passwords.ts",
     "start": "node dist/main",
     "gen:api": "openapi-typescript https://opsflow-erp-api.onrender.com/api/docs-json -o src/api/generated.ts"
   },

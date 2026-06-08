@@ -170,6 +170,7 @@ describe("create job items (LCL optional)", () => {
 
       const createArg = prisma.job.create.mock.calls[0][0];
       expect(createArg.data.items).toBeUndefined();
+      expect(createArg.data.internalRef).toMatch(/^WFL-\d{4}-\d{2}-\d{4}-LCL$/);
     });
 
     it("creates LCL job with empty items array", async () => {

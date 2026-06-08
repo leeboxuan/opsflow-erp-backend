@@ -11,6 +11,16 @@ describe("buildTripDisplayRef", () => {
     ).toBe("WF-0002-IMP-T03");
   });
 
+  it("supports new WFL internal ref prefix", () => {
+    expect(
+      buildTripDisplayRef({
+        jobInternalRef: "WFL-2026-05-0010-LCL",
+        tripSequence: 1,
+        tripId: "cmok4tpjs000pkq5j53kefqnc",
+      }),
+    ).toBe("WFL-0010-LCL-T01");
+  });
+
   it("supports LCL format", () => {
     expect(
       buildTripDisplayRef({
