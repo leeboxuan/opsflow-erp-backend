@@ -97,6 +97,7 @@ import {
   GUL_CIRCLE_ROUTE_DEFAULTS,
   jobTripTemplateDisplayLabel,
   resolveAppendTripRouteSnapshot,
+  isContainerCargoJobType,
 } from "./job-workflow.helpers";
 import type {
   ImportJobRowDto,
@@ -219,33 +220,56 @@ export function readUpdateJobItemsInput(dto: {
   return readCreateJobItemsInput(dto);
 }
 
-export function parseValidJobItemsFromInput(rawItems: unknown[]): Array<{
+export function parseValidJobItemsFromInput(
+  rawItems: unknown[],
+  jobType?: JobType,
+): Array<{
   itemCode: string;
   description: string | null;
-  qty: number;
+  sealNo: string | null;
+  pickupReference: string | null;
+  qty: number | null;
 }> {
+  const containerStyle =
+    jobType != null && isContainerCargoJobType(jobType);
+
   return rawItems
-    .filter((i: any) => i?.itemCode?.trim())
-    .map((i: any) => ({
-      itemCode: String(i.itemCode).trim(),
-      description: i.description?.trim() || null,
-      qty: Math.max(1, Number(i.qty) || 1),
-    }));
+    .map((i: any) => {
+      const itemCode = String(i?.itemCode ?? i?.containerNumber ?? "").trim();
+      if (!itemCode) return null;
+      const rawQty = i?.qty;
+      let qty: number | null;
+      if (containerStyle) {
+        qty =
+          rawQty == null || rawQty === ""
+            ? null
+            : Math.max(1, Number(rawQty) || 1);
+      } else {
+        qty = Math.max(1, Number(rawQty) || 1);
+      }
+      return {
+        itemCode,
+        description: i?.description?.trim() || null,
+        sealNo: i?.sealNo?.trim() || null,
+        pickupReference: i?.pickupReference?.trim() || null,
+        qty,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row != null);
 }
 
 export function assertCreateJobItemsRequiredForJobType(
-  jobType: JobType,
+  _jobType: JobType,
   rawItems: unknown[],
   validItems: Array<{ itemCode: string }>,
 ): void {
-  if (jobType === JobType.LCL) {
+  if (!rawItems.length) {
     return;
   }
-  if (!rawItems.length) {
-    throw new BadRequestException("At least one item is required");
-  }
   if (!validItems.length) {
-    throw new BadRequestException("At least one valid item is required");
+    throw new BadRequestException(
+      "At least one valid item is required when items are provided",
+    );
   }
 }
 
@@ -374,7 +398,9 @@ function toJobDto(j: any): JobDto {
         id: item.id,
         itemCode: item.itemCode,
         description: item.description ?? null,
-        qty: item.qty,
+        sealNo: item.sealNo ?? null,
+        pickupReference: item.pickupReference ?? null,
+        qty: item.qty ?? null,
       })) ?? [],
 
     documents: j.documents?.map((d: any) => toDocDto(d)) ?? [],
@@ -761,21 +787,25 @@ function deriveTripRouteSummaryFromJobAndTemplate(job: any, trip: any): {
   switch (t) {
     case JobTripTemplate.PICKUP_TO_DELIVERY:
       return {
-        fromLabel: pickupAddress ?? "Pickup location",
+        fromLabel:
+          job?.jobType === JobType.IMPORT
+            ? portLabel ?? null
+            : pickupAddress ?? "Pickup location",
         toLabel: deliveryAddress ?? "Delivery location",
-        fromAddress: pickupAddress,
+        fromAddress:
+          job?.jobType === JobType.IMPORT ? portLabel ?? null : pickupAddress,
         toAddress: deliveryAddress,
-        fromType: "PICKUP",
+        fromType: job?.jobType === JobType.IMPORT ? "PORT" : "PICKUP",
         toType: "DELIVERY",
       };
     case JobTripTemplate.DELIVERY_TO_DEPOT:
       return {
         fromLabel: deliveryAddress ?? "Delivery location",
-        toLabel: returnDepotLabel ?? "Return depot",
+        toLabel: returnDepotLabel ?? null,
         fromAddress: deliveryAddress,
-        toAddress: returnDepotLabel,
+        toAddress: returnDepotLabel ?? null,
         fromType: "DELIVERY",
-        toType: "DEPOT",
+        toType: returnDepotLabel ? "DEPOT" : null,
       };
     case JobTripTemplate.DEPOT_TO_DELIVERY:
       return {
@@ -1152,6 +1182,8 @@ export class OpsJobsService {
         return "IMP";
       case JobType.EXPORT:
         return "EXP";
+      case JobType.COLLECTION:
+        return "COL";
       default:
         return "GEN";
     }
@@ -1497,7 +1529,7 @@ export class OpsJobsService {
       let origin: any = null;
       let destination: any = null;
       if (trip.jobTripTemplate === JobTripTemplate.PICKUP_TO_DELIVERY) {
-        if (job.jobType === JobType.LCL) {
+        if (job.jobType === JobType.LCL || job.jobType === JobType.COLLECTION) {
           origin = this.buildAddressSnapshot(
             job.pickupAddress1 ?? "Pickup location",
             job,
@@ -1508,6 +1540,19 @@ export class OpsJobsService {
               placeId: options?.pickupPlaceId ?? null,
             },
           );
+        } else if (job.jobType === JobType.EXPORT) {
+          origin = exportOriginDepot
+            ? this.locationSnapshotFromMaster(exportOriginDepot)
+            : this.buildAddressSnapshot(
+                job.pickupAddress1 ?? "Pickup location",
+                job,
+                "pickup",
+                {
+                  lat: options?.pickupLat ?? null,
+                  lng: options?.pickupLng ?? null,
+                  placeId: options?.pickupPlaceId ?? null,
+                },
+              );
         } else {
           origin = this.locationSnapshotFromMaster(pickupPort);
         }
@@ -1743,7 +1788,7 @@ export class OpsJobsService {
     }
 
     const rawItems = readCreateJobItemsInput(dto);
-    const validItems = parseValidJobItemsFromInput(rawItems);
+    const validItems = parseValidJobItemsFromInput(rawItems, dto.jobType);
     assertCreateJobItemsRequiredForJobType(dto.jobType, rawItems, validItems);
 
     const importDetails = (dto as any).importDetails ?? {};
@@ -1765,34 +1810,52 @@ export class OpsJobsService {
     const portName = (dto.portName ?? importDetails.portName)?.trim();
     const psaStorageRentLastDay =
       dto.psaStorageRentLastDay ?? importDetails.psaStorageRentLastDay;
-    const vesselName = (dto.vesselName ?? importDetails.vesselName)?.trim();
-    const vesselEta = dto.vesselEta ?? importDetails.vesselEta;
+    const vesselName = (
+      dto.vesselName ?? importDetails.vesselName ?? exportDetails.vesselName
+    )?.trim();
+    const vesselEta =
+      dto.vesselEta ?? importDetails.vesselEta ?? exportDetails.vesselEta;
     const portnetReady =
       dto.portnetReady ?? importDetails.portnetReady ?? false;
     const permitReady = dto.permitReady ?? importDetails.permitReady ?? false;
-    const returningDepotCodeInput = (
-      dto.returningDepotCode ??
-      importDetails.returningDepotCode ??
-      exportDetails.returnDepotCode
-    )?.trim();
+    const returningDepotCodeInput =
+      dto.jobType === JobType.EXPORT
+        ? null
+        : (
+            dto.returningDepotCode ?? importDetails.returningDepotCode
+          )?.trim();
     const returningDepotCode =
-      returningDepotCodeInput ??
-      (await this.resolveLogisticsCodeFromId(
-        returningDepotId,
-        LogisticsLocationType.DEPOT,
-      ));
+      dto.jobType === JobType.EXPORT
+        ? null
+        : returningDepotCodeInput ??
+          (await this.resolveLogisticsCodeFromId(
+            returningDepotId,
+            LogisticsLocationType.DEPOT,
+          ));
     const returnLastDay =
-      dto.returnLastDay ??
-      importDetails.returnLastDay ??
-      exportDetails.returnLastDay;
-    const exportOriginDepotCode = (
+      dto.jobType === JobType.EXPORT
+        ? null
+        : dto.returnLastDay ?? importDetails.returnLastDay;
+    const exportOriginDepotCodeInput = (
       dto.exportOriginDepotCode ??
       exportDetails.pickupDepotCode ??
       exportDetails.exportOriginDepotCode
     )?.trim();
-    const exportPortCode = (
+    const exportOriginDepotCode =
+      exportOriginDepotCodeInput ??
+      (await this.resolveLogisticsCodeFromId(
+        exportDetails.pickupDepotId,
+        LogisticsLocationType.DEPOT,
+      ));
+    const exportPortCodeInput = (
       dto.exportPortCode ?? exportDetails.exportPortCode
     )?.trim();
+    const exportPortCode =
+      exportPortCodeInput ??
+      (await this.resolveLogisticsCodeFromId(
+        exportDetails.exportPortId,
+        LogisticsLocationType.PORT,
+      ));
     const containerPickupAddress1 = (
       exportDetails.containerPickupAddress1 ?? dto.pickupAddress1
     )?.trim();
@@ -1825,74 +1888,57 @@ export class OpsJobsService {
           "pickupPortCode is required for IMPORT jobs (Singapore port master code)",
         );
       }
-      if (!returningDepotCode) {
-        throw new BadRequestException(
-          "returningDepotCode is required for IMPORT jobs",
-        );
-      }
       const port = await this.prisma.masterLogisticsLocation.findFirst({
         where: { code: portCode, type: LogisticsLocationType.PORT, isActive: true },
       });
       if (!port) {
         throw new BadRequestException(`Unknown pickupPortCode: ${portCode}`);
       }
-      const returnDepotForImport = await this.prisma.masterLogisticsLocation.findFirst({
-        where: {
-          code: returningDepotCode ?? "",
-          type: LogisticsLocationType.DEPOT,
-          isActive: true,
-        },
-      });
-      if (!returnDepotForImport) {
-        throw new BadRequestException(
-          `Unknown returningDepotCode: ${returningDepotCode}`,
-        );
-      }
-    }
-
-    if (dto.jobType === JobType.EXPORT) {
-      if (!exportOriginDepotCode) {
-        throw new BadRequestException(
-          "exportDetails.pickupDepotCode is required for EXPORT jobs",
-        );
-      }
-      if (!stuffingAddress1) {
-        throw new BadRequestException(
-          "exportDetails.stuffingAddress1 is required for EXPORT jobs",
-        );
-      }
-      if (!returningDepotCode) {
-        throw new BadRequestException(
-          "exportDetails.returnDepotCode is required for EXPORT jobs",
-        );
-      }
-
-      const [pickupDepot, returnDepot] = await Promise.all([
-        this.prisma.masterLogisticsLocation.findFirst({
-          where: {
-            code: exportOriginDepotCode,
-            type: LogisticsLocationType.DEPOT,
-            isActive: true,
-          },
-        }),
-        this.prisma.masterLogisticsLocation.findFirst({
+      if (returningDepotCode) {
+        const returnDepotForImport = await this.prisma.masterLogisticsLocation.findFirst({
           where: {
             code: returningDepotCode,
             type: LogisticsLocationType.DEPOT,
             isActive: true,
           },
-        }),
-      ]);
+        });
+        if (!returnDepotForImport) {
+          throw new BadRequestException(
+            `Unknown returningDepotCode: ${returningDepotCode}`,
+          );
+        }
+      }
+    }
 
-      if (!pickupDepot) {
+    if (dto.jobType === JobType.EXPORT) {
+      const hasPickupDepot = !!exportOriginDepotCode;
+      const hasPickupAddress = !!(
+        containerPickupAddress1?.trim() || dto.pickupAddress1?.trim()
+      );
+      if (!hasPickupDepot && !hasPickupAddress) {
         throw new BadRequestException(
-          `Unknown export pickup depot code: ${exportOriginDepotCode}`,
+          "EXPORT jobs require exportDetails.pickupDepotCode or a pickup address",
         );
       }
-      if (!returnDepot) {
+      if (!stuffingAddress1) {
         throw new BadRequestException(
-          `Unknown export return depot code: ${returningDepotCode}`,
+          "exportDetails.stuffingAddress1 or deliveryAddress1 is required for EXPORT jobs",
         );
+      }
+
+      if (exportOriginDepotCode) {
+        const pickupDepot = await this.prisma.masterLogisticsLocation.findFirst({
+          where: {
+            code: exportOriginDepotCode,
+            type: LogisticsLocationType.DEPOT,
+            isActive: true,
+          },
+        });
+        if (!pickupDepot) {
+          throw new BadRequestException(
+            `Unknown export pickup depot code: ${exportOriginDepotCode}`,
+          );
+        }
       }
     }
 
@@ -1966,6 +2012,8 @@ export class OpsJobsService {
                   tenantId,
                   itemCode: item.itemCode,
                   description: item.description,
+                  sealNo: item.sealNo,
+                  pickupReference: item.pickupReference,
                   qty: item.qty,
                 })),
               },
@@ -2005,23 +2053,45 @@ export class OpsJobsService {
       shipper: null,
       vessel: String((job as any)?.vesselName ?? "").trim() || null,
     };
+    const pickupDeliveryRouteInput = {
+      pickupAddress1:
+        dto.jobType === JobType.EXPORT
+          ? (containerPickupAddress1 ?? dto.pickupAddress1)
+          : dto.pickupAddress1,
+      pickupAddress2:
+        dto.jobType === JobType.EXPORT
+          ? (containerPickupAddress2 ?? dto.pickupAddress2 ?? null)
+          : (dto.pickupAddress2 ?? null),
+      pickupPostal:
+        dto.jobType === JobType.EXPORT
+          ? (containerPickupPostal ?? dto.pickupPostal ?? null)
+          : (dto.pickupPostal ?? null),
+      pickupPlaceId: dto.pickupPlaceId ?? null,
+      pickupLat: dto.pickupLat ?? null,
+      pickupLng: dto.pickupLng ?? null,
+      deliveryAddress1:
+        dto.jobType === JobType.EXPORT
+          ? (stuffingAddress1 ?? dto.deliveryAddress1)
+          : dto.deliveryAddress1,
+      deliveryAddress2:
+        dto.jobType === JobType.EXPORT
+          ? (stuffingAddress2 ?? dto.deliveryAddress2 ?? null)
+          : (dto.deliveryAddress2 ?? null),
+      deliveryPostal:
+        dto.jobType === JobType.EXPORT
+          ? (stuffingPostal ?? dto.deliveryPostal ?? null)
+          : (dto.deliveryPostal ?? null),
+      deliveryPlaceId: dto.deliveryPlaceId ?? null,
+      deliveryLat: dto.deliveryLat ?? null,
+      deliveryLng: dto.deliveryLng ?? null,
+    };
     const lclRouteSnapshots =
       dto.jobType === JobType.LCL
+      || dto.jobType === JobType.COLLECTION
+      || dto.jobType === JobType.EXPORT
         ? {
-            [JobTripTemplate.PICKUP_TO_DELIVERY]: lclPickupToDeliveryRouteSnapshot({
-              pickupAddress1: dto.pickupAddress1,
-              pickupAddress2: dto.pickupAddress2 ?? null,
-              pickupPostal: dto.pickupPostal ?? null,
-              pickupPlaceId: dto.pickupPlaceId ?? null,
-              pickupLat: dto.pickupLat ?? null,
-              pickupLng: dto.pickupLng ?? null,
-              deliveryAddress1: dto.deliveryAddress1,
-              deliveryAddress2: dto.deliveryAddress2 ?? null,
-              deliveryPostal: dto.deliveryPostal ?? null,
-              deliveryPlaceId: dto.deliveryPlaceId ?? null,
-              deliveryLat: dto.deliveryLat ?? null,
-              deliveryLng: dto.deliveryLng ?? null,
-            }),
+            [JobTripTemplate.PICKUP_TO_DELIVERY]:
+              lclPickupToDeliveryRouteSnapshot(pickupDeliveryRouteInput),
           }
         : undefined;
 
@@ -2034,7 +2104,13 @@ export class OpsJobsService {
         seededContainerNumber,
         seededShippingRefs,
         lclRouteSnapshots,
-        actorUserId,
+        {
+          createdByUserId: actorUserId,
+          tripSeedOptions:
+            dto.jobType === JobType.IMPORT
+              ? { importHasReturnLocation: !!returningDepotCode }
+              : undefined,
+        },
       ),
     });
     const createdTrips = await this.prisma.trip.findMany({
@@ -2307,7 +2383,7 @@ export class OpsJobsService {
       });
 
       if (inputItems !== null) {
-        const validItems = parseValidJobItemsFromInput(inputItems);
+        const validItems = parseValidJobItemsFromInput(inputItems, effectiveJobType);
         assertCreateJobItemsRequiredForJobType(
           effectiveJobType,
           inputItems,
@@ -2325,6 +2401,8 @@ export class OpsJobsService {
               jobId,
               itemCode: item.itemCode,
               description: item.description,
+              sealNo: item.sealNo,
+              pickupReference: item.pickupReference,
               qty: item.qty,
             })),
           });
@@ -2640,7 +2718,7 @@ export class OpsJobsService {
 
     if (!job) throw new NotFoundException("Job not found");
 
-    if (job.jobType === JobType.LCL) {
+    if (job.jobType === JobType.LCL || job.jobType === JobType.COLLECTION) {
       throw new BadRequestException(
         "Verify depot only applies to IMPORT/EXPORT jobs",
       );
@@ -5126,8 +5204,7 @@ export class OpsJobsService {
         ? `${routeOriginLabel} -> ${routeDestinationLabel}`
         : routeOriginLabel || routeDestinationLabel || null;
     const cargoItems = Array.isArray(trip.job?.items) ? trip.job.items : [];
-    const isContainerMode =
-      trip.job?.jobType === JobType.IMPORT || trip.job?.jobType === JobType.EXPORT;
+    const isContainerMode = isContainerCargoJobType(trip.job?.jobType);
     const cargo = isContainerMode
       ? {
           mode: "CONTAINER",
@@ -5135,7 +5212,8 @@ export class OpsJobsService {
             id: item.id,
             containerNumber: item.itemCode,
             containerSize: null,
-            sealNo: null,
+            sealNo: item.sealNo ?? null,
+            pickupReference: item.pickupReference ?? null,
             weight: null,
             remarks: item.description ?? null,
           })),
@@ -5582,6 +5660,7 @@ export class OpsJobsService {
       if (jobTypeStr === "LCL") jobType = JobType.LCL;
       else if (jobTypeStr === "IMPORT") jobType = JobType.IMPORT;
       else if (jobTypeStr === "EXPORT") jobType = JobType.EXPORT;
+      else if (jobTypeStr === "COLLECTION") jobType = JobType.COLLECTION;
       else jobType = JobType.LCL;
 
       const data: ImportJobRowDto = {
@@ -5623,8 +5702,8 @@ export class OpsJobsService {
     }
 
     const jobType = row.jobType;
-    if (!jobType || !["LCL", "IMPORT", "EXPORT"].includes(jobType)) {
-      errors.push("jobType must be LCL, IMPORT, or EXPORT");
+    if (!jobType || !["LCL", "IMPORT", "EXPORT", "COLLECTION"].includes(jobType)) {
+      errors.push("jobType must be LCL, IMPORT, EXPORT, or COLLECTION");
     }
     if (!row.pickupAddress?.trim()) errors.push("pickupAddress is required");
     if (!row.deliveryAddress?.trim())
@@ -5739,7 +5818,9 @@ export class OpsJobsService {
           ? JobType.LCL
           : row.jobType === "IMPORT"
             ? JobType.IMPORT
-            : JobType.EXPORT;
+            : row.jobType === "COLLECTION"
+              ? JobType.COLLECTION
+              : JobType.EXPORT;
 
       try {
         let assignedVehicleId: string | null = null;
@@ -5812,7 +5893,7 @@ export class OpsJobsService {
               vessel: String(job?.vesselName ?? "").trim() || null,
             },
             undefined,
-            actorUserId,
+            { createdByUserId: actorUserId },
           ),
         });
 
@@ -5931,7 +6012,7 @@ export class OpsJobsService {
             null,
             null,
             undefined,
-            actorUserId,
+            { createdByUserId: actorUserId },
           ),
         });
 
@@ -6466,7 +6547,7 @@ export class OpsJobsService {
             null,
             null,
             undefined,
-            actorUserId,
+            { createdByUserId: actorUserId },
           ),
         });
 

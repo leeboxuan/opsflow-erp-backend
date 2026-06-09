@@ -39,20 +39,30 @@ describe("create job items (LCL optional)", () => {
       ).not.toThrow();
     });
 
-    it("requires items for IMPORT", () => {
+    it("allows empty items for IMPORT", () => {
       expect(() =>
         assertCreateJobItemsRequiredForJobType(JobType.IMPORT, [], []),
-      ).toThrow(new BadRequestException("At least one item is required"));
+      ).not.toThrow();
     });
 
-    it("requires valid item codes for EXPORT", () => {
+    it("allows empty items for COLLECTION", () => {
+      expect(() =>
+        assertCreateJobItemsRequiredForJobType(JobType.COLLECTION, [], []),
+      ).not.toThrow();
+    });
+
+    it("rejects blank item rows when items array is provided", () => {
       expect(() =>
         assertCreateJobItemsRequiredForJobType(
           JobType.EXPORT,
           [{ itemCode: "  " }],
           [],
         ),
-      ).toThrow(new BadRequestException("At least one valid item is required"));
+      ).toThrow(
+        new BadRequestException(
+          "At least one valid item is required when items are provided",
+        ),
+      );
     });
   });
 
@@ -199,8 +209,70 @@ describe("create job items (LCL optional)", () => {
       ).resolves.toBeTruthy();
     });
 
-    it("rejects IMPORT job without items", async () => {
+    it("creates IMPORT job without return location and generates one port→delivery trip", async () => {
       const prisma = makeCreatePrisma();
+      prisma.masterLogisticsLocation = {
+        findFirst: jest.fn().mockResolvedValue({ code: "JURONG", name: "Jurong Port" }),
+      };
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.IMPORT,
+            importDetails: {
+              pickupPortCode: "JURONG",
+            },
+          } as any,
+          { userId: "u1", role: Role.OPS },
+        ),
+      ).resolves.toBeTruthy();
+
+      const jobData = prisma.job.create.mock.calls[0][0].data;
+      expect(jobData.returningDepotCode).toBeNull();
+      const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
+      expect(tripRows).toHaveLength(1);
+      expect(tripRows[0].jobTripTemplate).toBe("PICKUP_TO_DELIVERY");
+    });
+
+    it("creates IMPORT job with returnLastDay only (no return depot) and still generates one trip", async () => {
+      const prisma = makeCreatePrisma();
+      prisma.masterLogisticsLocation = {
+        findFirst: jest.fn().mockResolvedValue({ code: "JURONG", name: "Jurong Port" }),
+      };
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.IMPORT,
+            importDetails: {
+              pickupPortCode: "JURONG",
+              returnLastDay: "2026-06-30",
+            },
+          } as any,
+          { userId: "u1", role: Role.OPS },
+        ),
+      ).resolves.toBeTruthy();
+
+      const jobData = prisma.job.create.mock.calls[0][0].data;
+      expect(jobData.returningDepotCode).toBeNull();
+      expect(jobData.returnLastDay).toEqual(new Date("2026-06-30"));
+      expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(1);
+    });
+
+    it("creates IMPORT job with return location and generates port→delivery plus delivery→return trips", async () => {
+      const prisma = makeCreatePrisma();
+      prisma.masterLogisticsLocation = {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({ code: "JURONG", name: "Jurong Port" })
+          .mockResolvedValueOnce({ code: "GUL", name: "Gul Depot" }),
+      };
       const svc = makeSvc(prisma);
 
       await expect(
@@ -216,9 +288,12 @@ describe("create job items (LCL optional)", () => {
           } as any,
           { userId: "u1", role: Role.OPS },
         ),
-      ).rejects.toThrow("At least one item is required");
+      ).resolves.toBeTruthy();
 
-      expect(prisma.job.create).not.toHaveBeenCalled();
+      const jobData = prisma.job.create.mock.calls[0][0].data;
+      expect(jobData.returningDepotCode).toBe("GUL");
+      const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
+      expect(tripRows).toHaveLength(2);
     });
   });
 
@@ -333,20 +408,23 @@ describe("create job items (LCL optional)", () => {
       expect(prisma.jobItemCreateMany).not.toHaveBeenCalled();
     });
 
-    it("rejects IMPORT PATCH with items: []", async () => {
+    it("allows IMPORT PATCH with items: [] to clear cargo lines", async () => {
       const prisma = makeUpdatePrisma(JobType.IMPORT);
       const svc = new OpsJobsService(
         prisma as any,
         { log: jest.fn() } as any,
         {} as any,
       );
+      jest.spyOn(svc as any, "attachTripAssignedDriverNamesForJobs").mockResolvedValue(undefined);
 
       await expect(
         svc.update("t1", "job1", { items: [] } as any, {
           userId: "u1",
           role: Role.OPS,
         }),
-      ).rejects.toThrow("At least one item is required");
+      ).resolves.toBeTruthy();
+
+      expect(prisma.jobItemDeleteMany).toHaveBeenCalled();
     });
   });
 });

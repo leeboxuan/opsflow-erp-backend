@@ -14,7 +14,66 @@ import {
 } from "../customers/quotation-parse.helpers";
 
 describe("workflow helpers", () => {
-  it("tripCreateManyForJob creates two IMPORT legs", () => {
+  describe("default trip generation rules", () => {
+    it.each([
+      {
+        label: "LCL",
+        jobType: JobType.LCL,
+        options: undefined,
+        expectedCount: 1,
+        templates: [JobTripTemplate.PICKUP_TO_DELIVERY],
+      },
+      {
+        label: "COLLECTION",
+        jobType: JobType.COLLECTION,
+        options: undefined,
+        expectedCount: 1,
+        templates: [JobTripTemplate.PICKUP_TO_DELIVERY],
+      },
+      {
+        label: "EXPORT",
+        jobType: JobType.EXPORT,
+        options: undefined,
+        expectedCount: 1,
+        templates: [JobTripTemplate.PICKUP_TO_DELIVERY],
+      },
+      {
+        label: "IMPORT without return",
+        jobType: JobType.IMPORT,
+        options: undefined,
+        expectedCount: 1,
+        templates: [JobTripTemplate.PICKUP_TO_DELIVERY],
+      },
+      {
+        label: "IMPORT with return",
+        jobType: JobType.IMPORT,
+        options: { tripSeedOptions: { importHasReturnLocation: true } },
+        expectedCount: 2,
+        templates: [
+          JobTripTemplate.PICKUP_TO_DELIVERY,
+          JobTripTemplate.DELIVERY_TO_DEPOT,
+        ],
+      },
+    ])(
+      "$label generates expected trip count and templates",
+      ({ jobType, options, expectedCount, templates }) => {
+        const rows = tripCreateManyForJob(
+          "t1",
+          "j1",
+          jobType,
+          new Date("2026-03-15"),
+          null,
+          null,
+          undefined,
+          options,
+        );
+        expect(rows).toHaveLength(expectedCount);
+        expect(rows.map((r) => r.jobTripTemplate)).toEqual(templates);
+      },
+    );
+  });
+
+  it("IMPORT with return location generates delivery→return leg completion rules", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -22,6 +81,8 @@ describe("workflow helpers", () => {
       new Date("2026-03-15"),
       null,
       null,
+      undefined,
+      { tripSeedOptions: { importHasReturnLocation: true } },
     );
     expect(rows).toHaveLength(2);
     expect(rows[0].jobSequence).toBe(1);
@@ -67,7 +128,7 @@ describe("workflow helpers", () => {
     expect(rows[0].destinationLabel).toBe("Delivery Address");
   });
 
-  it("tripCreateManyForJob creates two EXPORT legs", () => {
+  it("tripCreateManyForJob creates one EXPORT leg (pickup to export point)", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -76,8 +137,9 @@ describe("workflow helpers", () => {
       null,
       null,
     );
-    expect(rows).toHaveLength(2);
-    expect(rows[0].jobTripTemplate).toBe(JobTripTemplate.DEPOT_TO_DELIVERY);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].displayTitle).toBe("Pickup to Export Point");
+    expect(rows[0].jobTripTemplate).toBe(JobTripTemplate.PICKUP_TO_DELIVERY);
     expect(rows[0].completionRuleJson).toEqual({
       requireGeneratedDoSigned: true,
       tripUploads: {
@@ -86,17 +148,21 @@ describe("workflow helpers", () => {
         requiredUploadTypesExact: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
       },
     });
-    expect(rows[1].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_PORT);
-    expect(rows[1].completionRuleJson).toEqual({
-      requireGeneratedDoSigned: true,
-      tripUploads: {
-        minUploadCount: 1,
-        allowedUploadTypes: [TripDocumentType.POD_SIGNATURE],
-        requiredUploadTypesExact: [TripDocumentType.POD_SIGNATURE],
-      },
-    });
     expect(rows[0].status).toBe("DRAFT");
-    expect(rows[1].status).toBe("DRAFT");
+  });
+
+  it("tripCreateManyForJob creates one COLLECTION leg like LCL", () => {
+    const rows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.COLLECTION,
+      new Date("2026-03-15"),
+      "CONT-99",
+      null,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].jobTripTemplate).toBe(JobTripTemplate.PICKUP_TO_DELIVERY);
+    expect(rows[0].containerNumber).toBeNull();
   });
 
   it("lclPickupToDeliveryRouteSnapshot maps pickup and delivery text without geo", () => {
@@ -292,7 +358,7 @@ describe("workflow helpers", () => {
     expect(fromGul.destinationLat).toBeNull();
   });
 
-  it("tripCreateManyForJob seeds containerNumber onto IMPORT-generated trips", () => {
+  it("tripCreateManyForJob seeds containerNumber onto both IMPORT legs when return location provided", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -300,11 +366,14 @@ describe("workflow helpers", () => {
       new Date("2026-03-15"),
       "  CONT-001  ",
       null,
+      undefined,
+      { tripSeedOptions: { importHasReturnLocation: true } },
     );
+    expect(rows).toHaveLength(2);
     expect(rows.every((r) => r.containerNumber === "CONT-001")).toBe(true);
   });
 
-  it("tripCreateManyForJob seeds containerNumber onto EXPORT-generated trips", () => {
+  it("tripCreateManyForJob seeds containerNumber onto EXPORT-generated trip", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -313,7 +382,8 @@ describe("workflow helpers", () => {
       "  CONT-EXP-01  ",
       null,
     );
-    expect(rows.every((r) => r.containerNumber === "CONT-EXP-01")).toBe(true);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].containerNumber).toBe("CONT-EXP-01");
   });
 
   it("tripCreateManyForJob seeds shipping reference fields onto IMPORT and EXPORT trips", () => {
@@ -330,6 +400,8 @@ describe("workflow helpers", () => {
       new Date("2026-03-15"),
       null,
       seeds,
+      undefined,
+      { tripSeedOptions: { importHasReturnLocation: true } },
     );
     expect(
       importRows.every((r) =>

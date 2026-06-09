@@ -900,9 +900,11 @@ model JobItem {
   tenantId String
   jobId    String
 
-  itemCode    String
-  description String?
-  qty         Int     @default(1)
+  itemCode         String
+  description      String?
+  sealNo           String?
+  pickupReference  String?
+  qty              Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1396,6 +1398,7 @@ enum JobType {
   LCL
   IMPORT
   EXPORT
+  COLLECTION
 }
 
 enum JobStatus {

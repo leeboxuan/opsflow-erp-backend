@@ -277,6 +277,15 @@ export function resolveTripCompletionRule(raw: unknown): ResolvedTripCompletionR
   };
 }
 
+/** Job types whose trip detail cargo is exposed as CONTAINER (not item/qty lines). */
+export function isContainerCargoJobType(jobType: JobType): boolean {
+  return (
+    jobType === JobType.IMPORT
+    || jobType === JobType.EXPORT
+    || jobType === JobType.COLLECTION
+  );
+}
+
 export type DefaultTripSeed = {
   jobSequence: number;
   tripSequence: number;
@@ -286,13 +295,36 @@ export type DefaultTripSeed = {
   plannedStartAt: Date | null;
 };
 
+export type BuildDefaultTripSeedsOptions = {
+  /**
+   * IMPORT only. When true (return location resolved on the job), adds a second
+   * delivery → return leg. When false/omitted, IMPORT gets one port → delivery leg.
+   */
+  importHasReturnLocation?: boolean;
+};
+
+export type TripCreateManyForJobOptions = {
+  createdByUserId?: string | null;
+  tripSeedOptions?: BuildDefaultTripSeedsOptions;
+};
+
+/**
+ * Default trip legs generated on job create.
+ *
+ * - LCL: 1 trip — pickup → delivery
+ * - COLLECTION: 1 trip — pickup → delivery
+ * - EXPORT: 1 trip — pickup → delivery/export location
+ * - IMPORT without return location: 1 trip — port/terminal → delivery
+ * - IMPORT with return location: 2 trips — port/terminal → delivery, then delivery → return
+ */
 export function buildDefaultTripSeeds(
   jobType: JobType,
   pickupDate: Date | null,
+  options?: BuildDefaultTripSeedsOptions,
 ): DefaultTripSeed[] {
   const planned = pickupDate;
 
-  if (jobType === JobType.LCL) {
+  if (jobType === JobType.LCL || jobType === JobType.COLLECTION) {
     return [
       {
         jobSequence: 1,
@@ -306,7 +338,7 @@ export function buildDefaultTripSeeds(
   }
 
   if (jobType === JobType.IMPORT) {
-    return [
+    const legs: DefaultTripSeed[] = [
       {
         jobSequence: 1,
         tripSequence: 1,
@@ -315,15 +347,18 @@ export function buildDefaultTripSeeds(
         title: "Port to Delivery Point",
         plannedStartAt: planned,
       },
-      {
+    ];
+    if (options?.importHasReturnLocation) {
+      legs.push({
         jobSequence: 2,
         tripSequence: 2,
         displayTitle: "Delivery Point to Return",
         jobTripTemplate: JobTripTemplate.DELIVERY_TO_DEPOT,
         title: "Delivery Point to Return",
         plannedStartAt: planned,
-      },
-    ];
+      });
+    }
+    return legs;
   }
 
   if (jobType === JobType.EXPORT) {
@@ -331,17 +366,9 @@ export function buildDefaultTripSeeds(
       {
         jobSequence: 1,
         tripSequence: 1,
-        displayTitle: "Pickup Point to Port",
-        jobTripTemplate: JobTripTemplate.DEPOT_TO_DELIVERY,
-        title: "Pickup Point to Port",
-        plannedStartAt: planned,
-      },
-      {
-        jobSequence: 2,
-        tripSequence: 2,
-        displayTitle: "Return Leg",
-        jobTripTemplate: JobTripTemplate.DELIVERY_TO_PORT,
-        title: "Return Leg",
+        displayTitle: "Pickup to Export Point",
+        jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
+        title: "Pickup to Export Point",
         plannedStartAt: planned,
       },
     ];
@@ -377,7 +404,7 @@ function tripCargoShippingSeedForJobType(
   Prisma.TripCreateManyInput,
   "containerNumber" | "carrier" | "shipper" | "vessel"
 > {
-  if (jobType === JobType.LCL) {
+  if (jobType === JobType.LCL || jobType === JobType.COLLECTION) {
     return {
       containerNumber: null,
       carrier: null,
@@ -436,6 +463,7 @@ export function lclPickupToDeliveryRouteSnapshot(
   };
 }
 
+/** Bulk-create default trips for a new job. Pass `options.tripSeedOptions.importHasReturnLocation` for IMPORT jobs with a return depot. */
 export function tripCreateManyForJob(
   tenantId: string,
   jobId: string,
@@ -453,14 +481,14 @@ export function tripCreateManyForJob(
       Partial<Prisma.TripCreateManyInput>
     >
   >,
-  createdByUserId?: string | null,
+  options?: TripCreateManyForJobOptions,
 ): Prisma.TripCreateManyInput[] {
   const cargoShipping = tripCargoShippingSeedForJobType(
     jobType,
     containerNumber,
     shippingRefs,
   );
-  return buildDefaultTripSeeds(jobType, pickupDate).map((s) => {
+  return buildDefaultTripSeeds(jobType, pickupDate, options?.tripSeedOptions).map((s) => {
     const row: Prisma.TripCreateManyInput = {
       tenantId,
       jobId,
@@ -475,13 +503,13 @@ export function tripCreateManyForJob(
       tripPICName: null,
       tripPICContact: null,
       ...cargoShipping,
-      createdByUserId: createdByUserId ?? null,
+      createdByUserId: options?.createdByUserId ?? null,
       completionRuleJson: completionRuleForTemplate(s.jobTripTemplate),
       ...(routeSnapshots?.[s.jobTripTemplate] ?? {}),
     };
 
-    // LCL: never persist container/shipping defaults on bulk-generated legs.
-    if (jobType === JobType.LCL) {
+    // LCL/COLLECTION: never persist container/shipping defaults on bulk-generated legs.
+    if (jobType === JobType.LCL || jobType === JobType.COLLECTION) {
       row.containerNumber = null;
       row.carrier = null;
       row.shipper = null;

@@ -382,7 +382,9 @@ export class JobItemDto {
   jobId: string;
   itemCode: string;
   description: string | null;
-  qty: number;
+  sealNo: string | null;
+  pickupReference: string | null;
+  qty: number | null;
   createdAt: Date;
   updatedAt: Date;
 }

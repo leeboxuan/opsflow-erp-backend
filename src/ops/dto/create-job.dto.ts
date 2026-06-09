@@ -17,17 +17,36 @@ import { Type } from "class-transformer";
 
 
 export class CreateJobItemDto {
-  @ApiProperty()
+  @ApiPropertyOptional({ description: "LCL item code; container types may use containerNumber instead" })
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  itemCode: string;
+  itemCode?: string;
+
+  @ApiPropertyOptional({
+    description: "IMPORT/EXPORT/COLLECTION: stored as itemCode when itemCode omitted",
+  })
+  @IsOptional()
+  @IsString()
+  containerNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sealNo?: string;
+
+  @ApiPropertyOptional({
+    description: "IMPORT/EXPORT/COLLECTION: optional per-container pickup reference",
+  })
+  @IsOptional()
+  @IsString()
+  pickupReference?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   description?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: "LCL quantity; optional for container-style job types" })
   @IsOptional()
   @IsNumber()
   qty?: number;
@@ -83,26 +102,56 @@ export class CreateJobImportDetailsDto {
   @IsBoolean()
   permitReady?: boolean;
 
-  @ApiPropertyOptional({ description: "master_singapore_depots.code" })
+  @ApiPropertyOptional({
+    description:
+      "Optional IMPORT return depot code (master_singapore_depots.code). When omitted, only one port → delivery trip is generated.",
+  })
   @IsOptional()
   @IsString()
   returningDepotCode?: string;
 
   @ApiPropertyOptional({
     description:
-      "Legacy/FE alias: logistics location id for return depot; converted to returningDepotCode server-side",
+      "Legacy/FE alias: optional logistics location id for return depot; converted to returningDepotCode server-side",
   })
   @IsOptional()
   @IsString()
   returningDepotId?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      "Optional container return due date. Does not require or imply a return depot/trip when omitted.",
+  })
   @IsOptional()
   @IsDateString()
   returnLastDay?: string;
 }
 
 export class CreateJobExportDetailsDto {
+  @ApiPropertyOptional({
+    description:
+      "Legacy/FE alias: logistics location id for export pickup depot; converted server-side",
+  })
+  @IsOptional()
+  @IsString()
+  pickupDepotId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      "Legacy/FE alias: logistics location id for return depot (ignored for EXPORT routing)",
+  })
+  @IsOptional()
+  @IsString()
+  returnDepotId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      "Legacy/FE alias: logistics location id for export port (optional context)",
+  })
+  @IsOptional()
+  @IsString()
+  exportPortId?: string | null;
+
   @ApiPropertyOptional({
     description:
       "Container pickup source depot code (master_singapore_depots.code)",
@@ -317,7 +366,7 @@ export class CreateJobDto {
   @ApiPropertyOptional({
     type: [CreateJobItemDto],
     description:
-      "LCL cargo lines (optional for LCL; required for Import/Export). Empty array allowed for LCL.",
+      "LCL item/qty lines (optional). IMPORT/EXPORT/COLLECTION container lines (optional containerNumber, sealNo, pickupReference).",
   })
   @IsOptional()
   @IsArray()
@@ -343,7 +392,7 @@ export class CreateJobDto {
 
   @ApiPropertyOptional({
     description:
-      "Optional legacy job-level container number. Seeds generated trips only for IMPORT and EXPORT; not applied to generated LCL trips.",
+      "Optional legacy job-level container number. Seeds generated trips for IMPORT/EXPORT only.",
   })
   @IsOptional()
   @IsString()
@@ -435,7 +484,8 @@ export class CreateJobDto {
   permitReady?: boolean;
 
   @ApiPropertyOptional({
-    description: "Legacy flat field (prefer importDetails.returningDepotCode)",
+    description:
+      "Legacy flat field (prefer importDetails.returningDepotCode). Optional; omit for single port → delivery IMPORT trip.",
     deprecated: true,
   })
   @IsOptional()
@@ -443,7 +493,8 @@ export class CreateJobDto {
   returningDepotCode?: string;
 
   @ApiPropertyOptional({
-    description: "Legacy flat field (prefer importDetails.returnLastDay)",
+    description:
+      "Legacy flat field (prefer importDetails.returnLastDay). Optional metadata only; does not require return depot.",
     deprecated: true,
   })
   @IsOptional()

@@ -227,9 +227,10 @@ export class OpsJobsController {
     if (jobTypeUpper === "LCL") jobType = JobType.LCL;
     else if (jobTypeUpper === "IMPORT") jobType = JobType.IMPORT;
     else if (jobTypeUpper === "EXPORT") jobType = JobType.EXPORT;
+    else if (jobTypeUpper === "COLLECTION") jobType = JobType.COLLECTION;
     else {
       throw new BadRequestException(
-        "jobType must be one of: LCL, IMPORT, EXPORT",
+        "jobType must be one of: LCL, IMPORT, EXPORT, COLLECTION",
       );
     }
 

@@ -13,10 +13,25 @@ import { Type } from "class-transformer";
 import { IsArray, ValidateNested } from "class-validator";
 
 export class UpdateJobItemDto {
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  itemCode: string;
+  itemCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  containerNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sealNo?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pickupReference?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -175,12 +190,17 @@ export class UpdateJobDto {
   @IsBoolean()
   permitReady?: boolean;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      "Optional IMPORT return depot code. Null/omit for jobs with no return location (one port → delivery trip).",
+  })
   @IsOptional()
   @IsString()
   returningDepotCode?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Optional container return due date. Does not require return depot.",
+  })
   @IsOptional()
   @IsDateString()
   returnLastDay?: string;

@@ -513,7 +513,7 @@ describe("job charge workflow hardening", () => {
     );
   });
 
-  it("create job accepts nested importDetails and maps to import routing fields", async () => {
+  it("IMPORT create with return location maps importDetails and generates two trips", async () => {
     const prisma: any = {
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
@@ -659,6 +659,74 @@ describe("job charge workflow hardening", () => {
     expect(data.pickupPortCode).toBe("JURONG");
     expect(data.portName).toBe("Jurong Port");
     expect(data.returningDepotCode).toBe("GUL_DEFAULT");
+    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(2);
+  });
+
+  it("IMPORT create without return location stores null returningDepotCode and generates one trip", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
+      },
+      masterLogisticsLocation: {
+        findFirst: jest.fn().mockResolvedValue({ code: "JURONG", name: "Jurong Port", type: "PORT" }),
+      },
+      job_internal_ref_counters: {
+        upsert: jest.fn().mockResolvedValue({ nextSeq: 1 }),
+      },
+      job: {
+        create: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "comp1",
+          jobType: JobType.IMPORT,
+          customerCompany: { id: "comp1", name: "Customer A" },
+          items: [],
+        }),
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          jobType: JobType.IMPORT,
+          status: "ONGOING",
+          customerCompany: { id: "comp1", name: "Customer A" },
+          assignedDriver: null,
+          createdBy: null,
+          items: [],
+          trips: [],
+          charges: [],
+          documents: [],
+        }),
+      },
+      trip: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const svc = new OpsJobsService(
+      prisma,
+      { log: jest.fn() } as any,
+      { getClient: jest.fn() } as any,
+    );
+    jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
+    jest.spyOn(svc as any, "attachTripAssignedDriverNamesForJobs").mockResolvedValue(undefined);
+    jest.spyOn(svc as any, "syncJobInvoiceReadinessForJob").mockResolvedValue(undefined);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.IMPORT,
+        customerCompanyId: "comp1",
+        pickupAddress1: "Jurong Port",
+        deliveryAddress1: "Addr",
+        receiverName: "Receiver",
+        receiverPhone: "123",
+        importDetails: { pickupPortCode: "JURONG" },
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    const data = prisma.job.create.mock.calls[0][0].data;
+    expect(data.returningDepotCode).toBeNull();
+    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(1);
   });
 
   it("create job accepts nested exportDetails and maps export routing fields", async () => {
@@ -765,7 +833,7 @@ describe("job charge workflow hardening", () => {
         }),
       },
       trip: {
-        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn().mockResolvedValue([]),
       },
     };
@@ -800,12 +868,13 @@ describe("job charge workflow hardening", () => {
 
     const data = prisma.job.create.mock.calls[0][0].data;
     expect(data.exportOriginDepotCode).toBe("PSA_DEPOT_A");
-    expect(data.returningDepotCode).toBe("PSA_DEPOT_B");
+    expect(data.returningDepotCode).toBeNull();
     expect(data.exportPortCode).toBe("PSA");
     expect(data.pickupAddress1).toBe("Pickup A1");
     expect(data.deliveryAddress1).toBe("Stuffing A1");
     expect(data.receiverName).toBe("Stuffing PIC");
     expect(data.receiverPhone).toBe("99999999");
+    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(1);
   });
 
   it("invoice draft from jobs uses saved JobCharge rows and fails if any selected job has none", async () => {
@@ -2122,7 +2191,7 @@ describe("job charge workflow hardening", () => {
             createdByUserId: "u1",
             createdBy: { id: "u1", name: "Ops", email: "ops@example.com" },
             customerCompany: { name: "Customer A" },
-            items: [{ id: "it1", itemCode: "CONT-001", description: "20FT", qty: 1 }],
+            items: [{ id: "it1", itemCode: "CONT-001", description: "20FT", sealNo: "SEAL-A", qty: 1 }],
           },
         }),
       },
@@ -2136,6 +2205,7 @@ describe("job charge workflow hardening", () => {
     const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
     expect(result.cargo.mode).toBe("CONTAINER");
     expect(result.cargo.containers[0].containerNumber).toBe("CONT-001");
+    expect(result.cargo.containers[0].sealNo).toBe("SEAL-A");
     expect(result.job.customerCompanyName).toBe("Customer A");
     expect(result.tripDisplayRef).toBe("WF-0002-IMP-T03");
   });

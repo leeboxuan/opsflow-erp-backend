@@ -38,7 +38,10 @@ import {
 } from "./job-invoice-readiness";
 import { RealtimeEventsService } from "../realtime/realtime-events.service";
 import * as rt from "../realtime/realtime-publish";
-import { jobTripTemplateDisplayLabel } from "./job-workflow.helpers";
+import {
+  isContainerCargoJobType,
+  jobTripTemplateDisplayLabel,
+} from "./job-workflow.helpers";
 import { DRIVER_ACTIVE_JOB_DOCUMENTS_INCLUDE } from "./driver-mobile-document.select";
 
 const DEFAULT_TENANT_TIMEZONE = "Asia/Singapore";
@@ -2658,6 +2661,8 @@ export class DriverJobsService {
                 id: true,
                 itemCode: true,
                 description: true,
+                sealNo: true,
+                pickupReference: true,
                 qty: true,
               },
             },
@@ -2754,14 +2759,32 @@ export class DriverJobsService {
           && !DRIVER_NON_DELETABLE_TRIP_STATUSES.has(trip.status as TripStatus),
       })),
 
-      cargo: {
-        items: (trip.job?.items ?? []).map((item: any) => ({
-          id: item.id,
-          itemCode: item.itemCode ?? null,
-          description: item.description ?? null,
-          qty: item.qty ?? null,
-        })),
-      },
+      cargo: (() => {
+        const cargoItems = trip.job?.items ?? [];
+        if (isContainerCargoJobType(trip.job?.jobType)) {
+          return {
+            mode: "CONTAINER",
+            containers: cargoItems.map((item: any) => ({
+              id: item.id,
+              containerNumber: item.itemCode,
+              containerSize: null,
+              sealNo: item.sealNo ?? null,
+              pickupReference: item.pickupReference ?? null,
+              weight: null,
+              remarks: item.description ?? null,
+            })),
+          };
+        }
+        return {
+          mode: "ITEMS",
+          items: cargoItems.map((item: any) => ({
+            id: item.id,
+            itemCode: item.itemCode ?? null,
+            description: item.description ?? null,
+            qty: item.qty ?? null,
+          })),
+        };
+      })(),
       route: {
         origin: {
           label: trip.originLabel ?? null,
