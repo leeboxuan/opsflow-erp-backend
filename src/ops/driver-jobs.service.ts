@@ -146,6 +146,8 @@ function buildDriverTripExecutionCard(t: any, j: any) {
     deliveryPostal:
       firstNonEmptyText(t.destinationPostalCode, j.deliveryPostal) ?? j.deliveryPostal ?? null,
     notes: j.notes ?? null,
+    jobNotes: j.notes ?? null,
+    tripInstruction: j.notes ?? null,
   };
 }
 
@@ -2714,6 +2716,9 @@ export class DriverJobsService {
       vessel: trip.vessel ?? null,
       status: trip.status,
       plannedStartAt: trip.plannedStartAt ?? null,
+      jobNotes: trip.job?.notes ?? null,
+      notes: trip.job?.notes ?? null,
+      tripInstruction: trip.job?.notes ?? null,
       jobSequence: trip.jobSequence ?? null,
       tripSequence: trip.tripSequence ?? null,
       origin: trip.originLabel ?? null,
@@ -2737,6 +2742,8 @@ export class DriverJobsService {
             collectionType: trip.job.collectionType ?? null,
             status: trip.job.status ?? null,
             customerName: trip.job.customerCompany?.name ?? null,
+            notes: trip.job.notes ?? null,
+            jobNotes: trip.job.notes ?? null,
           }
         : null,
 

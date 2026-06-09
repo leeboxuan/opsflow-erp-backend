@@ -86,6 +86,7 @@ import {
   AssignJobTripDto,
   PatchTripPayoutDto,
   PatchJobTripDto,
+  PatchTripDetailsDto,
   PublishJobTripRouteDto,
   ReorderJobTripsDto,
   SuggestJobTripOrderDto,
@@ -920,6 +921,135 @@ function isTerminalStatus(status: TripStatus): boolean {
   );
 }
 
+/** Job fields that change trip route snapshots when edited. */
+export const TRIP_DETAILS_ROUTE_JOB_KEYS = [
+  "pickupAddress1",
+  "pickupAddress2",
+  "pickupPostal",
+  "pickupPlaceId",
+  "pickupLat",
+  "pickupLng",
+  "deliveryAddress1",
+  "deliveryAddress2",
+  "deliveryPostal",
+  "deliveryPlaceId",
+  "deliveryLat",
+  "deliveryLng",
+  "returningDepotCode",
+  "returnLastDay",
+  "pickupPortCode",
+  "exportPortCode",
+  "exportOriginDepotCode",
+] as const;
+
+export const TRIP_DETAILS_CARGO_KEYS = ["items", "cargoItems"] as const;
+
+export const TRIP_DETAILS_METADATA_JOB_KEYS = [
+  "collectionType",
+  "vesselName",
+  "vesselEta",
+] as const;
+
+export const TRIP_DETAILS_CONTACT_JOB_KEYS = [
+  "pickupContactName",
+  "pickupContactPhone",
+  "receiverName",
+  "receiverPhone",
+] as const;
+
+export const TRIP_DETAILS_NOTES_KEYS = [
+  "notes",
+  "jobNotes",
+  "tripInstruction",
+] as const;
+
+export const TRIP_DETAILS_TRIP_KEYS = [
+  "plannedStartAt",
+  "tripPICName",
+  "tripPICContact",
+] as const;
+
+function dtoHasAnyDefinedKey(
+  dto: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  return keys.some((k) => dto[k] !== undefined);
+}
+
+export function assertTripDetailsEditAllowed(
+  tripStatus: TripStatus,
+  jobStatus: JobStatus,
+  dto: PatchTripDetailsDto,
+): void {
+  if (
+    jobStatus === JobStatus.COMPLETED
+    || jobStatus === JobStatus.CANCELLED
+  ) {
+    throw new BadRequestException(
+      "Cannot edit job in COMPLETED or CANCELLED status",
+    );
+  }
+
+  const raw = dto as Record<string, unknown>;
+  const hasRoute = dtoHasAnyDefinedKey(raw, TRIP_DETAILS_ROUTE_JOB_KEYS);
+  const hasCargo = dtoHasAnyDefinedKey(raw, TRIP_DETAILS_CARGO_KEYS);
+  const hasMetadata = dtoHasAnyDefinedKey(raw, TRIP_DETAILS_METADATA_JOB_KEYS);
+  const hasContact = dtoHasAnyDefinedKey(raw, TRIP_DETAILS_CONTACT_JOB_KEYS);
+  const hasNotes = dtoHasAnyDefinedKey(raw, TRIP_DETAILS_NOTES_KEYS);
+  const hasTripFields = dtoHasAnyDefinedKey(raw, TRIP_DETAILS_TRIP_KEYS);
+
+  if (tripStatus === TripStatus.CANCELLED) {
+    throw new BadRequestException("Cannot edit a CANCELLED trip");
+  }
+
+  if (isTerminalStatus(tripStatus)) {
+    const allowedOnly =
+      (hasNotes || hasTripFields)
+      && !hasRoute
+      && !hasCargo
+      && !hasMetadata
+      && !hasContact;
+    if (!allowedOnly) {
+      throw new BadRequestException(
+        "Completed trips only allow notes and trip contact/timing corrections",
+      );
+    }
+    if (hasTripFields && raw.plannedStartAt !== undefined) {
+      throw new BadRequestException(
+        "Cannot change plannedStartAt on a completed trip",
+      );
+    }
+    return;
+  }
+
+  if (tripStatus === TripStatus.ONGOING) {
+    if (hasRoute) {
+      throw new BadRequestException(
+        "Cannot change pickup/delivery route while trip is ONGOING",
+      );
+    }
+    if (hasCargo) {
+      throw new BadRequestException(
+        "Cannot change cargo items while trip is ONGOING",
+      );
+    }
+    if (hasMetadata) {
+      throw new BadRequestException(
+        "Cannot change vessel/collection metadata while trip is ONGOING",
+      );
+    }
+  }
+}
+
+function resolveTripDetailsNotesInput(
+  dto: PatchTripDetailsDto,
+): string | null | undefined {
+  if (dto.notes !== undefined) return dto.notes;
+  if (dto.jobNotes !== undefined) return dto.jobNotes;
+  if (dto.tripInstruction !== undefined) return dto.tripInstruction;
+  return undefined;
+}
+
 function firstNonEmptyText(...values: Array<unknown>): string | null {
   for (const v of values) {
     const s = String(v ?? "").trim();
@@ -1677,6 +1807,33 @@ export class OpsJobsService {
     };
   }
 
+  private resolveRouteGeo(
+    prefix: "pickup" | "delivery",
+    trip: any,
+    snapshotRole: "origin" | "destination",
+    options?: {
+      pickupLat?: number | null;
+      pickupLng?: number | null;
+      pickupPlaceId?: string | null;
+      deliveryLat?: number | null;
+      deliveryLng?: number | null;
+      deliveryPlaceId?: string | null;
+    },
+  ): { lat: number | null; lng: number | null; placeId: string | null } {
+    const latOpt = prefix === "pickup" ? options?.pickupLat : options?.deliveryLat;
+    const lngOpt = prefix === "pickup" ? options?.pickupLng : options?.deliveryLng;
+    const placeOpt =
+      prefix === "pickup" ? options?.pickupPlaceId : options?.deliveryPlaceId;
+    return {
+      lat: latOpt !== undefined ? (latOpt ?? null) : (trip?.[`${snapshotRole}Lat`] ?? null),
+      lng: lngOpt !== undefined ? (lngOpt ?? null) : (trip?.[`${snapshotRole}Lng`] ?? null),
+      placeId:
+        placeOpt !== undefined
+          ? (String(placeOpt ?? "").trim() || null)
+          : (trip?.[`${snapshotRole}PlaceId`] ?? null),
+    };
+  }
+
   private buildAddressSnapshot(
     label: string | null,
     job: any,
@@ -1707,6 +1864,8 @@ export class OpsJobsService {
       deliveryLat?: number | null;
       deliveryLng?: number | null;
       deliveryPlaceId?: string | null;
+      /** When set, only trips in these statuses are updated (e.g. DRAFT/PUBLISHED). */
+      tripStatuses?: TripStatus[];
     },
   ): Promise<void> {
     if (
@@ -1748,49 +1907,45 @@ export class OpsJobsService {
     ]);
 
     for (const trip of job.trips ?? []) {
+      if (
+        options?.tripStatuses?.length
+        && !options.tripStatuses.includes(trip.status as TripStatus)
+      ) {
+        continue;
+      }
       let origin: any = null;
       let destination: any = null;
       if (trip.jobTripTemplate === JobTripTemplate.PICKUP_TO_DELIVERY) {
+        const pickupGeo = this.resolveRouteGeo("pickup", trip, "origin", options);
+        const deliveryGeo = this.resolveRouteGeo("delivery", trip, "destination", options);
         if (job.jobType === JobType.LCL || job.jobType === JobType.COLLECTION) {
           origin = this.buildAddressSnapshot(
             job.pickupAddress1 ?? "Pickup location",
             job,
             "pickup",
-            {
-              lat: options?.pickupLat ?? null,
-              lng: options?.pickupLng ?? null,
-              placeId: options?.pickupPlaceId ?? null,
-            },
+            pickupGeo,
           );
         } else if (job.jobType === JobType.EXPORT) {
           origin = this.buildAddressSnapshot(
             job.pickupAddress1 ?? "Pickup location",
             job,
             "pickup",
-            {
-              lat: options?.pickupLat ?? null,
-              lng: options?.pickupLng ?? null,
-              placeId: options?.pickupPlaceId ?? null,
-            },
+            pickupGeo,
           );
         } else if (job.jobType === JobType.IMPORT) {
           const useAddressOrigin = importPickupOriginUsesAddressFields({
             pickupAddress1: job.pickupAddress1,
             pickupPostal: job.pickupPostal,
-            pickupPlaceId: options?.pickupPlaceId,
-            pickupLat: options?.pickupLat,
-            pickupLng: options?.pickupLng,
+            pickupPlaceId: pickupGeo.placeId,
+            pickupLat: pickupGeo.lat,
+            pickupLng: pickupGeo.lng,
           });
           origin = useAddressOrigin || !pickupPort
             ? this.buildAddressSnapshot(
                 job.pickupAddress1 ?? "Pickup location",
                 job,
                 "pickup",
-                {
-                  lat: options?.pickupLat ?? null,
-                  lng: options?.pickupLng ?? null,
-                  placeId: options?.pickupPlaceId ?? null,
-                },
+                pickupGeo,
               )
             : this.locationSnapshotFromMaster(pickupPort);
         } else {
@@ -1800,22 +1955,15 @@ export class OpsJobsService {
           job.deliveryAddress1 ?? "Delivery location",
           job,
           "delivery",
-          {
-            lat: options?.deliveryLat ?? null,
-            lng: options?.deliveryLng ?? null,
-            placeId: options?.deliveryPlaceId ?? null,
-          },
+          deliveryGeo,
         );
       } else if (trip.jobTripTemplate === JobTripTemplate.DELIVERY_TO_DEPOT) {
+        const deliveryAsOriginGeo = this.resolveRouteGeo("delivery", trip, "origin", options);
         origin = this.buildAddressSnapshot(
           job.deliveryAddress1 ?? "Delivery location",
           job,
           "delivery",
-          {
-            lat: options?.deliveryLat ?? null,
-            lng: options?.deliveryLng ?? null,
-            placeId: options?.deliveryPlaceId ?? null,
-          },
+          deliveryAsOriginGeo,
         );
         destination = this.locationSnapshotFromMaster(returnDepot);
       } else if (trip.jobTripTemplate === JobTripTemplate.DEPOT_TO_DELIVERY) {
@@ -1824,22 +1972,14 @@ export class OpsJobsService {
           job.deliveryAddress1 ?? "Stuffing destination",
           job,
           "delivery",
-          {
-            lat: options?.deliveryLat ?? null,
-            lng: options?.deliveryLng ?? null,
-            placeId: options?.deliveryPlaceId ?? null,
-          },
+          this.resolveRouteGeo("delivery", trip, "destination", options),
         );
       } else if (trip.jobTripTemplate === JobTripTemplate.DELIVERY_TO_PORT) {
         origin = this.buildAddressSnapshot(
           job.deliveryAddress1 ?? "Stuffing destination",
           job,
           "delivery",
-          {
-            lat: options?.deliveryLat ?? null,
-            lng: options?.deliveryLng ?? null,
-            placeId: options?.deliveryPlaceId ?? null,
-          },
+          this.resolveRouteGeo("delivery", trip, "origin", options),
         );
         destination = this.locationSnapshotFromMaster(exportPort);
       }
@@ -2733,6 +2873,15 @@ export class OpsJobsService {
     }
 
     rt.publishJobEvent(this.realtime, "job.updated", tenantId, jobId);
+
+    const jobRouteFieldsChanged = Object.keys(data).some((k) =>
+      (TRIP_DETAILS_ROUTE_JOB_KEYS as readonly string[]).includes(k),
+    );
+    if (jobRouteFieldsChanged) {
+      await this.syncTripRouteSnapshotForJob(tenantId, jobId, {
+        tripStatuses: [TripStatus.DRAFT, TripStatus.PUBLISHED],
+      });
+    }
 
     return toJobDto(updated);
   }
@@ -4548,6 +4697,159 @@ export class OpsJobsService {
     return this.getOne(tenantId, jobId, user);
   }
 
+  async patchTripDetails(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    dto: PatchTripDetailsDto,
+    user: any,
+  ): Promise<any> {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+    });
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job, user);
+
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    assertTripDetailsEditAllowed(
+      trip.status as TripStatus,
+      job.status,
+      dto,
+    );
+
+    const raw = dto as Record<string, unknown>;
+    const routeChanged = dtoHasAnyDefinedKey(raw, TRIP_DETAILS_ROUTE_JOB_KEYS);
+    const jobData: Record<string, unknown> = {};
+    const tripData: Record<string, unknown> = {};
+
+    if (dto.pickupAddress1 !== undefined) jobData.pickupAddress1 = dto.pickupAddress1;
+    if (dto.pickupAddress2 !== undefined) jobData.pickupAddress2 = dto.pickupAddress2;
+    if (dto.pickupPostal !== undefined) jobData.pickupPostal = dto.pickupPostal;
+    if (dto.pickupContactName !== undefined) {
+      jobData.pickupContactName = dto.pickupContactName?.trim() || null;
+    }
+    if (dto.pickupContactPhone !== undefined) {
+      jobData.pickupContactPhone = dto.pickupContactPhone?.trim() || null;
+    }
+    if (dto.deliveryAddress1 !== undefined) jobData.deliveryAddress1 = dto.deliveryAddress1;
+    if (dto.deliveryAddress2 !== undefined) jobData.deliveryAddress2 = dto.deliveryAddress2;
+    if (dto.deliveryPostal !== undefined) jobData.deliveryPostal = dto.deliveryPostal;
+    if (dto.receiverName !== undefined) jobData.receiverName = dto.receiverName;
+    if (dto.receiverPhone !== undefined) jobData.receiverPhone = dto.receiverPhone;
+
+    const notesValue = resolveTripDetailsNotesInput(dto);
+    if (notesValue !== undefined) jobData.notes = notesValue;
+
+    if (dto.collectionType !== undefined && job.jobType === JobType.COLLECTION) {
+      jobData.collectionType = dto.collectionType;
+    }
+    if (dto.vesselName !== undefined) {
+      jobData.vesselName = dto.vesselName?.trim() || null;
+    }
+    if (dto.vesselEta !== undefined) {
+      jobData.vesselEta = dto.vesselEta ? new Date(dto.vesselEta) : null;
+    }
+    if (dto.returningDepotCode !== undefined) {
+      jobData.returningDepotCode = dto.returningDepotCode?.trim() || null;
+    }
+    if (dto.returnLastDay !== undefined) {
+      jobData.returnLastDay = dto.returnLastDay ? new Date(dto.returnLastDay) : null;
+    }
+    if (dto.pickupPortCode !== undefined) {
+      jobData.pickupPortCode = dto.pickupPortCode?.trim() || null;
+    }
+
+    if (dto.plannedStartAt !== undefined) {
+      tripData.plannedStartAt = dto.plannedStartAt
+        ? new Date(dto.plannedStartAt)
+        : null;
+    }
+    if (dto.tripPICName !== undefined) {
+      tripData.tripPICName = dto.tripPICName?.trim() || null;
+    }
+    if (dto.tripPICContact !== undefined) {
+      tripData.tripPICContact = dto.tripPICContact?.trim() || null;
+    }
+    tripData.updatedByUserId = actorUserId;
+
+    const inputItems = readUpdateJobItemsInput(dto as {
+      items?: unknown;
+      cargoItems?: unknown;
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      if (Object.keys(jobData).length > 0) {
+        await tx.job.update({ where: { id: jobId }, data: jobData });
+      }
+      if (Object.keys(tripData).length > 0) {
+        await tx.trip.update({ where: { id: tripId }, data: tripData });
+      }
+      if (inputItems !== null) {
+        const validItems = parseValidJobItemsFromInput(inputItems, job.jobType);
+        assertCreateJobItemsRequiredForJobType(
+          job.jobType,
+          inputItems,
+          validItems,
+        );
+        await tx.jobItem.deleteMany({ where: { tenantId, jobId } });
+        if (validItems.length > 0) {
+          await tx.jobItem.createMany({
+            data: validItems.map((item) => ({
+              tenantId,
+              jobId,
+              itemCode: item.itemCode,
+              description: item.description,
+              sealNo: item.sealNo,
+              pickupReference: item.pickupReference,
+              qty: item.qty,
+            })),
+          });
+        }
+      }
+    });
+
+    if (routeChanged && isPlanningEligibleStatus(trip.status as TripStatus)) {
+      await this.syncTripRouteSnapshotForJob(tenantId, jobId, {
+        pickupLat: dto.pickupLat,
+        pickupLng: dto.pickupLng,
+        pickupPlaceId: dto.pickupPlaceId,
+        deliveryLat: dto.deliveryLat,
+        deliveryLng: dto.deliveryLng,
+        deliveryPlaceId: dto.deliveryPlaceId,
+        tripStatuses: [TripStatus.DRAFT, TripStatus.PUBLISHED],
+      });
+    }
+
+    const changedFields = [
+      ...Object.keys(jobData),
+      ...Object.keys(tripData).filter((k) => k !== "updatedByUserId"),
+      ...(inputItems !== null ? ["items"] : []),
+    ];
+
+    await this.audit.log(
+      tenantId,
+      "TRIP_DETAILS_UPDATE",
+      "JOB",
+      jobId,
+      { tripId, changedFields },
+      actorUserId,
+    );
+
+    rt.publishTripEvent(this.realtime, "trip.updated", tenantId, jobId, tripId, {
+      driverUserId: trip.assignedDriverUserId,
+    });
+    rt.publishJobEvent(this.realtime, "job.updated", tenantId, jobId);
+
+    return this.getTripDetail(tenantId, tripId, user);
+  }
+
   async assignTrip(
     tenantId: string,
     jobId: string,
@@ -5056,6 +5358,9 @@ export class OpsJobsService {
         customerCompanyId: true,
         receiverName: true,
         receiverPhone: true,
+        notes: true,
+        pickupContactName: true,
+        pickupContactPhone: true,
         customerCompany: { select: { name: true } },
         pickupAddress1: true,
         pickupAddress2: true,
@@ -5228,6 +5533,9 @@ export class OpsJobsService {
       documentStatus: deriveTripDocumentStatus(t.documents ?? []),
       completionRuleJson:
         (t.completionRuleJson as Record<string, unknown> | null) ?? null,
+      notes: job.notes ?? null,
+      jobNotes: job.notes ?? null,
+      tripInstruction: job.notes ?? null,
       };
     }));
   }
@@ -5393,14 +5701,33 @@ export class OpsJobsService {
             jobType: true,
             collectionType: true,
             status: true,
+            notes: true,
             receiverName: true,
             receiverPhone: true,
+            pickupAddress1: true,
+            pickupAddress2: true,
+            pickupPostal: true,
+            pickupContactName: true,
+            pickupContactPhone: true,
+            deliveryAddress1: true,
+            deliveryAddress2: true,
+            deliveryPostal: true,
+            vesselName: true,
+            vesselEta: true,
+            returningDepotCode: true,
             createdAt: true,
             createdByUserId: true,
             createdBy: { select: { id: true, name: true, email: true } },
             items: {
               orderBy: { createdAt: "asc" },
-              select: { id: true, itemCode: true, description: true, qty: true },
+              select: {
+                id: true,
+                itemCode: true,
+                description: true,
+                qty: true,
+                sealNo: true,
+                pickupReference: true,
+              },
             },
             customerCompany: { select: { name: true } },
           },
@@ -5564,6 +5891,9 @@ export class OpsJobsService {
       shipper: trip.shipper ?? null,
       vessel: trip.vessel ?? null,
       plannedStartAt: trip.plannedStartAt ?? null,
+      jobNotes: trip.job?.notes ?? null,
+      notes: trip.job?.notes ?? null,
+      tripInstruction: trip.job?.notes ?? null,
       startedAt: trip.startedAt ?? null,
       completedAt: trip.closedAt ?? null,
       closedAt: trip.closedAt ?? null,
@@ -5577,16 +5907,26 @@ export class OpsJobsService {
             status: trip.job.status,
             customerCompanyId: trip.job.customerCompanyId,
             customerCompanyName: trip.job.customerCompany?.name ?? null,
+            notes: trip.job.notes ?? null,
             contactName: trip.job.receiverName ?? null,
             contactPhone: trip.job.receiverPhone ?? null,
             pickupAddress1: trip.job.pickupAddress1 ?? null,
+            pickupAddress2: trip.job.pickupAddress2 ?? null,
             pickupPostal: trip.job.pickupPostal ?? null,
+            pickupContactName: trip.job.pickupContactName ?? null,
+            pickupContactPhone: trip.job.pickupContactPhone ?? null,
             pickupPlaceId: trip.originPlaceId ?? null,
             pickupLat: trip.originLat ?? null,
             pickupLng: trip.originLng ?? null,
             deliveryAddress1: trip.job.deliveryAddress1 ?? null,
+            deliveryAddress2: trip.job.deliveryAddress2 ?? null,
             deliveryPostal: trip.job.deliveryPostal ?? null,
             deliveryPlaceId: trip.destinationPlaceId ?? null,
+            deliveryLat: trip.destinationLat ?? null,
+            deliveryLng: trip.destinationLng ?? null,
+            vesselName: trip.job.vesselName ?? null,
+            vesselEta: trip.job.vesselEta ?? null,
+            returningDepotCode: trip.job.returningDepotCode ?? null,
             createdAt: trip.job.createdAt,
             createdByName:
               trip.job.createdBy?.name?.trim() || trip.job.createdBy?.email || null,

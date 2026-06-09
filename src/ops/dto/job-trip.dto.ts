@@ -13,8 +13,9 @@ import {
   MinLength,
   IsNumber,
 } from "class-validator";
-import { JobTripTemplate } from "@prisma/client";
+import { CollectionType, JobTripTemplate } from "@prisma/client";
 import { Transform, Type } from "class-transformer";
+import { UpdateJobItemDto } from "./update-job.dto";
 
 export enum JobTripOrderStrategy {
   DISTANCE = "DISTANCE",
@@ -293,6 +294,163 @@ export class TripLocationPatchDto {
   @IsOptional()
   @IsString()
   locationId?: string | null;
+}
+
+/** Flat operational fields for PATCH /api/jobs/:jobId/trips/:tripId/details */
+export class PatchTripDetailsDto {
+  @ApiPropertyOptional({ description: "Planned trip start (ISO datetime)" })
+  @IsOptional()
+  @IsDateString()
+  plannedStartAt?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pickupAddress1?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pickupAddress2?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pickupPostal?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pickupPlaceId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  pickupLat?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  pickupLng?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pickupContactName?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pickupContactPhone?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  deliveryAddress1?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  deliveryAddress2?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  deliveryPostal?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  deliveryPlaceId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  deliveryLat?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  deliveryLng?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  receiverName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  receiverPhone?: string;
+
+  @ApiPropertyOptional({ description: "Job-level driver instruction (alias: jobNotes, tripInstruction)" })
+  @IsOptional()
+  @IsString()
+  notes?: string | null;
+
+  @ApiPropertyOptional({ description: "Alias for job-level notes (mobile)" })
+  @IsOptional()
+  @IsString()
+  jobNotes?: string | null;
+
+  @ApiPropertyOptional({ description: "Alias for job-level notes shown to driver" })
+  @IsOptional()
+  @IsString()
+  tripInstruction?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tripPICName?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  tripPICContact?: string | null;
+
+  @ApiPropertyOptional({ enum: CollectionType })
+  @IsOptional()
+  @IsEnum(CollectionType)
+  collectionType?: CollectionType;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  vesselName?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  vesselEta?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  returningDepotCode?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  returnLastDay?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  pickupPortCode?: string | null;
+
+  @ApiPropertyOptional({ type: [UpdateJobItemDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => UpdateJobItemDto)
+  items?: UpdateJobItemDto[];
+
+  @ApiPropertyOptional({ type: [UpdateJobItemDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => UpdateJobItemDto)
+  cargoItems?: UpdateJobItemDto[];
 }
 
 export class PatchJobTripDto {

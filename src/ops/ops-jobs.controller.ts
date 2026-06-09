@@ -46,6 +46,7 @@ import {
   AssignJobTripDto,
   PatchTripPayoutDto,
   PatchJobTripDto,
+  PatchTripDetailsDto,
   PublishJobTripRouteDto,
   PutTripPayoutLinesDto,
   ReorderJobTripsDto,
@@ -788,6 +789,26 @@ export class OpsJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.publishTripRoute(tenantId, jobId, dto, accessUser);
+  }
+
+  @Patch(":jobId/trips/:tripId/details")
+  @ApiOperation({
+    summary:
+      "Update operational job/trip execution details (addresses, contacts, notes, planned timing)",
+  })
+  async patchTripDetails(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Body() dto: PatchTripDetailsDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.patchTripDetails(tenantId, jobId, tripId, dto, accessUser);
   }
 
   @Patch(":jobId/trips/:tripId")
