@@ -2,6 +2,10 @@ import { BadRequestException } from "@nestjs/common";
 import { JobType, Role } from "@prisma/client";
 import {
   assertCreateJobItemsRequiredForJobType,
+  assertImportPickupSourceForCreate,
+  assertPickupLocationForCreate,
+  hasAutocompleteLocation,
+  importPickupOriginUsesAddressFields,
   OpsJobsService,
   readCreateJobItemsInput,
   readUpdateJobItemsInput,
@@ -29,6 +33,59 @@ describe("create job items (LCL optional)", () => {
           cargoItems: [{ itemCode: "A01", qty: 2 }],
         } as any),
       ).toHaveLength(1);
+    });
+  });
+
+  describe("autocomplete pickup validation", () => {
+    it("hasAutocompleteLocation accepts address1 or placeId", () => {
+      expect(hasAutocompleteLocation({ address1: "7 Gul Circle" })).toBe(true);
+      expect(hasAutocompleteLocation({ placeId: "ChIJxyz" })).toBe(true);
+      expect(hasAutocompleteLocation({})).toBe(false);
+    });
+
+    it("assertImportPickupSourceForCreate accepts port, address, or placeId", () => {
+      expect(() =>
+        assertImportPickupSourceForCreate({ pickupPortCode: "JURONG" }),
+      ).not.toThrow();
+      expect(() =>
+        assertImportPickupSourceForCreate({ pickupAddress1: "7 Gul Circle" }),
+      ).not.toThrow();
+      expect(() =>
+        assertImportPickupSourceForCreate({ pickupPlaceId: "ChIJ-import" }),
+      ).not.toThrow();
+      expect(() => assertImportPickupSourceForCreate({})).toThrow(
+        /Pickup location is required/i,
+      );
+    });
+
+    it("importPickupOriginUsesAddressFields prefers address over port metadata", () => {
+      expect(
+        importPickupOriginUsesAddressFields({
+          pickupAddress1: "1 Harbour Drive",
+        }),
+      ).toBe(true);
+      expect(importPickupOriginUsesAddressFields({ pickupPostal: "117352" })).toBe(
+        true,
+      );
+      expect(importPickupOriginUsesAddressFields({})).toBe(false);
+    });
+
+    it("assertPickupLocationForCreate requires EXPORT pickup address or placeId", () => {
+      expect(() =>
+        assertPickupLocationForCreate({
+          jobType: JobType.EXPORT,
+          pickupAddress1: "7 Gul Circle",
+        }),
+      ).not.toThrow();
+      expect(() =>
+        assertPickupLocationForCreate({
+          jobType: JobType.EXPORT,
+          pickupPlaceId: "ChIJ-export",
+        }),
+      ).not.toThrow();
+      expect(() =>
+        assertPickupLocationForCreate({ jobType: JobType.EXPORT }),
+      ).toThrow(/Pickup location is required/i);
     });
   });
 
@@ -207,6 +264,223 @@ describe("create job items (LCL optional)", () => {
           { userId: "u1", role: Role.OPS },
         ),
       ).resolves.toBeTruthy();
+    });
+
+    it("IMPORT with pickupAddress + pickupPortCode uses pickupAddress for trip origin", async () => {
+      const prisma = makeCreatePrisma();
+      prisma.masterLogisticsLocation = {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "port1",
+          code: "JURONG",
+          name: "Jurong Port",
+          type: "PORT",
+        }),
+      };
+      const svc = makeSvc(prisma);
+
+      await svc.create(
+        "t1",
+        {
+          ...baseLclDto,
+          jobType: JobType.IMPORT,
+          pickupAddress1: "1 Harbour Drive",
+          pickupPostal: "117352",
+          importDetails: {
+            pickupPortCode: "JURONG",
+          },
+        } as any,
+        { userId: "u1", role: Role.OPS },
+      );
+
+      expect(prisma.job.create.mock.calls[0][0].data.pickupPortCode).toBe("JURONG");
+      const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
+      expect(tripRows[0].originAddressLine1).toBe("1 Harbour Drive");
+      expect(tripRows[0].originPostalCode).toBe("117352");
+      expect(tripRows[0].originLabel).not.toMatch(/JURONG/);
+    });
+
+    it("IMPORT with pickupPortCode only uses port master for trip origin", async () => {
+      const prisma = makeCreatePrisma();
+      prisma.job.findFirst = jest.fn().mockImplementation(async () => ({
+        ...freshJobShape(),
+        jobType: JobType.IMPORT,
+        pickupAddress1: "",
+        pickupPortCode: "JURONG",
+        trips: [{ id: "trip1", jobTripTemplate: "PICKUP_TO_DELIVERY" }],
+      }));
+      prisma.masterLogisticsLocation = {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "port1",
+          code: "JURONG",
+          name: "Jurong Port",
+          type: "PORT",
+        }),
+      };
+      const svc = makeSvc(prisma);
+
+      await svc.create(
+        "t1",
+        {
+          ...baseLclDto,
+          jobType: JobType.IMPORT,
+          pickupAddress1: "",
+          pickupAddress2: null,
+          pickupPostal: null,
+          importDetails: {
+            pickupPortCode: "JURONG",
+          },
+        } as any,
+        { userId: "u1", role: Role.OPS },
+      );
+
+      expect(prisma.trip.createMany.mock.calls[0][0].data[0].originAddressLine1).toBeUndefined();
+      expect(prisma.trip.update).toHaveBeenCalled();
+      const syncData = prisma.trip.update.mock.calls[0][0].data;
+      expect(syncData.originLabel).toBe("JURONG — Jurong Port");
+      expect(syncData.originLocationId).toBe("port1");
+    });
+
+    it("creates IMPORT job with pickupPortCode still succeeds", async () => {
+      const prisma = makeCreatePrisma();
+      prisma.masterLogisticsLocation = {
+        findFirst: jest.fn().mockResolvedValue({ code: "JURONG", name: "Jurong Port" }),
+      };
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.IMPORT,
+            importDetails: {
+              pickupPortCode: "JURONG",
+            },
+          } as any,
+          { userId: "u1", role: Role.OPS },
+        ),
+      ).resolves.toBeTruthy();
+
+      expect(prisma.job.create.mock.calls[0][0].data.pickupPortCode).toBe("JURONG");
+    });
+
+    it("creates IMPORT job with pickupAddress1 + pickupPostal and no pickupPortCode", async () => {
+      const prisma = makeCreatePrisma();
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.IMPORT,
+            pickupAddress1: "20 Tuas Ave 9",
+            pickupPostal: "639201",
+            pickupPlaceId: "ChIJ-import-pickup",
+          } as any,
+          { userId: "u1", role: Role.OPS },
+        ),
+      ).resolves.toBeTruthy();
+
+      const jobData = prisma.job.create.mock.calls[0][0].data;
+      expect(jobData.pickupPortCode).toBeNull();
+      const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
+      expect(tripRows).toHaveLength(1);
+      expect(tripRows[0].originAddressLine1).toBe("20 Tuas Ave 9");
+      expect(tripRows[0].originPostalCode).toBe("639201");
+      expect(tripRows[0].originPlaceId).toBe("ChIJ-import-pickup");
+    });
+
+    it("IMPORT create with neither pickupPortCode nor pickup address fails", async () => {
+      const prisma = makeCreatePrisma();
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.IMPORT,
+            pickupAddress1: "   ",
+            pickupPostal: "629356",
+          } as any,
+          { userId: "u1", role: Role.OPS },
+        ),
+      ).rejects.toThrow(/Pickup location is required/i);
+      expect(prisma.job.create).not.toHaveBeenCalled();
+    });
+
+    it("IMPORT create with autocomplete pickup and no pickupPortCode succeeds", async () => {
+      const prisma = makeCreatePrisma();
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.IMPORT,
+            pickupAddress1: "1 Harbour Drive",
+            pickupPostal: "117352",
+            pickupPlaceId: "ChIJ-import-pickup",
+          } as any,
+          { userId: "u1", role: Role.OPS },
+        ),
+      ).resolves.toBeTruthy();
+
+      expect(prisma.job.create.mock.calls[0][0].data.pickupPortCode).toBeNull();
+      const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
+      expect(tripRows[0].originAddressLine1).toBe("1 Harbour Drive");
+      expect(tripRows[0].originPlaceId).toBe("ChIJ-import-pickup");
+    });
+
+    it("creates IMPORT address pickup without return and generates one trip", async () => {
+      const prisma = makeCreatePrisma();
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.IMPORT,
+            pickupAddress1: "1 Harbour Drive",
+            pickupPostal: "117352",
+          } as any,
+          { userId: "u1", role: Role.OPS },
+        ),
+      ).resolves.toBeTruthy();
+
+      expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(1);
+    });
+
+    it("creates IMPORT address pickup with return and generates two trips", async () => {
+      const prisma = makeCreatePrisma();
+      prisma.masterLogisticsLocation = {
+        findFirst: jest.fn().mockResolvedValue({ code: "GUL", name: "Gul Depot" }),
+      };
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.IMPORT,
+            pickupAddress1: "1 Harbour Drive",
+            pickupPostal: "117352",
+            importDetails: {
+              returningDepotCode: "GUL",
+            },
+          } as any,
+          { userId: "u1", role: Role.OPS },
+        ),
+      ).resolves.toBeTruthy();
+
+      const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
+      expect(tripRows).toHaveLength(2);
+      expect(tripRows[0].originAddressLine1).toBe("1 Harbour Drive");
+      expect(tripRows[1].jobTripTemplate).toBe("DELIVERY_TO_DEPOT");
     });
 
     it("creates IMPORT job without return location and generates one port→delivery trip", async () => {

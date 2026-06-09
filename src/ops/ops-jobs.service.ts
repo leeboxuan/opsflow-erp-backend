@@ -259,6 +259,187 @@ export function parseValidJobItemsFromInput(
     .filter((row): row is NonNullable<typeof row> => row != null);
 }
 
+export type AutocompleteLocationInput = {
+  address1?: string | null;
+  placeId?: string | null;
+};
+
+/** Address autocomplete: non-empty address line or Google place id. */
+export function hasAutocompleteLocation(input: AutocompleteLocationInput): boolean {
+  return !!(input.address1?.trim() || input.placeId?.trim());
+}
+
+export type ImportPickupSourceInput = {
+  pickupPortCode?: string | null;
+  pickupAddress1?: string | null;
+  pickupPlaceId?: string | null;
+};
+
+export type ImportPickupOriginInput = {
+  pickupAddress1?: string | null;
+  pickupPlaceId?: string | null;
+  pickupPostal?: string | null;
+  pickupLat?: number | null;
+  pickupLng?: number | null;
+};
+
+/**
+ * IMPORT route origin: pickup address/geo fields take precedence over optional pickupPortCode metadata.
+ */
+export function importPickupOriginUsesAddressFields(
+  input: ImportPickupOriginInput,
+): boolean {
+  return !!(
+    input.pickupAddress1?.trim()
+    || input.pickupPlaceId?.trim()
+    || input.pickupPostal?.trim()
+    || input.pickupLat != null
+    || input.pickupLng != null
+  );
+}
+
+/** @deprecated Use hasAutocompleteLocation for address-only pickup checks. */
+export function hasImportPickupAddressSource(
+  input: ImportPickupSourceInput,
+): boolean {
+  return hasAutocompleteLocation({
+    address1: input.pickupAddress1,
+    placeId: input.pickupPlaceId,
+  });
+}
+
+export function assertPickupLocationForCreate(input: {
+  jobType: JobType;
+  pickupAddress1?: string | null;
+  pickupPlaceId?: string | null;
+  pickupPortCode?: string | null;
+}): void {
+  if (input.jobType === JobType.IMPORT && input.pickupPortCode?.trim()) {
+    return;
+  }
+  if (
+    hasAutocompleteLocation({
+      address1: input.pickupAddress1,
+      placeId: input.pickupPlaceId,
+    })
+  ) {
+    return;
+  }
+  throw new BadRequestException("Pickup location is required.");
+}
+
+export function assertDeliveryLocationForCreate(input: {
+  jobType: JobType;
+  deliveryAddress1?: string | null;
+  deliveryPlaceId?: string | null;
+  stuffingAddress1?: string | null;
+}): void {
+  const deliveryLine =
+    input.stuffingAddress1?.trim() || input.deliveryAddress1?.trim() || null;
+  if (
+    hasAutocompleteLocation({
+      address1: deliveryLine,
+      placeId: input.deliveryPlaceId,
+    })
+  ) {
+    return;
+  }
+  if (input.jobType === JobType.EXPORT) {
+    throw new BadRequestException("Delivery / export location is required.");
+  }
+  throw new BadRequestException("Delivery location is required.");
+}
+
+/** Resolved EXPORT pickup address (top-level autocomplete preferred; legacy container fields as fallback). */
+export function resolveExportPickupFields(input: {
+  pickupAddress1?: string | null;
+  pickupAddress2?: string | null;
+  pickupPostal?: string | null;
+  containerPickupAddress1?: string | null;
+  containerPickupAddress2?: string | null;
+  containerPickupPostal?: string | null;
+}): { address1: string; address2: string | null; postal: string | null } {
+  return {
+    address1:
+      input.pickupAddress1?.trim()
+      || input.containerPickupAddress1?.trim()
+      || "",
+    address2:
+      input.pickupAddress2?.trim()
+      || input.containerPickupAddress2?.trim()
+      || null,
+    postal:
+      input.pickupPostal?.trim()
+      || input.containerPickupPostal?.trim()
+      || null,
+  };
+}
+
+export type ExportDestinationInput = {
+  deliveryAddress1?: string | null;
+  deliveryAddress2?: string | null;
+  deliveryPostal?: string | null;
+  stuffingAddress1?: string | null;
+  stuffingAddress2?: string | null;
+  stuffingPostal?: string | null;
+};
+
+/** When both top-level delivery and exportDetails stuffing fields are sent, they must agree. */
+export function assertExportDestinationFieldsConsistent(
+  input: ExportDestinationInput,
+): void {
+  const assertMatch = (
+    stuffing: string | null | undefined,
+    delivery: string | null | undefined,
+    field: string,
+  ) => {
+    const s = stuffing?.trim();
+    const d = delivery?.trim();
+    if (s && d && s !== d) {
+      throw new BadRequestException(
+        `EXPORT ${field} must match exportDetails stuffing field when both are provided`,
+      );
+    }
+  };
+  assertMatch(input.stuffingAddress1, input.deliveryAddress1, "deliveryAddress1");
+  assertMatch(input.stuffingAddress2, input.deliveryAddress2, "deliveryAddress2");
+  assertMatch(input.stuffingPostal, input.deliveryPostal, "deliveryPostal");
+}
+
+/** Resolved EXPORT delivery/export destination (stuffing fields preferred, else top-level delivery). */
+export function resolveExportDestinationFields(
+  input: ExportDestinationInput,
+): {
+  address1: string | null;
+  address2: string | null;
+  postal: string | null;
+} {
+  return {
+    address1:
+      input.stuffingAddress1?.trim()
+      || input.deliveryAddress1?.trim()
+      || null,
+    address2:
+      input.stuffingAddress2?.trim()
+      || input.deliveryAddress2?.trim()
+      || null,
+    postal:
+      input.stuffingPostal?.trim() || input.deliveryPostal?.trim() || null,
+  };
+}
+
+/** IMPORT create: pickupPortCode (optional metadata) or autocomplete pickup fields. */
+export function assertImportPickupSourceForCreate(
+  input: ImportPickupSourceInput,
+): void {
+  assertPickupLocationForCreate({
+    jobType: JobType.IMPORT,
+    pickupAddress1: input.pickupAddress1,
+    pickupPlaceId: input.pickupPlaceId,
+    pickupPortCode: input.pickupPortCode,
+  });
+}
+
 /** COLLECTION create requires EMPTY or LOADED; other job types store null. */
 export function resolveCollectionTypeForJobCreate(
   jobType: JobType,
@@ -382,12 +563,18 @@ function toJobDto(j: any): JobDto {
     pickupAddress1: j.pickupAddress1,
     pickupAddress2: j.pickupAddress2,
     pickupPostal: j.pickupPostal,
+    pickupPlaceId: primaryTrip?.originPlaceId ?? null,
+    pickupLat: primaryTrip?.originLat ?? null,
+    pickupLng: primaryTrip?.originLng ?? null,
     pickupContactName: j.pickupContactName,
     pickupContactPhone: j.pickupContactPhone,
 
     deliveryAddress1: j.deliveryAddress1,
     deliveryAddress2: j.deliveryAddress2,
     deliveryPostal: j.deliveryPostal,
+    deliveryPlaceId: primaryTrip?.destinationPlaceId ?? null,
+    deliveryLat: primaryTrip?.destinationLat ?? null,
+    deliveryLng: primaryTrip?.destinationLng ?? null,
     receiverName: j.receiverName,
     receiverPhone: j.receiverPhone,
 
@@ -806,19 +993,33 @@ function deriveTripRouteSummaryFromJobAndTemplate(job: any, trip: any): {
 
   const t = trip?.jobTripTemplate as JobTripTemplate | null | undefined;
   switch (t) {
-    case JobTripTemplate.PICKUP_TO_DELIVERY:
+    case JobTripTemplate.PICKUP_TO_DELIVERY: {
+      const importUsesAddressOrigin =
+        job?.jobType === JobType.IMPORT
+        && importPickupOriginUsesAddressFields({
+          pickupAddress1: job?.pickupAddress1,
+          pickupPostal: job?.pickupPostal,
+        });
+      const importOriginLabel = importUsesAddressOrigin
+        ? (pickupAddress ?? null)
+        : (portLabel ?? pickupAddress ?? null);
+      const importOriginType = importUsesAddressOrigin
+        ? (pickupAddress ? "PICKUP" : null)
+        : (portLabel ? "PORT" : pickupAddress ? "PICKUP" : null);
       return {
         fromLabel:
           job?.jobType === JobType.IMPORT
-            ? portLabel ?? null
+            ? importOriginLabel
             : pickupAddress ?? "Pickup location",
         toLabel: deliveryAddress ?? "Delivery location",
         fromAddress:
-          job?.jobType === JobType.IMPORT ? portLabel ?? null : pickupAddress,
+          job?.jobType === JobType.IMPORT ? importOriginLabel : pickupAddress,
         toAddress: deliveryAddress,
-        fromType: job?.jobType === JobType.IMPORT ? "PORT" : "PICKUP",
+        fromType:
+          job?.jobType === JobType.IMPORT ? importOriginType : "PICKUP",
         toType: "DELIVERY",
       };
+    }
     case JobTripTemplate.DELIVERY_TO_DEPOT:
       return {
         fromLabel: deliveryAddress ?? "Delivery location",
@@ -1562,9 +1763,26 @@ export class OpsJobsService {
             },
           );
         } else if (job.jobType === JobType.EXPORT) {
-          origin = exportOriginDepot
-            ? this.locationSnapshotFromMaster(exportOriginDepot)
-            : this.buildAddressSnapshot(
+          origin = this.buildAddressSnapshot(
+            job.pickupAddress1 ?? "Pickup location",
+            job,
+            "pickup",
+            {
+              lat: options?.pickupLat ?? null,
+              lng: options?.pickupLng ?? null,
+              placeId: options?.pickupPlaceId ?? null,
+            },
+          );
+        } else if (job.jobType === JobType.IMPORT) {
+          const useAddressOrigin = importPickupOriginUsesAddressFields({
+            pickupAddress1: job.pickupAddress1,
+            pickupPostal: job.pickupPostal,
+            pickupPlaceId: options?.pickupPlaceId,
+            pickupLat: options?.pickupLat,
+            pickupLng: options?.pickupLng,
+          });
+          origin = useAddressOrigin || !pickupPort
+            ? this.buildAddressSnapshot(
                 job.pickupAddress1 ?? "Pickup location",
                 job,
                 "pickup",
@@ -1573,7 +1791,8 @@ export class OpsJobsService {
                   lng: options?.pickupLng ?? null,
                   placeId: options?.pickupPlaceId ?? null,
                 },
-              );
+              )
+            : this.locationSnapshotFromMaster(pickupPort);
         } else {
           origin = this.locationSnapshotFromMaster(pickupPort);
         }
@@ -1882,15 +2101,12 @@ export class OpsJobsService {
         exportDetails.exportPortId,
         LogisticsLocationType.PORT,
       ));
-    const containerPickupAddress1 = (
-      exportDetails.containerPickupAddress1 ?? dto.pickupAddress1
-    )?.trim();
-    const containerPickupAddress2 = (
-      exportDetails.containerPickupAddress2 ?? dto.pickupAddress2
-    )?.trim();
-    const containerPickupPostal = (
-      exportDetails.containerPickupPostal ?? dto.pickupPostal
-    )?.trim();
+    const legacyContainerPickupAddress1 =
+      exportDetails.containerPickupAddress1?.trim();
+    const legacyContainerPickupAddress2 =
+      exportDetails.containerPickupAddress2?.trim();
+    const legacyContainerPickupPostal =
+      exportDetails.containerPickupPostal?.trim();
     const stuffingAddress1 = (
       exportDetails.stuffingAddress1 ?? dto.deliveryAddress1
     )?.trim();
@@ -1908,17 +2124,24 @@ export class OpsJobsService {
     )?.trim();
 
     if (dto.jobType === JobType.IMPORT) {
-      const portCode = pickupPortCode;
-      if (!portCode) {
-        throw new BadRequestException(
-          "pickupPortCode is required for IMPORT jobs (Singapore port master code)",
-        );
-      }
-      const port = await this.prisma.masterLogisticsLocation.findFirst({
-        where: { code: portCode, type: LogisticsLocationType.PORT, isActive: true },
+      assertImportPickupSourceForCreate({
+        pickupPortCode,
+        pickupAddress1: dto.pickupAddress1,
+        pickupPlaceId: dto.pickupPlaceId,
       });
-      if (!port) {
-        throw new BadRequestException(`Unknown pickupPortCode: ${portCode}`);
+      assertDeliveryLocationForCreate({
+        jobType: JobType.IMPORT,
+        deliveryAddress1: dto.deliveryAddress1,
+        deliveryPlaceId: dto.deliveryPlaceId,
+      });
+      const portCode = pickupPortCode?.trim();
+      if (portCode) {
+        const port = await this.prisma.masterLogisticsLocation.findFirst({
+          where: { code: portCode, type: LogisticsLocationType.PORT, isActive: true },
+        });
+        if (!port) {
+          throw new BadRequestException(`Unknown pickupPortCode: ${portCode}`);
+        }
       }
       if (returningDepotCode) {
         const returnDepotForImport = await this.prisma.masterLogisticsLocation.findFirst({
@@ -1936,21 +2159,35 @@ export class OpsJobsService {
       }
     }
 
+    const exportPickup = resolveExportPickupFields({
+      pickupAddress1: dto.pickupAddress1,
+      pickupAddress2: dto.pickupAddress2,
+      pickupPostal: dto.pickupPostal,
+      containerPickupAddress1: legacyContainerPickupAddress1,
+      containerPickupAddress2: legacyContainerPickupAddress2,
+      containerPickupPostal: legacyContainerPickupPostal,
+    });
+
     if (dto.jobType === JobType.EXPORT) {
-      const hasPickupDepot = !!exportOriginDepotCode;
-      const hasPickupAddress = !!(
-        containerPickupAddress1?.trim() || dto.pickupAddress1?.trim()
-      );
-      if (!hasPickupDepot && !hasPickupAddress) {
-        throw new BadRequestException(
-          "EXPORT jobs require exportDetails.pickupDepotCode or a pickup address",
-        );
-      }
-      if (!stuffingAddress1) {
-        throw new BadRequestException(
-          "exportDetails.stuffingAddress1 or deliveryAddress1 is required for EXPORT jobs",
-        );
-      }
+      assertExportDestinationFieldsConsistent({
+        deliveryAddress1: dto.deliveryAddress1,
+        deliveryAddress2: dto.deliveryAddress2,
+        deliveryPostal: dto.deliveryPostal,
+        stuffingAddress1: exportDetails.stuffingAddress1,
+        stuffingAddress2: exportDetails.stuffingAddress2,
+        stuffingPostal: exportDetails.stuffingPostal,
+      });
+      assertPickupLocationForCreate({
+        jobType: JobType.EXPORT,
+        pickupAddress1: exportPickup.address1,
+        pickupPlaceId: dto.pickupPlaceId,
+      });
+      assertDeliveryLocationForCreate({
+        jobType: JobType.EXPORT,
+        deliveryAddress1: dto.deliveryAddress1,
+        deliveryPlaceId: dto.deliveryPlaceId,
+        stuffingAddress1,
+      });
 
       if (exportOriginDepotCode) {
         const pickupDepot = await this.prisma.masterLogisticsLocation.findFirst({
@@ -1986,15 +2223,15 @@ export class OpsJobsService {
         pickupDate: pickupDateParsed,
         pickupAddress1:
           dto.jobType === JobType.EXPORT
-            ? (containerPickupAddress1 ?? dto.pickupAddress1)
-            : dto.pickupAddress1,
+            ? exportPickup.address1
+            : (dto.pickupAddress1?.trim() || ""),
         pickupAddress2:
           dto.jobType === JobType.EXPORT
-            ? (containerPickupAddress2 ?? null)
+            ? exportPickup.address2
             : (dto.pickupAddress2 ?? null),
         pickupPostal:
           dto.jobType === JobType.EXPORT
-            ? (containerPickupPostal ?? null)
+            ? exportPickup.postal
             : (dto.pickupPostal ?? null),
         pickupContactName: dto.pickupContactName ?? null,
         pickupContactPhone: dto.pickupContactPhone ?? null,
@@ -2083,15 +2320,15 @@ export class OpsJobsService {
     const pickupDeliveryRouteInput = {
       pickupAddress1:
         dto.jobType === JobType.EXPORT
-          ? (containerPickupAddress1 ?? dto.pickupAddress1)
-          : dto.pickupAddress1,
+          ? exportPickup.address1
+          : (dto.pickupAddress1?.trim() || ""),
       pickupAddress2:
         dto.jobType === JobType.EXPORT
-          ? (containerPickupAddress2 ?? dto.pickupAddress2 ?? null)
+          ? exportPickup.address2
           : (dto.pickupAddress2 ?? null),
       pickupPostal:
         dto.jobType === JobType.EXPORT
-          ? (containerPickupPostal ?? dto.pickupPostal ?? null)
+          ? exportPickup.postal
           : (dto.pickupPostal ?? null),
       pickupPlaceId: dto.pickupPlaceId ?? null,
       pickupLat: dto.pickupLat ?? null,
@@ -2112,10 +2349,20 @@ export class OpsJobsService {
       deliveryLat: dto.deliveryLat ?? null,
       deliveryLng: dto.deliveryLng ?? null,
     };
+    const importUsesAddressPickup =
+      dto.jobType === JobType.IMPORT
+      && importPickupOriginUsesAddressFields({
+        pickupAddress1: dto.pickupAddress1,
+        pickupPlaceId: dto.pickupPlaceId,
+        pickupPostal: dto.pickupPostal,
+        pickupLat: dto.pickupLat,
+        pickupLng: dto.pickupLng,
+      });
     const lclRouteSnapshots =
       dto.jobType === JobType.LCL
       || dto.jobType === JobType.COLLECTION
       || dto.jobType === JobType.EXPORT
+      || importUsesAddressPickup
         ? {
             [JobTripTemplate.PICKUP_TO_DELIVERY]:
               lclPickupToDeliveryRouteSnapshot(pickupDeliveryRouteInput),
@@ -5332,6 +5579,14 @@ export class OpsJobsService {
             customerCompanyName: trip.job.customerCompany?.name ?? null,
             contactName: trip.job.receiverName ?? null,
             contactPhone: trip.job.receiverPhone ?? null,
+            pickupAddress1: trip.job.pickupAddress1 ?? null,
+            pickupPostal: trip.job.pickupPostal ?? null,
+            pickupPlaceId: trip.originPlaceId ?? null,
+            pickupLat: trip.originLat ?? null,
+            pickupLng: trip.originLng ?? null,
+            deliveryAddress1: trip.job.deliveryAddress1 ?? null,
+            deliveryPostal: trip.job.deliveryPostal ?? null,
+            deliveryPlaceId: trip.destinationPlaceId ?? null,
             createdAt: trip.job.createdAt,
             createdByName:
               trip.job.createdBy?.name?.trim() || trip.job.createdBy?.email || null,

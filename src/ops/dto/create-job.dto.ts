@@ -63,7 +63,10 @@ export class CreateJobImportDetailsDto {
   @IsString()
   pickupPortId?: string;
 
-  @ApiPropertyOptional({ description: "Required for IMPORT; must match master_singapore_ports.code" })
+  @ApiPropertyOptional({
+    description:
+      "Optional IMPORT port/terminal metadata (master_singapore_ports.code). Stored when sent; trip origin uses pickup address autocomplete when address/geo fields are provided.",
+  })
   @IsOptional()
   @IsString()
   pickupPortCode?: string;
@@ -155,7 +158,7 @@ export class CreateJobExportDetailsDto {
 
   @ApiPropertyOptional({
     description:
-      "Container pickup source depot code (master_singapore_depots.code)",
+      "Optional EXPORT depot metadata (master_singapore_depots.code). Trip origin uses top-level pickup address autocomplete; not required.",
   })
   @IsOptional()
   @IsString()
@@ -431,7 +434,8 @@ export class CreateJobDto {
   exportDetails?: CreateJobExportDetailsDto;
 
   @ApiPropertyOptional({
-    description: "Legacy flat field (prefer importDetails.pickupPortCode)",
+    description:
+      "Legacy flat field (prefer importDetails.pickupPortCode). Optional metadata; route origin uses pickup address when address/geo fields are provided.",
     deprecated: true,
   })
   @IsOptional()

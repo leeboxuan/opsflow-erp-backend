@@ -323,12 +323,20 @@ export class JobDto {
   pickupAddress1: string;
   pickupAddress2: string | null;
   pickupPostal: string | null;
+  /** From primary trip origin snapshot when trips are loaded. */
+  pickupPlaceId?: string | null;
+  pickupLat?: number | null;
+  pickupLng?: number | null;
   pickupContactName: string | null;
   pickupContactPhone: string | null;
 
   deliveryAddress1: string;
   deliveryAddress2: string | null;
   deliveryPostal: string | null;
+  /** From primary trip destination snapshot when trips are loaded. */
+  deliveryPlaceId?: string | null;
+  deliveryLat?: number | null;
+  deliveryLng?: number | null;
   receiverName: string;
   receiverPhone: string;
 

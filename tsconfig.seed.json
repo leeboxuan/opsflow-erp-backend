@@ -6,6 +6,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["prisma/seed.ts"],
+  "include": ["prisma/seed.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "dist", "src"]
 }

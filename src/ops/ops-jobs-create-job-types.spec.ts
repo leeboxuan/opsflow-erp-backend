@@ -1,9 +1,11 @@
 import { CollectionType, JobTripTemplate, JobType, Role } from "@prisma/client";
 import { tripCreateManyForJob } from "./job-workflow.helpers";
 import {
+  assertExportDestinationFieldsConsistent,
   OpsJobsService,
   parseValidJobItemsFromInput,
   resolveCollectionTypeForJobCreate,
+  resolveExportDestinationFields,
 } from "./ops-jobs.service";
 
 describe("job create: EXPORT and COLLECTION", () => {
@@ -72,6 +74,179 @@ describe("job create: EXPORT and COLLECTION", () => {
     jest.spyOn(svc as any, "syncJobInvoiceReadinessForJob").mockResolvedValue(undefined);
     return svc;
   }
+
+  it("resolveExportDestinationFields prefers stuffing then top-level delivery", () => {
+    expect(
+      resolveExportDestinationFields({
+        deliveryAddress1: "Top Delivery",
+        deliveryPostal: "111111",
+        stuffingAddress1: "Stuffing Delivery",
+        stuffingPostal: "222222",
+      }),
+    ).toEqual({
+      address1: "Stuffing Delivery",
+      address2: null,
+      postal: "222222",
+    });
+    expect(
+      resolveExportDestinationFields({
+        deliveryAddress1: "Top Delivery",
+        deliveryPostal: "629356",
+      }),
+    ).toEqual({
+      address1: "Top Delivery",
+      address2: null,
+      postal: "629356",
+    });
+  });
+
+  it("assertExportDestinationFieldsConsistent rejects mismatched delivery vs stuffing", () => {
+    expect(() =>
+      assertExportDestinationFieldsConsistent({
+        deliveryAddress1: "20 Gul Way",
+        stuffingAddress1: "99 Other St",
+      }),
+    ).toThrow(/deliveryAddress1 must match/i);
+    expect(() =>
+      assertExportDestinationFieldsConsistent({
+        deliveryAddress1: "20 Gul Way",
+        stuffingAddress1: "20 Gul Way",
+        deliveryPostal: "629356",
+        stuffingPostal: "629356",
+      }),
+    ).not.toThrow();
+  });
+
+  it("EXPORT create with autocomplete pickup address succeeds without depot code", async () => {
+    const prisma = makeExportCreatePrisma();
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.EXPORT,
+        customerCompanyId: "comp1",
+        pickupAddress1: "7 Gul Circle",
+        pickupPostal: "629567",
+        pickupPlaceId: "ChIJ-export-pickup",
+        deliveryAddress1: "20 Gul Way #05-04",
+        deliveryPostal: "629356",
+        deliveryPlaceId: "ChIJ-export-dest",
+        receiverName: "PIC",
+        receiverPhone: "91234567",
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    expect(prisma.masterLogisticsLocation.findFirst).not.toHaveBeenCalled();
+    const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
+    expect(tripRows).toHaveLength(1);
+    expect(tripRows[0].originAddressLine1).toBe("7 Gul Circle");
+    expect(tripRows[0].originPlaceId).toBe("ChIJ-export-pickup");
+    expect(tripRows[0].destinationAddressLine1).toBe("20 Gul Way #05-04");
+  });
+
+  it("EXPORT create without pickup address fails", async () => {
+    const prisma = makeExportCreatePrisma();
+    const svc = makeSvc(prisma);
+
+    await expect(
+      svc.create(
+        "t1",
+        {
+          jobType: JobType.EXPORT,
+          customerCompanyId: "comp1",
+          pickupAddress1: "  ",
+          deliveryAddress1: "20 Gul Way",
+          receiverName: "PIC",
+          receiverPhone: "91234567",
+        } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow(/Pickup location is required/i);
+    expect(prisma.job.create).not.toHaveBeenCalled();
+  });
+
+  it("EXPORT create seeds trip destination from top-level deliveryAddress1 and deliveryPostal", async () => {
+    const prisma = makeExportCreatePrisma();
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.EXPORT,
+        customerCompanyId: "comp1",
+        pickupAddress1: "7 Gul Circle",
+        deliveryAddress1: "20 Gul Way #05-04",
+        deliveryPostal: "629356",
+        deliveryPlaceId: "ChIJ-export-dest",
+        receiverName: "PIC",
+        receiverPhone: "91234567",
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
+    expect(tripRows).toHaveLength(1);
+    expect(tripRows[0].jobTripTemplate).toBe(JobTripTemplate.PICKUP_TO_DELIVERY);
+    expect(tripRows[0].destinationAddressLine1).toBe("20 Gul Way #05-04");
+    expect(tripRows[0].destinationPostalCode).toBe("629356");
+    expect(tripRows[0].destinationPlaceId).toBe("ChIJ-export-dest");
+    expect(tripRows[0].originAddressLine1).toBe("7 Gul Circle");
+  });
+
+  it("EXPORT create seeds trip destination from exportDetails.stuffing fields", async () => {
+    const prisma = makeExportCreatePrisma();
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.EXPORT,
+        customerCompanyId: "comp1",
+        pickupAddress1: "7 Gul Circle",
+        deliveryAddress1: "20 Gul Way #05-04",
+        deliveryPostal: "629356",
+        receiverName: "PIC",
+        receiverPhone: "91234567",
+        exportDetails: {
+          pickupDepotCode: "DEPOT-A",
+          stuffingAddress1: "20 Gul Way #05-04",
+          stuffingPostal: "629356",
+        },
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
+    expect(tripRows[0].destinationAddressLine1).toBe("20 Gul Way #05-04");
+    expect(tripRows[0].destinationPostalCode).toBe("629356");
+  });
+
+  it("EXPORT create fails when top-level delivery and stuffing destination disagree", async () => {
+    const prisma = makeExportCreatePrisma();
+    const svc = makeSvc(prisma);
+
+    await expect(
+      svc.create(
+        "t1",
+        {
+          jobType: JobType.EXPORT,
+          customerCompanyId: "comp1",
+          pickupAddress1: "7 Gul Circle",
+          deliveryAddress1: "20 Gul Way",
+          receiverName: "PIC",
+          receiverPhone: "91234567",
+          exportDetails: {
+            pickupDepotCode: "DEPOT-A",
+            stuffingAddress1: "99 Other Street",
+          },
+        } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow(/deliveryAddress1 must match/i);
+    expect(prisma.job.create).not.toHaveBeenCalled();
+  });
 
   it("EXPORT create succeeds without returnDepotCode, returnDepotId, returnLastDay", async () => {
     const prisma = makeExportCreatePrisma();
@@ -164,14 +339,12 @@ describe("job create: EXPORT and COLLECTION", () => {
           deliveryAddress1: "Stuffing Street 1",
           receiverName: "PIC",
           receiverPhone: "91234567",
-          exportDetails: {
-            stuffingAddress1: "Stuffing Street 1",
-          },
         } as any,
         { userId: "u1", role: Role.OPS },
       ),
     ).resolves.toBeTruthy();
 
+    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(1);
     expect(prisma.masterLogisticsLocation.findFirst).not.toHaveBeenCalled();
   });
 
