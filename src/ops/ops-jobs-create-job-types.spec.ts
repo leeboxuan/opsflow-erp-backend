@@ -1,8 +1,9 @@
-import { JobTripTemplate, JobType, Role } from "@prisma/client";
+import { CollectionType, JobTripTemplate, JobType, Role } from "@prisma/client";
 import { tripCreateManyForJob } from "./job-workflow.helpers";
 import {
   OpsJobsService,
   parseValidJobItemsFromInput,
+  resolveCollectionTypeForJobCreate,
 } from "./ops-jobs.service";
 
 describe("job create: EXPORT and COLLECTION", () => {
@@ -174,12 +175,34 @@ describe("job create: EXPORT and COLLECTION", () => {
     expect(prisma.masterLogisticsLocation.findFirst).not.toHaveBeenCalled();
   });
 
-  it("COLLECTION create succeeds with no items and one pickup-delivery trip", async () => {
+  it("COLLECTION create without collectionType fails validation", async () => {
+    const prisma = makeExportCreatePrisma();
+    const svc = makeSvc(prisma);
+
+    await expect(
+      svc.create(
+        "t1",
+        {
+          jobType: JobType.COLLECTION,
+          customerCompanyId: "comp1",
+          pickupAddress1: "7 Gul Cir",
+          deliveryAddress1: "8 Gul Cir",
+          receiverName: "Receiver",
+          receiverPhone: "91234567",
+        } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).rejects.toThrow(/collectionType is required/i);
+    expect(prisma.job.create).not.toHaveBeenCalled();
+  });
+
+  it("COLLECTION create with EMPTY succeeds", async () => {
     const prisma = makeExportCreatePrisma();
     prisma.job.create = jest.fn().mockImplementation(({ data }) =>
       Promise.resolve({
         id: "job1",
         jobType: JobType.COLLECTION,
+        collectionType: data.collectionType,
         internalRef: "WFL-2026-05-0002-COL",
         customerCompany: { id: "comp1", name: "ACME" },
         items: [],
@@ -189,6 +212,7 @@ describe("job create: EXPORT and COLLECTION", () => {
       id: "job1",
       tenantId: "t1",
       jobType: JobType.COLLECTION,
+      collectionType: CollectionType.EMPTY,
       status: "ONGOING",
       customerCompany: { id: "comp1", name: "ACME" },
       assignedDriver: null,
@@ -205,6 +229,154 @@ describe("job create: EXPORT and COLLECTION", () => {
         "t1",
         {
           jobType: JobType.COLLECTION,
+          collectionType: CollectionType.EMPTY,
+          customerCompanyId: "comp1",
+          pickupAddress1: "7 Gul Cir",
+          deliveryAddress1: "8 Gul Cir",
+          receiverName: "Receiver",
+          receiverPhone: "91234567",
+        } as any,
+        { userId: "u1", role: Role.OPS },
+      ),
+    ).resolves.toBeTruthy();
+
+    expect(prisma.job.create.mock.calls[0][0].data.collectionType).toBe(
+      CollectionType.EMPTY,
+    );
+  });
+
+  it("COLLECTION create with LOADED succeeds", async () => {
+    const prisma = makeExportCreatePrisma();
+    prisma.job.create = jest.fn().mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: "job1",
+        jobType: JobType.COLLECTION,
+        collectionType: data.collectionType,
+        customerCompany: { id: "comp1", name: "ACME" },
+        items: [],
+      }),
+    );
+    prisma.job.findFirst = jest.fn().mockResolvedValue({
+      id: "job1",
+      tenantId: "t1",
+      jobType: JobType.COLLECTION,
+      collectionType: CollectionType.LOADED,
+      status: "ONGOING",
+      customerCompany: { id: "comp1", name: "ACME" },
+      assignedDriver: null,
+      createdBy: null,
+      items: [],
+      trips: [],
+      charges: [],
+      documents: [],
+    });
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.COLLECTION,
+        collectionType: CollectionType.LOADED,
+        customerCompanyId: "comp1",
+        pickupAddress1: "7 Gul Cir",
+        deliveryAddress1: "8 Gul Cir",
+        receiverName: "Receiver",
+        receiverPhone: "91234567",
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    expect(prisma.job.create.mock.calls[0][0].data.collectionType).toBe(
+      CollectionType.LOADED,
+    );
+  });
+
+  it("LCL/IMPORT/EXPORT create without collectionType still succeeds", async () => {
+    const prisma = makeExportCreatePrisma();
+    const svc = makeSvc(prisma);
+
+    for (const jobType of [JobType.LCL, JobType.IMPORT, JobType.EXPORT]) {
+      prisma.job.create.mockClear();
+      prisma.trip.createMany.mockClear();
+      prisma.job.create = jest.fn().mockImplementation(({ data }) =>
+        Promise.resolve({
+          id: "job1",
+          jobType: data.jobType,
+          collectionType: data.collectionType ?? null,
+          customerCompany: { id: "comp1", name: "ACME" },
+          items: [],
+        }),
+      );
+      prisma.job.findFirst = jest.fn().mockResolvedValue({
+        id: "job1",
+        tenantId: "t1",
+        jobType,
+        collectionType: null,
+        status: "ONGOING",
+        customerCompany: { id: "comp1", name: "ACME" },
+        assignedDriver: null,
+        createdBy: null,
+        items: [],
+        trips: [],
+        charges: [],
+        documents: [],
+      });
+
+      const payload: any = {
+        jobType,
+        customerCompanyId: "comp1",
+        pickupAddress1: "Pickup",
+        deliveryAddress1: "Delivery",
+        receiverName: "Receiver",
+        receiverPhone: "91234567",
+      };
+      if (jobType === JobType.IMPORT) {
+        payload.importDetails = { pickupPortCode: "BRANI" };
+        prisma.masterLogisticsLocation.findFirst = jest
+          .fn()
+          .mockResolvedValue({ code: "BRANI", name: "Brani" });
+      }
+
+      await expect(
+        svc.create("t1", payload, { userId: "u1", role: Role.OPS }),
+      ).resolves.toBeTruthy();
+      expect(prisma.job.create.mock.calls[0][0].data.collectionType).toBeNull();
+    }
+  });
+
+  it("COLLECTION create succeeds with no items and one pickup-delivery trip", async () => {
+    const prisma = makeExportCreatePrisma();
+    prisma.job.create = jest.fn().mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: "job1",
+        jobType: JobType.COLLECTION,
+        internalRef: "WFL-2026-05-0002-COL",
+        customerCompany: { id: "comp1", name: "ACME" },
+        items: [],
+      }),
+    );
+    prisma.job.findFirst = jest.fn().mockResolvedValue({
+      id: "job1",
+      tenantId: "t1",
+      jobType: JobType.COLLECTION,
+      collectionType: CollectionType.EMPTY,
+      status: "ONGOING",
+      customerCompany: { id: "comp1", name: "ACME" },
+      assignedDriver: null,
+      createdBy: null,
+      items: [],
+      trips: [],
+      charges: [],
+      documents: [],
+    });
+    const svc = makeSvc(prisma);
+
+    await expect(
+      svc.create(
+        "t1",
+        {
+          jobType: JobType.COLLECTION,
+          collectionType: CollectionType.EMPTY,
           customerCompanyId: "comp1",
           pickupAddress1: "7 Gul Cir",
           deliveryAddress1: "8 Gul Cir",
@@ -235,6 +407,7 @@ describe("job create: EXPORT and COLLECTION", () => {
       id: "job1",
       tenantId: "t1",
       jobType: JobType.COLLECTION,
+      collectionType: CollectionType.LOADED,
       status: "ONGOING",
       customerCompany: { id: "comp1", name: "ACME" },
       assignedDriver: null,
@@ -250,6 +423,7 @@ describe("job create: EXPORT and COLLECTION", () => {
       "t1",
       {
         jobType: JobType.COLLECTION,
+        collectionType: CollectionType.LOADED,
         customerCompanyId: "comp1",
         pickupAddress1: "7 Gul Cir",
         deliveryAddress1: "8 Gul Cir",
@@ -301,7 +475,65 @@ describe("parseValidJobItemsFromInput container cargo", () => {
   });
 });
 
+describe("resolveCollectionTypeForJobCreate", () => {
+  it("returns null for non-COLLECTION job types", () => {
+    expect(resolveCollectionTypeForJobCreate(JobType.LCL, undefined)).toBeNull();
+    expect(resolveCollectionTypeForJobCreate(JobType.IMPORT, "LOADED")).toBeNull();
+  });
+
+  it("accepts EMPTY and LOADED for COLLECTION", () => {
+    expect(resolveCollectionTypeForJobCreate(JobType.COLLECTION, "EMPTY")).toBe(
+      CollectionType.EMPTY,
+    );
+    expect(resolveCollectionTypeForJobCreate(JobType.COLLECTION, CollectionType.LOADED)).toBe(
+      CollectionType.LOADED,
+    );
+  });
+});
+
 describe("getTripDetail COLLECTION cargo sealNo", () => {
+  it("returns collectionType on job summary", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          status: "PUBLISHED",
+          pendingState: "NONE",
+          createdAt: new Date(),
+          documents: [],
+          payoutLines: [],
+          documentRequirements: [],
+          job: {
+            id: "job1",
+            customerCompanyId: "c1",
+            internalRef: "WFL-2026-05-0003-COL",
+            jobType: "COLLECTION",
+            collectionType: CollectionType.EMPTY,
+            status: "ONGOING",
+            receiverName: "R",
+            receiverPhone: "1",
+            createdAt: new Date(),
+            createdBy: null,
+            customerCompany: { name: "Customer" },
+            items: [],
+          },
+        }),
+      },
+      tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
+      driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+    };
+    const svc = new OpsJobsService(
+      prisma,
+      { log: jest.fn() } as any,
+      { getClient: jest.fn() } as any,
+    );
+
+    const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
+    expect(result.job.collectionType).toBe(CollectionType.EMPTY);
+  });
+
   it("returns sealNo for container mode", async () => {
     const prisma: any = {
       trip: {
@@ -320,6 +552,7 @@ describe("getTripDetail COLLECTION cargo sealNo", () => {
             customerCompanyId: "c1",
             internalRef: "WFL-2026-05-0003-COL",
             jobType: "COLLECTION",
+            collectionType: CollectionType.LOADED,
             status: "ONGOING",
             receiverName: "R",
             receiverPhone: "1",
@@ -359,6 +592,38 @@ describe("getTripDetail COLLECTION cargo sealNo", () => {
 });
 
 describe("getTripDetailForDriver pickupReference", () => {
+  it("returns collectionType on job summary", async () => {
+    const { DriverJobsService } = await import("./driver-jobs.service");
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          status: "PUBLISHED",
+          assignedDriverUserId: "driver-1",
+          documents: [],
+          job: {
+            id: "job1",
+            internalRef: "WFL-2026-05-0001-COL",
+            jobType: "COLLECTION",
+            collectionType: CollectionType.LOADED,
+            items: [],
+          },
+        }),
+      },
+      masterTrailerLocation: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const svc = new DriverJobsService(
+      prisma,
+      { log: jest.fn() } as any,
+      { getClient: jest.fn() } as any,
+    );
+
+    const result = await svc.getTripDetailForDriver("t1", "trip1", "driver-1");
+    expect(result.job.collectionType).toBe(CollectionType.LOADED);
+  });
+
   it("returns pickupReference on container cargo rows", async () => {
     const { DriverJobsService } = await import("./driver-jobs.service");
     const prisma: any = {
@@ -374,6 +639,7 @@ describe("getTripDetailForDriver pickupReference", () => {
             id: "job1",
             internalRef: "WFL-2026-05-0001-COL",
             jobType: "COLLECTION",
+            collectionType: CollectionType.EMPTY,
             items: [
               {
                 id: "it1",

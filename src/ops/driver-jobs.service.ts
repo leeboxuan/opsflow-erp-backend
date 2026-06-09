@@ -130,6 +130,7 @@ function buildDriverTripExecutionCard(t: any, j: any) {
     jobInternalRef: j.internalRef ?? null,
     customerName: j.customerCompany?.name ?? null,
     jobType: j.jobType,
+    collectionType: j.collectionType ?? null,
     originSummary,
     destinationSummary,
     pickupAddress1:
@@ -210,6 +211,7 @@ function toJobDto(j: any): JobDto {
     internalRef: j.internalRef,
     externalRef: j.externalRef ?? null,
     jobType: j.jobType,
+    collectionType: j.collectionType ?? null,
     status: j.status,
     invoiceReadyAt: j.invoiceReadyAt ?? null,
     isInvoiceReady: j.status === JobStatus.READY_FOR_INVOICE,
@@ -1424,6 +1426,7 @@ export class DriverJobsService {
       jobInternalRef: job.internalRef,
       customerName: job.customerCompany?.name ?? null,
       jobType: job.jobType,
+      collectionType: job.collectionType ?? null,
       status: JobStatus.ONGOING,
       pickupDate: job.pickupDate ?? null,
       originSummary:
@@ -2731,6 +2734,7 @@ export class DriverJobsService {
             internalRef: trip.job.internalRef ?? null,
             externalRef: trip.job.externalRef ?? null,
             jobType: trip.job.jobType ?? null,
+            collectionType: trip.job.collectionType ?? null,
             status: trip.job.status ?? null,
             customerName: trip.job.customerCompany?.name ?? null,
           }

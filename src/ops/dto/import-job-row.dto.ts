@@ -12,7 +12,7 @@ import {
   Min,
 } from "class-validator";
 import { Type } from "class-transformer";
-import { JobType } from "@prisma/client";
+import { CollectionType, JobType } from "@prisma/client";
 
 /**
  * Single row for job import (preview output / confirm input).
@@ -32,6 +32,14 @@ export class ImportJobRowDto {
   @ApiProperty({ enum: JobType })
   @IsEnum(JobType)
   jobType: JobType;
+
+  @ApiPropertyOptional({
+    enum: CollectionType,
+    description: "Required when jobType is COLLECTION (EMPTY or LOADED).",
+  })
+  @IsOptional()
+  @IsEnum(CollectionType)
+  collectionType?: CollectionType;
 
   @ApiProperty()
   @IsString()
@@ -116,6 +124,11 @@ export class ImportConfirmRowDto {
   @IsOptional()
   @IsEnum(JobType)
   jobType?: JobType;
+
+  @ApiPropertyOptional({ enum: CollectionType })
+  @IsOptional()
+  @IsEnum(CollectionType)
+  collectionType?: CollectionType;
 
   @ApiPropertyOptional()
   @IsOptional()

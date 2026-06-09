@@ -9,6 +9,7 @@ import {
   Optional,
 } from "@nestjs/common";
 import {
+  CollectionType,
   JobStatus,
   JobTripTemplate,
   JobChargeSourceType,
@@ -258,6 +259,24 @@ export function parseValidJobItemsFromInput(
     .filter((row): row is NonNullable<typeof row> => row != null);
 }
 
+/** COLLECTION create requires EMPTY or LOADED; other job types store null. */
+export function resolveCollectionTypeForJobCreate(
+  jobType: JobType,
+  collectionType?: CollectionType | string | null,
+): CollectionType | null {
+  if (jobType !== JobType.COLLECTION) return null;
+  const raw =
+    typeof collectionType === "string"
+      ? collectionType.trim().toUpperCase()
+      : collectionType;
+  if (raw === CollectionType.EMPTY || raw === CollectionType.LOADED) {
+    return raw;
+  }
+  throw new BadRequestException(
+    "collectionType is required for COLLECTION jobs (EMPTY or LOADED)",
+  );
+}
+
 export function assertCreateJobItemsRequiredForJobType(
   _jobType: JobType,
   rawItems: unknown[],
@@ -287,6 +306,7 @@ function toJobListItemDto(
     internalRef: j.internalRef,
     externalRef: j.externalRef ?? null,
     jobType: j.jobType,
+    collectionType: j.collectionType ?? null,
     status: j.status,
     pickupDate: j.pickupDate ?? null,
     createdAt: j.createdAt,
@@ -331,6 +351,7 @@ function toJobDto(j: any): JobDto {
     internalRef: j.internalRef,
     externalRef: j.externalRef ?? null,
     jobType: j.jobType,
+    collectionType: j.collectionType ?? null,
     status: j.status,
     invoiceReadyAt: j.invoiceReadyAt ?? null,
     isInvoiceReady: j.status === JobStatus.READY_FOR_INVOICE,
@@ -1733,6 +1754,7 @@ export class OpsJobsService {
           internalRef: true,
           externalRef: true,
           jobType: true,
+          collectionType: true,
           status: true,
           pickupDate: true,
           createdAt: true,
@@ -1790,6 +1812,10 @@ export class OpsJobsService {
     const rawItems = readCreateJobItemsInput(dto);
     const validItems = parseValidJobItemsFromInput(rawItems, dto.jobType);
     assertCreateJobItemsRequiredForJobType(dto.jobType, rawItems, validItems);
+    const collectionType = resolveCollectionTypeForJobCreate(
+      dto.jobType,
+      dto.collectionType,
+    );
 
     const importDetails = (dto as any).importDetails ?? {};
     const exportDetails = (dto as any).exportDetails ?? {};
@@ -1953,6 +1979,7 @@ export class OpsJobsService {
         internalRef,
         externalRef: normalizeExternalRef(dto.externalRef),
         jobType: dto.jobType,
+        collectionType,
         status: JobStatus.ONGOING,
         notes: dto.notes ?? null,
         createdByUserId: actorUserId,
@@ -2305,6 +2332,24 @@ export class OpsJobsService {
     const data: any = {};
 
     if (dto.jobType !== undefined) data.jobType = dto.jobType;
+    if (dto.jobType !== undefined && dto.jobType !== JobType.COLLECTION) {
+      data.collectionType = null;
+    }
+    if (dto.collectionType !== undefined) {
+      const effectiveJobType = (dto.jobType ?? job.jobType) as JobType;
+      if (effectiveJobType === JobType.COLLECTION) {
+        data.collectionType = dto.collectionType;
+      }
+    }
+    if (
+      dto.jobType === JobType.COLLECTION
+      && job.jobType !== JobType.COLLECTION
+      && dto.collectionType == null
+    ) {
+      throw new BadRequestException(
+        "collectionType is required when changing jobType to COLLECTION (EMPTY or LOADED)",
+      );
+    }
     if (dto.customerCompanyId !== undefined) {
       data.customerCompanyId = dto.customerCompanyId;
     }
@@ -5099,6 +5144,7 @@ export class OpsJobsService {
             internalRef: true,
             externalRef: true,
             jobType: true,
+            collectionType: true,
             status: true,
             receiverName: true,
             receiverPhone: true,
@@ -5280,6 +5326,7 @@ export class OpsJobsService {
             internalRef: trip.job.internalRef,
             externalRef: trip.job.externalRef ?? null,
             jobType: trip.job.jobType,
+            collectionType: trip.job.collectionType ?? null,
             status: trip.job.status,
             customerCompanyId: trip.job.customerCompanyId,
             customerCompanyName: trip.job.customerCompany?.name ?? null,
@@ -5655,6 +5702,7 @@ export class OpsJobsService {
       const receiverPhone = get(row, 5);
       const pickupDate = get(row, 6);
       const driverEmail = get(row, 7) || undefined;
+      const collectionTypeRaw = get(row, 8).toUpperCase();
 
       let jobType: JobType;
       if (jobTypeStr === "LCL") jobType = JobType.LCL;
@@ -5678,6 +5726,9 @@ export class OpsJobsService {
       }
 
       if (driverEmail) (data as any).driverEmail = driverEmail;
+      if (collectionTypeRaw === CollectionType.EMPTY || collectionTypeRaw === CollectionType.LOADED) {
+        (data as any).collectionType = collectionTypeRaw as CollectionType;
+      }
 
       out.push({ rowNumber: i + 1, data });
     }
@@ -5704,6 +5755,13 @@ export class OpsJobsService {
     const jobType = row.jobType;
     if (!jobType || !["LCL", "IMPORT", "EXPORT", "COLLECTION"].includes(jobType)) {
       errors.push("jobType must be LCL, IMPORT, EXPORT, or COLLECTION");
+    }
+    if (jobType === JobType.COLLECTION) {
+      try {
+        resolveCollectionTypeForJobCreate(JobType.COLLECTION, row.collectionType);
+      } catch (e: any) {
+        errors.push(e?.message ?? "collectionType is required for COLLECTION");
+      }
     }
     if (!row.pickupAddress?.trim()) errors.push("pickupAddress is required");
     if (!row.deliveryAddress?.trim())
@@ -5845,6 +5903,10 @@ export class OpsJobsService {
         const pickupDateParsed = row.pickupDate
           ? new Date(row.pickupDate)
           : null;
+        const collectionType = resolveCollectionTypeForJobCreate(
+          jobType,
+          row.collectionType,
+        );
 
         const job = await this.prisma.job.create({
           data: {
@@ -5852,6 +5914,7 @@ export class OpsJobsService {
             customerCompanyId,
             internalRef,
             jobType,
+            collectionType,
             status: JobStatus.ONGOING,
             createdByUserId: actorUserId,
             pickupDate: pickupDateParsed,
@@ -5941,7 +6004,9 @@ export class OpsJobsService {
     const parsed = parseJobBatchImportSheet(buffer);
     const rows = parsed.map((p) => {
       const data = buildJobBatchImportRowDto(p);
-      const errors = validateJobBatchImportRowFields(data);
+      const errors = validateJobBatchImportRowFields(data, {
+        jobType: params.jobType,
+      });
       return { rowNumber: p.rowNumber, data, errors };
     });
 
@@ -5979,7 +6044,9 @@ export class OpsJobsService {
     }));
 
     for (const { rowNumber, data: row } of normalizedRows) {
-      const fieldErrors = validateJobBatchImportRowFields(row);
+      const fieldErrors = validateJobBatchImportRowFields(row, {
+        jobType: dto.jobType,
+      });
       if (fieldErrors.length > 0) {
         failedRows.push({
           rowNumber,

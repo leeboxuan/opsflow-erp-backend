@@ -1,5 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
-import { JobType, Prisma } from "@prisma/client";
+import { CollectionType, JobType, Prisma } from "@prisma/client";
 import type { JobBatchImportRowDto } from "./dto/job-batch-import.dto";
 
 export function normalizeJobBatchText(value: unknown): string {
@@ -63,6 +63,8 @@ const HEADER_ALIASES: Record<string, keyof JobBatchImportRowDto> = {
   quantity: "itemQty",
   "item description": "itemDescription",
   itemdescription: "itemDescription",
+  "collection type": "collectionType",
+  collectiontype: "collectionType",
 };
 
 function normalizeHeaderKey(h: unknown): string {
@@ -85,6 +87,17 @@ export type ParsedJobBatchSheetRow = {
 function nullIfEmpty(s: string | undefined | null): string | null {
   const t = (s ?? "").trim();
   return t.length ? t : null;
+}
+
+function parseCollectionTypeCell(
+  value: string | undefined | null,
+): CollectionType | undefined {
+  const raw = (value ?? "").trim().toUpperCase();
+  if (!raw) return undefined;
+  if (raw === CollectionType.EMPTY || raw === CollectionType.LOADED) {
+    return raw as CollectionType;
+  }
+  return undefined;
 }
 
 /**
@@ -112,6 +125,7 @@ export function buildJobBatchImportRowDto(
     receiverPhone: normalizeJobBatchText(s.receiverPhone),
     itemCode: nullIfEmpty(s.itemCode),
     itemDescription: nullIfEmpty(s.itemDescription),
+    collectionType: parseCollectionTypeCell(s.collectionType),
   };
 
   const code = dto.itemCode?.trim();
@@ -166,6 +180,7 @@ export function normalizeJobBatchImportRowFromBody(
       receiverPhone: row.receiverPhone,
       itemCode: row.itemCode ?? "",
       itemDescription: row.itemDescription ?? "",
+      collectionType: row.collectionType ?? "",
     },
     itemQtyRaw: row.itemQty,
   });
@@ -176,6 +191,7 @@ export function normalizeJobBatchImportRowFromBody(
  */
 export function validateJobBatchImportRowFields(
   row: JobBatchImportRowDto,
+  options?: { jobType?: JobType },
 ): string[] {
   const errors: string[] = [];
 
@@ -198,6 +214,17 @@ export function validateJobBatchImportRowFields(
   }
   if (row.itemQty !== undefined && !code) {
     errors.push("itemCode: required when itemQty is set");
+  }
+
+  if (options?.jobType === JobType.COLLECTION) {
+    if (
+      !row.collectionType
+      || ![CollectionType.EMPTY, CollectionType.LOADED].includes(row.collectionType)
+    ) {
+      errors.push(
+        "collectionType: required for COLLECTION (EMPTY or LOADED)",
+      );
+    }
   }
 
   return errors;
@@ -276,6 +303,9 @@ export function buildBatchImportJobCreateData(input: {
     deliveryPostal: row.deliveryPostal?.trim() || null,
     receiverName: row.receiverName.trim(),
     receiverPhone: row.receiverPhone.trim(),
+    ...(jobType === JobType.COLLECTION && row.collectionType
+      ? { collectionType: row.collectionType }
+      : {}),
     items: {
       create: items.map((it) => ({
         tenantId: it.tenantId,

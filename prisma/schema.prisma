@@ -816,6 +816,8 @@ model Job {
   internalRef        String
   externalRef        String?
   jobType            JobType
+  /// COLLECTION only: EMPTY or LOADED; null for other job types.
+  collectionType     CollectionType?
   status             JobStatus @default(ONGOING)
   notes              String?
   pickupDate         DateTime?
@@ -1399,6 +1401,11 @@ enum JobType {
   IMPORT
   EXPORT
   COLLECTION
+}
+
+enum CollectionType {
+  EMPTY
+  LOADED
 }
 
 enum JobStatus {

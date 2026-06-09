@@ -8,7 +8,7 @@ import {
   IsNumber,
   IsBoolean,
 } from "class-validator";
-import { JobType } from "@prisma/client";
+import { CollectionType, JobType } from "@prisma/client";
 import { Type } from "class-transformer";
 import { IsArray, ValidateNested } from "class-validator";
 
@@ -49,6 +49,14 @@ export class UpdateJobDto {
   @IsOptional()
   @IsEnum(JobType)
   jobType?: JobType;
+
+  @ApiPropertyOptional({
+    enum: CollectionType,
+    description: "COLLECTION only (EMPTY or LOADED). Ignored for other job types.",
+  })
+  @IsOptional()
+  @IsEnum(CollectionType)
+  collectionType?: CollectionType;
 
   @ApiPropertyOptional()
   @IsOptional()

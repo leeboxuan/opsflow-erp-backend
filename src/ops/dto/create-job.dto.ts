@@ -11,8 +11,9 @@ import {
   IsNumber,
   Min,
   IsBoolean,
+  IsNotEmpty,
 } from "class-validator";
-import { JobType } from "@prisma/client";
+import { CollectionType, JobType } from "@prisma/client";
 import { Type } from "class-transformer";
 
 
@@ -264,6 +265,16 @@ export class CreateJobDto {
   @ApiProperty({ enum: JobType })
   @IsEnum(JobType)
   jobType: JobType;
+
+  @ApiPropertyOptional({
+    enum: CollectionType,
+    description:
+      "Required when jobType is COLLECTION (EMPTY or LOADED). Ignored for other job types.",
+  })
+  @ValidateIf((o) => o.jobType === JobType.COLLECTION)
+  @IsNotEmpty({ message: "collectionType is required when jobType is COLLECTION" })
+  @IsEnum(CollectionType)
+  collectionType?: CollectionType;
 
   @ApiProperty()
   @IsString()

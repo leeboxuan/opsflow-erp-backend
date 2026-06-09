@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  CollectionType,
   JobType,
   JobStatus,
   JobTripTemplate,
@@ -263,6 +264,8 @@ export class JobListItemDto {
   internalRef!: string;
   externalRef?: string | null;
   jobType!: JobType;
+  /** COLLECTION only; null for other job types. */
+  collectionType?: CollectionType | null;
   status!: JobStatus;
   pickupDate!: Date | null;
   createdAt!: Date;
@@ -290,6 +293,8 @@ export class JobDto {
   internalRef: string;
   externalRef?: string | null;
   jobType: JobType;
+  /** COLLECTION only; null for other job types. */
+  collectionType?: CollectionType | null;
   status: JobStatus;
   invoiceReadyAt?: Date | null;
   isInvoiceReady?: boolean;

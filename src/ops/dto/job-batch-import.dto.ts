@@ -11,7 +11,7 @@ import {
   IsDateString,
 } from "class-validator";
 import { Type } from "class-transformer";
-import { JobType } from "@prisma/client";
+import { CollectionType, JobType } from "@prisma/client";
 
 /** Normalized row-level fields (shared customer + jobType come from request). */
 export class JobBatchImportRowDto {
@@ -100,6 +100,14 @@ export class JobBatchImportRowDto {
   @IsOptional()
   @IsString()
   itemDescription?: string | null;
+
+  @ApiPropertyOptional({
+    enum: CollectionType,
+    description: "Required when batch jobType is COLLECTION (EMPTY or LOADED).",
+  })
+  @IsOptional()
+  @IsEnum(CollectionType)
+  collectionType?: CollectionType;
 }
 
 export class JobBatchImportPreviewRowDto {
