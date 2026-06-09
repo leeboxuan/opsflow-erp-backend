@@ -440,6 +440,63 @@ export class DriverJobsService {
     return !!doc;
   }
 
+  private async computeTrailerCheckoutGapsForTrip(
+    tenantId: string,
+    driverUserId: string,
+    trip: {
+      id: string;
+      plannedStartAt: Date | null;
+      createdAt: Date;
+      trailerLastLocationCode?: string | null;
+    },
+    opts?: {
+      trailerParkingLocationCode?: string | null;
+      hasNewTrailerEndPhotoUpload?: boolean;
+    },
+  ): Promise<{
+    requiresTrailerCheckout: boolean;
+    missingTrailerCheckoutFields: string[];
+    resolvedTrailerParkingLocationCode: string | null;
+    hasTrailerEndPhoto: boolean;
+  }> {
+    const tenantTimeZone = await this.getTenantTimeZone(tenantId);
+    const referenceDate = trip.plannedStartAt ?? trip.createdAt;
+    const dayWindow = this.getTenantDayWindow(referenceDate, tenantTimeZone);
+    const driverDayOpenTrips = await this.getDriverDayOpenTripsByWindow(
+      tenantId,
+      driverUserId,
+      dayWindow,
+    );
+    const requiresTrailerCheckout = driverDayOpenTrips.length === 1;
+
+    const hasExistingTrailerEndPhoto = await this.driverTripHasActiveTrailerEndPhoto(
+      tenantId,
+      trip.id,
+    );
+    const hasTrailerEndPhoto =
+      !!opts?.hasNewTrailerEndPhotoUpload || hasExistingTrailerEndPhoto;
+
+    const resolvedTrailerParkingLocationCode =
+      String(opts?.trailerParkingLocationCode ?? "").trim() ||
+      String(trip.trailerLastLocationCode ?? "").trim() ||
+      null;
+
+    const missingTrailerCheckoutFields = this.buildMissingTrailerCheckoutFields(
+      requiresTrailerCheckout,
+      {
+        hasTrailerEndPhoto,
+        trailerParkingLocationCode: resolvedTrailerParkingLocationCode,
+      },
+    );
+
+    return {
+      requiresTrailerCheckout,
+      missingTrailerCheckoutFields,
+      resolvedTrailerParkingLocationCode,
+      hasTrailerEndPhoto,
+    };
+  }
+
   private parseMonthToRange(month: string): { gte: Date; lt: Date } {
     const m = month.trim().match(/^(\d{4})-(\d{2})$/);
     if (!m) throw new BadRequestException("month must be YYYY-MM");
@@ -2278,7 +2335,7 @@ export class DriverJobsService {
       throw new BadRequestException("Trip must be ONGOING to complete");
     }
 
-    const [completionDocs, tenantTimeZone] = await Promise.all([
+    const [completionDocs, trailerCheckout] = await Promise.all([
       this.prisma.tripDocument.findMany({
         where: {
           tenantId,
@@ -2294,7 +2351,10 @@ export class DriverJobsService {
         },
         select: { type: true, signedAt: true, isSigned: true },
       }),
-      this.getTenantTimeZone(tenantId),
+      this.computeTrailerCheckoutGapsForTrip(tenantId, driverUserId, trip, {
+        trailerParkingLocationCode: payload?.trailerParkingLocationCode,
+        hasNewTrailerEndPhotoUpload: !!payload?.trailerEndPhoto?.buffer?.length,
+      }),
     ]);
     const missing = this.buildTripCompletionDocumentGaps(completionDocs);
 
@@ -2304,43 +2364,35 @@ export class DriverJobsService {
       );
     }
 
-    const referenceDate = trip.plannedStartAt ?? trip.createdAt;
-    const dayWindow = this.getTenantDayWindow(referenceDate, tenantTimeZone);
-    const driverDayOpenTrips = await this.getDriverDayOpenTripsByWindow(
-      tenantId,
-      driverUserId,
-      dayWindow,
-    );
-    const requiresTrailerCheckout = driverDayOpenTrips.length === 1;
-    const missingTrailerCheckoutFields = this.buildMissingTrailerCheckoutFields(
+    const {
       requiresTrailerCheckout,
-      {
-        hasTrailerEndPhoto: !!payload?.trailerEndPhoto?.buffer?.length,
-        trailerParkingLocationCode: payload?.trailerParkingLocationCode,
-      },
-    );
+      missingTrailerCheckoutFields,
+      resolvedTrailerParkingLocationCode,
+    } = trailerCheckout;
 
     let trailerLocation: { code: string; name: string } | null = null;
     if (requiresTrailerCheckout) {
-      const trailerEndPhoto = payload?.trailerEndPhoto;
-      const trailerParkingLocationCode = payload?.trailerParkingLocationCode?.trim();
       if (missingTrailerCheckoutFields.length > 0) {
         throw new BadRequestException(
           `Missing trailer checkout fields: ${missingTrailerCheckoutFields.join(", ")}`,
         );
       }
-      const mime = String(trailerEndPhoto.mimetype ?? "").toLowerCase();
-      if (!mime.startsWith("image/")) {
-        throw new BadRequestException("trailerEndPhoto must be an image");
+
+      const trailerEndPhoto = payload?.trailerEndPhoto;
+      if (trailerEndPhoto?.buffer?.length) {
+        const mime = String(trailerEndPhoto.mimetype ?? "").toLowerCase();
+        if (!mime.startsWith("image/")) {
+          throw new BadRequestException("trailerEndPhoto must be an image");
+        }
       }
 
       const location = await this.prisma.masterTrailerLocation.findFirst({
-        where: { code: trailerParkingLocationCode },
+        where: { code: resolvedTrailerParkingLocationCode ?? undefined },
         select: { code: true, name: true },
       });
       if (!location) {
         throw new BadRequestException(
-          `Unknown trailerParkingLocationCode: ${trailerParkingLocationCode}`,
+          `Unknown trailerParkingLocationCode: ${resolvedTrailerParkingLocationCode}`,
         );
       }
       trailerLocation = location;
@@ -2483,7 +2535,7 @@ export class DriverJobsService {
       throw new BadRequestException("You are not assigned to this trip");
     }
 
-    const [completionDocs, tenantTimeZone, hasTrailerEndPhoto] = await Promise.all([
+    const [completionDocs, trailerCheckout] = await Promise.all([
       this.prisma.tripDocument.findMany({
         where: {
           tenantId,
@@ -2499,26 +2551,10 @@ export class DriverJobsService {
         },
         select: { type: true, signedAt: true, isSigned: true },
       }),
-      this.getTenantTimeZone(tenantId),
-      this.driverTripHasActiveTrailerEndPhoto(tenantId, tripId),
+      this.computeTrailerCheckoutGapsForTrip(tenantId, driverUserId, trip),
     ]);
     const missingDocuments = this.buildTripCompletionDocumentGaps(completionDocs);
-
-    const referenceDate = trip.plannedStartAt ?? trip.createdAt;
-    const dayWindow = this.getTenantDayWindow(referenceDate, tenantTimeZone);
-    const driverDayOpenTrips = await this.getDriverDayOpenTripsByWindow(
-      tenantId,
-      driverUserId,
-      dayWindow,
-    );
-    const requiresTrailerCheckout = driverDayOpenTrips.length === 1;
-    const missingTrailerCheckoutFields = this.buildMissingTrailerCheckoutFields(
-      requiresTrailerCheckout,
-      {
-        hasTrailerEndPhoto,
-        trailerParkingLocationCode: trip.trailerLastLocationCode,
-      },
-    );
+    const { requiresTrailerCheckout, missingTrailerCheckoutFields } = trailerCheckout;
     const parkingLocations = await this.listTrailerParkingLocations();
 
     return {

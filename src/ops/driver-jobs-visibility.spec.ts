@@ -116,7 +116,10 @@ describe("driver trip completion requirements", () => {
             ),
           count: jest.fn().mockResolvedValue(0),
         },
-        tripDocument: { findMany: jest.fn().mockResolvedValue(tripDocRows) },
+        tripDocument: {
+          findMany: jest.fn().mockResolvedValue(tripDocRows),
+          findFirst: jest.fn().mockResolvedValue(null),
+        },
         masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
         $transaction: jest.fn(async (cb: any) => cb(tx)),
       },
@@ -316,6 +319,7 @@ describe("completeTrip completion docs visibility", () => {
       },
       tripDocument: {
         findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (cb: any) =>
@@ -894,6 +898,7 @@ describe("DriverJobsService trip assignment and trailer checkout", () => {
       },
       tripDocument: {
         findMany: jest.fn().mockResolvedValue([{ type: "DELIVERY_DO" }, { type: "POD_SIGNATURE" }]),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       masterTrailerLocation: {
         findFirst: jest.fn().mockResolvedValue({ code: "G7", name: "Gul 7" }),

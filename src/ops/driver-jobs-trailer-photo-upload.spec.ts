@@ -175,3 +175,100 @@ describe("DriverJobsService.uploadTripDocumentForDriver trailer photos", () => {
     expect(res.canComplete).toBe(true);
   });
 });
+
+describe("DriverJobsService.completeTrip trailer checkout", () => {
+  const tenantId = "tenant-1";
+  const jobId = "job-1";
+  const tripId = "trip-1";
+  const driverUserId = "driver-1";
+
+  const ongoingTrip = {
+    id: tripId,
+    tenantId,
+    jobId,
+    status: "ONGOING",
+    assignedDriverUserId: driverUserId,
+    trailerNumber: "TRD1234A",
+    trailerLastLocationCode: null,
+    plannedStartAt: new Date("2026-04-30T08:00:00.000Z"),
+    createdAt: new Date("2026-04-30T08:00:00.000Z"),
+  };
+
+  function makeCompletePrisma() {
+    const tripDocumentCreate = jest.fn();
+    const tripUpdate = jest.fn();
+    const tx = {
+      trip: { update: tripUpdate },
+      tripDocument: { create: tripDocumentCreate },
+    };
+    return {
+      prisma: {
+        tenant: { findUnique: jest.fn().mockResolvedValue({ timezone: "Asia/Singapore" }) },
+        job: {
+          findFirst: jest.fn().mockResolvedValue({ id: jobId, status: "ONGOING", documents: [] }),
+          update: jest.fn().mockResolvedValue({ id: jobId, status: "ONGOING", completedAt: null }),
+        },
+        trip: {
+          findFirst: jest.fn().mockResolvedValue(ongoingTrip),
+          findMany: jest.fn().mockResolvedValue([
+            {
+              id: tripId,
+              plannedStartAt: ongoingTrip.plannedStartAt,
+              createdAt: ongoingTrip.createdAt,
+            },
+          ]),
+        },
+        tripDocument: {
+          findMany: jest.fn().mockResolvedValue([]),
+          findFirst: jest.fn().mockResolvedValue({ id: "doc-end" }),
+        },
+        masterTrailerLocation: {
+          findFirst: jest.fn().mockResolvedValue({ code: "GUL7", name: "Gul 7" }),
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+        user: { findUnique: jest.fn().mockResolvedValue({ id: driverUserId }) },
+        $transaction: jest.fn(async (cb: any) => cb(tx)),
+      },
+      tripDocumentCreate,
+      tripUpdate,
+    };
+  }
+
+  function makeCompleteSvc(prisma: ReturnType<typeof makeCompletePrisma>["prisma"]) {
+    return new DriverJobsService(prisma as any, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+  }
+
+  it("completes when TRAILER_END_PHOTO document exists and parking code is provided", async () => {
+    const { prisma, tripDocumentCreate, tripUpdate } = makeCompletePrisma();
+    const svc = makeCompleteSvc(prisma);
+    jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: tripId }] } as any);
+
+    await expect(
+      svc.completeTrip(tenantId, jobId, tripId, driverUserId, {
+        trailerParkingLocationCode: "GUL7",
+      }),
+    ).resolves.toBeTruthy();
+
+    expect(prisma.tripDocument.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tripId,
+          isActive: true,
+          type: TripDocumentType.TRAILER_END_PHOTO,
+        }),
+      }),
+    );
+    expect(tripDocumentCreate).not.toHaveBeenCalled();
+    expect(tripUpdate).toHaveBeenCalled();
+    expect(tripUpdate.mock.calls[0][0].data.trailerLastLocationCode).toBe("GUL7");
+  });
+
+  it("reports only trailerParkingLocationCode missing when end photo document exists", async () => {
+    const { prisma } = makeCompletePrisma();
+    const svc = makeCompleteSvc(prisma);
+
+    await expect(
+      svc.completeTrip(tenantId, jobId, tripId, driverUserId),
+    ).rejects.toThrow("Missing trailer checkout fields: trailerParkingLocationCode");
+  });
+});
