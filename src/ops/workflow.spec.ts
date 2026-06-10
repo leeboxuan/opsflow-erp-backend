@@ -6,10 +6,12 @@ import {
   jobTripTemplateDisplayLabel,
   lclPickupToDeliveryRouteSnapshot,
   resolveAppendTripRouteSnapshot,
+  resolveTripRouteAddressResponseFields,
   trailerCheckoutBlocksCompletion,
   tripCreateManyForJob,
   TRIP_COMPLETION_RULES,
 } from "./job-workflow.helpers";
+import { resolveTripNotesResponseFields } from "./trip-notes.helpers";
 import {
   parseQuotationRateLinesFromDocxBuffer,
   parseQuotationRateLinesFromXlsxBuffer,
@@ -330,6 +332,117 @@ describe("workflow helpers", () => {
     expect(jobTripTemplateDisplayLabel(JobTripTemplate.GUL_TO_CUSTOMER)).toBe(
       "Gul Circle → Customer",
     );
+  });
+
+  it("resolveAppendTripRouteSnapshot prefers originAddress1 over originSummary", () => {
+    const route = resolveAppendTripRouteSnapshot(JobTripTemplate.CUSTOM, {
+      originAddress1: "8 Gul Cir, 8 Gul Circle",
+      originAddress2: "#12-34",
+      originSummary: "Legacy summary",
+      destinationAddress1: "7 Gul Circle",
+      destinationAddress2: "Unit 5",
+      destinationSummary: "Legacy destination",
+      originPostalCode: "629564",
+      destinationPostalCode: "629563",
+    });
+    expect(route.originLabel).toBe("8 Gul Cir, 8 Gul Circle");
+    expect(route.originAddressLine1).toBe("8 Gul Cir, 8 Gul Circle");
+    expect(route.originAddressLine2).toBe("#12-34");
+    expect(route.destinationLabel).toBe("7 Gul Circle");
+    expect(route.destinationAddressLine2).toBe("Unit 5");
+  });
+
+  it("resolveAppendTripRouteSnapshot falls back to summary when address1 omitted", () => {
+    const route = resolveAppendTripRouteSnapshot(JobTripTemplate.CUSTOM, {
+      originSummary: "Origin via summary",
+      destinationSummary: "Destination via summary",
+    });
+    expect(route.originAddressLine1).toBe("Origin via summary");
+    expect(route.destinationAddressLine1).toBe("Destination via summary");
+    expect(route.originAddressLine2).toBeNull();
+    expect(route.destinationAddressLine2).toBeNull();
+  });
+
+  it("resolveAppendTripRouteSnapshot normalizes empty address2 to null", () => {
+    const route = resolveAppendTripRouteSnapshot(JobTripTemplate.CUSTOM, {
+      originAddress1: "A",
+      originAddress2: "   ",
+      destinationAddress1: "B",
+      destinationAddress2: "",
+    });
+    expect(route.originAddressLine2).toBeNull();
+    expect(route.destinationAddressLine2).toBeNull();
+  });
+
+  it("trip response fields combine notes and structured route addresses", () => {
+    const trip = {
+      notes: "Use side gate",
+      originAddressLine1: "8 Gul Cir",
+      originAddressLine2: "#12-34",
+      originPostalCode: "629564",
+      originPlaceId: "place-origin",
+      originLat: 1.31,
+      originLng: 103.7,
+      destinationAddressLine1: "7 Gul Circle",
+      destinationAddressLine2: "Unit 5",
+      destinationPostalCode: "629563",
+      destinationPlaceId: "place-dest",
+      destinationLat: 1.32,
+      destinationLng: 103.71,
+    };
+    const job = { notes: "Job-level instruction" };
+    expect({
+      ...resolveTripNotesResponseFields(trip, job),
+      ...resolveTripRouteAddressResponseFields(trip),
+    }).toEqual({
+      notes: "Use side gate",
+      jobNotes: "Job-level instruction",
+      tripInstruction: "Job-level instruction",
+      originAddress1: "8 Gul Cir",
+      originAddress2: "#12-34",
+      originPostalCode: "629564",
+      originPlaceId: "place-origin",
+      originLat: 1.31,
+      originLng: 103.7,
+      destinationAddress1: "7 Gul Circle",
+      destinationAddress2: "Unit 5",
+      destinationPostalCode: "629563",
+      destinationPlaceId: "place-dest",
+      destinationLat: 1.32,
+      destinationLng: 103.71,
+    });
+  });
+
+  it("resolveTripRouteAddressResponseFields exposes flat route fields", () => {
+    expect(
+      resolveTripRouteAddressResponseFields({
+        originAddressLine1: "8 Gul Cir",
+        originAddressLine2: "#12-34",
+        originPostalCode: "629564",
+        originPlaceId: "place-origin",
+        originLat: 1.31,
+        originLng: 103.7,
+        destinationAddressLine1: "7 Gul Circle",
+        destinationAddressLine2: "Unit 5",
+        destinationPostalCode: "629563",
+        destinationPlaceId: "place-dest",
+        destinationLat: 1.32,
+        destinationLng: 103.71,
+      }),
+    ).toEqual({
+      originAddress1: "8 Gul Cir",
+      originAddress2: "#12-34",
+      originPostalCode: "629564",
+      originPlaceId: "place-origin",
+      originLat: 1.31,
+      originLng: 103.7,
+      destinationAddress1: "7 Gul Circle",
+      destinationAddress2: "Unit 5",
+      destinationPostalCode: "629563",
+      destinationPlaceId: "place-dest",
+      destinationLat: 1.32,
+      destinationLng: 103.71,
+    });
   });
 
   it("resolveAppendTripRouteSnapshot fills map-ready Gul Circle coordinates", () => {

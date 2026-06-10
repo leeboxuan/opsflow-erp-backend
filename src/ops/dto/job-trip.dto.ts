@@ -100,15 +100,41 @@ export class AppendJobTripDto {
   @IsDateString()
   plannedDate?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Legacy origin label fallback when originAddress1 is omitted",
+  })
   @IsOptional()
   @IsString()
   originSummary?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Legacy destination label fallback when destinationAddress1 is omitted",
+  })
   @IsOptional()
   @IsString()
   destinationSummary?: string | null;
+
+  @ApiPropertyOptional({ description: "Structured origin address line 1" })
+  @IsOptional()
+  @IsString()
+  originAddress1?: string | null;
+
+  @ApiPropertyOptional({ description: "Structured origin unit / address line 2" })
+  @IsOptional()
+  @IsString()
+  originAddress2?: string | null;
+
+  @ApiPropertyOptional({ description: "Structured destination address line 1" })
+  @IsOptional()
+  @IsString()
+  destinationAddress1?: string | null;
+
+  @ApiPropertyOptional({
+    description: "Structured destination unit / address line 2",
+  })
+  @IsOptional()
+  @IsString()
+  destinationAddress2?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -158,7 +184,9 @@ export class AppendJobTripDto {
   @Max(180)
   destinationLng?: number | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Trip-specific ops/driver instructions stored on Trip.notes",
+  })
   @IsOptional()
   @IsString()
   notes?: string | null;
@@ -383,12 +411,14 @@ export class PatchTripDetailsDto {
   @IsString()
   receiverPhone?: string;
 
-  @ApiPropertyOptional({ description: "Job-level driver instruction (alias: jobNotes, tripInstruction)" })
+  @ApiPropertyOptional({
+    description: "Trip-specific ops/driver instructions stored on Trip.notes",
+  })
   @IsOptional()
   @IsString()
   notes?: string | null;
 
-  @ApiPropertyOptional({ description: "Alias for job-level notes (mobile)" })
+  @ApiPropertyOptional({ description: "Job-level driver instruction (mobile)" })
   @IsOptional()
   @IsString()
   jobNotes?: string | null;

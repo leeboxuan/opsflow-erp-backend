@@ -4,6 +4,7 @@ export type DriverNotificationKind =
   | "DOCUMENT_ADDED"
   | "TRIP_UPDATED"
   | "PLANNED_TIME_UPDATED"
+  | "TRIP_NOTES_UPDATED"
   | "TRIP_INSTRUCTIONS_UPDATED"
   | "EARNINGS_UPDATED"
   | "TRIP_COMPLETED";
@@ -11,6 +12,7 @@ export type DriverNotificationKind =
 const DRIVER_VISIBLE_DETAIL_FIELDS = new Set([
   "plannedStartAt",
   "notes",
+  "jobNotes",
   "pickupAddress1",
   "pickupAddress2",
   "pickupPostal",
@@ -46,6 +48,9 @@ export function resolveTripDetailsNotificationKind(
     return "PLANNED_TIME_UPDATED";
   }
   if (visible.length === 1 && visible[0] === "notes") {
+    return "TRIP_NOTES_UPDATED";
+  }
+  if (visible.length === 1 && visible[0] === "jobNotes") {
     return "TRIP_INSTRUCTIONS_UPDATED";
   }
   return "TRIP_UPDATED";
@@ -84,6 +89,11 @@ export function driverNotificationCopy(event: RealtimeEvent): {
       return {
         title: "Planned time updated",
         description: `${ctx} planned time was updated.`,
+      };
+    case "TRIP_NOTES_UPDATED":
+      return {
+        title: "Trip notes updated",
+        description: `${ctx} notes were updated.`,
       };
     case "TRIP_INSTRUCTIONS_UPDATED":
       return {

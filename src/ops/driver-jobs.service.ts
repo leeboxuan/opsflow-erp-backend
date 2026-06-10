@@ -47,6 +47,8 @@ import {
 import { RealtimeEventsService } from "../realtime/realtime-events.service";
 import * as rt from "../realtime/realtime-publish";
 import { OpsJobsService } from "./ops-jobs.service";
+import { resolveTripNotesResponseFields } from "./trip-notes.helpers";
+import { resolveTripRouteAddressResponseFields } from "./job-workflow.helpers";
 import {
   isSignableDoType,
   parseSignatureImageBytes,
@@ -160,9 +162,8 @@ function buildDriverTripExecutionCard(t: any, j: any) {
       firstNonEmptyText(t.destinationAddressLine2, j.deliveryAddress2) ?? j.deliveryAddress2 ?? null,
     deliveryPostal:
       firstNonEmptyText(t.destinationPostalCode, j.deliveryPostal) ?? j.deliveryPostal ?? null,
-    notes: j.notes ?? null,
-    jobNotes: j.notes ?? null,
-    tripInstruction: j.notes ?? null,
+    ...resolveTripNotesResponseFields(t, j),
+    ...resolveTripRouteAddressResponseFields(t),
   };
 }
 
@@ -2727,9 +2728,8 @@ export class DriverJobsService {
       vessel: trip.vessel ?? null,
       status: trip.status,
       plannedStartAt: trip.plannedStartAt ?? null,
-      jobNotes: trip.job?.notes ?? null,
-      notes: trip.job?.notes ?? null,
-      tripInstruction: trip.job?.notes ?? null,
+      ...resolveTripNotesResponseFields(trip, trip.job),
+      ...resolveTripRouteAddressResponseFields(trip),
       jobSequence: trip.jobSequence ?? null,
       tripSequence: trip.tripSequence ?? null,
       origin: trip.originLabel ?? null,

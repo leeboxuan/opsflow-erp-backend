@@ -106,6 +106,33 @@ describe("notification-from-realtime", () => {
     });
   });
 
+  it("notifies driver once for admin trip notes update", () => {
+    const specs = buildNotificationSpecsFromRealtimeEvent(
+      event({
+        type: "trip.updated",
+        entityType: "trip",
+        entityId: "trip-1",
+        tripId: "trip-1",
+        jobId: "job-1",
+        jobInternalRef: "WFL-2026-06-0004-COL",
+        tripDisplayRef: "TRIP-T01",
+        driverUserId: "drv-1",
+        actorUserId: "ops-1",
+        actorRole: Role.OPS,
+        tripStatus: TripStatus.PUBLISHED,
+        notificationKind: "TRIP_NOTES_UPDATED",
+      }),
+    );
+    const driverSpecs = specs.filter(
+      (s) => s.audience === NotificationAudience.USER,
+    );
+    expect(driverSpecs).toHaveLength(1);
+    expect(driverSpecs[0]).toMatchObject({
+      title: "Trip notes updated",
+      description: "WFL-2026-06-0004-COL · TRIP-T01 notes were updated.",
+    });
+  });
+
   it("notifies driver once for admin trip details update with instructions copy", () => {
     const specs = buildNotificationSpecsFromRealtimeEvent(
       event({

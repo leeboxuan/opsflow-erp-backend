@@ -169,6 +169,36 @@ export class JobTripResponseDto {
   toType!: string | null;
   originSummary!: string | null;
   destinationSummary!: string | null;
+  @ApiPropertyOptional()
+  originAddress1?: string | null;
+  @ApiPropertyOptional()
+  originAddress2?: string | null;
+  @ApiPropertyOptional()
+  originPostalCode?: string | null;
+  @ApiPropertyOptional()
+  originPlaceId?: string | null;
+  @ApiPropertyOptional()
+  originLat?: number | null;
+  @ApiPropertyOptional()
+  originLng?: number | null;
+  @ApiPropertyOptional()
+  destinationAddress1?: string | null;
+  @ApiPropertyOptional()
+  destinationAddress2?: string | null;
+  @ApiPropertyOptional()
+  destinationPostalCode?: string | null;
+  @ApiPropertyOptional()
+  destinationPlaceId?: string | null;
+  @ApiPropertyOptional()
+  destinationLat?: number | null;
+  @ApiPropertyOptional()
+  destinationLng?: number | null;
+  @ApiPropertyOptional()
+  notes?: string | null;
+  @ApiPropertyOptional()
+  jobNotes?: string | null;
+  @ApiPropertyOptional()
+  tripInstruction?: string | null;
   origin!: JobTripLocationDto | null;
   destination!: JobTripLocationDto | null;
   status!: string;

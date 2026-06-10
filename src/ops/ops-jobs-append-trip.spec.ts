@@ -52,6 +52,28 @@ describe("AppendJobTripDto validation", () => {
     expect(errors).toHaveLength(0);
   });
 
+  it("accepts structured address fields, unit numbers, and trip notes", async () => {
+    const dto = plainToInstance(AppendJobTripDto, {
+      jobTripTemplate: "CUSTOM",
+      plannedStartAt: "2026-06-10T08:30:00.000Z",
+      originAddress1: "8 Gul Cir, 8 Gul Circle",
+      originAddress2: "#12-34",
+      destinationAddress1: "7 Gul Circle",
+      destinationAddress2: "Unit 5",
+      originPostalCode: "629564",
+      destinationPostalCode: "629563",
+      originPlaceId: "place-origin",
+      destinationPlaceId: "place-dest",
+      originLat: 1.31,
+      originLng: 103.7,
+      destinationLat: 1.32,
+      destinationLng: 103.71,
+      notes: "Use side gate",
+    });
+    const errors = await validate(dto);
+    expect(errors).toHaveLength(0);
+  });
+
   it("rejects invalid coordinates", async () => {
     const dto = plainToInstance(AppendJobTripDto, {
       jobTripTemplate: "CUSTOM",
@@ -269,16 +291,92 @@ describe("OpsJobsService.appendTrip", () => {
     expect(data.earningLabelSnapshot).toBe("Flat");
   });
 
-  it("returns clear error when notes is provided but trip notes storage is unavailable", async () => {
-    const { svc } = makeService();
-    await expect(
-      svc.appendTrip(
-        "t1",
-        "job1",
-        { jobTripTemplate: JobTripTemplate.CUSTOM, notes: "do this first" },
-        { userId: "u1", role: "OPS" },
-      ),
-    ).rejects.toThrow("Trip notes are not supported on create yet");
+  it("saves trip notes when provided on create", async () => {
+    const { svc, prisma } = makeService();
+    await svc.appendTrip(
+      "t1",
+      "job1",
+      { jobTripTemplate: JobTripTemplate.CUSTOM, notes: "do this first" },
+      { userId: "u1", role: "OPS" },
+    );
+    const data = prisma.trip.create.mock.calls[0][0].data;
+    expect(data.notes).toBe("do this first");
+  });
+
+  it("stores null when notes is empty on create", async () => {
+    const { svc, prisma } = makeService();
+    await svc.appendTrip(
+      "t1",
+      "job1",
+      { jobTripTemplate: JobTripTemplate.CUSTOM, notes: "   " },
+      { userId: "u1", role: "OPS" },
+    );
+    const data = prisma.trip.create.mock.calls[0][0].data;
+    expect(data.notes).toBeNull();
+  });
+
+  it("add trip with only originSummary/destinationSummary still works", async () => {
+    const { svc, prisma } = makeService();
+    await svc.appendTrip(
+      "t1",
+      "job1",
+      {
+        jobTripTemplate: JobTripTemplate.CUSTOM,
+        originSummary: "Legacy origin",
+        destinationSummary: "Legacy destination",
+      },
+      { userId: "u1", role: "OPS" },
+    );
+    const data = prisma.trip.create.mock.calls[0][0].data;
+    expect(data.originAddressLine1).toBe("Legacy origin");
+    expect(data.destinationAddressLine1).toBe("Legacy destination");
+    expect(data.originAddressLine2).toBeNull();
+    expect(data.destinationAddressLine2).toBeNull();
+  });
+
+  it("saves originAddress2 and destinationAddress2 on create", async () => {
+    const { svc, prisma } = makeService();
+    await svc.appendTrip(
+      "t1",
+      "job1",
+      {
+        jobTripTemplate: JobTripTemplate.CUSTOM,
+        originAddress1: "8 Gul Cir, 8 Gul Circle",
+        originAddress2: "#12-34",
+        destinationAddress1: "7 Gul Circle",
+        destinationAddress2: "Unit 5",
+        originPostalCode: "629564",
+        destinationPostalCode: "629563",
+        originPlaceId: "place-origin",
+        destinationPlaceId: "place-dest",
+        originLat: 1.31,
+        originLng: 103.7,
+        destinationLat: 1.32,
+        destinationLng: 103.71,
+      },
+      { userId: "u1", role: "OPS" },
+    );
+    const data = prisma.trip.create.mock.calls[0][0].data;
+    expect(data.originAddressLine1).toBe("8 Gul Cir, 8 Gul Circle");
+    expect(data.originAddressLine2).toBe("#12-34");
+    expect(data.destinationAddressLine1).toBe("7 Gul Circle");
+    expect(data.destinationAddressLine2).toBe("Unit 5");
+    expect(data.originPostalCode).toBe("629564");
+    expect(data.destinationPostalCode).toBe("629563");
+    expect(data.originPlaceId).toBe("place-origin");
+    expect(data.destinationPlaceId).toBe("place-dest");
+  });
+
+  it("create trip without notes still works", async () => {
+    const { svc, prisma } = makeService();
+    await svc.appendTrip(
+      "t1",
+      "job1",
+      { jobTripTemplate: JobTripTemplate.CUSTOM },
+      { userId: "u1", role: "OPS" },
+    );
+    const data = prisma.trip.create.mock.calls[0][0].data;
+    expect(data.notes).toBeNull();
   });
 
   it("create trip with multiple payout lines delegates to existing payout draft logic", async () => {

@@ -97,6 +97,10 @@ export const GUL_CIRCLE_ROUTE_DEFAULTS = {
 export type AppendTripRouteInput = {
   originSummary?: string | null;
   destinationSummary?: string | null;
+  originAddress1?: string | null;
+  originAddress2?: string | null;
+  destinationAddress1?: string | null;
+  destinationAddress2?: string | null;
   originPostalCode?: string | null;
   destinationPostalCode?: string | null;
   originPlaceId?: string | null;
@@ -111,7 +115,9 @@ export type ResolvedAppendTripRouteSnapshot = {
   originLabel: string | null;
   destinationLabel: string | null;
   originAddressLine1: string | null;
+  originAddressLine2: string | null;
   destinationAddressLine1: string | null;
+  destinationAddressLine2: string | null;
   originPostalCode: string | null;
   destinationPostalCode: string | null;
   originCountry: string | null;
@@ -124,16 +130,88 @@ export type ResolvedAppendTripRouteSnapshot = {
   destinationLng: number | null;
 };
 
+function normalizeOptionalAddressField(
+  value?: string | null,
+): string | null {
+  if (value === undefined || value === null) return null;
+  const trimmed = String(value).trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function resolvePrimaryAddressLine(
+  address1?: string | null,
+  summary?: string | null,
+): string | null {
+  return (
+    normalizeOptionalAddressField(address1)
+    ?? normalizeOptionalAddressField(summary)
+  );
+}
+
+/** Flat trip route address fields for API responses (add trip, list, detail, mobile). */
+export function resolveTripRouteAddressResponseFields(trip: {
+  originAddressLine1?: string | null;
+  originAddressLine2?: string | null;
+  originPostalCode?: string | null;
+  originPlaceId?: string | null;
+  originLat?: number | null;
+  originLng?: number | null;
+  destinationAddressLine1?: string | null;
+  destinationAddressLine2?: string | null;
+  destinationPostalCode?: string | null;
+  destinationPlaceId?: string | null;
+  destinationLat?: number | null;
+  destinationLng?: number | null;
+} | null | undefined): {
+  originAddress1: string | null;
+  originAddress2: string | null;
+  originPostalCode: string | null;
+  originPlaceId: string | null;
+  originLat: number | null;
+  originLng: number | null;
+  destinationAddress1: string | null;
+  destinationAddress2: string | null;
+  destinationPostalCode: string | null;
+  destinationPlaceId: string | null;
+  destinationLat: number | null;
+  destinationLng: number | null;
+} {
+  return {
+    originAddress1: trip?.originAddressLine1 ?? null,
+    originAddress2: trip?.originAddressLine2 ?? null,
+    originPostalCode: trip?.originPostalCode ?? null,
+    originPlaceId: trip?.originPlaceId ?? null,
+    originLat: trip?.originLat ?? null,
+    originLng: trip?.originLng ?? null,
+    destinationAddress1: trip?.destinationAddressLine1 ?? null,
+    destinationAddress2: trip?.destinationAddressLine2 ?? null,
+    destinationPostalCode: trip?.destinationPostalCode ?? null,
+    destinationPlaceId: trip?.destinationPlaceId ?? null,
+    destinationLat: trip?.destinationLat ?? null,
+    destinationLng: trip?.destinationLng ?? null,
+  };
+}
+
 /** Resolve route snapshot for append-trip, including map-ready Gul Circle defaults. */
 export function resolveAppendTripRouteSnapshot(
   template: JobTripTemplate,
   dto: AppendTripRouteInput,
 ): ResolvedAppendTripRouteSnapshot {
   const g = GUL_CIRCLE_ROUTE_DEFAULTS;
-  let originLabel = dto.originSummary?.trim() || null;
-  let destinationLabel = dto.destinationSummary?.trim() || null;
+  let originLabel = resolvePrimaryAddressLine(
+    dto.originAddress1,
+    dto.originSummary,
+  );
+  let destinationLabel = resolvePrimaryAddressLine(
+    dto.destinationAddress1,
+    dto.destinationSummary,
+  );
   let originAddressLine1 = originLabel;
   let destinationAddressLine1 = destinationLabel;
+  let originAddressLine2 = normalizeOptionalAddressField(dto.originAddress2);
+  let destinationAddressLine2 = normalizeOptionalAddressField(
+    dto.destinationAddress2,
+  );
   let originPostalCode = dto.originPostalCode?.trim() || null;
   let destinationPostalCode = dto.destinationPostalCode?.trim() || null;
   let originCountry: string | null = originLabel ? "SG" : null;
@@ -165,7 +243,9 @@ export function resolveAppendTripRouteSnapshot(
     originLabel,
     destinationLabel,
     originAddressLine1,
+    originAddressLine2,
     destinationAddressLine1,
+    destinationAddressLine2,
     originPostalCode,
     destinationPostalCode,
     originCountry,

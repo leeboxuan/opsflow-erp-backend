@@ -135,28 +135,51 @@ describe("OpsJobsService.patchTripDetails", () => {
     });
   });
 
-  it("updates notes and contact fields on job", async () => {
+  it("updates trip notes and contact fields", async () => {
     const prisma = basePrisma();
     const svc = makeOpsService(prisma);
     jest.spyOn(svc, "getTripDetail").mockResolvedValue({ id: tripId } as any);
     jest.spyOn(svc as any, "syncTripRouteSnapshotForJob").mockResolvedValue(undefined);
 
     await svc.patchTripDetails(tenantId, jobId, tripId, {
-      notes: "Driver to call before arrival.",
+      notes: "Use side gate for this trip.",
       pickupContactName: "Ah Tan",
       pickupContactPhone: "91234567",
       receiverName: "Derek",
       receiverPhone: "91234567",
     }, user);
 
+    expect(prisma.__tripUpdate).toHaveBeenCalledWith({
+      where: { id: tripId },
+      data: expect.objectContaining({
+        notes: "Use side gate for this trip.",
+      }),
+    });
     expect(prisma.__jobUpdate).toHaveBeenCalledWith({
       where: { id: jobId },
       data: expect.objectContaining({
-        notes: "Driver to call before arrival.",
         pickupContactName: "Ah Tan",
         pickupContactPhone: "91234567",
         receiverName: "Derek",
         receiverPhone: "91234567",
+      }),
+    });
+  });
+
+  it("updates jobNotes on job when jobNotes alias is used", async () => {
+    const prisma = basePrisma();
+    const svc = makeOpsService(prisma);
+    jest.spyOn(svc, "getTripDetail").mockResolvedValue({ id: tripId } as any);
+    jest.spyOn(svc as any, "syncTripRouteSnapshotForJob").mockResolvedValue(undefined);
+
+    await svc.patchTripDetails(tenantId, jobId, tripId, {
+      jobNotes: "Driver to call before arrival.",
+    }, user);
+
+    expect(prisma.__jobUpdate).toHaveBeenCalledWith({
+      where: { id: jobId },
+      data: expect.objectContaining({
+        notes: "Driver to call before arrival.",
       }),
     });
   });
@@ -267,6 +290,7 @@ describe("DriverJobsService.getTripDetailForDriver notes", () => {
           publishedAt: null,
           startedAt: null,
           closedAt: null,
+          notes: "Use loading bay B.",
           documents: [],
           job: {
             id: "job1",
@@ -288,8 +312,8 @@ describe("DriverJobsService.getTripDetailForDriver notes", () => {
     const detail = await svc.getTripDetailForDriver(tenantId, tripId, driverUserId);
 
     expect(detail.plannedStartAt).toEqual(new Date("2026-06-10T08:30:00.000Z"));
+    expect(detail.notes).toBe("Use loading bay B.");
     expect(detail.jobNotes).toBe("Driver to call before arrival.");
-    expect(detail.notes).toBe("Driver to call before arrival.");
     expect(detail.tripInstruction).toBe("Driver to call before arrival.");
     expect(detail.job?.jobNotes).toBe("Driver to call before arrival.");
   });

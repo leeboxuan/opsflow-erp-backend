@@ -81,6 +81,10 @@ import { RealtimeEventsService } from "../realtime/realtime-events.service";
 import * as rt from "../realtime/realtime-publish";
 import { tripDocumentTypeLabel } from "../notifications/document-type-label";
 import { resolveTripDetailsNotificationKind } from "../notifications/trip-details-notification";
+import {
+  normalizeOptionalNotes,
+  resolveTripNotesResponseFields,
+} from "./trip-notes.helpers";
 
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
@@ -113,6 +117,7 @@ import {
   GUL_CIRCLE_ROUTE_DEFAULTS,
   jobTripTemplateDisplayLabel,
   resolveAppendTripRouteSnapshot,
+  resolveTripRouteAddressResponseFields,
   isContainerCargoJobType,
 } from "./job-workflow.helpers";
 import type {
@@ -716,6 +721,8 @@ function toJobDto(j: any): JobDto {
           receiverDo: "PENDING",
         },
         completionRuleJson: t.completionRuleJson ?? null,
+        ...resolveTripNotesResponseFields(t, j),
+        ...resolveTripRouteAddressResponseFields(t),
       })) ?? [],
 
     charges:
@@ -1055,10 +1062,9 @@ export function assertTripDetailsEditAllowed(
   }
 }
 
-function resolveTripDetailsNotesInput(
+function resolveTripDetailsJobNotesInput(
   dto: PatchTripDetailsDto,
 ): string | null | undefined {
-  if (dto.notes !== undefined) return dto.notes;
   if (dto.jobNotes !== undefined) return dto.jobNotes;
   if (dto.tripInstruction !== undefined) return dto.tripInstruction;
   return undefined;
@@ -3842,12 +3848,6 @@ export class OpsJobsService {
       );
     }
 
-    if (dto.notes !== undefined && dto.notes !== null && String(dto.notes).trim().length > 0) {
-      throw new BadRequestException(
-        "Trip notes are not supported on create yet (Trip.notes column is missing). Save notes at job level or use a trip custom field endpoint.",
-      );
-    }
-
     const plannedStartAt = dto.plannedStartAt
       ? new Date(dto.plannedStartAt)
       : dto.plannedDate
@@ -3894,6 +3894,7 @@ export class OpsJobsService {
         jobTripTemplate: normalizedTemplate,
         title: dto.title?.trim() || tripDisplayLabel,
         displayTitle: dto.title?.trim() || tripDisplayLabel,
+        notes: normalizeOptionalNotes(dto.notes),
         tripPICName: dto.tripPICName?.trim() || null,
         tripPICContact: dto.tripPICContact?.trim() || null,
         containerNumber: dto.containerNumber?.trim() || null,
@@ -3904,7 +3905,9 @@ export class OpsJobsService {
         originLabel: route.originLabel,
         destinationLabel: route.destinationLabel,
         originAddressLine1: route.originAddressLine1,
+        originAddressLine2: route.originAddressLine2,
         destinationAddressLine1: route.destinationAddressLine1,
+        destinationAddressLine2: route.destinationAddressLine2,
         originPostalCode: route.originPostalCode,
         destinationPostalCode: route.destinationPostalCode,
         originCountry: route.originCountry,
@@ -4806,8 +4809,13 @@ export class OpsJobsService {
     if (dto.receiverName !== undefined) jobData.receiverName = dto.receiverName;
     if (dto.receiverPhone !== undefined) jobData.receiverPhone = dto.receiverPhone;
 
-    const notesValue = resolveTripDetailsNotesInput(dto);
-    if (notesValue !== undefined) jobData.notes = notesValue;
+    const jobNotesValue = resolveTripDetailsJobNotesInput(dto);
+    if (jobNotesValue !== undefined) {
+      jobData.notes = normalizeOptionalNotes(jobNotesValue);
+    }
+    if (dto.notes !== undefined) {
+      tripData.notes = normalizeOptionalNotes(dto.notes);
+    }
 
     if (dto.collectionType !== undefined && job.jobType === JobType.COLLECTION) {
       jobData.collectionType = dto.collectionType;
@@ -4890,7 +4898,7 @@ export class OpsJobsService {
     }
 
     const changedFields = [
-      ...Object.keys(jobData),
+      ...Object.keys(jobData).map((k) => (k === "notes" ? "jobNotes" : k)),
       ...Object.keys(tripData).filter((k) => k !== "updatedByUserId"),
       ...(inputItems !== null ? ["items"] : []),
     ];
@@ -5609,9 +5617,8 @@ export class OpsJobsService {
       documentStatus: deriveTripDocumentStatus(t.documents ?? []),
       completionRuleJson:
         (t.completionRuleJson as Record<string, unknown> | null) ?? null,
-      notes: job.notes ?? null,
-      jobNotes: job.notes ?? null,
-      tripInstruction: job.notes ?? null,
+      ...resolveTripNotesResponseFields(t, job),
+      ...resolveTripRouteAddressResponseFields(t),
       };
     }));
   }
@@ -6134,9 +6141,8 @@ export class OpsJobsService {
       shipper: trip.shipper ?? null,
       vessel: trip.vessel ?? null,
       plannedStartAt: trip.plannedStartAt ?? null,
-      jobNotes: trip.job?.notes ?? null,
-      notes: trip.job?.notes ?? null,
-      tripInstruction: trip.job?.notes ?? null,
+      ...resolveTripNotesResponseFields(trip, trip.job),
+      ...resolveTripRouteAddressResponseFields(trip),
       startedAt: trip.startedAt ?? null,
       completedAt: trip.closedAt ?? null,
       closedAt: trip.closedAt ?? null,
