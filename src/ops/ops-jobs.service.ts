@@ -92,6 +92,11 @@ import {
   normalizeOptionalNotes,
   resolveTripNotesResponseFields,
 } from "./trip-notes.helpers";
+import {
+  ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES,
+  deriveTripDocumentStatus,
+  groupTripDocumentsByTripId,
+} from "./trip-document-list.helpers";
 
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
@@ -721,12 +726,7 @@ function toJobDto(j: any): JobDto {
         payoutLines: [],
         driverEarningCentsTotal: t.driverEarningCents ?? null,
         documents: [],
-        documentStatus: {
-          pickupDo: "PENDING",
-          deliveryDo: "GENERATED",
-          podSignature: "PENDING",
-          receiverDo: "PENDING",
-        },
+        documentStatus: deriveTripDocumentStatus([]),
         completionRuleJson: t.completionRuleJson ?? null,
         ...resolveTripNotesResponseFields(t, j),
         ...resolveTripRouteAddressResponseFields(t),
@@ -751,28 +751,6 @@ function toJobDto(j: any): JobDto {
         sortOrder: c.sortOrder,
         metadataJson: (c.metadataJson as Record<string, unknown> | null) ?? null,
       })) ?? [],
-  };
-}
-
-function deriveTripDocumentStatus(documents: Array<any> | null | undefined): {
-  pickupDo: "PENDING" | "UPLOADED";
-  deliveryDo: "GENERATED" | "UPLOADED";
-  podSignature: "PENDING" | "UPLOADED";
-  receiverDo: "PENDING" | "UPLOADED";
-} {
-  const docs = documents ?? [];
-  const hasPickupDo = docs.some((d) => d?.type === TripDocumentType.PICKUP_DO);
-  const hasDeliveryDo = docs.some((d) => d?.type === TripDocumentType.DELIVERY_DO);
-  const hasDeliveryDoGenerated = docs.some(
-    (d) => d?.type === TripDocumentType.DELIVERY_DO && d?.generatedBySystem === true,
-  );
-  const hasPodSignature = docs.some((d) => d?.type === TripDocumentType.POD_SIGNATURE);
-  const hasReceiverDo = docs.some((d) => d?.type === TripDocumentType.OTHER);
-  return {
-    pickupDo: hasPickupDo ? "UPLOADED" : "PENDING",
-    deliveryDo: hasDeliveryDoGenerated || !hasDeliveryDo ? "GENERATED" : "UPLOADED",
-    podSignature: hasPodSignature ? "UPLOADED" : "PENDING",
-    receiverDo: hasReceiverDo ? "UPLOADED" : "PENDING",
   };
 }
 
@@ -1360,16 +1338,13 @@ export class OpsJobsService {
             documents: {
               where: {
                 isActive: true,
-                type: {
-                  in: [
-                    TripDocumentType.PICKUP_DO,
-                    TripDocumentType.DELIVERY_DO,
-                    TripDocumentType.POD_SIGNATURE,
-                    TripDocumentType.OTHER,
-                  ],
-                },
+                type: { in: ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES },
               },
-              select: { type: true, generatedBySystem: true },
+              select: {
+                type: true,
+                generatedBySystem: true,
+                isSigned: true,
+              },
             },
             vehicles: { select: { type: true } },
             fleetVehicle: { select: { type: true } },
@@ -2749,7 +2724,44 @@ export class OpsJobsService {
       dto.documents = job.documents.map((doc: any) => this.toDocumentMetadataDto(doc));
     }
 
+    await this.attachTripDocumentsToJobDto(tenantId, dto);
+
     return dto;
+  }
+
+  private async attachTripDocumentsToJobDto(
+    tenantId: string,
+    dto: JobDto,
+  ): Promise<void> {
+    const tripIds = (dto.trips ?? []).map((trip) => trip.id).filter(Boolean);
+    if (!tripIds.length) return;
+
+    const tripDocs = await this.prisma.tripDocument.findMany({
+      where: {
+        tenantId,
+        tripId: { in: tripIds },
+        isActive: true,
+        type: { in: ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES },
+      },
+      orderBy: { createdAt: "desc" },
+      include: documentUploadedByInclude,
+    });
+    const docsByTripId = groupTripDocumentsByTripId(tripDocs);
+
+    dto.trips = (dto.trips ?? []).map((trip) => {
+      const rawDocs = docsByTripId.get(trip.id) ?? [];
+      return {
+        ...trip,
+        documents: rawDocs.map((doc) => this.toDocumentMetadataDto(doc)),
+        documentStatus: deriveTripDocumentStatus(
+          rawDocs as Array<{
+            type?: string;
+            generatedBySystem?: boolean | null;
+            isSigned?: boolean | null;
+          }>,
+        ),
+      };
+    });
   }
 
   async update(
@@ -5476,7 +5488,10 @@ export class OpsJobsService {
         vehicles: { select: { id: true, plateNo: true, type: true } },
         fleetVehicle: { select: { id: true, plateNo: true, type: true } },
         documents: {
-          where: { isActive: true },
+          where: {
+            isActive: true,
+            type: { in: ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES },
+          },
           orderBy: { createdAt: "desc" },
           include: documentUploadedByInclude,
         },
@@ -5641,15 +5656,7 @@ export class OpsJobsService {
         tenantId,
         tripId,
         isActive: true,
-        type: {
-          in: [
-            TripDocumentType.PICKUP_DO,
-            TripDocumentType.DELIVERY_DO,
-            TripDocumentType.POD_PHOTO,
-            TripDocumentType.POD_SIGNATURE,
-            TripDocumentType.OTHER,
-          ],
-        },
+        type: { in: ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES },
       },
       orderBy: { createdAt: "desc" },
       include: documentUploadedByInclude,
@@ -6123,7 +6130,10 @@ export class OpsJobsService {
         vehicles: { select: { id: true, plateNo: true, type: true } },
         fleetVehicle: { select: { id: true, plateNo: true, type: true } },
         documents: {
-          where: { isActive: true },
+          where: {
+            isActive: true,
+            type: { in: ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES },
+          },
           orderBy: { createdAt: "desc" },
           include: documentUploadedByInclude,
         },

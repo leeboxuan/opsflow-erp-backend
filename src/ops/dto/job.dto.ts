@@ -226,10 +226,13 @@ export class JobTripResponseDto {
   /** Populated on driver detail when trip documents are loaded */
   documents?: JobDocumentDto[];
   documentStatus?: {
-    pickupDo: "PENDING" | "UPLOADED";
-    deliveryDo: "GENERATED" | "UPLOADED";
-    podSignature: "PENDING" | "UPLOADED";
-    receiverDo: "PENDING" | "UPLOADED";
+    pickupDo: "PENDING" | "UPLOADED" | "GENERATED" | "SIGNED";
+    deliveryDo: "PENDING" | "UPLOADED" | "GENERATED" | "SIGNED";
+    podSignature: "PENDING" | "UPLOADED" | "GENERATED" | "SIGNED";
+    receiverDo: "PENDING" | "UPLOADED" | "GENERATED" | "SIGNED";
+    podPhoto?: "PENDING" | "UPLOADED" | "GENERATED" | "SIGNED";
+    trailerStartPhoto?: "PENDING" | "UPLOADED" | "GENERATED" | "SIGNED";
+    trailerEndPhoto?: "PENDING" | "UPLOADED" | "GENERATED" | "SIGNED";
   };
   completionRuleJson?: Record<string, unknown> | null;
 

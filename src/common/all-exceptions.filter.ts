@@ -5,6 +5,10 @@ import {
     HttpException,
     HttpStatus,
   } from "@nestjs/common";
+import {
+  isPayloadTooLargeError,
+  payloadTooLargeResponseBody,
+} from "./payload-too-large";
   
   @Catch()
   export class AllExceptionsFilter implements ExceptionFilter {
@@ -12,6 +16,12 @@ import {
       const ctx = host.switchToHttp();
       const req = ctx.getRequest();
       const res = ctx.getResponse();
+
+      if (isPayloadTooLargeError(exception)) {
+        return res
+          .status(HttpStatus.PAYLOAD_TOO_LARGE)
+          .json(payloadTooLargeResponseBody());
+      }
   
       const isHttp = exception instanceof HttpException;
       const status = isHttp ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;

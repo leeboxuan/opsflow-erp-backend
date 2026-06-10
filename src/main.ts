@@ -1,8 +1,10 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/all-exceptions.filter';
+import { JSON_BODY_LIMIT } from './common/http-body.config';
 import { PrismaExceptionFilter } from './common/prisma-exception.filter';
 
 // Fail fast if Supabase JWT secret is missing (required for HS256 token verification after login)
@@ -22,7 +24,9 @@ const enableSwagger =
 async function bootstrap() {
   validateAuthEnv();
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  app.useBodyParser("json", { limit: JSON_BODY_LIMIT });
+  app.useBodyParser("urlencoded", { extended: true, limit: JSON_BODY_LIMIT });
   app.useGlobalFilters(new PrismaExceptionFilter(), new AllExceptionsFilter());
   const rawOrigins =
     process.env.WEB_APP_URLS || process.env.WEB_APP_URL || "http://localhost:3000";
