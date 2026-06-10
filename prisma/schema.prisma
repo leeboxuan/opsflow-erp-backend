@@ -1484,6 +1484,10 @@ enum TripDocumentType {
   DELIVERY_DO
   POD_PHOTO
   POD_SIGNATURE
+  /// Handwritten signature image captured when signing Pickup DO.
+  PICKUP_SIGNATURE
+  /// Handwritten signature image captured when signing Delivery DO.
+  DELIVERY_SIGNATURE
   OTHER
   /// legacy values kept for backward compatibility with existing rows
   SIGNATURE

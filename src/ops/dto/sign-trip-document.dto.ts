@@ -34,9 +34,10 @@ export class SignTripDocumentDto {
   signatureContentType?: string;
 
   @ApiPropertyOptional({
-    description: "Document type hint from mobile (PICKUP_DO, DELIVERY_DO, POD_SIGNATURE).",
+    description: "Document type hint from mobile (PICKUP_DO, DELIVERY_DO).",
+    enum: ["PICKUP_DO", "DELIVERY_DO"],
   })
   @IsOptional()
   @IsString()
-  documentType?: string;
+  documentType?: "PICKUP_DO" | "DELIVERY_DO" | string;
 }

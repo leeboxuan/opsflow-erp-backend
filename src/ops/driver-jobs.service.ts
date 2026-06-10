@@ -51,6 +51,7 @@ import { resolveTripNotesResponseFields } from "./trip-notes.helpers";
 import { resolveTripRouteAddressResponseFields } from "./job-workflow.helpers";
 import {
   isSignableDoType,
+  parseSignatureContentType,
   parseSignatureImageBytes,
   parseSignedAtFromBody,
   type SignTripDocumentBody,
@@ -3048,14 +3049,37 @@ export class DriverJobsService {
       where: { id: documentId, tenantId, tripId, isActive: true },
     });
     if (!doc) throw new NotFoundException("Trip document not found");
-    if (doc.type === TripDocumentType.POD_SIGNATURE) {
+    if (
+      doc.type === TripDocumentType.POD_SIGNATURE
+      || doc.type === TripDocumentType.PICKUP_SIGNATURE
+      || doc.type === TripDocumentType.DELIVERY_SIGNATURE
+    ) {
       throw new BadRequestException(
-        "POD_SIGNATURE is the canonical signature artifact and cannot be signed separately",
+        "Signature image documents cannot be signed separately; sign the Pickup/Delivery DO instead",
       );
     }
     const signatureImageBytes = parseSignatureImageBytes(body);
+    const signatureContentType = parseSignatureContentType(body);
     const signedAt = parseSignedAtFromBody(body) ?? new Date();
     const normalizedSignedByName = body?.signedByName?.trim() || null;
+
+    if (isSignableDoType(doc.type) && signatureImageBytes?.length) {
+      await this.opsJobs?.persistSignedDoSignatureImage(
+        tenantId,
+        jobId,
+        tripId,
+        doc.type,
+        {
+          signatureImageBytes,
+          mimeType: signatureContentType,
+          signedByName: normalizedSignedByName,
+          signedAt,
+          signedByUserId: driverUserId,
+          signBody: body,
+        },
+      );
+    }
+
     const updated = await this.prisma.tripDocument.update({
       where: { id: documentId },
       data: {

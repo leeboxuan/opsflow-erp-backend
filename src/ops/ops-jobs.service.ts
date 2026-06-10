@@ -52,14 +52,21 @@ import {
   JOB_DOCUMENTS_BUCKET,
 } from "../common/job-document-signed-url";
 import {
+  buildSignedDoSignatureStorageKey,
   doFileSuffixForType,
   doStorageFolderForType,
   isSignableDoType,
+  logDoSignatureDebug,
+  parseSignatureContentType,
   parseSignatureImageBytes,
   parseSignedAtFromBody,
+  pickPreferredSignatureArtifact,
   resolveDoSignatureEmbedInput,
+  resolveUsedSignatureSource,
   signableDoHasCustomerSignature,
-  SIGNATURE_ARTIFACT_TYPES,
+  signatureArtifactFallbackTypes,
+  signatureArtifactTypeForDo,
+  warnMissingSignatureImageForSignedDo,
   type SignableDoType,
   type SignTripDocumentBody,
 } from "./do-signature.helpers";
@@ -5736,6 +5743,97 @@ export class OpsJobsService {
     return this.attachSignedUrl(doc);
   }
 
+  private isSignatureArtifactDocumentType(type: TripDocumentType): boolean {
+    return (
+      type === TripDocumentType.POD_SIGNATURE
+      || type === TripDocumentType.PICKUP_SIGNATURE
+      || type === TripDocumentType.DELIVERY_SIGNATURE
+    );
+  }
+
+  /**
+   * Uploads and records the handwritten signature image for a signed Pickup/Delivery DO.
+   */
+  async persistSignedDoSignatureImage(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    doType: SignableDoType,
+    params: {
+      signatureImageBytes: Buffer;
+      mimeType: string;
+      signedByName?: string | null;
+      signedAt?: Date | null;
+      signedByUserId?: string | null;
+      signBody?: SignTripDocumentBody | null;
+    },
+  ): Promise<{ id: string; storageKey: string }> {
+    const {
+      signatureImageBytes,
+      mimeType,
+      signedByName,
+      signedAt,
+      signedByUserId,
+      signBody,
+    } = params;
+
+    logDoSignatureDebug({
+      phase: "persist_signature_image",
+      doType,
+      hasSignatureBase64: !!signBody?.signatureBase64?.trim(),
+      signatureBase64Length: signBody?.signatureBase64?.trim().length ?? 0,
+      hasSignatureImage: !!signBody?.signatureImage?.trim(),
+      signatureImagePrefix: signBody?.signatureImage?.trim().slice(0, 32) ?? null,
+      signatureContentType: mimeType,
+      decodedSignatureBufferBytes: signatureImageBytes.length,
+    });
+
+    await this.replaceTripDocumentByType(
+      tenantId,
+      tripId,
+      signatureArtifactTypeForDo(doType),
+    );
+
+    const storageKey = buildSignedDoSignatureStorageKey(
+      tenantId,
+      jobId,
+      tripId,
+      doType,
+      mimeType,
+    );
+    await this.putJobDocumentObject(storageKey, signatureImageBytes, mimeType);
+
+    const ext =
+      mimeType.includes("jpeg") || mimeType.includes("jpg") ? "jpg" : "png";
+    const signatureDoc = await this.prisma.tripDocument.create({
+      data: {
+        tenantId,
+        tripId,
+        type: signatureArtifactTypeForDo(doType),
+        storageKey,
+        originalName: `${doType.toLowerCase()}-signature.${ext}`,
+        mimeType,
+        sizeBytes: signatureImageBytes.length,
+        isActive: true,
+        isSigned: true,
+        signedAt: signedAt ?? new Date(),
+        signedByUserId: signedByUserId ?? null,
+        signedByName: signedByName?.trim() || null,
+        uploadedByUserId: signedByUserId ?? null,
+        requiresSignature: false,
+      },
+    });
+
+    logDoSignatureDebug({
+      phase: "persist_signature_image_complete",
+      doType,
+      storedSignatureStorageKey: storageKey,
+      signatureDocumentId: signatureDoc.id,
+    });
+
+    return { id: signatureDoc.id, storageKey };
+  }
+
   /**
    * Rebuilds the active Pickup/Delivery DO PDF with signature/name when available.
    * Updates the same TripDocument row (new storage object) so admin download stays on one doc.
@@ -5751,7 +5849,7 @@ export class OpsJobsService {
       signedAt?: Date | null;
     },
   ): Promise<void> {
-    const [job, doDoc, signatureArtifact] = await Promise.all([
+    const [job, doDoc, signatureArtifacts] = await Promise.all([
       this.prisma.job.findFirst({
         where: { id: jobId, tenantId },
         include: {
@@ -5767,16 +5865,20 @@ export class OpsJobsService {
           isActive: true,
         },
       }),
-      this.prisma.tripDocument.findFirst({
+      this.prisma.tripDocument.findMany({
         where: {
           tenantId,
           tripId,
-          type: { in: SIGNATURE_ARTIFACT_TYPES },
+          type: { in: signatureArtifactFallbackTypes(doType) },
           isActive: true,
         },
         orderBy: { createdAt: "desc" },
       }),
     ]);
+    const signatureArtifact = pickPreferredSignatureArtifact(
+      signatureArtifacts,
+      doType,
+    );
 
     if (!job?.items?.length || !doDoc?.storageKey) {
       return;
@@ -5794,10 +5896,28 @@ export class OpsJobsService {
     }
 
     let signatureImageBytes = embedBase.signatureImageBytes;
-    if (!signatureImageBytes && signatureArtifact?.storageKey) {
-      signatureImageBytes = await this.downloadJobDocumentBytes(
+    let downloadedSignatureBytes: Buffer | null = null;
+    if (!signatureImageBytes?.length && signatureArtifact?.storageKey) {
+      downloadedSignatureBytes = await this.downloadJobDocumentBytes(
         signatureArtifact.storageKey,
       );
+      signatureImageBytes = downloadedSignatureBytes;
+    }
+
+    const usedSignatureSource = resolveUsedSignatureSource(
+      overrides?.signatureImageBytes,
+      signatureArtifact,
+      downloadedSignatureBytes,
+    );
+    logDoSignatureDebug({
+      phase: "refresh_signed_do_pdf",
+      doType,
+      usedSignatureSource,
+      decodedSignatureBufferBytes: signatureImageBytes?.length ?? 0,
+      storedSignatureStorageKey: signatureArtifact?.storageKey ?? null,
+    });
+    if (!signatureImageBytes?.length) {
+      warnMissingSignatureImageForSignedDo(doType, doDoc);
     }
 
     const variant =
@@ -5885,14 +6005,32 @@ export class OpsJobsService {
       where: { id: documentId, tenantId, tripId, isActive: true },
     });
     if (!doc) throw new NotFoundException("Trip document not found");
-    if (doc.type === TripDocumentType.POD_SIGNATURE) {
+    if (this.isSignatureArtifactDocumentType(doc.type)) {
       throw new BadRequestException(
-        "POD_SIGNATURE is the canonical signature artifact and cannot be signed separately",
+        "Signature image documents cannot be signed separately; sign the Pickup/Delivery DO instead",
       );
     }
     const signatureImageBytes = parseSignatureImageBytes(body);
+    const signatureContentType = parseSignatureContentType(body);
     const signedAt = parseSignedAtFromBody(body) ?? new Date();
     const signedByName = body?.signedByName?.trim() || null;
+
+    if (isSignableDoType(doc.type) && signatureImageBytes?.length) {
+      await this.persistSignedDoSignatureImage(
+        tenantId,
+        jobId,
+        tripId,
+        doc.type,
+        {
+          signatureImageBytes,
+          mimeType: signatureContentType,
+          signedByName,
+          signedAt,
+          signedByUserId: actorUserId,
+          signBody: body,
+        },
+      );
+    }
 
     const updated = await this.prisma.tripDocument.update({
       where: { id: documentId },

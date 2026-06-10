@@ -63,7 +63,7 @@ function makeRefreshPrisma(doType: TripDocumentType) {
               where,
             }: {
               where: {
-                type?: TripDocumentType | { in: TripDocumentType[] };
+                type?: TripDocumentType;
                 id?: string;
               };
             }) => {
@@ -78,20 +78,17 @@ function makeRefreshPrisma(doType: TripDocumentType) {
               if (where.type === doType) {
                 return Promise.resolve(doDoc);
               }
-              if (
-                typeof where.type === "object"
-                && where.type.in?.includes(TripDocumentType.POD_SIGNATURE)
-              ) {
-                return Promise.resolve({
-                  id: "sig-1",
-                  type: TripDocumentType.POD_SIGNATURE,
-                  storageKey: "t1/jobs/j1/trips/t1/pod_signature/sig.png",
-                  createdAt: new Date("2026-06-10T00:30:00.000Z"),
-                });
-              }
               return Promise.resolve(null);
             },
           ),
+        findMany: jest.fn().mockResolvedValue([]),
+        create: jest.fn().mockImplementation(({ data }: { data: any }) =>
+          Promise.resolve({
+            id: "sig-doc-1",
+            ...data,
+          }),
+        ),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         update: tripDocumentUpdate,
       },
     },
@@ -372,5 +369,182 @@ describe("Signed DO PDF rendering", () => {
       TripDocumentType.PICKUP_DO,
     );
     expect(result.previewUrl).toBe("https://example.com/signed.pdf");
+  });
+
+  it("persistSignedDoSignatureImage stores PICKUP_SIGNATURE document in Supabase", async () => {
+    const { prisma, storage } = makeRefreshPrisma(TripDocumentType.PICKUP_DO);
+    const svc = makeSvc(prisma, storage);
+
+    const result = await svc.persistSignedDoSignatureImage(
+      "t1",
+      "j1",
+      "t1",
+      TripDocumentType.PICKUP_DO,
+      {
+        signatureImageBytes: TINY_PNG,
+        mimeType: "image/png",
+        signedByName: "Shipper Sam",
+        signedAt: new Date("2026-06-10T00:30:00.000Z"),
+        signedByUserId: "driver-1",
+      },
+    );
+
+    expect(storage.upload).toHaveBeenCalled();
+    expect(prisma.tripDocument.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: TripDocumentType.PICKUP_SIGNATURE,
+          storageKey: expect.stringContaining("/signatures/PICKUP_DO/"),
+          mimeType: "image/png",
+          isSigned: true,
+          signedByName: "Shipper Sam",
+        }),
+      }),
+    );
+    expect(result.storageKey).toContain("/signatures/PICKUP_DO/");
+  });
+
+  it("persistSignedDoSignatureImage stores DELIVERY_SIGNATURE document in Supabase", async () => {
+    const { prisma, storage } = makeRefreshPrisma(TripDocumentType.DELIVERY_DO);
+    const svc = makeSvc(prisma, storage);
+
+    await svc.persistSignedDoSignatureImage(
+      "t1",
+      "j1",
+      "t1",
+      TripDocumentType.DELIVERY_DO,
+      {
+        signatureImageBytes: TINY_PNG,
+        mimeType: "image/png",
+        signedByName: "Derek",
+        signedAt: new Date("2026-06-10T00:30:00.000Z"),
+        signedByUserId: "driver-1",
+      },
+    );
+
+    expect(prisma.tripDocument.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: TripDocumentType.DELIVERY_SIGNATURE,
+          storageKey: expect.stringContaining("/signatures/DELIVERY_DO/"),
+        }),
+      }),
+    );
+  });
+
+  it("signTripDocument persists signature image before refreshing signed DO PDF", async () => {
+    const { prisma, storage } = makeRefreshPrisma(TripDocumentType.PICKUP_DO);
+    prisma.tripDocument.findFirst = jest.fn().mockResolvedValue({
+      id: "pickup-do-1",
+      type: TripDocumentType.PICKUP_DO,
+      storageKey: "t1/jobs/j1/trips/t1/pickup-do/old.pdf",
+    });
+    prisma.tripDocument.update = jest.fn().mockResolvedValue({
+      id: "pickup-do-1",
+      type: TripDocumentType.PICKUP_DO,
+      storageKey: "t1/jobs/j1/trips/t1/pickup-do/old.pdf",
+      isSigned: true,
+      signedAt: new Date("2026-06-10T00:30:00.000Z"),
+      signedByName: "Shipper Sam",
+      uploadedBy: null,
+    });
+
+    const svc = makeSvc(prisma, storage);
+    const persistSpy = jest.spyOn(svc, "persistSignedDoSignatureImage").mockResolvedValue({
+      id: "sig-doc-1",
+      storageKey: "t1/jobs/j1/trips/t1/signatures/PICKUP_DO/1-signature.png",
+    });
+    const refreshSpy = jest.spyOn(svc, "refreshSignedDoPdf").mockResolvedValue(undefined);
+    jest.spyOn(svc as any, "attachSignedUrl").mockImplementation((doc: any) => doc);
+
+    await svc.signTripDocument(
+      "t1",
+      "j1",
+      "t1",
+      "pickup-do-1",
+      {
+        signedByName: "Shipper Sam",
+        signatureBase64: TINY_PNG_BASE64,
+        signatureContentType: "image/png",
+        documentType: "PICKUP_DO",
+      },
+      { userId: "ops-1", role: "OPS" },
+    );
+
+    expect(persistSpy).toHaveBeenCalledWith(
+      "t1",
+      "j1",
+      "t1",
+      TripDocumentType.PICKUP_DO,
+      expect.objectContaining({
+        signatureImageBytes: expect.any(Buffer),
+        mimeType: "image/png",
+        signedByName: "Shipper Sam",
+      }),
+    );
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it("refreshSignedDoPdf downloads stored DELIVERY_SIGNATURE for PDF embed", async () => {
+    const { prisma, storage, tripDocumentUpdate } = makeRefreshPrisma(
+      TripDocumentType.DELIVERY_DO,
+    );
+    prisma.tripDocument.findFirst = jest.fn().mockImplementation(({ where }: any) => {
+      if (where.type === TripDocumentType.DELIVERY_DO) {
+        return Promise.resolve({
+          id: "do-1",
+          type: TripDocumentType.DELIVERY_DO,
+          storageKey: "t1/jobs/j1/trips/t1/delivery-do/old.pdf",
+          isSigned: true,
+          signedAt: new Date("2026-06-10T00:30:00.000Z"),
+          signedByName: "Derek",
+        });
+      }
+      return Promise.resolve(null);
+    });
+    prisma.tripDocument.findMany = jest.fn().mockResolvedValue([
+      {
+        id: "sig-1",
+        type: TripDocumentType.DELIVERY_SIGNATURE,
+        storageKey: "t1/jobs/j1/trips/t1/signatures/DELIVERY_DO/1-signature.png",
+        createdAt: new Date("2026-06-10T00:30:00.000Z"),
+      },
+    ]);
+
+    const svc = makeSvc(prisma, storage);
+    await svc.refreshSignedDoPdf("t1", "j1", "t1", TripDocumentType.DELIVERY_DO);
+
+    expect(storage.download).toHaveBeenCalledWith(
+      "t1/jobs/j1/trips/t1/signatures/DELIVERY_DO/1-signature.png",
+    );
+    expect(tripDocumentUpdate).toHaveBeenCalled();
+  });
+
+  it("refreshSignedDoPdf logs warning when signed metadata exists but no signature image", async () => {
+    const { prisma, storage } = makeRefreshPrisma(TripDocumentType.PICKUP_DO);
+    prisma.tripDocument.findFirst = jest.fn().mockImplementation(({ where }: any) => {
+      if (where.type === TripDocumentType.PICKUP_DO) {
+        return Promise.resolve({
+          id: "pickup-do-1",
+          type: TripDocumentType.PICKUP_DO,
+          storageKey: "t1/jobs/j1/trips/t1/pickup-do/old.pdf",
+          isSigned: true,
+          signedAt: new Date("2026-06-10T00:30:00.000Z"),
+          signedByName: "Shipper Sam",
+        });
+      }
+      return Promise.resolve(null);
+    });
+    prisma.tripDocument.findMany = jest.fn().mockResolvedValue([]);
+
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    const svc = makeSvc(prisma, storage);
+    await svc.refreshSignedDoPdf("t1", "j1", "t1", TripDocumentType.PICKUP_DO);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "Signed metadata exists but no signature image found; cannot embed handwritten signature.",
+      expect.objectContaining({ doType: TripDocumentType.PICKUP_DO }),
+    );
+    warnSpy.mockRestore();
   });
 });
