@@ -53,6 +53,7 @@ import {
   SuggestJobTripOrderDto,
 } from "./dto/job-trip.dto";
 import { JobDto, JobDocumentDto, JobTripResponseDto } from "./dto/job.dto";
+import { SignTripDocumentDto } from "./dto/sign-trip-document.dto";
 
 @ApiTags("ops-jobs")
 @Controller("jobs")
@@ -1084,7 +1085,7 @@ export class OpsJobsController {
     @Param("jobId") jobId: string,
     @Param("tripId") tripId: string,
     @Param("documentId") documentId: string,
-    @Body() body: { signedByName?: string },
+    @Body() body: SignTripDocumentDto,
   ) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -1097,7 +1098,7 @@ export class OpsJobsController {
       jobId,
       tripId,
       documentId,
-      body?.signedByName,
+      body,
       accessUser,
     );
   }

@@ -46,6 +46,13 @@ import {
 } from "./job-invoice-readiness";
 import { RealtimeEventsService } from "../realtime/realtime-events.service";
 import * as rt from "../realtime/realtime-publish";
+import { OpsJobsService } from "./ops-jobs.service";
+import {
+  isSignableDoType,
+  parseSignatureImageBytes,
+  parseSignedAtFromBody,
+  type SignTripDocumentBody,
+} from "./do-signature.helpers";
 import {
   isContainerCargoJobType,
   jobTripTemplateDisplayLabel,
@@ -340,6 +347,7 @@ export class DriverJobsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly supabaseService: SupabaseService,
+    @Optional() private readonly opsJobs?: OpsJobsService,
     @Optional() private readonly realtime?: RealtimeEventsService,
   ) {}
 
@@ -961,6 +969,24 @@ export class DriverJobsService {
       where: { id: documentId, tenantId, tripId, isActive: true },
     });
     if (!doc) throw new NotFoundException("Document not found");
+
+    if (isSignableDoType(doc.type)) {
+      await this.opsJobs?.refreshSignedDoPdf(
+        tenantId,
+        trip.jobId,
+        tripId,
+        doc.type,
+      );
+      const refreshed = await this.prisma.tripDocument.findFirst({
+        where: { id: documentId, tenantId, tripId, isActive: true },
+      });
+      if (refreshed?.storageKey) {
+        return buildDocumentSignedUrlResponse(
+          this.supabaseService.getClient(),
+          refreshed.storageKey,
+        );
+      }
+    }
 
     return buildDocumentSignedUrlResponse(
       this.supabaseService.getClient(),
@@ -2926,6 +2952,15 @@ export class DriverJobsService {
       actorRole: Role.DRIVER,
       tripStatus: trip.status as TripStatus,
     });
+    if (type === TripDocumentType.POD_SIGNATURE) {
+      await this.opsJobs?.refreshSignedDoPdf(
+        tenantId,
+        jobId,
+        tripId,
+        TripDocumentType.DELIVERY_DO,
+        { signatureImageBytes: file.buffer, signedAt: new Date() },
+      );
+    }
     perf.markSideEffectsEnd();
 
     const result = this.toDocumentMetadataDto(doc);
@@ -3005,7 +3040,7 @@ export class DriverJobsService {
     tripId: string,
     documentId: string,
     driverUserId: string,
-    signedByName?: string,
+    body?: SignTripDocumentBody,
   ): Promise<JobDocumentDto> {
     await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
     const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
@@ -3018,12 +3053,14 @@ export class DriverJobsService {
         "POD_SIGNATURE is the canonical signature artifact and cannot be signed separately",
       );
     }
-    const normalizedSignedByName = signedByName?.trim() || null;
+    const signatureImageBytes = parseSignatureImageBytes(body);
+    const signedAt = parseSignedAtFromBody(body) ?? new Date();
+    const normalizedSignedByName = body?.signedByName?.trim() || null;
     const updated = await this.prisma.tripDocument.update({
       where: { id: documentId },
       data: {
         isSigned: true,
-        signedAt: new Date(),
+        signedAt,
         signedByUserId: driverUserId,
         signedByName: normalizedSignedByName,
       },
@@ -3045,6 +3082,22 @@ export class DriverJobsService {
       actorRole: Role.DRIVER,
       tripStatus: trip.status as TripStatus,
     });
+
+    if (isSignableDoType(updated.type)) {
+      await this.opsJobs?.refreshSignedDoPdf(tenantId, jobId, tripId, updated.type, {
+        signatureImageBytes,
+        recipientName: updated.signedByName,
+        signedAt: updated.signedAt,
+      });
+      const refreshed = await this.prisma.tripDocument.findFirst({
+        where: { id: documentId, tenantId, tripId, isActive: true },
+        include: documentUploadedByInclude,
+      });
+      if (refreshed) {
+        return this.attachTripDocumentSignedUrl(refreshed);
+      }
+    }
+
     return this.attachTripDocumentSignedUrl(updated);
   }
 }

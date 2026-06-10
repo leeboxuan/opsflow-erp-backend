@@ -43,6 +43,7 @@ import { DriverJobsHistoryListQueryDto } from "./dto/driver-jobs-history-list-qu
 import { DriverCompleteJobDto } from "./dto/complete-job.dto";
 import { JobLocationDto } from "./dto/location.dto";
 import { DriverTripCompleteDto } from "./dto/driver-trip-complete.dto";
+import { SignTripDocumentDto } from "./dto/sign-trip-document.dto";
 
 @ApiTags("driver-jobs")
 @Controller("drivers/jobs")
@@ -354,13 +355,17 @@ export class DriverJobsController {
   }
 
   @Post(":jobId/trips/:tripId/documents/:documentId/sign")
-  @ApiOperation({ summary: "Mark trip document as signed" })
+  @ApiOperation({
+    summary: "Mark trip document as signed",
+    description:
+      "Accepts signedByName, signedAt, signatureBase64, signatureImage (data URL), and signatureContentType from mobile.",
+  })
   async signTripDocument(
     @Req() req: any,
     @Param("jobId") jobId: string,
     @Param("tripId") tripId: string,
     @Param("documentId") documentId: string,
-    @Body() body: { signedByName?: string },
+    @Body() body: SignTripDocumentDto,
   ) {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
@@ -370,7 +375,7 @@ export class DriverJobsController {
       tripId,
       documentId,
       userId,
-      body?.signedByName,
+      body,
     );
   }
 

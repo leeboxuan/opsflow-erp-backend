@@ -52,6 +52,18 @@ import {
   JOB_DOCUMENTS_BUCKET,
 } from "../common/job-document-signed-url";
 import {
+  doFileSuffixForType,
+  doStorageFolderForType,
+  isSignableDoType,
+  parseSignatureImageBytes,
+  parseSignedAtFromBody,
+  resolveDoSignatureEmbedInput,
+  signableDoHasCustomerSignature,
+  SIGNATURE_ARTIFACT_TYPES,
+  type SignableDoType,
+  type SignTripDocumentBody,
+} from "./do-signature.helpers";
+import {
   documentUploadedByInclude,
   loadUploadActorFields,
   resolveDocumentUploadedByFields,
@@ -1647,10 +1659,41 @@ export class OpsJobsService {
     });
     if (!doc) throw new NotFoundException("Document not found");
 
+    if (isSignableDoType(doc.type)) {
+      await this.refreshSignedDoPdf(tenantId, jobId, tripId, doc.type);
+      const refreshed = await this.prisma.tripDocument.findFirst({
+        where: { id: documentId, tenantId, tripId, isActive: true },
+      });
+      if (refreshed?.storageKey) {
+        return buildDocumentSignedUrlResponse(
+          this.supabaseService.getClient(),
+          refreshed.storageKey,
+        );
+      }
+    }
+
     return buildDocumentSignedUrlResponse(
       this.supabaseService.getClient(),
       doc.storageKey,
     );
+  }
+
+  private async downloadJobDocumentBytes(
+    storageKey: string,
+  ): Promise<Buffer | null> {
+    const { data, error } = await this.supabaseService
+      .getClient()
+      .storage.from(JOB_DOCUMENTS_BUCKET)
+      .download(storageKey);
+
+    if (error || !data) {
+      console.warn(
+        `[OpsJobsService] Failed to download job document ${storageKey}: ${error?.message ?? "no data"}`,
+      );
+      return null;
+    }
+
+    return Buffer.from(await data.arrayBuffer());
   }
 
   private isAllowedTripDocument(file: Express.Multer.File): boolean {
@@ -5675,7 +5718,148 @@ export class OpsJobsService {
       documentTypeLabel: tripDocumentTypeLabel(type),
       ...this.notifyActorContext(user),
     });
+
+    if (type === TripDocumentType.POD_SIGNATURE) {
+      await this.refreshSignedDoPdf(tenantId, jobId, tripId, TripDocumentType.DELIVERY_DO, {
+        signatureImageBytes: file.buffer,
+        signedAt: new Date(),
+      });
+    }
+
     return this.attachSignedUrl(doc);
+  }
+
+  /**
+   * Rebuilds the active Pickup/Delivery DO PDF with signature/name when available.
+   * Updates the same TripDocument row (new storage object) so admin download stays on one doc.
+   */
+  async refreshSignedDoPdf(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    doType: SignableDoType,
+    overrides?: {
+      signatureImageBytes?: Buffer | null;
+      recipientName?: string | null;
+      signedAt?: Date | null;
+    },
+  ): Promise<void> {
+    const [job, doDoc, signatureArtifact] = await Promise.all([
+      this.prisma.job.findFirst({
+        where: { id: jobId, tenantId },
+        include: {
+          customerCompany: true,
+          items: { orderBy: { createdAt: "asc" } },
+        },
+      }),
+      this.prisma.tripDocument.findFirst({
+        where: {
+          tenantId,
+          tripId,
+          type: doType,
+          isActive: true,
+        },
+      }),
+      this.prisma.tripDocument.findFirst({
+        where: {
+          tenantId,
+          tripId,
+          type: { in: SIGNATURE_ARTIFACT_TYPES },
+          isActive: true,
+        },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+
+    if (!job?.items?.length || !doDoc?.storageKey) {
+      return;
+    }
+
+    const embedBase = resolveDoSignatureEmbedInput(
+      doType,
+      doDoc,
+      signatureArtifact,
+      job,
+      overrides,
+    );
+    if (!embedBase) {
+      return;
+    }
+
+    let signatureImageBytes = embedBase.signatureImageBytes;
+    if (!signatureImageBytes && signatureArtifact?.storageKey) {
+      signatureImageBytes = await this.downloadJobDocumentBytes(
+        signatureArtifact.storageKey,
+      );
+    }
+
+    const variant =
+      doType === TripDocumentType.PICKUP_DO ? "pickup" : "delivery";
+    const pdfBuffer = await this.buildDoPdfBuffer(job, {
+      variant,
+      signatureImageBytes,
+      recipientName: embedBase.recipientName,
+      recipientNric: embedBase.recipientNric,
+      signedAt: embedBase.signedAt,
+    });
+
+    const refForFile =
+      job.externalRef?.trim() || job.internalRef?.trim() || job.id;
+    const safeRef = this.safeFileName(refForFile);
+    const suffix = doFileSuffixForType(doType);
+    const fileName = `${safeRef}_${suffix}.pdf`;
+    const folder = doStorageFolderForType(doType);
+    const storageKey = `${tenantId}/jobs/${jobId}/trips/${tripId}/${folder}/${Date.now()}-${fileName}`;
+    const previousStorageKey = doDoc.storageKey;
+
+    await this.putJobDocumentObject(storageKey, pdfBuffer, "application/pdf");
+
+    const shouldMarkSigned = signableDoHasCustomerSignature(
+      doType,
+      doDoc,
+      signatureArtifact,
+      overrides,
+    );
+
+    await this.prisma.tripDocument.update({
+      where: { id: doDoc.id },
+      data: {
+        storageKey,
+        sizeBytes: pdfBuffer.length,
+        originalName: fileName,
+        mimeType: "application/pdf",
+        ...(shouldMarkSigned && !doDoc.isSigned
+          ? {
+              isSigned: true,
+              signedAt: doDoc.signedAt ?? embedBase.signedAt ?? new Date(),
+              signedByName:
+                doDoc.signedByName ?? embedBase.recipientName ?? null,
+            }
+          : {}),
+      },
+    });
+
+    await this.deleteStorageObjectIfExists(previousStorageKey);
+  }
+
+  /** @deprecated Use refreshSignedDoPdf with DELIVERY_DO */
+  async refreshSignedDeliveryDoPdf(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    overrides?: {
+      signatureImageBytes?: Buffer | null;
+      recipientName?: string | null;
+      signedAt?: Date | null;
+    },
+  ): Promise<void> {
+    return this.refreshSignedDoPdf(
+      tenantId,
+      jobId,
+      tripId,
+      TripDocumentType.DELIVERY_DO,
+      overrides,
+    );
   }
 
   async signTripDocument(
@@ -5683,7 +5867,7 @@ export class OpsJobsService {
     jobId: string,
     tripId: string,
     documentId: string,
-    signedByName: string | undefined,
+    body: SignTripDocumentBody | undefined,
     user: any,
   ) {
     this.assertCustomerCanOnlyRead(user);
@@ -5699,13 +5883,17 @@ export class OpsJobsService {
         "POD_SIGNATURE is the canonical signature artifact and cannot be signed separately",
       );
     }
+    const signatureImageBytes = parseSignatureImageBytes(body);
+    const signedAt = parseSignedAtFromBody(body) ?? new Date();
+    const signedByName = body?.signedByName?.trim() || null;
+
     const updated = await this.prisma.tripDocument.update({
       where: { id: documentId },
       data: {
         isSigned: true,
-        signedAt: new Date(),
+        signedAt,
         signedByUserId: actorUserId ?? null,
-        signedByName: signedByName?.trim() || null,
+        signedByName,
       },
       include: documentUploadedByInclude,
     });
@@ -5724,6 +5912,22 @@ export class OpsJobsService {
       tripStatus: trip.status as TripStatus,
       ...this.notifyActorContext(user),
     });
+
+    if (isSignableDoType(updated.type)) {
+      await this.refreshSignedDoPdf(tenantId, jobId, tripId, updated.type, {
+        signatureImageBytes,
+        recipientName: updated.signedByName,
+        signedAt: updated.signedAt,
+      });
+      const refreshed = await this.prisma.tripDocument.findFirst({
+        where: { id: documentId, tenantId, tripId, isActive: true },
+        include: documentUploadedByInclude,
+      });
+      if (refreshed) {
+        return this.attachSignedUrl(refreshed);
+      }
+    }
+
     return this.attachSignedUrl(updated);
   }
 
@@ -7291,6 +7495,11 @@ export class OpsJobsService {
       internalRef: string;
       externalRef?: string | null;
       pickupDate: Date | null;
+      pickupAddress1?: string | null;
+      pickupAddress2?: string | null;
+      pickupPostal?: string | null;
+      pickupContactName?: string | null;
+      pickupContactPhone?: string | null;
       deliveryAddress1: string;
       deliveryAddress2: string | null;
       deliveryPostal: string | null;
@@ -7307,6 +7516,7 @@ export class OpsJobsService {
       }>;
     },
     options?: {
+      variant?: "pickup" | "delivery";
       signatureImageBytes?: Buffer | null;
       recipientName?: string | null;
       recipientNric?: string | null;
@@ -7335,21 +7545,35 @@ export class OpsJobsService {
         .filter(Boolean)
         .join(" / ") || orderRef;
   
-    const receiverName =
-      options?.recipientName?.trim() ||
-      job.podRecipientName?.trim() ||
-      job.receiverName?.trim() ||
-      "-";
-  
-    const receiverPhone = job.receiverPhone?.trim() || "-";
+    const variant = options?.variant ?? "delivery";
+    const isPickup = variant === "pickup";
+
+    const contactName =
+      options?.recipientName?.trim()
+      || (isPickup
+        ? job.pickupContactName?.trim()
+        : (job.podRecipientName?.trim() || job.receiverName?.trim()))
+      || "-";
+
+    const contactPhone = isPickup
+      ? (job.pickupContactPhone?.trim() || "-")
+      : (job.receiverPhone?.trim() || "-");
     const specialRequest = job.notes?.trim() || "-";
-  
-    const deliveryAddress =
-      [
-        job.deliveryAddress1,
-        job.deliveryAddress2,
-        job.deliveryPostal ? `Singapore ${job.deliveryPostal}` : null,
-      ]
+
+    const addressBlock =
+      isPickup
+        ? [
+            job.pickupAddress1,
+            job.pickupAddress2,
+            job.pickupPostal ? `Singapore ${job.pickupPostal}` : null,
+          ]
+        : [
+            job.deliveryAddress1,
+            job.deliveryAddress2,
+            job.deliveryPostal ? `Singapore ${job.deliveryPostal}` : null,
+          ];
+    const addressText =
+      addressBlock
         .map((v) => (v ?? "").trim())
         .filter(Boolean)
         .join("\n") || "-";
@@ -7440,7 +7664,10 @@ export class OpsJobsService {
       { label: "Order Ref", width: 95 },
       { label: "First / Last Name", width: 120 },
       { label: "Phone", width: 85 },
-      { label: "Delivery Adress", width: 235 },
+      {
+        label: isPickup ? "Pickup Address" : "Delivery Adress",
+        width: 235,
+      },
       { label: "Item Code", width: 120 },
       { label: "Item Qty", width: 55 },
       {
@@ -7475,9 +7702,9 @@ export class OpsJobsService {
     const rowHeight = this.estimateRowHeight(
       [
         orderRef,
-        receiverName,
-        receiverPhone,
-        deliveryAddress,
+        contactName,
+        contactPhone,
+        addressText,
         itemCodeText,
         itemQtyText,
         specialRequest,
@@ -7522,7 +7749,7 @@ export class OpsJobsService {
   
     this.drawMultilineText(
       page,
-      receiverName,
+      contactName,
       cx + cellPaddingX,
       rowTopY - cellPaddingTop,
       cols[1].width - cellPaddingX * 2,
@@ -7536,7 +7763,7 @@ export class OpsJobsService {
   
     this.drawMultilineText(
       page,
-      receiverPhone,
+      contactPhone,
       cx + cellPaddingX,
       rowTopY - cellPaddingTop,
       cols[2].width - cellPaddingX * 2,
@@ -7550,7 +7777,7 @@ export class OpsJobsService {
   
     this.drawMultilineText(
       page,
-      deliveryAddress,
+      addressText,
       cx + cellPaddingX,
       rowTopY - cellPaddingTop,
       cols[3].width - cellPaddingX * 2,
@@ -7628,14 +7855,6 @@ export class OpsJobsService {
       color: black,
     });
   
-    page.drawText("Signature/Name/NRIC No.", {
-      x: tableX,
-      y: signLineY - 18,
-      size: 10,
-      font,
-      color: black,
-    });
-  
     // ===== SIGNATURE IMAGE =====
     if (options?.signatureImageBytes) {
       try {
@@ -7645,20 +7864,20 @@ export class OpsJobsService {
         } catch {
           signatureImage = await pdfDoc.embedJpg(options.signatureImageBytes);
         }
-  
-        const maxSigWidth = 170;
-        const maxSigHeight = 42;
-  
+
+        const maxSigWidth = 300;
+        const maxSigHeight = 100;
+
         const widthRatio = maxSigWidth / signatureImage.width;
         const heightRatio = maxSigHeight / signatureImage.height;
         const scale = Math.min(widthRatio, heightRatio);
-  
+
         const sigWidth = signatureImage.width * scale;
         const sigHeight = signatureImage.height * scale;
-  
+
         page.drawImage(signatureImage, {
           x: tableX + 8,
-          y: signLineY + 2,
+          y: signLineY + 6,
           width: sigWidth,
           height: sigHeight,
         });
@@ -7666,21 +7885,24 @@ export class OpsJobsService {
         // ignore bad signature image
       }
     }
-  
-    if (options?.recipientName?.trim()) {
-      page.drawText(options.recipientName.trim(), {
-        x: tableX + 6,
-        y: signLineY - 38,
-        size: 10,
-        font,
-        color: black,
-      });
-    }
-  
+
+    const signerName = options?.recipientName?.trim() || null;
+    const signatureLabel = signerName
+      ? `Signature/Name/NRIC No.: ${signerName}`
+      : "Signature/Name/NRIC No.";
+
+    page.drawText(signatureLabel, {
+      x: tableX,
+      y: signLineY - 18,
+      size: 10,
+      font,
+      color: black,
+    });
+
     if (options?.signedAt) {
-      page.drawText(`Signed on: ${this.formatDoDate(options.signedAt)}`, {
-        x: tableX + 190,
-        y: signLineY - 38,
+      page.drawText(`Signed at: ${this.formatDoSignedAt(options.signedAt)}`, {
+        x: tableX,
+        y: signLineY - 34,
         size: 9,
         font,
         color: black,
@@ -7716,6 +7938,20 @@ export class OpsJobsService {
     const d = value instanceof Date ? value : new Date(value);
     if (Number.isNaN(d.getTime())) return "-";
     return d.toLocaleDateString("en-SG");
+  }
+
+  private formatDoSignedAt(value?: Date | string | null): string {
+    if (!value) return "-";
+    const d = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(d.getTime())) return "-";
+    return d.toLocaleString("en-SG", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
   }
 
   private drawCellLabel(
