@@ -1,4 +1,11 @@
-import { TripDocumentType } from "@prisma/client";
+import { TripDocumentType, TripStatus } from "@prisma/client";
+
+export const DO_SIGN_REQUIRES_ONGOING_TRIP_MESSAGE =
+  "DO can only be signed while the trip is ongoing.";
+
+export function tripStatusAllowsDoSign(status: TripStatus): boolean {
+  return status === TripStatus.ONGOING;
+}
 
 export const SIGNABLE_DO_TYPES = [
   TripDocumentType.PICKUP_DO,

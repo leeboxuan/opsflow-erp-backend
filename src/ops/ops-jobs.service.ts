@@ -70,6 +70,8 @@ import {
   type SignableDoType,
   type SignTripDocumentBody,
 } from "./do-signature.helpers";
+import { computeDoSignatureImageDrawRect } from "./signature-pdf-layout.helpers";
+import { normalizeSignatureImageForPdf } from "./signature-image-normalize";
 import {
   documentUploadedByInclude,
   loadUploadActorFields,
@@ -5773,6 +5775,7 @@ export class OpsJobsService {
       signedAt?: Date | null;
       signedByUserId?: string | null;
       signBody?: SignTripDocumentBody | null;
+      replaceExisting?: boolean;
     },
   ): Promise<{ id: string; storageKey: string }> {
     const {
@@ -5782,6 +5785,7 @@ export class OpsJobsService {
       signedAt,
       signedByUserId,
       signBody,
+      replaceExisting = true,
     } = params;
 
     logDoSignatureDebug({
@@ -5795,11 +5799,13 @@ export class OpsJobsService {
       decodedSignatureBufferBytes: signatureImageBytes.length,
     });
 
-    await this.replaceTripDocumentByType(
-      tenantId,
-      tripId,
-      signatureArtifactTypeForDo(doType),
-    );
+    if (replaceExisting) {
+      await this.replaceTripDocumentByType(
+        tenantId,
+        tripId,
+        signatureArtifactTypeForDo(doType),
+      );
+    }
 
     const storageKey = buildSignedDoSignatureStorageKey(
       tenantId,
@@ -5839,6 +5845,24 @@ export class OpsJobsService {
     });
 
     return { id: signatureDoc.id, storageKey };
+  }
+
+  async deactivatePreviousSignedDoSignatureArtifacts(
+    tenantId: string,
+    tripId: string,
+    doType: SignableDoType,
+    keepDocumentId: string,
+  ): Promise<void> {
+    await this.prisma.tripDocument.updateMany({
+      where: {
+        tenantId,
+        tripId,
+        type: signatureArtifactTypeForDo(doType),
+        isActive: true,
+        id: { not: keepDocumentId },
+      },
+      data: { isActive: false },
+    });
   }
 
   /**
@@ -8012,29 +8036,27 @@ export class OpsJobsService {
     // ===== SIGNATURE IMAGE =====
     if (options?.signatureImageBytes) {
       try {
+        const normalizedSignatureBytes = await normalizeSignatureImageForPdf(
+          options.signatureImageBytes,
+        );
         let signatureImage;
         try {
-          signatureImage = await pdfDoc.embedPng(options.signatureImageBytes);
+          signatureImage = await pdfDoc.embedPng(normalizedSignatureBytes);
         } catch {
-          signatureImage = await pdfDoc.embedJpg(options.signatureImageBytes);
+          signatureImage = await pdfDoc.embedJpg(normalizedSignatureBytes);
         }
 
-        const maxSigWidth = 300;
-        const maxSigHeight = 100;
-
-        const widthRatio = maxSigWidth / signatureImage.width;
-        const heightRatio = maxSigHeight / signatureImage.height;
-        const scale = Math.min(widthRatio, heightRatio);
-
-        const sigWidth = signatureImage.width * scale;
-        const sigHeight = signatureImage.height * scale;
-
-        page.drawImage(signatureImage, {
-          x: tableX + 8,
-          y: signLineY + 6,
-          width: sigWidth,
-          height: sigHeight,
+        const drawRect = computeDoSignatureImageDrawRect({
+          tableX,
+          signLineY,
+          declarationY,
+          imageWidthPx: signatureImage.width,
+          imageHeightPx: signatureImage.height,
         });
+
+        if (drawRect.width > 0 && drawRect.height > 0) {
+          page.drawImage(signatureImage, drawRect);
+        }
       } catch {
         // ignore bad signature image
       }

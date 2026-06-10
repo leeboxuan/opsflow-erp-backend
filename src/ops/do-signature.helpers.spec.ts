@@ -1,4 +1,5 @@
 import { TripDocumentType } from "@prisma/client";
+import { TripStatus } from "@prisma/client";
 import {
   buildSignedDoSignatureStorageKey,
   parseSignatureContentType,
@@ -8,12 +9,22 @@ import {
   resolveDoSignatureEmbedInput,
   resolveSignerNameForDo,
   signableDoHasCustomerSignature,
+  tripStatusAllowsDoSign,
 } from "./do-signature.helpers";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 describe("do-signature.helpers", () => {
+  it("allows DO sign only when trip is ONGOING", () => {
+    expect(tripStatusAllowsDoSign(TripStatus.ONGOING)).toBe(true);
+    expect(tripStatusAllowsDoSign(TripStatus.PUBLISHED)).toBe(false);
+    expect(tripStatusAllowsDoSign(TripStatus.COMPLETED)).toBe(false);
+    expect(tripStatusAllowsDoSign(TripStatus.DONE)).toBe(false);
+    expect(tripStatusAllowsDoSign(TripStatus.CANCELLED)).toBe(false);
+    expect(tripStatusAllowsDoSign(TripStatus.DRAFT)).toBe(false);
+  });
+
   const deliveryJob = {
     receiverName: "Delivery Receiver",
     pickupContactName: "Pickup Shipper",

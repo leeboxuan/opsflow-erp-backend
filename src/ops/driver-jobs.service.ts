@@ -50,10 +50,12 @@ import { OpsJobsService } from "./ops-jobs.service";
 import { resolveTripNotesResponseFields } from "./trip-notes.helpers";
 import { resolveTripRouteAddressResponseFields } from "./job-workflow.helpers";
 import {
+  DO_SIGN_REQUIRES_ONGOING_TRIP_MESSAGE,
   isSignableDoType,
   parseSignatureContentType,
   parseSignatureImageBytes,
   parseSignedAtFromBody,
+  tripStatusAllowsDoSign,
   type SignTripDocumentBody,
 } from "./do-signature.helpers";
 import {
@@ -3058,70 +3060,102 @@ export class DriverJobsService {
         "Signature image documents cannot be signed separately; sign the Pickup/Delivery DO instead",
       );
     }
+
+    const isDoDocument = isSignableDoType(doc.type);
+    if (isDoDocument && !tripStatusAllowsDoSign(trip.status as TripStatus)) {
+      throw new BadRequestException(DO_SIGN_REQUIRES_ONGOING_TRIP_MESSAGE);
+    }
+
     const signatureImageBytes = parseSignatureImageBytes(body);
     const signatureContentType = parseSignatureContentType(body);
     const signedAt = parseSignedAtFromBody(body) ?? new Date();
     const normalizedSignedByName = body?.signedByName?.trim() || null;
 
-    if (isSignableDoType(doc.type) && signatureImageBytes?.length) {
-      await this.opsJobs?.persistSignedDoSignatureImage(
-        tenantId,
-        jobId,
-        tripId,
-        doc.type,
-        {
+    let newSignatureDocId: string | null = null;
+    try {
+      if (isDoDocument && signatureImageBytes?.length) {
+        const persisted = await this.opsJobs!.persistSignedDoSignatureImage(
+          tenantId,
+          jobId,
+          tripId,
+          doc.type,
+          {
+            signatureImageBytes,
+            mimeType: signatureContentType,
+            signedByName: normalizedSignedByName,
+            signedAt,
+            signedByUserId: driverUserId,
+            signBody: body,
+            replaceExisting: false,
+          },
+        );
+        newSignatureDocId = persisted.id;
+      }
+
+      if (isDoDocument) {
+        await this.opsJobs?.refreshSignedDoPdf(tenantId, jobId, tripId, doc.type, {
           signatureImageBytes,
-          mimeType: signatureContentType,
-          signedByName: normalizedSignedByName,
+          recipientName: normalizedSignedByName ?? doc.signedByName,
+          signedAt,
+        });
+      }
+
+      const updated = await this.prisma.tripDocument.update({
+        where: { id: documentId },
+        data: {
+          isSigned: true,
           signedAt,
           signedByUserId: driverUserId,
-          signBody: body,
+          signedByName: normalizedSignedByName,
         },
-      );
-    }
-
-    const updated = await this.prisma.tripDocument.update({
-      where: { id: documentId },
-      data: {
-        isSigned: true,
-        signedAt,
-        signedByUserId: driverUserId,
-        signedByName: normalizedSignedByName,
-      },
-      include: documentUploadedByInclude,
-    });
-    await this.audit.log(
-      tenantId,
-      "TRIP_DOC_SIGN",
-      "TRIP",
-      tripId,
-      { jobId, documentId },
-      driverUserId,
-    );
-    rt.publishDocumentEvent(this.realtime, "document.signed", tenantId, documentId, {
-      jobId,
-      tripId,
-      driverUserId,
-      actorUserId: driverUserId,
-      actorRole: Role.DRIVER,
-      tripStatus: trip.status as TripStatus,
-    });
-
-    if (isSignableDoType(updated.type)) {
-      await this.opsJobs?.refreshSignedDoPdf(tenantId, jobId, tripId, updated.type, {
-        signatureImageBytes,
-        recipientName: updated.signedByName,
-        signedAt: updated.signedAt,
-      });
-      const refreshed = await this.prisma.tripDocument.findFirst({
-        where: { id: documentId, tenantId, tripId, isActive: true },
         include: documentUploadedByInclude,
       });
-      if (refreshed) {
-        return this.attachTripDocumentSignedUrl(refreshed);
-      }
-    }
 
-    return this.attachTripDocumentSignedUrl(updated);
+      if (isDoDocument && newSignatureDocId) {
+        await this.opsJobs?.deactivatePreviousSignedDoSignatureArtifacts(
+          tenantId,
+          tripId,
+          doc.type,
+          newSignatureDocId,
+        );
+      }
+
+      await this.audit.log(
+        tenantId,
+        "TRIP_DOC_SIGN",
+        "TRIP",
+        tripId,
+        { jobId, documentId },
+        driverUserId,
+      );
+      rt.publishDocumentEvent(this.realtime, "document.signed", tenantId, documentId, {
+        jobId,
+        tripId,
+        driverUserId,
+        actorUserId: driverUserId,
+        actorRole: Role.DRIVER,
+        tripStatus: trip.status as TripStatus,
+      });
+
+      if (isDoDocument) {
+        const refreshed = await this.prisma.tripDocument.findFirst({
+          where: { id: documentId, tenantId, tripId, isActive: true },
+          include: documentUploadedByInclude,
+        });
+        if (refreshed) {
+          return this.attachTripDocumentSignedUrl(refreshed);
+        }
+      }
+
+      return this.attachTripDocumentSignedUrl(updated);
+    } catch (error) {
+      if (newSignatureDocId) {
+        await this.prisma.tripDocument.update({
+          where: { id: newSignatureDocId },
+          data: { isActive: false },
+        });
+      }
+      throw error;
+    }
   }
 }

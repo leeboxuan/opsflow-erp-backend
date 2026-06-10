@@ -1,5 +1,7 @@
+import sharp from "sharp";
 import { TripDocumentType } from "@prisma/client";
 import { OpsJobsService } from "./ops-jobs.service";
+import * as signatureImageNormalize from "./signature-image-normalize";
 
 const TINY_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -146,6 +148,53 @@ describe("Signed DO PDF rendering", () => {
 
     expect(signedPdf.length).toBeGreaterThan(unsignedPdf.length);
     expect(signedPdf.subarray(0, 4).toString()).toBe("%PDF");
+  });
+
+  it("buildDoPdfBuffer normalizes transparent signature PNG before embed", async () => {
+    const transparentSignaturePng = await sharp({
+      create: {
+        width: 120,
+        height: 40,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      },
+    })
+      .composite([
+        {
+          input: await sharp({
+            create: {
+              width: 100,
+              height: 3,
+              channels: 4,
+              background: { r: 0, g: 0, b: 0, alpha: 255 },
+            },
+          })
+            .png()
+            .toBuffer(),
+          top: 18,
+          left: 10,
+        },
+      ])
+      .png()
+      .toBuffer();
+    const normalizeSpy = jest.spyOn(
+      signatureImageNormalize,
+      "normalizeSignatureImageForPdf",
+    );
+    const { prisma, storage } = makeRefreshPrisma(TripDocumentType.PICKUP_DO);
+    const svc = makeSvc(prisma, storage);
+    const signedAt = new Date("2026-06-10T00:30:00.000Z");
+
+    const signedPdf = await (svc as any).buildDoPdfBuffer(makeJob(), {
+      variant: "pickup",
+      signatureImageBytes: transparentSignaturePng,
+      recipientName: "Shipper Sam",
+      signedAt,
+    });
+
+    expect(normalizeSpy).toHaveBeenCalledWith(transparentSignaturePng);
+    expect(signedPdf.subarray(0, 4).toString()).toBe("%PDF");
+    normalizeSpy.mockRestore();
   });
 
   it("refreshSignedDoPdf uploads new PDF and updates PICKUP_DO storage", async () => {
@@ -402,6 +451,29 @@ describe("Signed DO PDF rendering", () => {
       }),
     );
     expect(result.storageKey).toContain("/signatures/PICKUP_DO/");
+  });
+
+  it("persistSignedDoSignatureImage with replaceExisting false keeps prior signature active until deactivation", async () => {
+    const { prisma, storage } = makeRefreshPrisma(TripDocumentType.PICKUP_DO);
+    const svc = makeSvc(prisma, storage);
+
+    await svc.persistSignedDoSignatureImage(
+      "t1",
+      "j1",
+      "t1",
+      TripDocumentType.PICKUP_DO,
+      {
+        signatureImageBytes: TINY_PNG,
+        mimeType: "image/png",
+        signedByName: "Shipper Sam",
+        signedAt: new Date("2026-06-10T00:30:00.000Z"),
+        signedByUserId: "driver-1",
+        replaceExisting: false,
+      },
+    );
+
+    expect(prisma.tripDocument.updateMany).not.toHaveBeenCalled();
+    expect(prisma.tripDocument.create).toHaveBeenCalled();
   });
 
   it("persistSignedDoSignatureImage stores DELIVERY_SIGNATURE document in Supabase", async () => {
