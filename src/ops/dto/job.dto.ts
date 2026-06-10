@@ -193,8 +193,10 @@ export class JobTripResponseDto {
   destinationLat?: number | null;
   @ApiPropertyOptional()
   destinationLng?: number | null;
+  /** Trip-specific ops/driver instructions (Trip.notes). */
   @ApiPropertyOptional()
   notes?: string | null;
+  /** Job-level notes (Job.notes). */
   @ApiPropertyOptional()
   jobNotes?: string | null;
   @ApiPropertyOptional()
@@ -260,10 +262,6 @@ export class JobTripResponseDto {
 
   @ApiPropertyOptional()
   deliveryPostal?: string | null;
-
-  /** Job-level notes surfaced on the trip card. */
-  @ApiPropertyOptional()
-  notes?: string | null;
 }
 
 export class JobChargeResponseDto {
