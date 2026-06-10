@@ -94,15 +94,15 @@ export class LclImportConfirmRowDto {
   @IsString()
   externalRef: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  receiverName: string;
+  receiverName?: string | null;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  receiverPhone: string;
+  receiverPhone?: string | null;
 
   @ApiProperty()
   @IsString()

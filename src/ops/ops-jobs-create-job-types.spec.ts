@@ -348,6 +348,25 @@ describe("job create: EXPORT and COLLECTION", () => {
     expect(prisma.masterLogisticsLocation.findFirst).not.toHaveBeenCalled();
   });
 
+  it("create persists empty receiver contact when omitted", async () => {
+    const prisma = makeExportCreatePrisma();
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.EXPORT,
+        customerCompanyId: "comp1",
+        pickupAddress1: "7 Gul Circle",
+        deliveryAddress1: "20 Gul Way",
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    expect(prisma.job.create.mock.calls[0][0].data.receiverName).toBe("");
+    expect(prisma.job.create.mock.calls[0][0].data.receiverPhone).toBe("");
+  });
+
   it("COLLECTION create without collectionType fails validation", async () => {
     const prisma = makeExportCreatePrisma();
     const svc = makeSvc(prisma);

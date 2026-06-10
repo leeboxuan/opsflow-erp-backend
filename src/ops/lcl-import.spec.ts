@@ -181,7 +181,7 @@ describe("LCL Import – grouping by Order Ref", () => {
     expect(result.stats.total).toBe(2);
   });
 
-  it("validates and marks rows with missing delivery or receiver as invalid", async () => {
+  it("validates and marks rows with missing delivery as invalid", async () => {
     const rows = [
       {
         "Order Ref": "ORD-EMPTY",
@@ -211,7 +211,7 @@ describe("LCL Import – grouping by Order Ref", () => {
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0].errors.length).toBeGreaterThan(0);
     expect(result.rows[0].errors.some((e) => e.includes("deliveryAddress1"))).toBe(true);
-    expect(result.rows[0].errors.some((e) => e.includes("receiverName"))).toBe(true);
+    expect(result.rows[0].errors.some((e) => e.includes("receiverName"))).toBe(false);
     expect(result.stats.valid).toBe(0);
     expect(result.stats.invalid).toBe(1);
   });

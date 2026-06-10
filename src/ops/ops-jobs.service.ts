@@ -2401,12 +2401,12 @@ export class OpsJobsService {
             : (dto.deliveryPostal ?? null),
         receiverName:
           dto.jobType === JobType.EXPORT
-            ? (stuffingContactName ?? dto.receiverName)
-            : dto.receiverName,
+            ? (stuffingContactName ?? dto.receiverName ?? "")
+            : (dto.receiverName ?? ""),
         receiverPhone:
           dto.jobType === JobType.EXPORT
-            ? (stuffingContactPhone ?? dto.receiverPhone)
-            : dto.receiverPhone,
+            ? (stuffingContactPhone ?? dto.receiverPhone ?? "")
+            : (dto.receiverPhone ?? ""),
         pickupPortCode: pickupPortCode || null,
         portTerminalCode: portTerminalCode || null,
         portName: portName || null,
@@ -6417,8 +6417,6 @@ export class OpsJobsService {
     if (!row.pickupAddress?.trim()) errors.push("pickupAddress is required");
     if (!row.deliveryAddress?.trim())
       errors.push("deliveryAddress is required");
-    if (!row.receiverName?.trim()) errors.push("receiverName is required");
-    if (!row.receiverPhone?.trim()) errors.push("receiverPhone is required");
 
     if (!row.pickupDate?.trim()) {
       errors.push("pickupDate is required");
@@ -6575,8 +6573,8 @@ export class OpsJobsService {
             deliveryAddress1: row.deliveryAddress,
             deliveryAddress2: (row as any).deliveryAddress2 ?? null,
             deliveryPostal: (row as any).deliveryPostal ?? null,
-            receiverName: row.receiverName,
-            receiverPhone: row.receiverPhone,
+            receiverName: row.receiverName?.trim() ?? "",
+            receiverPhone: row.receiverPhone?.trim() ?? "",
             ...(driverId && {
               assignedDriverId: driverId,
               assignedAt: new Date(),
@@ -7040,19 +7038,6 @@ export class OpsJobsService {
     if (!row.deliveryAddress1?.trim())
       errors.push("deliveryAddress1 is required");
 
-    const receiverName = (row.receiverName || "").trim();
-    if (!receiverName) errors.push("receiverName is required");
-
-    const receiverPhone =
-      (row.receiverPhone || "").trim() ||
-      (pickup.pickupContactPhone || "").trim();
-
-    if (!receiverPhone) {
-      errors.push(
-        "receiverPhone is required (or set pickupContactPhone as default)",
-      );
-    }
-
     return errors;
   }
 
@@ -7233,8 +7218,8 @@ export class OpsJobsService {
             deliveryAddress1: row.deliveryAddress1,
             deliveryAddress2: row.deliveryAddress2 ?? null,
             deliveryPostal: row.deliveryPostal ?? null,
-            receiverName: row.receiverName,
-            receiverPhone: row.receiverPhone,
+            receiverName: row.receiverName?.trim() ?? "",
+            receiverPhone: row.receiverPhone?.trim() ?? "",
             items: {
               create:
                 parsedItems.length > 0

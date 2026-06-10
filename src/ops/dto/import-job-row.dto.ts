@@ -71,15 +71,15 @@ export class ImportJobRowDto {
   @IsString()
   deliveryPostal?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  receiverName: string;
+  receiverName?: string | null;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  receiverPhone: string;
+  receiverPhone?: string | null;
 
   @ApiProperty({ description: "ISO date (YYYY-MM-DD)" })
   @IsDateString()

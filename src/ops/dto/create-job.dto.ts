@@ -358,15 +358,23 @@ export class CreateJobDto {
   @IsNumber()
   deliveryLng?: number;
 
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description:
+      "Delivery contact name. Optional for IMPORT, EXPORT, COLLECTION, and LCL.",
+    nullable: true,
+  })
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  receiverName: string;
+  receiverName?: string | null;
 
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description:
+      "Delivery contact phone. Optional for IMPORT, EXPORT, COLLECTION, and LCL.",
+    nullable: true,
+  })
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  receiverPhone: string;
+  receiverPhone?: string | null;
 
   @ApiPropertyOptional({
     description:

@@ -72,15 +72,15 @@ export class JobBatchImportRowDto {
   @IsString()
   deliveryPostal?: string | null;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  receiverName: string;
+  receiverName?: string | null;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  receiverPhone: string;
+  receiverPhone?: string | null;
 
   @ApiPropertyOptional({
     description: "If set with itemQty, a job line item is created",

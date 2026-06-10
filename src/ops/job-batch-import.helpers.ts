@@ -140,8 +140,6 @@ const REQUIRED_BATCH_HEADERS: (keyof JobBatchImportRowDto)[] = [
   "pickupDate",
   "pickupAddress1",
   "deliveryAddress1",
-  "receiverName",
-  "receiverPhone",
 ];
 
 export function assertJobBatchImportTemplateHasHeaders(
@@ -205,8 +203,6 @@ export function validateJobBatchImportRowFields(
 
   if (!row.pickupAddress1?.trim()) errors.push("pickupAddress1: required");
   if (!row.deliveryAddress1?.trim()) errors.push("deliveryAddress1: required");
-  if (!row.receiverName?.trim()) errors.push("receiverName: required");
-  if (!row.receiverPhone?.trim()) errors.push("receiverPhone: required");
 
   const code = row.itemCode?.trim();
   if (code && row.itemQty === undefined) {
@@ -301,8 +297,8 @@ export function buildBatchImportJobCreateData(input: {
     deliveryAddress1: row.deliveryAddress1.trim(),
     deliveryAddress2: row.deliveryAddress2?.trim() || null,
     deliveryPostal: row.deliveryPostal?.trim() || null,
-    receiverName: row.receiverName.trim(),
-    receiverPhone: row.receiverPhone.trim(),
+    receiverName: row.receiverName?.trim() ?? "",
+    receiverPhone: row.receiverPhone?.trim() ?? "",
     ...(jobType === JobType.COLLECTION && row.collectionType
       ? { collectionType: row.collectionType }
       : {}),
