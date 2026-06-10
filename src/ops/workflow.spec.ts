@@ -1,10 +1,12 @@
 import { JobTripTemplate, JobType, TripDocumentType } from "@prisma/client";
 import {
+  buildTripCompletionDocumentGaps,
   completionRuleForTemplate,
   GUL_CIRCLE_ROUTE_DEFAULTS,
   jobTripTemplateDisplayLabel,
   lclPickupToDeliveryRouteSnapshot,
   resolveAppendTripRouteSnapshot,
+  trailerCheckoutBlocksCompletion,
   tripCreateManyForJob,
   TRIP_COMPLETION_RULES,
 } from "./job-workflow.helpers";
@@ -607,6 +609,63 @@ describe("workflow helpers", () => {
     expect(lines).toEqual([]);
   },
   15_000);
+});
+
+describe("trip completion document gaps", () => {
+  it("returns POD_PHOTO when photo documentation is missing", () => {
+    const missing = buildTripCompletionDocumentGaps([
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: new Date(),
+        isSigned: true,
+      },
+    ]);
+    expect(missing).toEqual(["POD_PHOTO"]);
+  });
+
+  it("accepts OTHER as satisfying photo documentation", () => {
+    const missing = buildTripCompletionDocumentGaps([
+      {
+        type: TripDocumentType.OTHER,
+        signedAt: null,
+        isSigned: false,
+      },
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: new Date(),
+        isSigned: true,
+      },
+    ]);
+    expect(missing).toEqual([]);
+  });
+
+  it("returns DELIVERY_DO when delivery DO is unsigned", () => {
+    const missing = buildTripCompletionDocumentGaps([
+      {
+        type: TripDocumentType.POD_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: null,
+        isSigned: false,
+      },
+    ]);
+    expect(missing).toEqual([TripDocumentType.DELIVERY_DO]);
+  });
+
+  it("does not block completion for trailerParkingLocationCode alone", () => {
+    expect(
+      trailerCheckoutBlocksCompletion(true, ["trailerParkingLocationCode"]),
+    ).toBe(false);
+    expect(
+      trailerCheckoutBlocksCompletion(true, [
+        "trailerEndPhoto",
+        "trailerParkingLocationCode",
+      ]),
+    ).toBe(true);
+  });
 });
 
 describe("portal user name", () => {

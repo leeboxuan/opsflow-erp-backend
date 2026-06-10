@@ -2,14 +2,17 @@ import {
   NotificationAudience,
   NotificationSeverity,
   Role,
+  TripStatus,
 } from "@prisma/client";
 import type { RealtimeEvent } from "../realtime/realtime-event.types";
+import { shouldNotifyAssignedDriver } from "./driver-notification-audience";
 import {
   buildNotificationMetadataFromEvent,
   documentNotificationDescription,
   jobNotificationDescription,
   tripNotificationDescription,
 } from "./notification-display-context";
+import { driverNotificationCopy } from "./trip-details-notification";
 
 export const PERSISTED_NOTIFICATION_EVENT_TYPES = new Set([
   "job.created",
@@ -119,15 +122,22 @@ export function buildNotificationSpecsFromRealtimeEvent(
       const specs: NotificationCreateSpec[] = [];
       const tripTitle = tripEventTitle(event.type);
       const tripDesc = tripNotificationDescription(event);
+      const driverCopy = event.notificationKind
+        ? driverNotificationCopy(event)
+        : null;
 
-      if (event.driverUserId) {
+      if (
+        shouldNotifyAssignedDriverForTripEvent(event, {
+          isDriverVisibleEvent: isDriverVisibleTripEvent(event.type),
+        })
+      ) {
         specs.push({
           ...base,
           audience: NotificationAudience.USER,
-          userId: event.driverUserId,
+          userId: event.driverUserId!,
           role: null,
-          title: tripTitle.driver,
-          description: tripDesc,
+          title: driverCopy?.title ?? tripTitle.driver,
+          description: driverCopy?.description ?? tripDesc,
           severity: tripSeverity(event.type),
         });
       }
@@ -149,14 +159,24 @@ export function buildNotificationSpecsFromRealtimeEvent(
     case "document.deleted": {
       const specs: NotificationCreateSpec[] = [];
       const docTitle = documentEventTitle(event.type);
+      const driverCopy =
+        event.type === "document.uploaded" && event.notificationKind
+          ? driverNotificationCopy(event)
+          : null;
 
-      if (event.driverUserId) {
+      if (
+        shouldNotifyAssignedDriverForTripEvent(event, {
+          isDriverVisibleEvent: event.type !== "document.deleted",
+        })
+      ) {
         specs.push({
           ...base,
           audience: NotificationAudience.USER,
-          userId: event.driverUserId,
-          title: docTitle.driver,
-          description: documentNotificationDescription(event),
+          userId: event.driverUserId!,
+          title: driverCopy?.title ?? docTitle.driver,
+          description:
+            driverCopy?.description
+            ?? documentNotificationDescription(event),
           severity: NotificationSeverity.INFO,
         });
       }
@@ -276,6 +296,36 @@ function tripEventTitle(type: string): { driver: string; ops: string } {
     "trip.cancelled": { driver: "Trip cancelled", ops: "Trip cancelled" },
   };
   return map[type] ?? { driver: "Trip update", ops: "Trip update" };
+}
+
+function shouldNotifyAssignedDriverForTripEvent(
+  event: RealtimeEvent,
+  opts: { isDriverVisibleEvent: boolean },
+): boolean {
+  if (!event.driverUserId) return false;
+
+  const allowUnpublished =
+    event.type === "trip.assigned"
+    || event.type === "trip.unassigned"
+    || event.type === "trip.published"
+    || event.type === "trip.unpublished"
+    || event.type === "trip.cancelled";
+
+  return shouldNotifyAssignedDriver({
+    actorUserId: event.actorUserId,
+    actorRole: event.actorRole,
+    assignedDriverUserId: event.driverUserId,
+    tripStatus: event.tripStatus as TripStatus | undefined,
+    isDriverVisibleEvent: opts.isDriverVisibleEvent,
+    allowUnpublishedTrip: allowUnpublished,
+  });
+}
+
+function isDriverVisibleTripEvent(type: string): boolean {
+  if (type === "trip.started" || type === "trip.completed") {
+    return false;
+  }
+  return true;
 }
 
 function tripSeverity(type: string): NotificationSeverity {

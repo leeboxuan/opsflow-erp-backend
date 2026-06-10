@@ -1,4 +1,5 @@
 import {
+  createDriverTripDocUploadPerfTimer,
   isDriverApiPerfLogEnabled,
   logDriverEndpointPerf,
   withDriverEndpointPerf,
@@ -45,6 +46,44 @@ describe("driver-endpoint-perf", () => {
       expect.not.objectContaining({
         signedUrl: expect.anything(),
         apiKey: expect.anything(),
+      }),
+    );
+    spy.mockRestore();
+  });
+
+  it("logDriverTripDocUploadPerf records stage timings without signed URLs", () => {
+    process.env.DRIVER_API_PERF_LOG = "true";
+    const spy = jest.spyOn(console, "info").mockImplementation(() => undefined);
+    const timer = createDriverTripDocUploadPerfTimer({
+      endpoint: "POST /api/drivers/jobs/:jobId/trips/:tripId/documents",
+      tenantId: "t1",
+      jobId: "job-1",
+      tripId: "trip-1",
+      documentType: "POD_PHOTO",
+      fileSizeBytes: 2_500_000,
+      mimeType: "image/jpeg",
+    });
+    timer.markFileParsed();
+    timer.markAuthDbStart();
+    timer.markAuthDbEnd();
+    timer.markStorageUploadStart();
+    timer.markStorageUploadEnd();
+    timer.markDbWriteStart();
+    timer.markDbWriteEnd();
+    timer.markSideEffectsStart();
+    timer.markSideEffectsEnd();
+    timer.finish();
+
+    expect(spy).toHaveBeenCalledWith(
+      "driver_trip_doc_upload_perf",
+      expect.objectContaining({
+        documentType: "POD_PHOTO",
+        fileSizeBytes: 2_500_000,
+        timings: expect.objectContaining({
+          storageUploadMs: expect.any(Number),
+          dbWriteMs: expect.any(Number),
+          totalMs: expect.any(Number),
+        }),
       }),
     );
     spy.mockRestore();

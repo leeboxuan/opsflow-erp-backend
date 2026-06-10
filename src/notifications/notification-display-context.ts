@@ -192,6 +192,7 @@ export function buildNotificationMetadataFromEvent(
 
   if (event.tripId) meta.tripId = event.tripId;
   if (event.tripDisplayRef) meta.tripDisplayRef = event.tripDisplayRef;
+  if (event.notificationKind) meta.type = event.notificationKind;
 
   const driverUserId = event.driverUserId;
   if (driverUserId) meta.assignedDriverUserId = driverUserId;

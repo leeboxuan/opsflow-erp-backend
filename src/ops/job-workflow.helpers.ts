@@ -277,6 +277,74 @@ export function resolveTripCompletionRule(raw: unknown): ResolvedTripCompletionR
   };
 }
 
+/** Canonical missing key returned to mobile for photo documentation gaps. */
+export const PHOTO_DOCUMENTATION_MISSING_KEY = "POD_PHOTO";
+
+/** Active trip document types that satisfy the photo documentation requirement. */
+export const PHOTO_DOCUMENTATION_SATISFYING_TYPES: TripDocumentType[] = [
+  TripDocumentType.POD_PHOTO,
+  TripDocumentType.OTHER,
+];
+
+export type TripCompletionDocRow = {
+  type: TripDocumentType;
+  signedAt: Date | null;
+  isSigned: boolean;
+};
+
+function isSignableDoMarkedSigned(doc: TripCompletionDocRow): boolean {
+  if (
+    doc.type !== TripDocumentType.DELIVERY_DO
+    && doc.type !== TripDocumentType.PICKUP_DO
+  ) {
+    return false;
+  }
+  return !!doc.signedAt || doc.isSigned === true;
+}
+
+/**
+ * Driver trip completion document gaps (photo documentation + delivery DO signing).
+ * Photo documentation is always required; missing key is always POD_PHOTO.
+ */
+export function buildTripCompletionDocumentGaps(
+  docs: TripCompletionDocRow[],
+): string[] {
+  const missing: string[] = [];
+
+  const hasPhotoDocumentation = docs.some((d) =>
+    PHOTO_DOCUMENTATION_SATISFYING_TYPES.includes(d.type),
+  );
+  if (!hasPhotoDocumentation) {
+    missing.push(PHOTO_DOCUMENTATION_MISSING_KEY);
+  }
+
+  const deliveryDo = docs.find((d) => d.type === TripDocumentType.DELIVERY_DO);
+  if (!deliveryDo) {
+    return missing;
+  }
+
+  const deliveryDoSigned = isSignableDoMarkedSigned(deliveryDo);
+  const hasLegacyPodSignature = docs.some(
+    (d) => d.type === TripDocumentType.POD_SIGNATURE,
+  );
+  if (!deliveryDoSigned && !hasLegacyPodSignature) {
+    missing.push(TripDocumentType.DELIVERY_DO);
+  }
+
+  return missing;
+}
+
+/** Trailer checkout fields that block completion (parking code is advisory only). */
+export function trailerCheckoutBlocksCompletion(
+  requiresTrailerCheckout: boolean,
+  missingTrailerCheckoutFields: string[],
+): boolean {
+  if (!requiresTrailerCheckout) return false;
+  return missingTrailerCheckoutFields.some(
+    (field) => field !== "trailerParkingLocationCode",
+  );
+}
+
 /** Job types whose trip detail cargo is exposed as CONTAINER (not item/qty lines). */
 export function isContainerCargoJobType(jobType: JobType): boolean {
   return (

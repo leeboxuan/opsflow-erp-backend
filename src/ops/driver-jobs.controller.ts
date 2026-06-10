@@ -258,7 +258,7 @@ export class DriverJobsController {
   @ApiOperation({
     summary: "Upload trip document (form field type + file)",
     description:
-      "Used for trip/container photo documentation. Upload multiple photos by calling this endpoint repeatedly with type=OTHER or type=POD_PHOTO.",
+      "Used for trip/container photo documentation. Upload multiple photos by calling this endpoint repeatedly with type=OTHER or type=POD_PHOTO. Returns document metadata only (no signed URLs); fetch preview via GET .../documents/:documentId/signed-url.",
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
@@ -318,6 +318,7 @@ export class DriverJobsController {
       type,
       file,
       requiresSignature,
+      { email: req.user?.email ?? null },
     );
   }
 

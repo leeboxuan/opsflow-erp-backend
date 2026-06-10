@@ -1,3 +1,4 @@
+import type { Role, TripStatus } from "@prisma/client";
 import type { RealtimeEventsService } from "./realtime-events.service";
 import type {
   RealtimeEntityType,
@@ -5,7 +6,14 @@ import type {
   RealtimeNotificationContext,
 } from "./realtime-event.types";
 
-type PublishContextOpts = Partial<RealtimeNotificationContext>;
+type PublishContextOpts = Partial<RealtimeNotificationContext> & {
+  actorUserId?: string | null;
+  actorRole?: Role | null;
+  tripStatus?: TripStatus | null;
+  notificationKind?: string;
+  documentTypeLabel?: string;
+  earningsAmountCents?: number;
+};
 
 function publish(
   svc: RealtimeEventsService | undefined,
@@ -31,6 +39,12 @@ export function publishJobEvent(
     reason: opts?.reason,
     jobInternalRef: opts?.jobInternalRef,
     customerCompanyName: opts?.customerCompanyName,
+    actorUserId: opts?.actorUserId ?? undefined,
+    actorRole: opts?.actorRole ?? undefined,
+    tripStatus: opts?.tripStatus ?? undefined,
+    notificationKind: opts?.notificationKind,
+    documentTypeLabel: opts?.documentTypeLabel,
+    earningsAmountCents: opts?.earningsAmountCents,
   });
   svc?.publishDispatchAndDashboard(tenantId, {
     jobId,
@@ -61,6 +75,12 @@ export function publishTripEvent(
     tripDisplayRef: opts?.tripDisplayRef,
     assignedDriverName: opts?.assignedDriverName,
     vehicleNumber: opts?.vehicleNumber,
+    actorUserId: opts?.actorUserId ?? undefined,
+    actorRole: opts?.actorRole ?? undefined,
+    tripStatus: opts?.tripStatus ?? undefined,
+    notificationKind: opts?.notificationKind,
+    documentTypeLabel: opts?.documentTypeLabel,
+    earningsAmountCents: opts?.earningsAmountCents,
   });
   svc?.publishDispatchAndDashboard(tenantId, {
     jobId,
@@ -96,6 +116,12 @@ export function publishDocumentEvent(
     tripDisplayRef: opts.tripDisplayRef,
     assignedDriverName: opts.assignedDriverName,
     vehicleNumber: opts.vehicleNumber,
+    actorUserId: opts.actorUserId ?? undefined,
+    actorRole: opts.actorRole ?? undefined,
+    tripStatus: opts.tripStatus ?? undefined,
+    notificationKind: opts.notificationKind,
+    documentTypeLabel: opts.documentTypeLabel,
+    earningsAmountCents: opts.earningsAmountCents,
   });
   svc?.publishDispatchAndDashboard(tenantId, {
     jobId: opts.jobId,

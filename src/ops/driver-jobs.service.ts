@@ -8,6 +8,7 @@ import {
 import {
   JobStatus,
   Prisma,
+  Role,
   TripPendingState,
   TripStatus,
   TripDocumentType,
@@ -28,9 +29,16 @@ import {
   resolveDocumentUploadedByFields,
 } from "./document-uploader.utils";
 import { buildTripDisplayRef } from "../common/trip-display-ref";
-import { withDriverEndpointPerf } from "../common/driver-endpoint-perf";
+import {
+  createDriverTripDocUploadPerfTimer,
+  withDriverEndpointPerf,
+} from "../common/driver-endpoint-perf";
 import { JobLocationDto } from "./dto/location.dto";
 import { DocumentSignedUrlDto, JobDto, JobDocumentDto } from "./dto/job.dto";
+import {
+  buildTripCompletionDocumentGaps,
+  trailerCheckoutBlocksCompletion,
+} from "./job-workflow.helpers";
 import {
   evaluateJobInvoiceReadiness,
   syncJobInvoiceReadiness,
@@ -363,42 +371,13 @@ export class DriverJobsService {
     return trip;
   }
 
-  /** Signature on a signable DO (not standalone POD_SIGNATURE artifact). */
-  private isSignableDoMarkedSigned(doc: {
-    type: TripDocumentType;
-    signedAt: Date | null;
-    isSigned: boolean;
-  }): boolean {
-    if (
-      doc.type !== TripDocumentType.DELIVERY_DO
-      && doc.type !== TripDocumentType.PICKUP_DO
-    ) {
-      return false;
-    }
-    return !!doc.signedAt || doc.isSigned === true;
-  }
-
-  /**
-   * DELIVERY_DO is required only when an active DELIVERY_DO exists on the trip.
-   * When present, it must be signed (signedAt/isSigned) or legacy POD_SIGNATURE must exist.
-   */
-  private buildTripCompletionDocumentGaps(
-    docs: Array<{ type: TripDocumentType; signedAt: Date | null; isSigned: boolean }>,
-  ): string[] {
-    const missing: string[] = [];
-    const deliveryDo = docs.find((d) => d.type === TripDocumentType.DELIVERY_DO);
-    if (!deliveryDo) {
-      return missing;
-    }
-    const deliveryDoSigned = this.isSignableDoMarkedSigned(deliveryDo);
-    const hasLegacyPodSignature = docs.some(
-      (d) => d.type === TripDocumentType.POD_SIGNATURE,
-    );
-    if (!deliveryDoSigned && !hasLegacyPodSignature) {
-      missing.push("DELIVERY_DO");
-    }
-    return missing;
-  }
+  private static readonly COMPLETION_DOC_QUERY_TYPES: TripDocumentType[] = [
+    TripDocumentType.DELIVERY_DO,
+    TripDocumentType.POD_SIGNATURE,
+    TripDocumentType.PICKUP_DO,
+    TripDocumentType.POD_PHOTO,
+    TripDocumentType.OTHER,
+  ];
 
   private buildMissingTrailerCheckoutFields(
     requiresTrailerCheckout: boolean,
@@ -426,8 +405,10 @@ export class DriverJobsService {
   ): boolean {
     if (tripStatus !== TripStatus.ONGOING) return false;
     const hasMissingBaseDocuments = missingBaseCompletionDocuments.length > 0;
-    const hasMissingTrailerCheckout =
-      requiresTrailerCheckout && missingTrailerCheckoutFields.length > 0;
+    const hasMissingTrailerCheckout = trailerCheckoutBlocksCompletion(
+      requiresTrailerCheckout,
+      missingTrailerCheckoutFields,
+    );
     return !hasMissingBaseDocuments && !hasMissingTrailerCheckout;
   }
 
@@ -2228,6 +2209,9 @@ export class DriverJobsService {
 
     rt.publishTripEvent(this.realtime, "trip.started", tenantId, jobId, tripId, {
       driverUserId,
+      actorUserId: driverUserId,
+      actorRole: Role.DRIVER,
+      tripStatus: TripStatus.ONGOING,
     });
     rt.publishDriverActiveJobsUpdated(this.realtime, tenantId, driverUserId);
 
@@ -2349,13 +2333,7 @@ export class DriverJobsService {
           tenantId,
           tripId,
           isActive: true,
-          type: {
-            in: [
-              TripDocumentType.DELIVERY_DO,
-              TripDocumentType.POD_SIGNATURE,
-              TripDocumentType.PICKUP_DO,
-            ],
-          },
+          type: { in: DriverJobsService.COMPLETION_DOC_QUERY_TYPES },
         },
         select: { type: true, signedAt: true, isSigned: true },
       }),
@@ -2364,7 +2342,7 @@ export class DriverJobsService {
         hasNewTrailerEndPhotoUpload: !!payload?.trailerEndPhoto?.buffer?.length,
       }),
     ]);
-    const missing = this.buildTripCompletionDocumentGaps(completionDocs);
+    const missing = buildTripCompletionDocumentGaps(completionDocs);
 
     if (missing.length > 0) {
       throw new BadRequestException(
@@ -2380,9 +2358,17 @@ export class DriverJobsService {
 
     let trailerLocation: { code: string; name: string } | null = null;
     if (requiresTrailerCheckout) {
-      if (missingTrailerCheckoutFields.length > 0) {
+      if (
+        trailerCheckoutBlocksCompletion(
+          requiresTrailerCheckout,
+          missingTrailerCheckoutFields,
+        )
+      ) {
+        const blocking = missingTrailerCheckoutFields.filter(
+          (f) => f !== "trailerParkingLocationCode",
+        );
         throw new BadRequestException(
-          `Missing trailer checkout fields: ${missingTrailerCheckoutFields.join(", ")}`,
+          `Missing trailer checkout fields: ${blocking.join(", ")}`,
         );
       }
 
@@ -2394,16 +2380,18 @@ export class DriverJobsService {
         }
       }
 
-      const location = await this.prisma.masterTrailerLocation.findFirst({
-        where: { code: resolvedTrailerParkingLocationCode ?? undefined },
-        select: { code: true, name: true },
-      });
-      if (!location) {
-        throw new BadRequestException(
-          `Unknown trailerParkingLocationCode: ${resolvedTrailerParkingLocationCode}`,
-        );
+      if (resolvedTrailerParkingLocationCode) {
+        const location = await this.prisma.masterTrailerLocation.findFirst({
+          where: { code: resolvedTrailerParkingLocationCode },
+          select: { code: true, name: true },
+        });
+        if (!location) {
+          throw new BadRequestException(
+            `Unknown trailerParkingLocationCode: ${resolvedTrailerParkingLocationCode}`,
+          );
+        }
+        trailerLocation = location;
       }
-      trailerLocation = location;
     }
 
     const now = new Date();
@@ -2492,6 +2480,9 @@ export class DriverJobsService {
 
     rt.publishTripEvent(this.realtime, "trip.completed", tenantId, jobId, tripId, {
       driverUserId,
+      actorUserId: driverUserId,
+      actorRole: Role.DRIVER,
+      tripStatus: TripStatus.COMPLETED,
     });
     rt.publishDriverActiveJobsUpdated(this.realtime, tenantId, driverUserId);
 
@@ -2549,19 +2540,13 @@ export class DriverJobsService {
           tenantId,
           tripId,
           isActive: true,
-          type: {
-            in: [
-              TripDocumentType.DELIVERY_DO,
-              TripDocumentType.POD_SIGNATURE,
-              TripDocumentType.PICKUP_DO,
-            ],
-          },
+          type: { in: DriverJobsService.COMPLETION_DOC_QUERY_TYPES },
         },
         select: { type: true, signedAt: true, isSigned: true },
       }),
       this.computeTrailerCheckoutGapsForTrip(tenantId, driverUserId, trip),
     ]);
-    const missingDocuments = this.buildTripCompletionDocumentGaps(completionDocs);
+    const missingDocuments = buildTripCompletionDocumentGaps(completionDocs);
     const { requiresTrailerCheckout, missingTrailerCheckoutFields } = trailerCheckout;
     const parkingLocations = await this.listTrailerParkingLocations();
 
@@ -2830,9 +2815,19 @@ export class DriverJobsService {
     type: TripDocumentType,
     file: Express.Multer.File,
     requiresSignature = false,
+    uploadActorHint?: { name?: string | null; email?: string | null },
   ): Promise<JobDocumentDto> {
-    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
-    await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
+    const perf = createDriverTripDocUploadPerfTimer({
+      endpoint: "POST /api/drivers/jobs/:jobId/trips/:tripId/documents",
+      tenantId,
+      jobId,
+      tripId,
+      documentType: type,
+      fileSizeBytes: file?.size ?? null,
+      mimeType: file?.mimetype ?? null,
+    });
+    perf.markFileParsed();
+
     if (!file?.buffer?.length) {
       throw new BadRequestException("Trip document file is required");
     }
@@ -2857,19 +2852,30 @@ export class DriverJobsService {
       throw new BadRequestException("Unsupported file type for this trip document");
     }
 
+    perf.markAuthDbStart();
+    const [, trip] = await Promise.all([
+      this.findAssignedJobOrThrow(tenantId, jobId, driverUserId),
+      this.findPublishedTripOrThrow(tenantId, jobId, tripId),
+    ]);
+    perf.markAuthDbEnd();
+
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
     const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/${type.toLowerCase()}/${Date.now()}${ext}`;
 
     const supabase = this.supabaseService.getClient();
+    perf.markStorageUploadStart();
     const { error } = await supabase.storage
       .from(JOB_DOCUMENTS_BUCKET)
       .upload(key, file.buffer, {
         contentType: file.mimetype ?? "application/octet-stream",
         upsert: false,
       });
+    perf.markStorageUploadEnd();
     if (error) {
       throw new BadRequestException(`Storage upload failed: ${error.message}`);
     }
+
+    perf.markDbWriteStart();
     if (DRIVER_SINGLE_ACTIVE_TRIP_DOCUMENT_TYPES.has(type)) {
       await this.prisma.tripDocument.updateMany({
         where: { tenantId, tripId, type, isActive: true },
@@ -2880,6 +2886,7 @@ export class DriverJobsService {
     const uploadActor = await loadUploadActorFields(
       this.prisma,
       driverUserId,
+      uploadActorHint,
     );
     const doc = await this.prisma.tripDocument.create({
       data: {
@@ -2908,14 +2915,22 @@ export class DriverJobsService {
       { jobId, documentId: doc.id, type },
       driverUserId,
     );
+    perf.markDbWriteEnd();
 
+    perf.markSideEffectsStart();
     rt.publishDocumentEvent(this.realtime, "document.uploaded", tenantId, doc.id, {
       jobId,
       tripId,
       driverUserId,
+      actorUserId: driverUserId,
+      actorRole: Role.DRIVER,
+      tripStatus: trip.status as TripStatus,
     });
+    perf.markSideEffectsEnd();
 
-    return this.attachTripDocumentSignedUrl(doc);
+    const result = this.toDocumentMetadataDto(doc);
+    perf.finish(result);
+    return result;
   }
 
   async deleteTripDocumentForDriver(
@@ -2976,6 +2991,9 @@ export class DriverJobsService {
       jobId,
       tripId,
       driverUserId,
+      actorUserId: driverUserId,
+      actorRole: Role.DRIVER,
+      tripStatus: trip.status as TripStatus,
     });
 
     return { success: true, documentId: doc.id };
@@ -2990,7 +3008,7 @@ export class DriverJobsService {
     signedByName?: string,
   ): Promise<JobDocumentDto> {
     await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
-    await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
+    const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
     const doc = await this.prisma.tripDocument.findFirst({
       where: { id: documentId, tenantId, tripId, isActive: true },
     });
@@ -3023,6 +3041,9 @@ export class DriverJobsService {
       jobId,
       tripId,
       driverUserId,
+      actorUserId: driverUserId,
+      actorRole: Role.DRIVER,
+      tripStatus: trip.status as TripStatus,
     });
     return this.attachTripDocumentSignedUrl(updated);
   }

@@ -67,6 +67,8 @@ import {
 } from "./job-invoice-readiness";
 import { RealtimeEventsService } from "../realtime/realtime-events.service";
 import * as rt from "../realtime/realtime-publish";
+import { tripDocumentTypeLabel } from "../notifications/document-type-label";
+import { resolveTripDetailsNotificationKind } from "../notifications/trip-details-notification";
 
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
@@ -1241,6 +1243,16 @@ export class OpsJobsService {
     private readonly supabaseService: SupabaseService,
     @Optional() private readonly realtime?: RealtimeEventsService,
   ) {}
+
+  private notifyActorContext(user: any): {
+    actorUserId?: string;
+    actorRole?: Role;
+  } {
+    return {
+      actorUserId: user?.userId ?? undefined,
+      actorRole: user?.role as Role | undefined,
+    };
+  }
 
   private getCustomerCompanyIdOrThrow(user: any): string {
     if (user?.role !== Role.CUSTOMER) {
@@ -4013,7 +4025,9 @@ export class OpsJobsService {
 
     rt.publishTripEvent(this.realtime, "trip.cancelled", tenantId, jobId, tripId, {
       driverUserId: trip.assignedDriverUserId,
+      tripStatus: TripStatus.CANCELLED,
       reason: "Deleted by ops",
+      ...this.notifyActorContext(user),
     });
     if (trip.assignedDriverUserId) {
       rt.publishDriverActiveJobsUpdated(
@@ -4692,6 +4706,11 @@ export class OpsJobsService {
 
     rt.publishTripEvent(this.realtime, "trip.updated", tenantId, jobId, tripId, {
       driverUserId: trip.assignedDriverUserId,
+      tripStatus: trip.status as TripStatus,
+      ...this.notifyActorContext(user),
+      ...(dto.earningRateMasterId !== undefined
+        ? { notificationKind: "EARNINGS_UPDATED", earningsAmountCents: data.driverEarningCents ?? trip.driverEarningCents }
+        : {}),
     });
 
     return this.getOne(tenantId, jobId, user);
@@ -4842,9 +4861,15 @@ export class OpsJobsService {
       actorUserId,
     );
 
-    rt.publishTripEvent(this.realtime, "trip.updated", tenantId, jobId, tripId, {
-      driverUserId: trip.assignedDriverUserId,
-    });
+    const notificationKind = resolveTripDetailsNotificationKind(changedFields);
+    if (notificationKind) {
+      rt.publishTripEvent(this.realtime, "trip.updated", tenantId, jobId, tripId, {
+        driverUserId: trip.assignedDriverUserId,
+        tripStatus: trip.status as TripStatus,
+        notificationKind,
+        ...this.notifyActorContext(user),
+      });
+    }
     rt.publishJobEvent(this.realtime, "job.updated", tenantId, jobId);
 
     return this.getTripDetail(tenantId, tripId, user);
@@ -4946,10 +4971,14 @@ export class OpsJobsService {
     );
     rt.publishTripEvent(this.realtime, "trip.assigned", tenantId, jobId, tripId, {
       driverUserId: dto.driverId,
+      tripStatus: trip.status as TripStatus,
+      ...this.notifyActorContext(user),
     });
     if (oldDriverUserId && oldDriverUserId !== dto.driverId) {
       rt.publishTripEvent(this.realtime, "trip.unassigned", tenantId, jobId, tripId, {
         driverUserId: oldDriverUserId,
+        tripStatus: trip.status as TripStatus,
+        ...this.notifyActorContext(user),
       });
     }
     rt.publishDriverActiveJobsUpdated(this.realtime, tenantId, dto.driverId);
@@ -5018,6 +5047,8 @@ export class OpsJobsService {
     await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
     rt.publishTripEvent(this.realtime, "trip.published", tenantId, jobId, tripId, {
       driverUserId: trip.assignedDriverUserId,
+      tripStatus: TripStatus.PUBLISHED,
+      ...this.notifyActorContext(user),
     });
     if (trip.assignedDriverUserId) {
       rt.publishDriverActiveJobsUpdated(
@@ -5105,6 +5136,8 @@ export class OpsJobsService {
 
     rt.publishTripEvent(this.realtime, "trip.unpublished", tenantId, jobId, tripId, {
       driverUserId: trip.assignedDriverUserId,
+      tripStatus: TripStatus.DRAFT,
+      ...this.notifyActorContext(user),
     });
     if (trip.assignedDriverUserId) {
       rt.publishDriverActiveJobsUpdated(
@@ -5165,10 +5198,14 @@ export class OpsJobsService {
     );
     const tripForEmit = await this.prisma.trip.findFirst({
       where: { id: tripId, tenantId },
-      select: { assignedDriverUserId: true },
+      select: { assignedDriverUserId: true, driverEarningCents: true },
     });
     rt.publishTripEvent(this.realtime, "trip.done", tenantId, jobId, tripId, {
       driverUserId: tripForEmit?.assignedDriverUserId,
+      tripStatus: TripStatus.DONE,
+      notificationKind: "TRIP_COMPLETED",
+      earningsAmountCents: tripForEmit?.driverEarningCents ?? undefined,
+      ...this.notifyActorContext(user),
     });
     return this.getOne(tenantId, jobId, user);
   }
@@ -5210,10 +5247,6 @@ export class OpsJobsService {
       { jobId, pendingState },
       actorUserId,
     );
-    rt.publishTripEvent(this.realtime, "trip.updated", tenantId, jobId, tripId, {
-      driverUserId: trip.assignedDriverUserId,
-      reason: `pendingState:${pendingState}`,
-    });
     return this.getOne(tenantId, jobId, user);
   }
 
@@ -5637,6 +5670,10 @@ export class OpsJobsService {
       jobId,
       tripId,
       driverUserId: trip.assignedDriverUserId,
+      tripStatus: trip.status as TripStatus,
+      notificationKind: "DOCUMENT_ADDED",
+      documentTypeLabel: tripDocumentTypeLabel(type),
+      ...this.notifyActorContext(user),
     });
     return this.attachSignedUrl(doc);
   }
@@ -5684,6 +5721,8 @@ export class OpsJobsService {
       jobId,
       tripId,
       driverUserId: trip.assignedDriverUserId,
+      tripStatus: trip.status as TripStatus,
+      ...this.notifyActorContext(user),
     });
     return this.attachSignedUrl(updated);
   }
@@ -6033,6 +6072,15 @@ export class OpsJobsService {
       });
     });
     await this.audit.log(tenantId, "TRIP_PAYOUT_LINES_REPLACE", "TRIP", tripId, { lineCount: normalized.length }, actorUserId);
+    const selectable = normalized.filter((line) => line.isSelectableForTripEarning);
+    const total = selectable.reduce((sum, line) => sum + (line.totalCents ?? 0), 0);
+    rt.publishTripEvent(this.realtime, "trip.updated", tenantId, jobId, tripId, {
+      driverUserId: trip.assignedDriverUserId,
+      tripStatus: trip.status as TripStatus,
+      notificationKind: "EARNINGS_UPDATED",
+      earningsAmountCents: selectable.length ? total : undefined,
+      ...this.notifyActorContext(user),
+    });
     return this.listTripPayoutLines(tenantId, jobId, tripId, user);
   }
 
@@ -6169,6 +6217,14 @@ export class OpsJobsService {
       },
       actorUserId,
     );
+
+    rt.publishTripEvent(this.realtime, "trip.updated", tenantId, jobId, tripId, {
+      driverUserId: trip.assignedDriverUserId,
+      tripStatus: trip.status as TripStatus,
+      notificationKind: "EARNINGS_UPDATED",
+      earningsAmountCents: totalDriverEarningCents,
+      ...this.notifyActorContext(user),
+    });
 
     return this.getOne(tenantId, jobId, user);
   }

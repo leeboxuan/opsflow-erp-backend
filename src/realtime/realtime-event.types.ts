@@ -33,6 +33,14 @@ export interface RealtimeEvent extends RealtimeNotificationContext {
   driverUserId?: string;
   changedAt: string;
   reason?: string;
+  /** User who performed the action (for notification audience rules). */
+  actorUserId?: string;
+  actorRole?: import("@prisma/client").Role;
+  tripStatus?: import("@prisma/client").TripStatus;
+  /** UI notification kind for driver copy/metadata. */
+  notificationKind?: string;
+  documentTypeLabel?: string;
+  earningsAmountCents?: number;
 }
 
 export type RealtimeEventInput = Omit<RealtimeEvent, "changedAt"> & {

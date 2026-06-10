@@ -60,9 +60,18 @@ describe("DriverJobsService.uploadTripDocumentForDriver trailer photos", () => {
     TripDocumentType.TRAILER_END_PHOTO,
   ])("uploads %s and saves active TripDocument", async (type) => {
     const prisma = makePrisma();
-    const svc = makeSvc(prisma);
+    const supabaseStorage = {
+      upload: jest.fn().mockResolvedValue({ error: null }),
+      createSignedUrl: jest.fn().mockResolvedValue({ data: { signedUrl: "https://signed" } }),
+    };
+    const supabaseService = {
+      getClient: jest.fn().mockReturnValue({
+        storage: { from: jest.fn().mockReturnValue(supabaseStorage) },
+      }),
+    };
+    const svc = new DriverJobsService(prisma as any, { log: jest.fn() } as any, supabaseService as any);
 
-    await svc.uploadTripDocumentForDriver(
+    const result = await svc.uploadTripDocumentForDriver(
       tenantId,
       jobId,
       tripId,
@@ -71,6 +80,9 @@ describe("DriverJobsService.uploadTripDocumentForDriver trailer photos", () => {
       imageFile,
     );
 
+    expect(supabaseStorage.createSignedUrl).not.toHaveBeenCalled();
+    expect(result.previewUrl).toBeNull();
+    expect(result.downloadUrl).toBeNull();
     expect(prisma.tripDocument.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -105,6 +117,34 @@ describe("DriverJobsService.uploadTripDocumentForDriver trailer photos", () => {
       },
       data: { isActive: false },
     });
+  });
+
+  it("logs upload stage timings for photo documentation uploads", async () => {
+    process.env.DRIVER_API_PERF_LOG = "true";
+    const prisma = makePrisma();
+    const svc = makeSvc(prisma);
+    const perfSpy = jest.spyOn(console, "info").mockImplementation(() => undefined);
+
+    await svc.uploadTripDocumentForDriver(
+      tenantId,
+      jobId,
+      tripId,
+      driverUserId,
+      TripDocumentType.POD_PHOTO,
+      imageFile,
+      false,
+      { email: "driver@test.com" },
+    );
+
+    expect(perfSpy).toHaveBeenCalledWith(
+      "driver_trip_doc_upload_perf",
+      expect.objectContaining({
+        documentType: TripDocumentType.POD_PHOTO,
+        fileSizeBytes: imageFile.size,
+      }),
+    );
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    perfSpy.mockRestore();
   });
 
   it("rejects unsupported trip document types with logging context", async () => {
@@ -157,6 +197,18 @@ describe("DriverJobsService.uploadTripDocumentForDriver trailer photos", () => {
     ]);
     prisma.masterTrailerLocation.findMany.mockResolvedValue([
       { id: "loc1", code: "GUL-7", name: "7 Gul Circle" },
+    ]);
+    prisma.tripDocument.findMany.mockResolvedValue([
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: new Date(),
+        isSigned: true,
+      },
+      {
+        type: TripDocumentType.POD_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
     ]);
 
     const svc = makeSvc(prisma);
@@ -240,6 +292,18 @@ describe("DriverJobsService.completeTrip trailer checkout", () => {
 
   it("completes when TRAILER_END_PHOTO document exists and parking code is provided", async () => {
     const { prisma, tripDocumentCreate, tripUpdate } = makeCompletePrisma();
+    prisma.tripDocument.findMany.mockResolvedValue([
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: new Date(),
+        isSigned: true,
+      },
+      {
+        type: TripDocumentType.POD_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
+    ]);
     const svc = makeCompleteSvc(prisma);
     jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: tripId }] } as any);
 
@@ -263,12 +327,26 @@ describe("DriverJobsService.completeTrip trailer checkout", () => {
     expect(tripUpdate.mock.calls[0][0].data.trailerLastLocationCode).toBe("GUL7");
   });
 
-  it("reports only trailerParkingLocationCode missing when end photo document exists", async () => {
-    const { prisma } = makeCompletePrisma();
+  it("completes without parking code when end photo and required docs exist", async () => {
+    const { prisma, tripUpdate } = makeCompletePrisma();
+    prisma.tripDocument.findMany.mockResolvedValue([
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: new Date(),
+        isSigned: true,
+      },
+      {
+        type: TripDocumentType.POD_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
+    ]);
     const svc = makeCompleteSvc(prisma);
+    jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: tripId }] } as any);
 
     await expect(
       svc.completeTrip(tenantId, jobId, tripId, driverUserId),
-    ).rejects.toThrow("Missing trailer checkout fields: trailerParkingLocationCode");
+    ).resolves.toBeTruthy();
+    expect(tripUpdate).toHaveBeenCalled();
   });
 });
