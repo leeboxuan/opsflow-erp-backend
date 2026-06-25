@@ -18,19 +18,26 @@ import {
   DeleteChassisResult,
   FleetTrackingChassisDto,
   FleetTrackingGpsDeviceDto,
+  ChassisHistoryResponse,
   ListFleetTrackingChassisResult,
   ListFleetTrackingGpsDevicesResult,
   LiveChassisLocationsResponse,
   TrackingStatus,
 } from "./fleet-tracking.types";
+import {
+  computeHistorySummary,
+  decimalToNumber,
+  detectHistoryStops,
+  downsampleHistoryPoints,
+  getSafeTenantTimezone,
+  isValidCoordinate,
+  parseCalendarDateToUtcRangeInTimeZone,
+  ValidHistoryPoint,
+} from "./fleet-tracking.helpers";
+import { ChassisHistoryQueryDto } from "./dto/chassis-history-query.dto";
 
 const ONLINE_SECONDS = 5 * 60;
 const STALE_SECONDS = 30 * 60;
-
-function decimalToNumber(value: Prisma.Decimal | null | undefined): number | null {
-  if (value === null || value === undefined) return null;
-  return Number(value);
-}
 
 function ageSeconds(lastSeenAt: Date | null | undefined, now: Date): number | null {
   if (!lastSeenAt) return null;
@@ -520,6 +527,96 @@ export class FleetTrackingService {
           ageSeconds: trackingStatus === "UNASSIGNED" ? null : age,
         };
       }),
+    };
+  }
+
+  private async getTenantTimezone(tenantId: string): Promise<string> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timezone: true },
+    });
+    return getSafeTenantTimezone(tenant?.timezone);
+  }
+
+  async getChassisHistory(
+    tenantId: string,
+    chassisId: string,
+    query: ChassisHistoryQueryDto,
+  ): Promise<ChassisHistoryResponse> {
+    const date = query.date;
+    const stopMinutes = query.stopMinutes ?? 10;
+    const stopRadiusMeters = query.stopRadiusMeters ?? 50;
+
+    const chassis = await this.prisma.chassis.findFirst({
+      where: { id: chassisId, tenantId },
+      select: { id: true, chassisNo: true, label: true },
+    });
+    if (!chassis) throw new NotFoundException("Chassis not found");
+
+    const timezone = await this.getTenantTimezone(tenantId);
+    const dayWindow = parseCalendarDateToUtcRangeInTimeZone(date, timezone);
+
+    const rows = await this.prisma.gpsPosition.findMany({
+      where: {
+        tenantId,
+        chassisId,
+        recordedAt: { gte: dayWindow.gte, lt: dayWindow.lt },
+      },
+      orderBy: { recordedAt: "asc" },
+      select: {
+        id: true,
+        recordedAt: true,
+        lat: true,
+        lng: true,
+        speedKph: true,
+        heading: true,
+      },
+    });
+
+    const validPoints: ValidHistoryPoint[] = [];
+    for (const row of rows) {
+      const lat = decimalToNumber(row.lat);
+      const lng = decimalToNumber(row.lng);
+      if (lat === null || lng === null || !isValidCoordinate(lat, lng)) continue;
+      validPoints.push({
+        id: row.id,
+        recordedAt: row.recordedAt,
+        lat,
+        lng,
+        speedKph: row.speedKph ?? null,
+        heading: row.heading ?? null,
+      });
+    }
+
+    const stops = detectHistoryStops(validPoints, { stopMinutes, stopRadiusMeters });
+    const summary = computeHistorySummary(validPoints, stops);
+    const displayPoints = downsampleHistoryPoints(validPoints);
+
+    return {
+      chassisId: chassis.id,
+      chassisNo: chassis.chassisNo,
+      label: chassis.label ?? null,
+      date: date.trim(),
+      timezone,
+      summary,
+      stops: stops.map((stop) => ({
+        id: stop.id,
+        startedAt: stop.startedAt.toISOString(),
+        endedAt: stop.endedAt.toISOString(),
+        durationSeconds: stop.durationSeconds,
+        lat: stop.lat,
+        lng: stop.lng,
+        pointCount: stop.pointCount,
+        maxRadiusMeters: stop.maxRadiusMeters,
+      })),
+      points: displayPoints.map((p) => ({
+        id: p.id,
+        recordedAt: p.recordedAt.toISOString(),
+        lat: p.lat,
+        lng: p.lng,
+        speedKph: p.speedKph,
+        heading: p.heading,
+      })),
     };
   }
 }

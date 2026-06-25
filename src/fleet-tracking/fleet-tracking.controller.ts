@@ -14,6 +14,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
 import { AssignGpsDeviceChassisDto } from "./dto/assign-gps-device-chassis.dto";
+import { ChassisHistoryQueryDto } from "./dto/chassis-history-query.dto";
 import { CreateChassisDto } from "./dto/create-chassis.dto";
 import { CreateGpsDeviceDto } from "./dto/create-gps-device.dto";
 import { ListChassisQueryDto } from "./dto/list-chassis-query.dto";
@@ -39,6 +40,16 @@ export class FleetTrackingController {
   @ApiOperation({ summary: "Create chassis" })
   createChassis(@Req() req: any, @Body() dto: CreateChassisDto) {
     return this.fleetTracking.createChassis(req.tenant.tenantId, dto);
+  }
+
+  @Get("chassis/:chassisId/history")
+  @ApiOperation({ summary: "Get chassis GPS route history for a day" })
+  getChassisHistory(
+    @Req() req: any,
+    @Param("chassisId") chassisId: string,
+    @Query() query: ChassisHistoryQueryDto,
+  ) {
+    return this.fleetTracking.getChassisHistory(req.tenant.tenantId, chassisId, query);
   }
 
   @Get("chassis/:id")

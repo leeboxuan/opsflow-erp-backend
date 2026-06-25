@@ -97,3 +97,45 @@ export interface LiveChassisLocationsResponse {
 
 export type ListFleetTrackingChassisResult = PaginatedResponse<FleetTrackingChassisDto>;
 export type ListFleetTrackingGpsDevicesResult = PaginatedResponse<FleetTrackingGpsDeviceDto>;
+
+export interface ChassisHistoryPoint {
+  id: string;
+  recordedAt: string;
+  lat: number;
+  lng: number;
+  speedKph: number | null;
+  heading: number | null;
+}
+
+export interface ChassisHistorySummary {
+  pointCount: number;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  distanceKm: number | null;
+  maxSpeedKph: number | null;
+  avgSpeedKph: number | null;
+  stopCount: number;
+  stoppedTimeSeconds: number;
+}
+
+export interface ChassisHistoryStop {
+  id: string;
+  startedAt: string;
+  endedAt: string;
+  durationSeconds: number;
+  lat: number;
+  lng: number;
+  pointCount: number;
+  maxRadiusMeters: number;
+}
+
+export interface ChassisHistoryResponse {
+  chassisId: string;
+  chassisNo: string;
+  label: string | null;
+  date: string;
+  timezone: string;
+  summary: ChassisHistorySummary;
+  stops: ChassisHistoryStop[];
+  points: ChassisHistoryPoint[];
+}
