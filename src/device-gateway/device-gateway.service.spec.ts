@@ -111,6 +111,7 @@ describe("DeviceGatewayService", () => {
     expect(realtime.publish).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "asset.location.updated",
+        entityType: "asset",
         tenantId: "tenant-1",
         assetType: "CHASSIS",
         chassisId: "chassis-1",

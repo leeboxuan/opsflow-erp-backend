@@ -4,6 +4,7 @@ export const REALTIME_ENTITY_TYPES = [
   "document",
   "driver",
   "vehicle",
+  "asset",
   "customer",
   "dispatch",
   "dashboard",

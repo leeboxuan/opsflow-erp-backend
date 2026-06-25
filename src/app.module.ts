@@ -24,6 +24,7 @@ import { RealtimeModule } from "./realtime/realtime.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { PushModule } from "./push/push.module";
 import { DeviceGatewayModule } from "./device-gateway/device-gateway.module";
+import { FleetTrackingModule } from "./fleet-tracking/fleet-tracking.module";
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { DeviceGatewayModule } from "./device-gateway/device-gateway.module";
     PushModule,
     RealtimeModule,
     DeviceGatewayModule,
+    FleetTrackingModule,
   ],
   controllers: [AppController],
 })

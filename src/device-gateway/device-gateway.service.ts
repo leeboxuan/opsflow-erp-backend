@@ -95,7 +95,7 @@ export class DeviceGatewayService {
     this.realtime?.publish({
       type: "asset.location.updated",
       tenantId: device.tenantId,
-      entityType: "vehicle",
+      entityType: "asset",
       entityId: device.chassisId ?? device.id,
       driverUserId: device.driverId ?? undefined,
       assetType: "CHASSIS",
