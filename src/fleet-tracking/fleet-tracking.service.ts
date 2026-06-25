@@ -54,6 +54,7 @@ function statusFromAge(age: number | null): TrackingStatus {
 function mapGpsDeviceHealth(device: any): {
   lastBatteryVoltageMv: number | null;
   lastBatteryVoltage: number | null;
+  lastBatteryPercent: number | null;
   lastBatterySeenAt: Date | null;
   lastSignalStrength: number | null;
   lastSatelliteCount: number | null;
@@ -62,6 +63,7 @@ function mapGpsDeviceHealth(device: any): {
     return {
       lastBatteryVoltageMv: null,
       lastBatteryVoltage: null,
+      lastBatteryPercent: null,
       lastBatterySeenAt: null,
       lastSignalStrength: null,
       lastSatelliteCount: null,
@@ -71,6 +73,7 @@ function mapGpsDeviceHealth(device: any): {
   return {
     lastBatteryVoltageMv: device.lastBatteryVoltageMv ?? null,
     lastBatteryVoltage: decimalToNumber(device.lastBatteryVoltage),
+    lastBatteryPercent: device.lastBatteryPercent ?? null,
     lastBatterySeenAt: device.lastBatterySeenAt ?? null,
     lastSignalStrength: device.lastSignalStrength ?? null,
     lastSatelliteCount: device.lastSatelliteCount ?? null,
@@ -556,6 +559,7 @@ export class FleetTrackingService {
           lng: decimalToNumber(device?.lastLng),
           speedKph: device?.lastSpeedKph ?? null,
           heading: device?.lastHeading ?? null,
+          batteryPercent: health.lastBatteryPercent,
           lastBatteryVoltageMv: health.lastBatteryVoltageMv,
           lastBatteryVoltage: health.lastBatteryVoltage,
           lastBatterySeenAt: health.lastBatterySeenAt?.toISOString() ?? null,

@@ -134,6 +134,7 @@ describe("DeviceGatewayService", () => {
         ...eventBody.payload,
         batteryVoltageMv: 3850,
         batteryVoltage: 3.85,
+        batteryPercent: 87,
         signalStrength: 24,
         satelliteCount: 12,
       },
@@ -143,6 +144,7 @@ describe("DeviceGatewayService", () => {
       data: expect.objectContaining({
         batteryVoltageMv: 3850,
         batteryVoltage: new Prisma.Decimal(3.85),
+        batteryPercent: 87,
         signalStrength: 24,
         satelliteCount: 12,
       }),
@@ -152,9 +154,35 @@ describe("DeviceGatewayService", () => {
       data: expect.objectContaining({
         lastBatteryVoltageMv: 3850,
         lastBatteryVoltage: new Prisma.Decimal(3.85),
+        lastBatteryPercent: 87,
         lastBatterySeenAt: new Date("2026-05-21T12:34:56.000Z"),
         lastSignalStrength: 24,
         lastSatelliteCount: 12,
+      }),
+    });
+  });
+
+  it("sets lastBatterySeenAt when only batteryPercent is present", async () => {
+    const { svc, gpsPositionCreate, gpsDeviceUpdate } = makeService();
+
+    await svc.ingestLocationEvent({
+      ...eventBody,
+      payload: {
+        ...eventBody.payload,
+        batteryPercent: 72,
+      },
+    });
+
+    expect(gpsPositionCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        batteryPercent: 72,
+      }),
+    });
+    expect(gpsDeviceUpdate).toHaveBeenCalledWith({
+      where: { id: "gps-device-1" },
+      data: expect.objectContaining({
+        lastBatteryPercent: 72,
+        lastBatterySeenAt: new Date("2026-05-21T12:34:56.000Z"),
       }),
     });
   });
@@ -167,12 +195,14 @@ describe("DeviceGatewayService", () => {
     const positionData = gpsPositionCreate.mock.calls[0][0].data;
     expect(positionData.batteryVoltageMv).toBeUndefined();
     expect(positionData.batteryVoltage).toBeUndefined();
+    expect(positionData.batteryPercent).toBeUndefined();
     expect(positionData.signalStrength).toBeUndefined();
     expect(positionData.satelliteCount).toBeUndefined();
 
     const deviceData = gpsDeviceUpdate.mock.calls[0][0].data;
     expect(deviceData.lastBatteryVoltageMv).toBeUndefined();
     expect(deviceData.lastBatteryVoltage).toBeUndefined();
+    expect(deviceData.lastBatteryPercent).toBeUndefined();
     expect(deviceData.lastBatterySeenAt).toBeUndefined();
     expect(deviceData.lastSignalStrength).toBeUndefined();
     expect(deviceData.lastSatelliteCount).toBeUndefined();

@@ -26,28 +26,42 @@ export class DeviceGatewayService {
     const positionData: {
       batteryVoltageMv?: number;
       batteryVoltage?: Prisma.Decimal;
+      batteryPercent?: number;
       signalStrength?: number;
       satelliteCount?: number;
     } = {};
     const deviceData: {
       lastBatteryVoltageMv?: number;
       lastBatteryVoltage?: Prisma.Decimal;
+      lastBatteryPercent?: number;
       lastBatterySeenAt?: Date;
       lastSignalStrength?: number;
       lastSatelliteCount?: number;
     } = {};
+    let hasBatteryReading = false;
 
     if (payload.batteryVoltageMv !== undefined && payload.batteryVoltageMv !== null) {
       const batteryVoltageMv = Math.trunc(payload.batteryVoltageMv);
       positionData.batteryVoltageMv = batteryVoltageMv;
       deviceData.lastBatteryVoltageMv = batteryVoltageMv;
-      deviceData.lastBatterySeenAt = recordedAt;
+      hasBatteryReading = true;
     }
 
     if (payload.batteryVoltage !== undefined && payload.batteryVoltage !== null) {
       const batteryVoltage = new Prisma.Decimal(payload.batteryVoltage);
       positionData.batteryVoltage = batteryVoltage;
       deviceData.lastBatteryVoltage = batteryVoltage;
+      hasBatteryReading = true;
+    }
+
+    if (payload.batteryPercent !== undefined && payload.batteryPercent !== null) {
+      const batteryPercent = Math.trunc(payload.batteryPercent);
+      positionData.batteryPercent = batteryPercent;
+      deviceData.lastBatteryPercent = batteryPercent;
+      hasBatteryReading = true;
+    }
+
+    if (hasBatteryReading) {
       deviceData.lastBatterySeenAt = recordedAt;
     }
 

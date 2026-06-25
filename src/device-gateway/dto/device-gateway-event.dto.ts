@@ -45,6 +45,11 @@ export class DeviceGatewayLocationPayloadDto {
   @IsNumber()
   batteryVoltage?: number;
 
+  @ApiPropertyOptional({ example: 87 })
+  @IsOptional()
+  @IsNumber()
+  batteryPercent?: number;
+
   @ApiPropertyOptional({ example: 24 })
   @IsOptional()
   @IsNumber()

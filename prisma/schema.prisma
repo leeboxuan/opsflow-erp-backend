@@ -1874,6 +1874,7 @@ model GpsDevice {
   lastHeading  Int?
   lastBatteryVoltageMv Int?
   lastBatteryVoltage   Decimal?  @db.Decimal(6, 3)
+  lastBatteryPercent   Int?
   lastBatterySeenAt    DateTime?
   lastSignalStrength   Int?
   lastSatelliteCount   Int?
@@ -1907,6 +1908,7 @@ model GpsPosition {
   altitude      Float?
   batteryVoltageMv Int?
   batteryVoltage   Decimal? @db.Decimal(6, 3)
+  batteryPercent   Int?
   signalStrength   Int?
   satelliteCount   Int?
   recordedAt    DateTime
