@@ -124,4 +124,57 @@ describe("DeviceGatewayService", () => {
       }),
     );
   });
+
+  it("persists optional health fields and updates device snapshot", async () => {
+    const { svc, gpsPositionCreate, gpsDeviceUpdate } = makeService();
+
+    await svc.ingestLocationEvent({
+      ...eventBody,
+      payload: {
+        ...eventBody.payload,
+        batteryVoltageMv: 3850,
+        batteryVoltage: 3.85,
+        signalStrength: 24,
+        satelliteCount: 12,
+      },
+    });
+
+    expect(gpsPositionCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        batteryVoltageMv: 3850,
+        batteryVoltage: new Prisma.Decimal(3.85),
+        signalStrength: 24,
+        satelliteCount: 12,
+      }),
+    });
+    expect(gpsDeviceUpdate).toHaveBeenCalledWith({
+      where: { id: "gps-device-1" },
+      data: expect.objectContaining({
+        lastBatteryVoltageMv: 3850,
+        lastBatteryVoltage: new Prisma.Decimal(3.85),
+        lastBatterySeenAt: new Date("2026-05-21T12:34:56.000Z"),
+        lastSignalStrength: 24,
+        lastSatelliteCount: 12,
+      }),
+    });
+  });
+
+  it("does not require health fields on ingest", async () => {
+    const { svc, gpsPositionCreate, gpsDeviceUpdate } = makeService();
+
+    await svc.ingestLocationEvent(eventBody);
+
+    const positionData = gpsPositionCreate.mock.calls[0][0].data;
+    expect(positionData.batteryVoltageMv).toBeUndefined();
+    expect(positionData.batteryVoltage).toBeUndefined();
+    expect(positionData.signalStrength).toBeUndefined();
+    expect(positionData.satelliteCount).toBeUndefined();
+
+    const deviceData = gpsDeviceUpdate.mock.calls[0][0].data;
+    expect(deviceData.lastBatteryVoltageMv).toBeUndefined();
+    expect(deviceData.lastBatteryVoltage).toBeUndefined();
+    expect(deviceData.lastBatterySeenAt).toBeUndefined();
+    expect(deviceData.lastSignalStrength).toBeUndefined();
+    expect(deviceData.lastSatelliteCount).toBeUndefined();
+  });
 });

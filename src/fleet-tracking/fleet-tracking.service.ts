@@ -51,6 +51,32 @@ function statusFromAge(age: number | null): TrackingStatus {
   return "OFFLINE";
 }
 
+function mapGpsDeviceHealth(device: any): {
+  lastBatteryVoltageMv: number | null;
+  lastBatteryVoltage: number | null;
+  lastBatterySeenAt: Date | null;
+  lastSignalStrength: number | null;
+  lastSatelliteCount: number | null;
+} {
+  if (!device) {
+    return {
+      lastBatteryVoltageMv: null,
+      lastBatteryVoltage: null,
+      lastBatterySeenAt: null,
+      lastSignalStrength: null,
+      lastSatelliteCount: null,
+    };
+  }
+
+  return {
+    lastBatteryVoltageMv: device.lastBatteryVoltageMv ?? null,
+    lastBatteryVoltage: decimalToNumber(device.lastBatteryVoltage),
+    lastBatterySeenAt: device.lastBatterySeenAt ?? null,
+    lastSignalStrength: device.lastSignalStrength ?? null,
+    lastSatelliteCount: device.lastSatelliteCount ?? null,
+  };
+}
+
 @Injectable()
 export class FleetTrackingService {
   constructor(private readonly prisma: PrismaService) {}
@@ -71,6 +97,7 @@ export class FleetTrackingService {
     const assignedAge = ageSeconds(assigned?.lastSeenAt ?? null, now);
     const trackingStatus: TrackingStatus =
       assigned && assigned.isActive ? statusFromAge(assignedAge) : "UNASSIGNED";
+    const health = mapGpsDeviceHealth(assigned);
 
     return {
       id: row.id,
@@ -95,6 +122,7 @@ export class FleetTrackingService {
             lastLng: decimalToNumber(assigned.lastLng),
             lastSpeedKph: assigned.lastSpeedKph ?? null,
             lastHeading: assigned.lastHeading ?? null,
+            ...health,
           }
         : null,
       trackingStatus,
@@ -103,6 +131,7 @@ export class FleetTrackingService {
       lastLng: decimalToNumber(assigned?.lastLng),
       lastSpeedKph: assigned?.lastSpeedKph ?? null,
       lastHeading: assigned?.lastHeading ?? null,
+      ...health,
       ageSeconds: trackingStatus === "UNASSIGNED" ? null : assignedAge,
     };
   }
@@ -114,6 +143,7 @@ export class FleetTrackingService {
         ? statusFromAge(age)
         : "OFFLINE"
       : "UNASSIGNED";
+    const health = mapGpsDeviceHealth(row);
 
     return {
       id: row.id,
@@ -138,6 +168,7 @@ export class FleetTrackingService {
       lastLng: decimalToNumber(row.lastLng),
       lastSpeedKph: row.lastSpeedKph ?? null,
       lastHeading: row.lastHeading ?? null,
+      ...health,
       trackingStatus,
       ageSeconds: trackingStatus === "UNASSIGNED" ? null : age,
       createdAt: row.createdAt,
@@ -505,6 +536,7 @@ export class FleetTrackingService {
         const age = ageSeconds(device?.lastSeenAt ?? null, now);
         const trackingStatus: TrackingStatus =
           device && device.isActive ? statusFromAge(age) : "UNASSIGNED";
+        const health = mapGpsDeviceHealth(device);
 
         return {
           chassisId: row.id,
@@ -524,6 +556,11 @@ export class FleetTrackingService {
           lng: decimalToNumber(device?.lastLng),
           speedKph: device?.lastSpeedKph ?? null,
           heading: device?.lastHeading ?? null,
+          lastBatteryVoltageMv: health.lastBatteryVoltageMv,
+          lastBatteryVoltage: health.lastBatteryVoltage,
+          lastBatterySeenAt: health.lastBatterySeenAt?.toISOString() ?? null,
+          lastSignalStrength: health.lastSignalStrength,
+          lastSatelliteCount: health.lastSatelliteCount,
           ageSeconds: trackingStatus === "UNASSIGNED" ? null : age,
         };
       }),

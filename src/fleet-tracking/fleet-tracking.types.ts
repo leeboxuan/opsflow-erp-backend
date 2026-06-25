@@ -2,6 +2,14 @@ import type { PaginatedResponse } from "../common/pagination";
 
 export type TrackingStatus = "ONLINE" | "STALE" | "OFFLINE" | "UNASSIGNED";
 
+export interface GpsDeviceHealthFields {
+  lastBatteryVoltageMv: number | null;
+  lastBatteryVoltage: number | null;
+  lastBatterySeenAt: Date | null;
+  lastSignalStrength: number | null;
+  lastSatelliteCount: number | null;
+}
+
 export interface AssignedGpsDeviceDto {
   id: string;
   terminalId: string;
@@ -15,6 +23,11 @@ export interface AssignedGpsDeviceDto {
   lastLng: number | null;
   lastSpeedKph: number | null;
   lastHeading: number | null;
+  lastBatteryVoltageMv: number | null;
+  lastBatteryVoltage: number | null;
+  lastBatterySeenAt: Date | null;
+  lastSignalStrength: number | null;
+  lastSatelliteCount: number | null;
 }
 
 export interface FleetTrackingChassisDto {
@@ -33,6 +46,11 @@ export interface FleetTrackingChassisDto {
   lastLng: number | null;
   lastSpeedKph: number | null;
   lastHeading: number | null;
+  lastBatteryVoltageMv: number | null;
+  lastBatteryVoltage: number | null;
+  lastBatterySeenAt: Date | null;
+  lastSignalStrength: number | null;
+  lastSatelliteCount: number | null;
   ageSeconds: number | null;
 }
 
@@ -57,6 +75,11 @@ export interface FleetTrackingGpsDeviceDto {
   lastLng: number | null;
   lastSpeedKph: number | null;
   lastHeading: number | null;
+  lastBatteryVoltageMv: number | null;
+  lastBatteryVoltage: number | null;
+  lastBatterySeenAt: Date | null;
+  lastSignalStrength: number | null;
+  lastSatelliteCount: number | null;
   trackingStatus: TrackingStatus;
   ageSeconds: number | null;
   createdAt: Date;
@@ -87,6 +110,11 @@ export interface LiveChassisLocationItem {
   lng: number | null;
   speedKph: number | null;
   heading: number | null;
+  lastBatteryVoltageMv: number | null;
+  lastBatteryVoltage: number | null;
+  lastBatterySeenAt: string | null;
+  lastSignalStrength: number | null;
+  lastSatelliteCount: number | null;
   ageSeconds: number | null;
 }
 

@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, Optional } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { RealtimeEventsService } from "../realtime/realtime-events.service";
-import { DeviceGatewayEventDto } from "./dto/device-gateway-event.dto";
+import { DeviceGatewayEventDto, DeviceGatewayLocationPayloadDto } from "./dto/device-gateway-event.dto";
 
 export type DeviceGatewayEventResult = {
   ok: true;
@@ -21,6 +21,50 @@ export class DeviceGatewayService {
     private readonly prisma: PrismaService,
     @Optional() private readonly realtime?: RealtimeEventsService,
   ) {}
+
+  private buildHealthFields(payload: DeviceGatewayLocationPayloadDto, recordedAt: Date) {
+    const positionData: {
+      batteryVoltageMv?: number;
+      batteryVoltage?: Prisma.Decimal;
+      signalStrength?: number;
+      satelliteCount?: number;
+    } = {};
+    const deviceData: {
+      lastBatteryVoltageMv?: number;
+      lastBatteryVoltage?: Prisma.Decimal;
+      lastBatterySeenAt?: Date;
+      lastSignalStrength?: number;
+      lastSatelliteCount?: number;
+    } = {};
+
+    if (payload.batteryVoltageMv !== undefined && payload.batteryVoltageMv !== null) {
+      const batteryVoltageMv = Math.trunc(payload.batteryVoltageMv);
+      positionData.batteryVoltageMv = batteryVoltageMv;
+      deviceData.lastBatteryVoltageMv = batteryVoltageMv;
+      deviceData.lastBatterySeenAt = recordedAt;
+    }
+
+    if (payload.batteryVoltage !== undefined && payload.batteryVoltage !== null) {
+      const batteryVoltage = new Prisma.Decimal(payload.batteryVoltage);
+      positionData.batteryVoltage = batteryVoltage;
+      deviceData.lastBatteryVoltage = batteryVoltage;
+      deviceData.lastBatterySeenAt = recordedAt;
+    }
+
+    if (payload.signalStrength !== undefined && payload.signalStrength !== null) {
+      const signalStrength = Math.trunc(payload.signalStrength);
+      positionData.signalStrength = signalStrength;
+      deviceData.lastSignalStrength = signalStrength;
+    }
+
+    if (payload.satelliteCount !== undefined && payload.satelliteCount !== null) {
+      const satelliteCount = Math.trunc(payload.satelliteCount);
+      positionData.satelliteCount = satelliteCount;
+      deviceData.lastSatelliteCount = satelliteCount;
+    }
+
+    return { positionData, deviceData };
+  }
 
   async ingestLocationEvent(
     dto: DeviceGatewayEventDto,
@@ -41,6 +85,7 @@ export class DeviceGatewayService {
     const lat = new Prisma.Decimal(payload.lat);
     const lng = new Prisma.Decimal(payload.lng);
     const receivedAt = new Date();
+    const { positionData, deviceData } = this.buildHealthFields(payload, recordedAt);
 
     await this.prisma.$transaction([
       this.prisma.gpsPosition.create({
@@ -58,6 +103,7 @@ export class DeviceGatewayService {
               ? null
               : Math.trunc(payload.heading),
           altitude: payload.altitude ?? null,
+          ...positionData,
           recordedAt,
           receivedAt,
           rawProtocol: dto.protocol,
@@ -77,6 +123,7 @@ export class DeviceGatewayService {
             payload.heading === undefined || payload.heading === null
               ? null
               : Math.trunc(payload.heading),
+          ...deviceData,
         },
       }),
     ]);

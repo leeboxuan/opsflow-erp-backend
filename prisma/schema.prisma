@@ -1872,6 +1872,11 @@ model GpsDevice {
   lastLng      Decimal?  @db.Decimal(10, 7)
   lastSpeedKph Float?
   lastHeading  Int?
+  lastBatteryVoltageMv Int?
+  lastBatteryVoltage   Decimal?  @db.Decimal(6, 3)
+  lastBatterySeenAt    DateTime?
+  lastSignalStrength   Int?
+  lastSatelliteCount   Int?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -1900,6 +1905,10 @@ model GpsPosition {
   speedKph      Float?
   heading       Int?
   altitude      Float?
+  batteryVoltageMv Int?
+  batteryVoltage   Decimal? @db.Decimal(6, 3)
+  signalStrength   Int?
+  satelliteCount   Int?
   recordedAt    DateTime
   receivedAt    DateTime @default(now())
   rawProtocol   String?

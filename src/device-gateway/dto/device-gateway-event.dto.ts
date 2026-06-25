@@ -35,6 +35,26 @@ export class DeviceGatewayLocationPayloadDto {
   @IsNumber()
   altitude?: number;
 
+  @ApiPropertyOptional({ example: 3850 })
+  @IsOptional()
+  @IsNumber()
+  batteryVoltageMv?: number;
+
+  @ApiPropertyOptional({ example: 3.85 })
+  @IsOptional()
+  @IsNumber()
+  batteryVoltage?: number;
+
+  @ApiPropertyOptional({ example: 24 })
+  @IsOptional()
+  @IsNumber()
+  signalStrength?: number;
+
+  @ApiPropertyOptional({ example: 12 })
+  @IsOptional()
+  @IsNumber()
+  satelliteCount?: number;
+
   @ApiProperty({ example: "2026-05-21T12:34:56.000Z" })
   @IsDateString()
   recordedAt!: string;
