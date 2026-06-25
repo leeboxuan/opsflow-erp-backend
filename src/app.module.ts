@@ -23,6 +23,7 @@ import { UsersModule } from "./users/users.module";
 import { RealtimeModule } from "./realtime/realtime.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { PushModule } from "./push/push.module";
+import { DeviceGatewayModule } from "./device-gateway/device-gateway.module";
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { PushModule } from "./push/push.module";
     NotificationsModule,
     PushModule,
     RealtimeModule,
+    DeviceGatewayModule,
   ],
   controllers: [AppController],
 })

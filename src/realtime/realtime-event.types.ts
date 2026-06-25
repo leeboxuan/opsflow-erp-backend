@@ -41,6 +41,20 @@ export interface RealtimeEvent extends RealtimeNotificationContext {
   notificationKind?: string;
   documentTypeLabel?: string;
   earningsAmountCents?: number;
+  assetType?: "CHASSIS";
+  chassisId?: string | null;
+  gpsDeviceId?: string;
+  terminalId?: string;
+  vehicleId?: string | null;
+  speedKph?: number | null;
+  heading?: number | null;
+  altitude?: number | null;
+  lat?: number;
+  lng?: number;
+  recordedAt?: string;
+  receivedAt?: string;
+  status?: "LIVE";
+  source?: "GPS_TRACKER";
 }
 
 export type RealtimeEventInput = Omit<RealtimeEvent, "changedAt"> & {

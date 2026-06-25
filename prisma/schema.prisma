@@ -62,6 +62,9 @@ model Tenant {
   tripDocumentRequirements     TripDocumentRequirement[]
   notifications                Notification[]
   pushDevices                  PushDevice[]
+  chassis                      Chassis[]
+  gpsDevices                   GpsDevice[]
+  gpsPositions                 GpsPosition[]
 
   @@map("tenants")
 }
@@ -603,6 +606,8 @@ model Vehicle {
   tenant             Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   driversDefault     drivers[]
   driver             User?         @relation("VehicleDriver", fields: [driverId], references: [id], onDelete: SetNull)
+  gpsDevices         GpsDevice[]
+  gpsPositions       GpsPosition[]
 
   @@unique([tenantId, plateNo])
   @@index([tenantId])
@@ -803,6 +808,8 @@ model drivers {
   trips                      Trip[]
   assignedVehicle             Vehicle?                  @relation(fields: [assignedVehicleId], references: [id], onDelete: SetNull)
   assignedFleetVehicle        FleetVehicle?             @relation(fields: [assignedFleetVehicleId], references: [id], onDelete: SetNull)
+  gpsDevices                  GpsDevice[]
+  gpsPositions                GpsPosition[]
 
   @@unique([tenantId, email])
   @@unique([tenantId, userId])
@@ -1826,4 +1833,90 @@ model PushDevice {
   @@index([tenantId, userId])
   @@index([disabledAt])
   @@map("push_devices")
+}
+
+model Chassis {
+  id        String   @id @default(cuid())
+  tenantId  String
+  chassisNo String
+  label     String?
+  status    String   @default("ACTIVE")
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  gpsDevices   GpsDevice[]
+  gpsPositions GpsPosition[]
+
+  @@unique([tenantId, chassisNo])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@map("chassis")
+}
+
+model GpsDevice {
+  id           String    @id @default(cuid())
+  tenantId     String
+  chassisId    String?
+  vehicleId    String?
+  driverId     String?
+  terminalId   String    @unique
+  imei         String?
+  simNumber    String?
+  model        String    @default("TK905B-4G")
+  protocol     String    @default("JT808")
+  isActive     Boolean   @default(true)
+  lastSeenAt   DateTime?
+  lastLat      Decimal?  @db.Decimal(10, 7)
+  lastLng      Decimal?  @db.Decimal(10, 7)
+  lastSpeedKph Float?
+  lastHeading  Int?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  chassis   Chassis?      @relation(fields: [chassisId], references: [id], onDelete: SetNull)
+  vehicle   Vehicle?      @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  driver    drivers?      @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  positions GpsPosition[]
+
+  @@index([tenantId])
+  @@index([tenantId, chassisId])
+  @@index([tenantId, vehicleId])
+  @@index([tenantId, driverId])
+  @@map("gps_devices")
+}
+
+model GpsPosition {
+  id            String   @id @default(cuid())
+  tenantId      String
+  gpsDeviceId   String
+  chassisId     String?
+  vehicleId     String?
+  driverId      String?
+  lat           Decimal  @db.Decimal(10, 7)
+  lng           Decimal  @db.Decimal(10, 7)
+  speedKph      Float?
+  heading       Int?
+  altitude      Float?
+  recordedAt    DateTime
+  receivedAt    DateTime @default(now())
+  rawProtocol   String?
+  rawMessageId  String?
+  rawPayload    Json?
+  createdAt     DateTime @default(now())
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  gpsDevice GpsDevice @relation(fields: [gpsDeviceId], references: [id], onDelete: Cascade)
+  chassis   Chassis?  @relation(fields: [chassisId], references: [id], onDelete: SetNull)
+  vehicle   Vehicle?  @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  driver    drivers?  @relation(fields: [driverId], references: [id], onDelete: SetNull)
+
+  @@index([gpsDeviceId, recordedAt])
+  @@index([chassisId, recordedAt])
+  @@index([vehicleId, recordedAt])
+  @@index([tenantId, chassisId, recordedAt])
+  @@index([tenantId, recordedAt])
+  @@map("gps_positions")
 }

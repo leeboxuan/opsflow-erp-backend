@@ -10,6 +10,9 @@ CREATE TYPE "JobChargeSourceType" AS ENUM ('CUSTOMER_QUOTATION', 'DRIVER_RATE_MA
 -- CreateEnum
 CREATE TYPE "TripDocumentType" AS ENUM ('POD_PHOTO', 'SIGNATURE', 'OFFLOADING', 'TRAILER_PARKING_PHOTO', 'PICKUP_DO', 'OTHER');
 
+-- CreateEnum
+CREATE TYPE "JobDocumentType" AS ENUM ('QUOTATION', 'OTHER');
+
 -- AlterEnum (PostgreSQL: one statement per migration if PG <= 11; safe as separate statements)
 ALTER TYPE "JobDocumentType" ADD VALUE 'PICKUP_DO';
 ALTER TYPE "JobDocumentType" ADD VALUE 'OFFLOADING';
