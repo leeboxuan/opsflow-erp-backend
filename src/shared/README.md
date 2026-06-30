@@ -4,7 +4,7 @@
 
 `src/shared` contains **cross-domain infrastructure and utilities** used by Transport, Warehousing, Finance, and platform/admin features.
 
-Modules here should be reusable without belonging to a single product domain. Domain-specific business rules belong under `src/transport`, `src/warehousing`, or `src/finance` (or their subfolders), not in shared.
+Modules here should be reusable without belonging to a single product domain. Domain-specific business rules belong under `src/transport` (including `transport/finance`), `src/warehousing`, or their subfolders — not in shared.
 
 ## Current contents
 
@@ -53,6 +53,4 @@ It is **not** for:
 
 ## Finance note
 
-Transport finance and warehouse finance should eventually live under their respective domains (`src/finance` may split or nest under domain folders as the product grows).
-
-Only **generic billing primitives or helpers** (e.g. shared money/format utilities with no transport or warehouse job coupling) belong in shared. Job invoicing, wallet flows tied to driver trips, and warehouse billing should stay in domain modules.
+Transport finance lives under `src/transport/finance/`. Warehouse finance will live under `src/warehousing/finance/`. Generic billing primitives (if ever needed) under `src/shared/billing/` — not created yet.

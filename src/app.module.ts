@@ -12,7 +12,7 @@ import { DriverModule } from './driver/driver.module';
 import { InventoryModule } from './warehousing/inventory/inventory.module';
 import { CustomersModule } from './transport/customers/customers.module';
 import { DashboardModule } from "./dashboard/dashboard.module";
-import { FinanceModule } from './finance/finance.module';
+import { FinanceModule } from './transport/finance/finance.module';
 import { AuditModule } from './shared/audit/audit.module';
 import { TransportExecutionModule } from './transport/transport-execution.module';
 import { VehiclesModule } from './transport/vehicles/vehicles.module';

@@ -11,9 +11,9 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { Role } from "@prisma/client";
 import type { Response } from "express";
 
-import { AuthGuard } from "../shared/auth/guards/auth.guard";
-import { TenantGuard } from "../shared/auth/guards/tenant.guard";
-import { RoleGuard, Roles } from "../shared/auth/guards/role.guard";
+import { AuthGuard } from "../../shared/auth/guards/auth.guard";
+import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
+import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
 import { InvoicesService } from "./invoices.service";
 import { PortalInvoiceDto } from "./dto/portal-invoice.dto";
 

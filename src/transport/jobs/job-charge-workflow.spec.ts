@@ -1,6 +1,6 @@
 import { JobTripTemplate, JobStatus, JobType, Role } from "@prisma/client";
 import { OpsJobsService } from "./ops-jobs.service";
-import { InvoicesService } from "../../finance/invoices.service";
+import { InvoicesService } from "../finance/invoices.service";
 
 /** Minimal job row for syncJobInvoiceReadinessForJob after create/publish/unpublish. */
 const jobInvoiceSyncRow = {

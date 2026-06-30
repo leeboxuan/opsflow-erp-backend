@@ -6,7 +6,7 @@
     "deleteOutDir": true,
     "assets": [
       {
-        "include": "finance/assets/**/*",
+        "include": "transport/finance/assets/**/*",
         "outDir": "dist"
       }
     ]

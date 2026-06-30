@@ -11,7 +11,7 @@ import { DispatchController } from "./dispatch/dispatch.controller";
 import { OpsJobsService } from "./jobs/ops-jobs.service";
 import { DriverJobsService } from "./driver-app/driver-jobs.service";
 import { DispatchService } from "./dispatch/dispatch.service";
-import { FinanceModule } from "../finance/finance.module";
+import { FinanceModule } from "./finance/finance.module";
 
 @Module({
   imports: [PrismaModule, AuthModule, AuditModule, FinanceModule],

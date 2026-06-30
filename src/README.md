@@ -14,10 +14,9 @@ See also domain-specific notes:
 
 | Path | Domain | Role |
 |------|--------|------|
-| [`transport/`](transport/) | **Transport** | Transport execution, submodules, helpers, specs, and legacy transport-orders stack |
+| [`transport/`](transport/) | **Transport** | Transport execution, submodules, **transport finance**, helpers, specs, and legacy transport-orders stack |
 | [`warehousing/`](warehousing/) | **Warehousing** | Inventory and future warehouse jobs |
 | [`shared/`](shared/) | **Shared / Platform** | Cross-domain infrastructure: auth, prisma, tenants, realtime, notifications, push, health, audit, places, users |
-| [`finance/`](finance/) | **Finance** (transport-heavy today) | Invoicing, driver wallets, portal invoices |
 | [`driver/`](driver/) | **Transport** (legacy) | Legacy transport-order mobile API (`/driver/*`) |
 | [`drivers/`](drivers/) | **Transport** | Admin driver CRUD and driver self-profile |
 
@@ -42,7 +41,8 @@ Transport support modules and extracted helpers live under this folder. The **le
 | `trips/` | Ops trips controller, trip notes/document helpers, trip/payout DTOs |
 | `driver-app/` | Driver mobile controllers, `DriverJobsService`, driver DTOs |
 | `workflows/` | Job workflow kernel (`job-workflow.helpers.ts`) |
-| `transport-execution.module.ts` | Nest module registering jobs, trips, driver app, and dispatch execution |
+| `transport-execution.module.ts` | Nest module registering jobs, trips, driver app, dispatch, and finance |
+| `finance/` | **Transport finance** — job invoicing, driver wallets, portal invoices (`/finance/*`, `/portal/invoices/*`) |
 
 Specs are colocated under each transport subfolder (`jobs/*.spec.ts`, `trips/*.spec.ts`, `driver-app/*.spec.ts`, `documents/*.spec.ts`, `workflows/*.spec.ts`, etc.).
 
@@ -55,7 +55,7 @@ Specs are colocated under each transport subfolder (`jobs/*.spec.ts`, `trips/*.s
 |---------------|------|
 | `ops-jobs.controller.ts` | `/jobs/*` HTTP routes |
 | `ops-jobs.service.ts` | Main job/trip workflow monolith (~7.7k lines) |
-| `job-invoice-readiness.ts` | Invoice readiness evaluation (consumed by `src/finance`) |
+| `job-invoice-readiness.ts` | Invoice readiness evaluation (consumed by `transport/finance/invoices.service.ts`) |
 | `job-batch-import.helpers.ts` | Batch job import parsing helpers |
 | `create-job-validation.helpers.ts` | Pure create-job validation (items parsing, location assertions, collection type resolution) |
 | `dto/update-job.dto.ts` | Update job request DTO |
@@ -120,13 +120,13 @@ Shared must stay **infrastructure and generic utilities only**—not transport o
 
 ---
 
-## Finance (`src/finance/`)
+## Transport Finance (`src/transport/finance/`)
 
-Finance is **transport-heavy today** (job invoicing, driver wallets, portal invoices tied to transport jobs). `invoices.service.ts` imports `evaluateJobInvoiceReadiness` from `src/transport/jobs/job-invoice-readiness`.
+Current finance is **Transport Finance**: job invoicing, driver wallets, portal invoices, invoice readiness handoff, and invoice prefill tied to transport jobs/trips. `InvoicesService` imports `evaluateJobInvoiceReadiness` from `transport/jobs/job-invoice-readiness`.
 
-**Future architecture:** split into **Transport Finance** and **Warehouse Finance** under their respective domains. Only generic billing primitives or helpers (no job-domain coupling) may eventually live in `shared/`.
+Routes unchanged: `/finance/*`, `/finance/invoices/*`, `/portal/invoices/*`.
 
-**Do not move the finance module** as part of the current transport folder refactor sequence.
+**Future:** warehouse billing under `src/warehousing/finance/`. Generic billing primitives (if ever needed) under `src/shared/billing/` — not created yet.
 
 ---
 
@@ -193,8 +193,8 @@ The following are intentionally **out of scope** for the current extraction phas
 | `job-workflow.helpers.ts` | Moved to `transport/workflows/` |
 | `ops-jobs.service.ts`, `driver-jobs.service.ts`, ops controllers | Moved to `src/transport/`; registered via `TransportExecutionModule` |
 | Ops controllers | Route stability preserved (`/jobs`, `/drivers/jobs`, etc.) |
-| `src/finance/` | Separate domain module; only imports transport job readiness today |
-| `src/driver/`, `src/drivers/` | Legacy split; shared `LocationService` and DTO exports |
+| Transport finance relocation | **Done** — `src/transport/finance/` |
+| `src/driver/`, `src/drivers/` | Legacy split; shared exports |
 | PDF/signing orchestration inside `OpsJobsService` | Behavior-sensitive; helpers already extracted to `transport/documents/` |
 | Prisma `Job`/`Trip` model renames | Schema change, not a folder refactor |
 
@@ -255,6 +255,7 @@ src/transport/
   documents/          (done — helpers and selects)
   driver-app/         (done — driver controllers and DriverJobsService)
   workflows/          (done — job-workflow.helpers.ts)
+  finance/            (done — transport finance)
   orders/             ← legacy transport/orders module at transport root (future rename)
 ```
 
@@ -264,7 +265,7 @@ src/transport/
 src/warehousing/
   inventory/          (done)
   warehouse-jobs/     (future — new models/services, not transport Job)
-  finance/            (future warehouse billing)
+  finance/            (future — warehouse billing)
 ```
 
 ### Shared
@@ -286,8 +287,9 @@ src/shared/
 ### Finance
 
 ```
-src/finance/          (current — transport-heavy)
-  → eventually transport/finance and warehousing/finance
+src/transport/finance/   (done — transport finance: invoices, wallets, portal)
+src/warehousing/finance/ (future — warehouse billing)
+src/shared/billing/      (future — generic primitives only, if needed)
 ```
 
 ### Drivers

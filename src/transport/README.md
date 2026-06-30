@@ -14,12 +14,13 @@ Specs live next to the code they exercise:
 | `documents/` | `delivery-do-signed-pdf.spec.ts`, `do-signature.helpers.spec.ts` |
 | `workflows/` | `workflow.spec.ts` (tests `job-workflow.helpers.ts` and related trip-note helpers) |
 | `dispatch/` | `dispatch.service.spec.ts` |
+| `finance/` | `invoice-render.spec.ts`, `invoices-wisdom-force.spec.ts` |
 
 ## Folder structure (current)
 
 ```
 src/transport/
-├── transport-execution.module.ts   # Nest module: jobs, trips, driver app, dispatch
+├── transport-execution.module.ts   # Nest module: jobs, trips, driver app, dispatch, finance
 ├── customers/                      # customer companies, contacts, documents
 ├── master-rates/                   # quotations, trucking rates, DHC, driver trip rates
 ├── vehicles/                       # tenant vehicles, /fleet alias
@@ -28,6 +29,7 @@ src/transport/
 │   ├── tracking/                   # chassis/GPS tracking
 │   └── device-gateway/             # internal GPS ingestion
 ├── dispatch/                       # dispatch board, route planning (/dispatch)
+├── finance/                        # transport finance: invoices, wallets, portal
 ├── jobs/                           # ops jobs controller/service, helpers, DTOs
 ├── trips/                          # ops trips controller, trip helpers, DTOs
 ├── driver-app/                     # driver mobile controllers, service, DTOs
@@ -74,7 +76,7 @@ Transport is responsible for:
 |---------------|------|
 | `ops-jobs.controller.ts` | `/jobs/*` HTTP routes |
 | `ops-jobs.service.ts` | Main job/trip workflow monolith (~7.7k lines); trip-details edit guards exported from here |
-| `job-invoice-readiness.ts` | Invoice readiness evaluation (used by `src/finance/invoices.service.ts`) |
+| `job-invoice-readiness.ts` | Invoice readiness evaluation (used by `finance/invoices.service.ts`) |
 | `job-batch-import.helpers.ts` | Batch job import parsing |
 | `create-job-validation.helpers.ts` | Pure create-job validation helpers |
 | `dto/*` | Job CRUD, list, charges, import, response DTOs |
@@ -118,6 +120,21 @@ Consumed by `ops-jobs.service.ts`, `driver-jobs.service.ts`, and `workflow.spec.
 | `dto/sign-trip-document.dto.ts`, `do-signature-submit.dto.ts` | Signing request DTOs |
 | `delivery-do-signed-pdf.spec.ts` | DO signed PDF integration tests (via `OpsJobsService`) |
 
+## `src/transport/finance/` (Transport Finance)
+
+| File / folder | Role |
+|---------------|------|
+| `finance.module.ts` | `FinanceModule` — wired from `AppModule` and `TransportExecutionModule` |
+| `finance.controller.ts` | Driver wallet routes (`/finance/wallets/*`) |
+| `invoices.controller.ts` | Ops invoice CRUD and prefill (`/finance/invoices/*`) |
+| `portal-invoices.controller.ts` | Customer portal invoice download (`/portal/invoices/*`) |
+| `invoices.service.ts` | Invoice orchestration; imports `jobs/job-invoice-readiness` |
+| `finance.service.ts` | Driver wallet summaries and transactions |
+| `dto/*` | Invoice, wallet, portal DTOs |
+| `assets/` | Invoice PDF template assets (WF logo, QR) |
+
+Future **warehouse finance** belongs under `src/warehousing/finance/`, not here.
+
 ## `src/transport/dispatch/` (current)
 
 - **Routes:** `/dispatch/*` (unchanged)
@@ -135,21 +152,21 @@ The original transport-orders Nest module remains at the `transport/` root:
 | Location | Role |
 |----------|------|
 | `src/drivers`, `src/driver` | Admin driver CRUD and legacy order-trip mobile API |
-| `src/finance` | Invoicing and wallets; imports `transport/jobs/job-invoice-readiness` |
+| `src/warehousing/` | Inventory; future warehouse finance under `warehousing/finance/` |
 
 ## Do not move yet
 
 | Item | Reason |
 |------|--------|
 | `OpsJobsService` / `DriverJobsService` splits | Behavior-sensitive orchestration monoliths |
-| `src/finance/` | Separate domain |
 | `src/driver/`, `src/drivers/` | Legacy split with shared exports |
 | Prisma `Job`/`Trip` renames | Schema change |
 
 ## Next steps
 
 - Deduplicate `isContainerCargoJobType` between `create-job-validation.helpers.ts` and `job-workflow.helpers.ts`
-- Finance domain split, `src/driver` / `src/drivers` consolidation (separate efforts)
+- `src/driver` / `src/drivers` consolidation
+- `src/warehousing/finance/` when warehouse billing is implemented
 
 ## Warehousing boundary
 

@@ -31,7 +31,7 @@ import { RoleGuard } from "../../shared/auth/guards/role.guard";
 import { Roles } from "../../shared/auth/guards/role.guard";
 import { Role, JobType, TripPendingState } from "@prisma/client";
 import { OpsJobsService } from "./ops-jobs.service";
-import { InvoicesService } from "../../finance/invoices.service";
+import { InvoicesService } from "../finance/invoices.service";
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
 import { AssignJobDto } from "./dto/assign-job.dto";

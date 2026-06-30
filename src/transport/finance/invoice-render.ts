@@ -48,6 +48,9 @@ function esc(value: unknown): string {
 function resolveAssetCandidates(fileName: string): string[] {
   const cwd = process.cwd();
   return [
+    path.join(cwd, "src", "transport", "finance", "assets", fileName),
+    path.join(cwd, "dist", "transport", "finance", "assets", fileName),
+    path.join(cwd, "dist", "src", "transport", "finance", "assets", fileName),
     path.join(cwd, "src", "finance", "assets", fileName),
     path.join(cwd, "dist", "finance", "assets", fileName),
     path.join(cwd, "dist", "src", "finance", "assets", fileName),

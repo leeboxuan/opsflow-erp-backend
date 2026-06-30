@@ -1,3 +1,3 @@
-import { ListQueryBaseDto } from "../../common/dto";
+import { ListQueryBaseDto } from "../../../common/dto";
 
 export class ListInvoicesQueryDto extends ListQueryBaseDto {}
