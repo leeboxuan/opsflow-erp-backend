@@ -37,9 +37,9 @@ import { UpdateJobDto } from "./dto/update-job.dto";
 import { AssignJobDto } from "./dto/assign-job.dto";
 import { CancelJobDto } from "./dto/cancel-job.dto";
 import { JobListQueryDto } from "./dto/job-list-query.dto";
-import { ImportConfirmRequestDto } from "./dto/import-job-row.dto";
-import { LclImportConfirmRequestDto } from "./dto/lcl-import.dto";
-import { JobBatchImportConfirmRequestDto } from "./dto/job-batch-import.dto";
+import { ImportConfirmRequestDto } from "../transport/jobs/dto/import-job-row.dto";
+import { LclImportConfirmRequestDto } from "../transport/jobs/dto/lcl-import.dto";
+import { JobBatchImportConfirmRequestDto } from "../transport/jobs/dto/job-batch-import.dto";
 import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
 import {
   AppendJobTripDto,

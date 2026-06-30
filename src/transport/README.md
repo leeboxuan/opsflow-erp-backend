@@ -10,7 +10,7 @@ Transport is responsible for:
 - **Drivers** — driver profiles, admin driver management, and driver mobile execution APIs
 - **Vehicles** — tenant vehicle records
 - **Fleet** — fleet vehicles, fleet list aliases, and fleet operations
-- **Transport Jobs** — job-centric workflows (LCL, IMPORT, EXPORT, COLLECTION); shared helpers in `src/transport/jobs` (e.g. job invoice readiness)
+- **Transport Jobs** — job-centric workflows (LCL, IMPORT, EXPORT, COLLECTION); shared helpers and import DTOs in `src/transport/jobs` (e.g. job invoice readiness, job batch import, `dto/import-job-row`, `dto/lcl-import`)
 - **Trips** — trip execution, routing, documents, and payouts tied to transport jobs or legacy transport orders; shared helpers in `src/transport/trips` (e.g. trip notes, trip document list)
 - **Dispatch** — dispatch board, route planning, and trip reordering (`src/transport/dispatch`)
 - **Fleet Tracking** — chassis/GPS devices, live positions, and device-gateway ingestion
@@ -30,7 +30,7 @@ Today, much of the transport domain still lives elsewhere:
 |------------------|------|
 | `src/ops` | Transport jobs, trips, and driver execution (see `src/ops/README.md`) |
 | `src/transport/dispatch` | Dispatch board and route APIs (`/dispatch`) |
-| `src/transport/jobs` | Transport job helpers (invoice readiness; consumed by `src/ops` and Finance) |
+| `src/transport/jobs` | Transport job helpers and import DTOs (`dto/`); consumed by `src/ops` and Finance |
 | `src/transport/trips` | Trip-level helpers (trip notes, trip document list; consumed by `src/ops`) |
 | `src/transport/customers` | Customer master data |
 | `src/drivers`, `src/driver` | Driver admin and mobile APIs |
