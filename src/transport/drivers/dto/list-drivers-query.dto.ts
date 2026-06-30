@@ -1,3 +1,3 @@
 import { ListQueryBaseDto } from "../../../shared/common/dto";
 
-export class ListInvoicesQueryDto extends ListQueryBaseDto {}
+export class ListDriversQueryDto extends ListQueryBaseDto {}

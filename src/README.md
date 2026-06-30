@@ -14,13 +14,11 @@ See also domain-specific notes:
 
 | Path | Domain | Role |
 |------|--------|------|
-| [`transport/`](transport/) | **Transport** | Transport execution, submodules, **transport finance**, helpers, specs, and legacy transport-orders stack |
+| [`transport/`](transport/) | **Transport** | Transport execution, submodules, **transport finance**, legacy driver APIs, helpers, specs, and legacy transport-orders stack |
 | [`warehousing/`](warehousing/) | **Warehousing** | Inventory and future warehouse jobs |
-| [`shared/`](shared/) | **Shared / Platform** | Cross-domain infrastructure: auth, prisma, tenants, realtime, notifications, push, health, audit, places, users |
-| [`driver/`](driver/) | **Transport** (legacy) | Legacy transport-order mobile API (`/driver/*`) |
-| [`drivers/`](drivers/) | **Transport** | Admin driver CRUD and driver self-profile |
+| [`shared/`](shared/) | **Shared / Platform** | Cross-domain infrastructure: auth, prisma, tenants, realtime, notifications, push, health, audit, places, users, **common utilities** |
 
-**Other top-level folders** (not listed in the product domain map but present today): `admin/`, `dashboard/`, `common/`, `api/`, `assets/`.
+**Other top-level folders** (not listed in the product domain map but present today): `admin/`, `dashboard/`, `api/`. Top-level `src/common/` is empty after refactors — platform utilities live in `shared/common/`.
 
 ---
 
@@ -43,6 +41,8 @@ Transport support modules and extracted helpers live under this folder. The **le
 | `workflows/` | Job workflow kernel (`job-workflow.helpers.ts`) |
 | `transport-execution.module.ts` | Nest module registering jobs, trips, driver app, dispatch, and finance |
 | `finance/` | **Transport finance** — job invoicing, driver wallets, portal invoices (`/finance/*`, `/portal/invoices/*`) |
+| `drivers/` | Admin driver CRUD, driver self-profile (`/admin/drivers/*`, `/drivers/me`); wallet DTOs; location service |
+| `legacy-driver/` | Legacy singular `/driver/*` mobile order-trip API (`DriverModule`); temporary until old clients retire |
 
 Specs are colocated under each transport subfolder (`jobs/*.spec.ts`, `trips/*.spec.ts`, `driver-app/*.spec.ts`, `documents/*.spec.ts`, `workflows/*.spec.ts`, etc.).
 
@@ -68,6 +68,7 @@ Specs are colocated under each transport subfolder (`jobs/*.spec.ts`, `trips/*.s
 | `dto/import-job-row.dto.ts` | Single-row import confirm DTO |
 | `dto/job-batch-import.dto.ts` | Batch import confirm DTO |
 | `dto/lcl-import.dto.ts` | LCL import confirm DTO |
+| `assets/` | Job PDF branding assets (`db-logo.png`) |
 
 `OpsJobsService` lives in `src/transport/jobs/` and orchestrates the create-job flow. HTTP routes remain `/jobs/*` via `TransportExecutionModule`.
 
@@ -113,8 +114,9 @@ Cross-domain infrastructure used by Transport, Warehousing, Finance, and admin/p
 | `health/` | Health probes (`/health/*`) |
 | `places/` | Google Places helpers (`/places/*`) |
 | `users/` | User profile and avatar (`/users/me`, `/users/me/avatar`) |
+| `common/` | Platform utilities: exception filters, HTTP body limits, pagination, listing helpers, list-query base DTOs, query constants |
 
-**Future candidates** to move here: truly generic parts of `common/` (transport- or warehousing-specific helpers should leave `common/` over time).
+Generic cross-domain helpers live under `shared/common/`. Transport-specific helpers are colocated under `src/transport/` subfolders (`documents/`, `trips/`, `workflows/`, `driver-app/`, `legacy-driver/`, etc.).
 
 Shared must stay **infrastructure and generic utilities only**—not transport or warehousing business workflows.
 
@@ -130,24 +132,24 @@ Routes unchanged: `/finance/*`, `/finance/invoices/*`, `/portal/invoices/*`.
 
 ---
 
-## Driver modules (legacy split)
+## Driver modules
 
-Two modules exist for historical reasons:
-
-### `src/driver/` — legacy transport-order mobile API
-
-- Routes: `/driver/*` (singular prefix)
-- Stack: `TransportOrder` → `Trip` where `jobId` is null; stops, POD, order inbox
-- Also exports `LocationService` and DTOs used by `admin`, `transport`, and `drivers`
-- **Do not add new features here**; prefer `transport/driver-app` driver execution
-- **Do not move yet** — shared exports and legacy mobile clients must be audited first
-
-### `src/drivers/` — admin CRUD and driver profile
+### `src/transport/drivers/` — admin CRUD and driver profile (done)
 
 - Routes: `/admin/drivers/*` (web Drivers page), `/drivers/me` (self-profile)
 - **Does not own job execution** — that lives in `transport/driver-app` at `/drivers/jobs/*` and `/drivers/trips/*`
 - Uses `UsersService` from `shared/users` for avatars
-- **Do not move yet** — consolidate only after `src/driver` dependencies are untangled
+- Wallet response types in `transport/drivers/dto/driver-wallet.dto.ts`
+- Driver latest-location service in `transport/drivers/location/` (`LocationService`, `driverLocationLatest`); consumed by `GET /admin/locations` and legacy `POST /driver/location`
+
+### `src/transport/legacy-driver/` — legacy transport-order mobile API
+
+- Routes: `/driver/*` (singular prefix)
+- Stack: `TransportOrder` → `Trip` where `jobId` is null; stops, POD, order inbox
+- Registered via `DriverModule` from `AppModule` (not `TransportExecutionModule`)
+- Imports `LocationService` from `transport/drivers/location/` for `/driver/location`
+- **Separate from** `transport/driver-app` (`/drivers/jobs/*`, `/drivers/trips/*`) — do not merge
+- **Temporary/legacy** until old mobile clients are retired
 
 ---
 
@@ -194,7 +196,7 @@ The following are intentionally **out of scope** for the current extraction phas
 | `ops-jobs.service.ts`, `driver-jobs.service.ts`, ops controllers | Moved to `src/transport/`; registered via `TransportExecutionModule` |
 | Ops controllers | Route stability preserved (`/jobs`, `/drivers/jobs`, etc.) |
 | Transport finance relocation | **Done** — `src/transport/finance/` |
-| `src/driver/`, `src/drivers/` | Legacy split; shared exports |
+| `src/transport/legacy-driver/` | Legacy `/driver/*` order-trip mobile API; retire after client migration |
 | PDF/signing orchestration inside `OpsJobsService` | Behavior-sensitive; helpers already extracted to `transport/documents/` |
 | Prisma `Job`/`Trip` model renames | Schema change, not a folder refactor |
 
@@ -227,7 +229,7 @@ Recommended next step:
 | Platform module relocation | **Done** — `auth`, `prisma`, `tenants`, `realtime`, `notifications`, `push` under `src/shared/` |
 | `OpsJobsService` / `DriverJobsService` splits | Behavior-sensitive; file moves only, no splits |
 - Finance domain split
-- `src/driver` / `src/drivers` consolidation
+- `src/transport/legacy-driver` API retirement after client migration
 - Prisma `Job`/`Trip` model renames
 
 After any future step: `npm run build` and full test suite.
@@ -282,6 +284,7 @@ src/shared/
   health/             (done)
   places/             (done)
   users/              (done)
+  common/             (done — pagination, listing, filters, list-query DTOs, HTTP/exception helpers)
 ```
 
 ### Finance
@@ -294,9 +297,8 @@ src/shared/billing/      (future — generic primitives only, if needed)
 
 ### Drivers
 
-- Consolidate `src/drivers` under `src/transport/drivers` when safe.
-- Split or retire `src/driver` legacy API after confirming mobile clients no longer depend on `/driver/*`.
-- Merge admin driver CRUD with transport driver domain documentation—not with `ops` job execution.
+- **`src/transport/drivers/`** — admin driver CRUD and self-profile (done).
+- Retire **`src/transport/legacy-driver`** (`/driver/*`) after confirming mobile clients no longer depend on it.
 
 ---
 

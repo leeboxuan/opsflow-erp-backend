@@ -18,8 +18,8 @@ import { TripService } from './trip.service';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { ListTripsQueryDto } from './dto/list-trips-query.dto';
 import { TripDto } from './dto/trip.dto';
-import { AssignDriverDto } from '../driver/dto/assign-driver.dto';
-import { AssignVehicleDto } from '../driver/dto/assign-vehicle.dto';
+import { AssignDriverDto } from './trips/dto/assign-driver.dto';
+import { AssignVehicleDto } from './trips/dto/assign-vehicle.dto';
 import { Role } from '@prisma/client';
 
 @ApiTags('transport')

@@ -9,10 +9,10 @@ Specs live next to the code they exercise:
 | Folder | Spec examples |
 |--------|----------------|
 | `jobs/` | `ops-jobs-create-items.spec.ts`, `lcl-import.spec.ts`, `job-charge-workflow.spec.ts` |
-| `trips/` | `trip-details-edit.spec.ts`, `ops-jobs-append-trip.spec.ts`, `ops-jobs-unpublish.spec.ts` |
-| `driver-app/` | `driver-jobs-home.spec.ts`, `driver-jobs-do-sign.spec.ts` |
-| `documents/` | `delivery-do-signed-pdf.spec.ts`, `do-signature.helpers.spec.ts` |
-| `workflows/` | `workflow.spec.ts` (tests `job-workflow.helpers.ts` and related trip-note helpers) |
+| `trips/` | `trip-details-edit.spec.ts`, `ops-jobs-append-trip.spec.ts`, `ops-jobs-unpublish.spec.ts`, `trip-display-ref.spec.ts`, `ops-jobs-route-plan.spec.ts` |
+| `driver-app/` | `driver-jobs-home.spec.ts`, `driver-jobs-do-sign.spec.ts`, `driver-endpoint-perf.spec.ts` |
+| `documents/` | `delivery-do-signed-pdf.spec.ts`, `do-signature.helpers.spec.ts`, `document-file-display.spec.ts`, `job-document-signed-url.spec.ts` |
+| `workflows/` | `workflow.spec.ts` (tests `job-workflow.helpers.ts` and related trip-note helpers), `gul-circle-location.spec.ts` |
 | `dispatch/` | `dispatch.service.spec.ts` |
 | `finance/` | `invoice-render.spec.ts`, `invoices-wisdom-force.spec.ts` |
 
@@ -32,6 +32,7 @@ src/transport/
 ├── finance/                        # transport finance: invoices, wallets, portal
 ├── jobs/                           # ops jobs controller/service, helpers, DTOs
 ├── trips/                          # ops trips controller, trip helpers, DTOs
+├── legacy-driver/                  # legacy singular /driver/* mobile order-trip API
 ├── driver-app/                     # driver mobile controllers, service, DTOs
 ├── documents/                      # document/signature helpers and DTOs
 ├── workflows/                      # trip template and completion workflow kernel
@@ -60,7 +61,7 @@ Providers: `OpsJobsService`, `DriverJobsService`, `DispatchService`. Imports: `P
 Transport is responsible for:
 
 - **Customers** — customer companies, contacts, and company documents (`src/transport/customers`)
-- **Drivers** — driver profiles and admin driver management (`src/drivers`, `src/driver`); driver mobile **job execution** under `src/transport/driver-app`
+- **Drivers** — driver profiles and admin driver management (`src/transport/drivers`); legacy order mobile API in `src/transport/legacy-driver` (`/driver/*`); modern job execution under `src/transport/driver-app` (`/drivers/jobs/*`, `/drivers/trips/*`)
 - **Vehicles** — tenant vehicle records (`src/transport/vehicles`)
 - **Fleet** — fleet vehicles, fleet list aliases, and fleet operations (`src/transport/fleet/vehicles`)
 - **Fleet Tracking** — chassis/GPS devices, live positions, and device-gateway ingestion (`src/transport/fleet/tracking`, `src/transport/fleet/device-gateway`)
@@ -80,6 +81,37 @@ Transport is responsible for:
 | `job-batch-import.helpers.ts` | Batch job import parsing |
 | `create-job-validation.helpers.ts` | Pure create-job validation helpers |
 | `dto/*` | Job CRUD, list, charges, import, response DTOs |
+| `assets/` | Job PDF branding assets (`db-logo.png`) |
+
+## `src/transport/drivers/` (current)
+
+| File / folder | Role |
+|---------------|------|
+| `drivers.module.ts` | `DriversModule` — wired from `AppModule` |
+| `drivers.controller.ts` | `/drivers/me` (driver self-profile) |
+| `admin-drivers.controller.ts` | `/admin/drivers/*` (admin CRUD, suspend, wallet) |
+| `admin-drivers.service.ts` | Admin driver list/create/update/suspend/wallet |
+| `dto/driver-wallet.dto.ts` | `DriverWalletDto`, `DriverWalletTransactionDto` |
+| `dto/*` | Admin create/update/list DTOs, `UpdateDriverDto` |
+| `admin-drivers.service.spec.ts` | Admin drivers service tests |
+| `location/location.service.ts` | Driver phone GPS latest position (`driverLocationLatest`); admin list + legacy mobile ingest |
+| `location/dto/location.dto.ts` | `LocationDto`, `DriverLocationDto` (admin map list shape) |
+| `location/dto/update-location.dto.ts` | Legacy `POST /driver/location` request body |
+| `location/location.service.spec.ts` | Location service unit tests |
+
+Legacy **`src/transport/legacy-driver/`** hosts `DriverModule` for `/driver/location`; it imports `LocationService` from `drivers/location/` until the API is retired.
+
+## `src/transport/legacy-driver/` (current)
+
+| File / folder | Role |
+|---------------|------|
+| `driver.module.ts` | `DriverModule` — wired from `AppModule` only (not `TransportExecutionModule`) |
+| `driver.controller.ts` | `/driver/*` legacy mobile order-trip routes |
+| `driver-mvp.service.ts` | Order-trip mobile orchestration (~1.3k lines) |
+| `google-maps.service.ts` | Geocode + route optimize for legacy order-trip flows (Directions API) |
+| `dto/*` | Legacy mobile trip/order DTOs |
+
+Temporary/legacy until old clients retire. **Do not merge** with `driver-app`.
 
 ## `src/transport/trips/` (current)
 
@@ -88,7 +120,10 @@ Transport is responsible for:
 | `ops-trips.controller.ts` | `/trips/:tripId` ops trip detail |
 | `trip-notes.helpers.ts` | Trip notes field resolution |
 | `trip-document-list.helpers.ts` | Trip document list shaping |
+| `trip-display-ref.ts` | Human-readable trip display refs (job ref + sequence) |
+| `trip-order-suggest.ts` | Nearest-neighbour trip route ordering suggestion |
 | `dto/job-trip.dto.ts` | Trip append/patch/payout/reorder DTOs |
+| `dto/assign-driver.dto.ts`, `dto/assign-vehicle.dto.ts` | Legacy transport-order trip assignment (`POST /transport/trips/:tripId/assign-*`) |
 
 ## `src/transport/driver-app/` (current)
 
@@ -98,6 +133,7 @@ Transport is responsible for:
 | `driver-jobs.controller.ts` | `/drivers/jobs/*` |
 | `driver-trips.controller.ts` | `/drivers/trips/*` |
 | `driver-jobs.service.ts` | Driver mobile execution (~2.9k lines); optional `OpsJobsService` delegation for PDF/signing |
+| `driver-endpoint-perf.ts` | Optional driver API timing logs (`DRIVER_API_PERF_LOG`); used by `DriverJobsService` and `drivers/location/LocationService` |
 | `dto/*` | Driver home, jobs list/history, completion, location DTOs |
 
 ## `src/transport/workflows/` (current)
@@ -105,6 +141,7 @@ Transport is responsible for:
 | File | Role |
 |------|------|
 | `job-workflow.helpers.ts` | Trip templates, completion rules, trip seeding, route snapshots |
+| `gul-circle-location.ts` | Canonical 7 Gul Circle depot coords and legacy coord repair helper |
 
 Consumed by `ops-jobs.service.ts`, `driver-jobs.service.ts`, and `workflow.spec.ts`.
 
@@ -112,6 +149,8 @@ Consumed by `ops-jobs.service.ts`, `driver-jobs.service.ts`, and `workflow.spec.
 
 | File / folder | Role |
 |---------------|------|
+| `document-file-display.ts` | Safe client-facing filenames and display fields for stored documents |
+| `job-document-signed-url.ts` | Cached Supabase signed URLs for job document storage |
 | `signature-pdf-layout.helpers.ts` | DO signature image placement on PDF |
 | `document-uploader.utils.ts` | Document upload utilities |
 | `do-signature.helpers.ts` | DO signature submission helpers |
@@ -151,7 +190,6 @@ The original transport-orders Nest module remains at the `transport/` root:
 
 | Location | Role |
 |----------|------|
-| `src/drivers`, `src/driver` | Admin driver CRUD and legacy order-trip mobile API |
 | `src/warehousing/` | Inventory; future warehouse finance under `warehousing/finance/` |
 
 ## Do not move yet
@@ -159,13 +197,13 @@ The original transport-orders Nest module remains at the `transport/` root:
 | Item | Reason |
 |------|--------|
 | `OpsJobsService` / `DriverJobsService` splits | Behavior-sensitive orchestration monoliths |
-| `src/driver/`, `src/drivers/` | Legacy split with shared exports |
+| `driver-mvp.service.ts` refactor / retirement | Legacy API still in use |
 | Prisma `Job`/`Trip` renames | Schema change |
 
 ## Next steps
 
 - Deduplicate `isContainerCargoJobType` between `create-job-validation.helpers.ts` and `job-workflow.helpers.ts`
-- `src/driver` / `src/drivers` consolidation
+- Retire `src/transport/legacy-driver` after client migration
 - `src/warehousing/finance/` when warehouse billing is implemented
 
 ## Warehousing boundary

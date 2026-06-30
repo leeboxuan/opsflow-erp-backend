@@ -1,5 +1,5 @@
 import { MembershipStatus } from "@prisma/client";
-import { buildTripDisplayRef } from "../../common/trip-display-ref";
+import { buildTripDisplayRef } from "../../transport/trips/trip-display-ref";
 import type { RealtimeEvent } from "../realtime/realtime-event.types";
 
 /** Uppercase kind for UI metadata (notification.type stays dotted, e.g. trip.assigned). */

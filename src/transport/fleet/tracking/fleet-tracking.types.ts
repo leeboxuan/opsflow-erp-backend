@@ -1,4 +1,4 @@
-import type { PaginatedResponse } from "../../../common/pagination";
+import type { PaginatedResponse } from "../../../shared/common/pagination";
 
 export type TrackingStatus = "ONLINE" | "STALE" | "OFFLINE" | "UNASSIGNED";
 

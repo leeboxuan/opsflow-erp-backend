@@ -20,6 +20,11 @@ Modules here should be reusable without belonging to a single product domain. Do
 | `health/` | Health and tenant-context probe endpoints | `/health/*` |
 | `audit/` | Cross-domain audit logging (`AuditService`; no HTTP routes) | — |
 | `users/` | Authenticated user profile and avatar APIs | `/users/me`, `/users/me/avatar` |
+| `common/` | Platform utilities: exception filters, HTTP body limits, pagination, listing helpers, list-query base DTOs, query constants | (filters wired in `main.ts`; helpers imported by domain modules) |
+
+## Future candidates
+
+- Remaining transport-specific code should live under `src/transport/` subfolders. Top-level `src/common/` is empty; platform utilities are in `shared/common/`.
 
 ## Module dependencies (platform)
 
@@ -31,13 +36,7 @@ Modules here should be reusable without belonging to a single product domain. Do
 
 `AppModule` wires these from `./shared/<module>/<module>.module`.
 
-## Future candidates
-
-- `common/` — only utilities that are genuinely cross-domain (transport- or warehousing-specific helpers should move out of `common` over time)
-
 ## Rules
-
-**Do not put Transport-specific or Warehousing-specific business logic in shared.**
 
 Shared is for:
 

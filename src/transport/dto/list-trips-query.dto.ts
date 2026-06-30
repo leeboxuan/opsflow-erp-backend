@@ -1,3 +1,3 @@
-import { ListQueryBaseDto } from '../../common/dto';
+import { ListQueryBaseDto } from '../../shared/common/dto';
 
 export class ListTripsQueryDto extends ListQueryBaseDto {}

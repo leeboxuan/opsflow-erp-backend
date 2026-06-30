@@ -48,19 +48,3 @@ export interface DriverTripDto {
   createdAt: Date;
   updatedAt: Date;
 }
-
-export interface DriverWalletTransactionDto {
-  id: string;
-  tripId: string;
-  amountCents: number;
-  currency: string;
-  type: string;
-  description: string | null;
-  createdAt: Date;
-}
-
-export interface DriverWalletDto {
-  month: string;
-  transactions: DriverWalletTransactionDto[];
-  totalCents: number;
-}

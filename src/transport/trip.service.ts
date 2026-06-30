@@ -4,10 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../shared/prisma/prisma.service';
-import { parsePaginationFromQuery, buildPaginationMeta } from '../common/pagination';
-import { applyMappedFilter } from '../common/listing/listing.filters';
-import { buildOrderBy } from '../common/listing/listing.sort';
-import { applyQSearch } from '../common/listing/listing.search';
+import { parsePaginationFromQuery, buildPaginationMeta } from '../shared/common/pagination';
+import { applyMappedFilter } from '../shared/common/listing/listing.filters';
+import { buildOrderBy } from '../shared/common/listing/listing.sort';
+import { applyQSearch } from '../shared/common/listing/listing.search';
 import { TripPendingState, TripStatus, StopType } from '@prisma/client';
 import { CreateTripDto } from './dto/create-trip.dto';
 import {
@@ -19,7 +19,7 @@ import {
   DriverLocationDto
 } from './dto/trip.dto';
 import { EventLogService } from './event-log.service';
-import { AssignVehicleDto } from '../driver/dto/assign-vehicle.dto';
+import { AssignVehicleDto } from './trips/dto/assign-vehicle.dto';
 import { Role, MembershipStatus } from '@prisma/client';
 
 @Injectable()

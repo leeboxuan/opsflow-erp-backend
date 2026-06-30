@@ -14,25 +14,25 @@ import {
   TripDocumentType,
 } from "@prisma/client";
 import { PrismaService } from "../../shared/prisma/prisma.service";
-import { parsePaginationFromQuery, buildPaginationMeta } from "../../common/pagination";
-import { buildOrderBy } from "../../common/listing/listing.sort";
+import { parsePaginationFromQuery, buildPaginationMeta } from "../../shared/common/pagination";
+import { buildOrderBy } from "../../shared/common/listing/listing.sort";
 import { AuditService } from "../../shared/audit/audit.service";
 import { SupabaseService } from "../../shared/auth/supabase.service";
-import { buildDocumentFileDisplayFields } from "../../common/document-file-display";
+import { buildDocumentFileDisplayFields } from "../documents/document-file-display";
 import {
   buildDocumentSignedUrlResponse,
   JOB_DOCUMENTS_BUCKET,
-} from "../../common/job-document-signed-url";
+} from "../documents/job-document-signed-url";
 import {
   documentUploadedByInclude,
   loadUploadActorFields,
   resolveDocumentUploadedByFields,
 } from "../documents/document-uploader.utils";
-import { buildTripDisplayRef } from "../../common/trip-display-ref";
+import { buildTripDisplayRef } from "../trips/trip-display-ref";
 import {
   createDriverTripDocUploadPerfTimer,
   withDriverEndpointPerf,
-} from "../../common/driver-endpoint-perf";
+} from "./driver-endpoint-perf";
 import { JobLocationDto } from "./dto/location.dto";
 import { DocumentSignedUrlDto, JobDto, JobDocumentDto } from "../jobs/dto/job.dto";
 import {

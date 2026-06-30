@@ -2,16 +2,16 @@ import { Body, Controller, Get, Param, Patch, Post, Query, Request, UseGuards } 
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { Role } from "@prisma/client";
 
-import { AuthGuard } from "../shared/auth/guards/auth.guard";
-import { TenantGuard } from "../shared/auth/guards/tenant.guard";
-import { RoleGuard, Roles } from "../shared/auth/guards/role.guard";
+import { AuthGuard } from "../../shared/auth/guards/auth.guard";
+import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
+import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
 
 import { AdminDriversService } from "./admin-drivers.service";
 import { AdminCreateDriverDto } from "./dto/admin-create-driver.dto";
 import { AdminUpdateDriverDto } from "./dto/admin-update-driver.dto";
 import { AdminDriverDto } from "./dto/admin-driver.dto";
 import { ListDriversQueryDto } from "./dto/list-drivers-query.dto";
-import type { DriverWalletDto } from "../driver/dto/driver-trip.dto";
+import type { DriverWalletDto } from "./dto/driver-wallet.dto";
 
 @ApiTags("admin-drivers")
 @Controller("admin/drivers")

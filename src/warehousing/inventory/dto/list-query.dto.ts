@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsIn, IsOptional, IsString } from 'class-validator';
-import { ListQueryBaseDto } from '../../../common/dto';
+import { ListQueryBaseDto } from '../../../shared/common/dto';
 
 export const BATCH_STATUS_FILTER = ['Draft', 'Open', 'Completed', 'Cancelled'] as const;
 

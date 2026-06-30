@@ -3,9 +3,9 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { AllExceptionsFilter } from './common/all-exceptions.filter';
-import { JSON_BODY_LIMIT } from './common/http-body.config';
-import { PrismaExceptionFilter } from './common/prisma-exception.filter';
+import { AllExceptionsFilter } from './shared/common/all-exceptions.filter';
+import { JSON_BODY_LIMIT } from './shared/common/http-body.config';
+import { PrismaExceptionFilter } from './shared/common/prisma-exception.filter';
 
 // Fail fast if Supabase JWT secret is missing (required for HS256 token verification after login)
 function validateAuthEnv(): void {

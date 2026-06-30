@@ -8,6 +8,10 @@
       {
         "include": "transport/finance/assets/**/*",
         "outDir": "dist"
+      },
+      {
+        "include": "transport/jobs/assets/**/*",
+        "outDir": "dist"
       }
     ]
   }

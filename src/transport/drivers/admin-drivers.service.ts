@@ -5,24 +5,24 @@ import {
   Optional,
 } from "@nestjs/common";
 import { MembershipStatus, Role, UserRole } from "@prisma/client";
-import { PrismaService } from "../shared/prisma/prisma.service";
-import { SupabaseService } from "../shared/auth/supabase.service";
-import { UsersService } from "../shared/users/users.service";
+import { PrismaService } from "../../shared/prisma/prisma.service";
+import { SupabaseService } from "../../shared/auth/supabase.service";
+import { UsersService } from "../../shared/users/users.service";
 import {
   parsePaginationFromQuery,
   buildPaginationMeta,
-} from "../common/pagination";
-import { applyMappedFilter } from "../common/listing/listing.filters";
-import { buildOrderBy } from "../common/listing/listing.sort";
+} from "../../shared/common/pagination";
+import { applyMappedFilter } from "../../shared/common/listing/listing.filters";
+import { buildOrderBy } from "../../shared/common/listing/listing.sort";
 import { AdminCreateDriverDto } from "./dto/admin-create-driver.dto";
 import { AdminUpdateDriverDto } from "./dto/admin-update-driver.dto";
 import { AdminDriverDto } from "./dto/admin-driver.dto";
 import type {
   DriverWalletDto,
   DriverWalletTransactionDto,
-} from "../driver/dto/driver-trip.dto";
-import { RealtimeEventsService } from "../shared/realtime/realtime-events.service";
-import * as rt from "../shared/realtime/realtime-publish";
+} from "./dto/driver-wallet.dto";
+import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
+import * as rt from "../../shared/realtime/realtime-publish";
 
 @Injectable()
 export class AdminDriversService {

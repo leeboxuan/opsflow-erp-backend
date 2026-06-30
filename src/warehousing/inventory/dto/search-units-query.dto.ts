@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString } from 'class-validator';
-import { ListQueryBaseDto } from '../../../common/dto';
+import { ListQueryBaseDto } from '../../../shared/common/dto';
 
 export class SearchUnitsQueryDto extends ListQueryBaseDto {
   @ApiPropertyOptional({

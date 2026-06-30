@@ -5,9 +5,9 @@ import { SupabaseService } from "../../shared/auth/supabase.service";
 import {
   buildDocumentFileDisplayFields,
   documentMimeTypeOrNull,
-} from "../../common/document-file-display";
-import { buildTripDisplayRef } from "../../common/trip-display-ref";
-import { suggestTripOrderByNearestNeighbour } from "../../common/trip-order-suggest";
+} from "../documents/document-file-display";
+import { buildTripDisplayRef } from "../trips/trip-display-ref";
+import { suggestTripOrderByNearestNeighbour } from "../trips/trip-order-suggest";
 import {
   DispatchGpsStatus,
   DispatchRouteMode,

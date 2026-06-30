@@ -2,7 +2,7 @@ import { ApiPropertyOptional } from "@nestjs/swagger";
 import { IsEnum, IsIn, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
 import { Type } from "class-transformer";
 import { VehicleStatus, VehicleType } from "@prisma/client";
-import { SORT_DIR_VALUES } from "../../../../common/constants";
+import { SORT_DIR_VALUES } from "../../../../shared/common/constants";
 
 export const FLEET_VEHICLE_LIST_FILTER = {
   ALL: "all",

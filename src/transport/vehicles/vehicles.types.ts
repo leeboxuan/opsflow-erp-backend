@@ -1,5 +1,5 @@
 import { VehicleType, VehicleStatus } from "@prisma/client";
-import type { PaginatedResponse } from "../../common/pagination";
+import type { PaginatedResponse } from "../../shared/common/pagination";
 
 export interface VehicleDto {
   id: string;

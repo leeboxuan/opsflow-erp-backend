@@ -9,9 +9,9 @@ import { PrismaService } from "../../shared/prisma/prisma.service";
 import {
   parsePaginationFromQuery,
   buildPaginationMeta,
-} from "../../common/pagination";
-import { applyMappedFilter } from "../../common/listing/listing.filters";
-import { buildOrderBy } from "../../common/listing/listing.sort";
+} from "../../shared/common/pagination";
+import { applyMappedFilter } from "../../shared/common/listing/listing.filters";
+import { buildOrderBy } from "../../shared/common/listing/listing.sort";
 import { CreateVehicleDto } from "./dto/create-vehicle.dto";
 import { UpdateVehicleDto } from "./dto/update-vehicle.dto";
 import {

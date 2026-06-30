@@ -4,12 +4,12 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { VehicleStatus, VehicleType } from "@prisma/client";
-import { applyMappedFilter } from "../../../common/listing/listing.filters";
-import { buildOrderBy } from "../../../common/listing/listing.sort";
+import { applyMappedFilter } from "../../../shared/common/listing/listing.filters";
+import { buildOrderBy } from "../../../shared/common/listing/listing.sort";
 import {
   buildPaginationMeta,
   parsePaginationFromQuery,
-} from "../../../common/pagination";
+} from "../../../shared/common/pagination";
 import { PrismaService } from "../../../shared/prisma/prisma.service";
 import { AssignFleetVehicleDriverDto } from "./dto/assign-fleet-vehicle-driver.dto";
 import { CreateFleetVehicleDto } from "./dto/create-fleet-vehicle.dto";

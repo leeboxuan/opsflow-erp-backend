@@ -4,8 +4,8 @@ import {
   BadRequestException,
   ForbiddenException,
 } from "@nestjs/common";
-import { PrismaService } from "../shared/prisma/prisma.service";
-import { EventLogService } from "../transport/event-log.service";
+import { PrismaService } from "../../shared/prisma/prisma.service";
+import { EventLogService } from "../event-log.service";
 import {
   TripStatus,
   TripPendingState,
@@ -19,12 +19,14 @@ import {
   DriverStopDto,
   DeliveryOrderSummaryDto,
   TripLockStateDto,
+} from "./dto/driver-trip.dto";
+import type {
   DriverWalletDto,
   DriverWalletTransactionDto,
-} from "./dto/driver-trip.dto";
+} from "../drivers/dto/driver-wallet.dto";
 import { AcceptTripDto } from "./dto/accept-trip.dto";
 import { CompleteStopDto } from "./dto/complete-stop.dto";
-import { GoogleMapsService } from "../common/google-maps.service";
+import { GoogleMapsService } from "./google-maps.service";
 
 type OrderLite = {
   id: string;

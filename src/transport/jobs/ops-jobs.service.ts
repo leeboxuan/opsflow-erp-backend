@@ -42,15 +42,15 @@ import {
   parsePaginationFromQuery,
   buildPaginationMeta,
   type PaginatedResponse,
-} from "../../common/pagination";
-import { applyMappedFilter } from "../../common/listing/listing.filters";
-import { buildOrderBy } from "../../common/listing/listing.sort";
-import { applyQSearch } from "../../common/listing/listing.search";
-import { buildDocumentFileDisplayFields } from "../../common/document-file-display";
+} from "../../shared/common/pagination";
+import { applyMappedFilter } from "../../shared/common/listing/listing.filters";
+import { buildOrderBy } from "../../shared/common/listing/listing.sort";
+import { applyQSearch } from "../../shared/common/listing/listing.search";
+import { buildDocumentFileDisplayFields } from "../documents/document-file-display";
 import {
   buildDocumentSignedUrlResponse,
   JOB_DOCUMENTS_BUCKET,
-} from "../../common/job-document-signed-url";
+} from "../documents/job-document-signed-url";
 import {
   buildSignedDoSignatureStorageKey,
   doFileSuffixForType,
@@ -78,8 +78,8 @@ import {
   resolveDocumentUploadedByFields,
 } from "../documents/document-uploader.utils";
 import { DocumentSignedUrlDto, JobListItemDto } from "./dto/job.dto";
-import { buildTripDisplayRef } from "../../common/trip-display-ref";
-import { suggestTripOrderByNearestNeighbour } from "../../common/trip-order-suggest";
+import { buildTripDisplayRef } from "../trips/trip-display-ref";
+import { suggestTripOrderByNearestNeighbour } from "../trips/trip-order-suggest";
 import {
   evaluateJobInvoiceReadiness,
   assertJobHasNoTripsForCancelOrDelete,
@@ -7510,6 +7510,9 @@ export class OpsJobsService {
   
     // ===== LOGO =====
     const logoPathCandidates = [
+      path.resolve(process.cwd(), "src/transport/jobs/assets/db-logo.png"),
+      path.resolve(process.cwd(), "dist/transport/jobs/assets/db-logo.png"),
+      path.resolve(process.cwd(), "dist/src/transport/jobs/assets/db-logo.png"),
       path.resolve(process.cwd(), "src/assets/db-logo.png"),
       path.resolve(process.cwd(), "assets/db-logo.png"),
       path.resolve(process.cwd(), "db-logo.png"),

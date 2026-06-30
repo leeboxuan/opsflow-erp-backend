@@ -23,11 +23,11 @@ import {
   CreateCustomerCompanyDto,
   UpdateCustomerCompanyDto,
 } from "./dto/customers.dto";
-import { parsePaginationFromQuery, buildPaginationMeta } from "../../common/pagination";
+import { parsePaginationFromQuery, buildPaginationMeta } from "../../shared/common/pagination";
 import { createClient } from "@supabase/supabase-js";
-import { applyMappedFilter } from "../../common/listing/listing.filters";
-import { buildOrderBy } from "../../common/listing/listing.sort";
-import { applyQSearch } from "../../common/listing/listing.search";
+import { applyMappedFilter } from "../../shared/common/listing/listing.filters";
+import { buildOrderBy } from "../../shared/common/listing/listing.sort";
+import { applyQSearch } from "../../shared/common/listing/listing.search";
 import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
 import * as rt from "../../shared/realtime/realtime-publish";
 
