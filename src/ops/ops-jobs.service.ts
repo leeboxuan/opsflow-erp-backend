@@ -70,13 +70,13 @@ import {
   type SignableDoType,
   type SignTripDocumentBody,
 } from "./do-signature.helpers";
-import { computeDoSignatureImageDrawRect } from "./signature-pdf-layout.helpers";
+import { computeDoSignatureImageDrawRect } from "../transport/documents/signature-pdf-layout.helpers";
 import { normalizeSignatureImageForPdf } from "./signature-image-normalize";
 import {
   documentUploadedByInclude,
   loadUploadActorFields,
   resolveDocumentUploadedByFields,
-} from "./document-uploader.utils";
+} from "../transport/documents/document-uploader.utils";
 import { DocumentSignedUrlDto, JobListItemDto } from "./dto/job.dto";
 import { buildTripDisplayRef } from "../common/trip-display-ref";
 import { suggestTripOrderByNearestNeighbour } from "../common/trip-order-suggest";

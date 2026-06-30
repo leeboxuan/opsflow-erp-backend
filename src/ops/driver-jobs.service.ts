@@ -27,7 +27,7 @@ import {
   documentUploadedByInclude,
   loadUploadActorFields,
   resolveDocumentUploadedByFields,
-} from "./document-uploader.utils";
+} from "../transport/documents/document-uploader.utils";
 import { buildTripDisplayRef } from "../common/trip-display-ref";
 import {
   createDriverTripDocUploadPerfTimer,
