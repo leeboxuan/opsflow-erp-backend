@@ -6,10 +6,10 @@ import {
   assertPickupLocationForCreate,
   hasAutocompleteLocation,
   importPickupOriginUsesAddressFields,
-  OpsJobsService,
   readCreateJobItemsInput,
   readUpdateJobItemsInput,
-} from "./ops-jobs.service";
+} from "../transport/jobs/create-job-validation.helpers";
+import { OpsJobsService } from "./ops-jobs.service";
 
 describe("create job items (LCL optional)", () => {
   describe("readUpdateJobItemsInput", () => {

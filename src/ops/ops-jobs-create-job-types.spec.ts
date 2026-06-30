@@ -2,11 +2,11 @@ import { CollectionType, JobTripTemplate, JobType, Role } from "@prisma/client";
 import { tripCreateManyForJob } from "./job-workflow.helpers";
 import {
   assertExportDestinationFieldsConsistent,
-  OpsJobsService,
   parseValidJobItemsFromInput,
   resolveCollectionTypeForJobCreate,
   resolveExportDestinationFields,
-} from "./ops-jobs.service";
+} from "../transport/jobs/create-job-validation.helpers";
+import { OpsJobsService } from "./ops-jobs.service";
 
 describe("job create: EXPORT and COLLECTION", () => {
   function makeExportCreatePrisma() {

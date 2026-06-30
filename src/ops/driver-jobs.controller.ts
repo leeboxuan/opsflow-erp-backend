@@ -37,7 +37,7 @@ import {
   DriverJobsService,
   DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPES,
 } from "./driver-jobs.service";
-import { JobDocumentDto } from "./dto/job.dto";
+import { JobDocumentDto } from "../transport/jobs/dto/job.dto";
 import { DriverJobsListQueryDto } from "./dto/driver-jobs-list-query.dto";
 import { DriverJobsHistoryListQueryDto } from "./dto/driver-jobs-history-list-query.dto";
 import { DriverCompleteJobDto } from "./dto/complete-job.dto";

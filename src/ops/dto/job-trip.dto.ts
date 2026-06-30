@@ -15,7 +15,7 @@ import {
 } from "class-validator";
 import { CollectionType, JobTripTemplate } from "@prisma/client";
 import { Transform, Type } from "class-transformer";
-import { UpdateJobItemDto } from "./update-job.dto";
+import { UpdateJobItemDto } from "../../transport/jobs/dto/update-job.dto";
 
 export enum JobTripOrderStrategy {
   DISTANCE = "DISTANCE",

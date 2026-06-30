@@ -34,7 +34,7 @@ import {
   withDriverEndpointPerf,
 } from "../common/driver-endpoint-perf";
 import { JobLocationDto } from "./dto/location.dto";
-import { DocumentSignedUrlDto, JobDto, JobDocumentDto } from "./dto/job.dto";
+import { DocumentSignedUrlDto, JobDto, JobDocumentDto } from "../transport/jobs/dto/job.dto";
 import {
   buildTripCompletionDocumentGaps,
   trailerCheckoutBlocksCompletion,
