@@ -1,6 +1,6 @@
 # Ops module (Transport domain)
 
-Despite the generic name, **`src/ops` is the current home of Transport jobs, trips, dispatch, and driver execution workflows.** Treat everything in this folder as **Transport domain** code.
+Despite the generic name, **`src/ops` is the current home of Transport jobs, trips, and driver execution workflows.** Treat everything in this folder as **Transport domain** code. Dispatch code lives under `src/transport/dispatch` but remains wired through `OpsModule` (routes still `/dispatch`).
 
 ## What lives here today
 
@@ -8,10 +8,10 @@ Despite the generic name, **`src/ops` is the current home of Transport jobs, tri
 |------|-------------------------------------|----------------|
 | Transport jobs | `/jobs` | Job CRUD, charges, documents, imports, invoicing handoff |
 | Trips | `/trips`, job-scoped trip APIs | Multi-leg trip execution on transport jobs |
-| Dispatch | `/dispatch` | Dispatch board, route optimisation, trip reorder |
+| Dispatch | `/dispatch` | Dispatch board, route optimisation, trip reorder — **code:** `src/transport/dispatch` (registered via `OpsModule`) |
 | Driver execution | `/drivers/jobs`, `/drivers/trips`, `/drivers` | Driver mobile and ops-facing job/trip flows |
 
-Core services include `ops-jobs.service.ts`, `driver-jobs.service.ts`, and `dispatch.service.ts`. Prisma `Job` and `Trip` (where `jobId` is set) are **transport-only**.
+Core services include `ops-jobs.service.ts` and `driver-jobs.service.ts`. Dispatch is `src/transport/dispatch/dispatch.service.ts`. Job invoice readiness helpers live in `src/transport/jobs/job-invoice-readiness.ts` (imported by ops services and Finance). Trip helpers live in `src/transport/trips/` (trip notes, trip document list; imported by ops services). Prisma `Job` and `Trip` (where `jobId` is set) are **transport-only**.
 
 ## Domain classification
 
@@ -31,7 +31,7 @@ Do **not** add new warehousing code, warehouse job handlers, or inventory domain
 Do **not** split or move this module all at once. A safe sequence looks like:
 
 1. Document domain boundaries (this file and sibling READMEs)
-2. Move leaf modules with few dependencies (e.g. dispatch, fleet tracking)
+2. Move leaf modules with few dependencies (e.g. fleet tracking; dispatch moved to `src/transport/dispatch`; job invoice readiness moved to `src/transport/jobs`; trip helpers moved to `src/transport/trips`)
 3. Extract helpers and smaller services from `ops-jobs.service.ts`
 4. Relocate job/trip/workflow code under `src/transport` subfolders while keeping the same Nest module registrations and routes until an explicit cutover
 

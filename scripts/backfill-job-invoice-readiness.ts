@@ -18,7 +18,7 @@
  */
 
 import { JobStatus, PrismaClient } from "@prisma/client";
-import { syncJobInvoiceReadiness } from "../src/ops/job-invoice-readiness";
+import { syncJobInvoiceReadiness } from "../src/transport/jobs/job-invoice-readiness";
 
 type CliOptions = {
   dryRun: boolean;

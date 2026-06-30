@@ -11,7 +11,7 @@ import {
   tripCreateManyForJob,
   TRIP_COMPLETION_RULES,
 } from "./job-workflow.helpers";
-import { resolveTripNotesResponseFields } from "./trip-notes.helpers";
+import { resolveTripNotesResponseFields } from "../transport/trips/trip-notes.helpers";
 import {
   parseQuotationRateLinesFromDocxBuffer,
   parseQuotationRateLinesFromXlsxBuffer,

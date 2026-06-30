@@ -85,7 +85,7 @@ import {
   assertJobHasNoTripsForCancelOrDelete,
   syncJobInvoiceReadiness,
   type JobInvoiceSyncPrisma,
-} from "./job-invoice-readiness";
+} from "../transport/jobs/job-invoice-readiness";
 import { RealtimeEventsService } from "../realtime/realtime-events.service";
 import * as rt from "../realtime/realtime-publish";
 import { tripDocumentTypeLabel } from "../notifications/document-type-label";
@@ -93,12 +93,12 @@ import { resolveTripDetailsNotificationKind } from "../notifications/trip-detail
 import {
   normalizeOptionalNotes,
   resolveTripNotesResponseFields,
-} from "./trip-notes.helpers";
+} from "../transport/trips/trip-notes.helpers";
 import {
   ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES,
   deriveTripDocumentStatus,
   groupTripDocumentsByTripId,
-} from "./trip-document-list.helpers";
+} from "../transport/trips/trip-document-list.helpers";
 
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";

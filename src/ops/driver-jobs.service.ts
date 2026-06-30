@@ -43,11 +43,11 @@ import {
   evaluateJobInvoiceReadiness,
   syncJobInvoiceReadiness,
   type JobInvoiceSyncPrisma,
-} from "./job-invoice-readiness";
+} from "../transport/jobs/job-invoice-readiness";
 import { RealtimeEventsService } from "../realtime/realtime-events.service";
 import * as rt from "../realtime/realtime-publish";
 import { OpsJobsService } from "./ops-jobs.service";
-import { resolveTripNotesResponseFields } from "./trip-notes.helpers";
+import { resolveTripNotesResponseFields } from "../transport/trips/trip-notes.helpers";
 import { resolveTripRouteAddressResponseFields } from "./job-workflow.helpers";
 import {
   DO_SIGN_REQUIRES_ONGOING_TRIP_MESSAGE,

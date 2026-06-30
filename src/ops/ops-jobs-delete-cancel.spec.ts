@@ -3,7 +3,7 @@ import { JobStatus, Role, TripStatus } from "@prisma/client";
 import {
   JOBS_WITH_TRIPS_CANNOT_CANCEL_OR_DELETE_MSG,
   assertJobHasNoTripsForCancelOrDelete,
-} from "./job-invoice-readiness";
+} from "../transport/jobs/job-invoice-readiness";
 import { OpsJobsService } from "./ops-jobs.service";
 
 describe("OpsJobsService job delete/cancel guards", () => {

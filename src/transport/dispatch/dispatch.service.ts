@@ -1,13 +1,13 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from "@nestjs/common";
 import { MembershipStatus, Role, TripDocumentType, TripStatus } from "@prisma/client";
-import { PrismaService } from "../prisma/prisma.service";
-import { SupabaseService } from "../auth/supabase.service";
+import { PrismaService } from "../../prisma/prisma.service";
+import { SupabaseService } from "../../auth/supabase.service";
 import {
   buildDocumentFileDisplayFields,
   documentMimeTypeOrNull,
-} from "../common/document-file-display";
-import { buildTripDisplayRef } from "../common/trip-display-ref";
-import { suggestTripOrderByNearestNeighbour } from "../common/trip-order-suggest";
+} from "../../common/document-file-display";
+import { buildTripDisplayRef } from "../../common/trip-display-ref";
+import { suggestTripOrderByNearestNeighbour } from "../../common/trip-order-suggest";
 import {
   DispatchGpsStatus,
   DispatchRouteMode,
@@ -16,7 +16,7 @@ import {
   DispatchOptimiseRouteDto,
   DispatchReorderTripsDto,
 } from "./dto/dispatch.dto";
-import { RealtimeEventsService } from "../realtime/realtime-events.service";
+import { RealtimeEventsService } from "../../realtime/realtime-events.service";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
 const GOOGLE_ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes";

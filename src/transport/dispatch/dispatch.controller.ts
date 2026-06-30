@@ -12,9 +12,9 @@ import {
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { Role } from "@prisma/client";
-import { AuthGuard } from "../auth/guards/auth.guard";
-import { RoleGuard, Roles } from "../auth/guards/role.guard";
-import { TenantGuard } from "../auth/guards/tenant.guard";
+import { AuthGuard } from "../../auth/guards/auth.guard";
+import { RoleGuard, Roles } from "../../auth/guards/role.guard";
+import { TenantGuard } from "../../auth/guards/tenant.guard";
 import { DispatchService } from "./dispatch.service";
 import {
   DispatchBoardResponseDto,

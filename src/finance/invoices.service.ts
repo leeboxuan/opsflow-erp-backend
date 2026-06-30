@@ -21,7 +21,7 @@ import { SupabaseService } from "../auth/supabase.service";
 import { AuditService } from "../shared/audit/audit.service";
 import { loadInvoiceAssetBuffer, renderInvoiceHtml } from "./invoice-render";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { evaluateJobInvoiceReadiness } from "../ops/job-invoice-readiness";
+import { evaluateJobInvoiceReadiness } from "../transport/jobs/job-invoice-readiness";
 import { buildTripDisplayRef } from "../common/trip-display-ref";
 import { RealtimeEventsService } from "../realtime/realtime-events.service";
 import * as rt from "../realtime/realtime-publish";

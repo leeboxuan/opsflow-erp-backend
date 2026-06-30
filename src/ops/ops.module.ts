@@ -7,10 +7,10 @@ import { OpsTripsController } from "./ops-trips.controller";
 import { DriverJobsController } from "./driver-jobs.controller";
 import { DriverHomeController } from "./driver-home.controller";
 import { DriverTripsController } from "./driver-trips.controller";
-import { DispatchController } from "./dispatch.controller";
+import { DispatchController } from "../transport/dispatch/dispatch.controller";
 import { OpsJobsService } from "./ops-jobs.service";
 import { DriverJobsService } from "./driver-jobs.service";
-import { DispatchService } from "./dispatch.service";
+import { DispatchService } from "../transport/dispatch/dispatch.service";
 import { FinanceModule } from "../finance/finance.module";
 
 @Module({

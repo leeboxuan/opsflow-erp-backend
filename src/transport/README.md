@@ -1,6 +1,6 @@
 # Transport domain
 
-This folder is part of the **Transport** product domain. It currently holds the legacy transport-orders stack (`/transport/orders`, `/transport/trips`, `/transport/stops`). Other transport-related code still lives in sibling folders and will be consolidated here gradually.
+This folder is part of the **Transport** product domain. It holds the legacy transport-orders stack (`/transport/orders`, `/transport/trips`, `/transport/stops`), **dispatch** (`/dispatch`), and other transport submodules consolidated here gradually.
 
 ## What Transport owns
 
@@ -10,9 +10,9 @@ Transport is responsible for:
 - **Drivers** — driver profiles, admin driver management, and driver mobile execution APIs
 - **Vehicles** — tenant vehicle records
 - **Fleet** — fleet vehicles, fleet list aliases, and fleet operations
-- **Transport Jobs** — job-centric workflows (LCL, IMPORT, EXPORT, COLLECTION)
-- **Trips** — trip execution, routing, documents, and payouts tied to transport jobs or legacy transport orders
-- **Dispatch** — dispatch board, route planning, and trip reordering
+- **Transport Jobs** — job-centric workflows (LCL, IMPORT, EXPORT, COLLECTION); shared helpers in `src/transport/jobs` (e.g. job invoice readiness)
+- **Trips** — trip execution, routing, documents, and payouts tied to transport jobs or legacy transport orders; shared helpers in `src/transport/trips` (e.g. trip notes, trip document list)
+- **Dispatch** — dispatch board, route planning, and trip reordering (`src/transport/dispatch`)
 - **Fleet Tracking** — chassis/GPS devices, live positions, and device-gateway ingestion
 - **Master Rates** — quotations, trucking rates, DHC references, and driver trip rate masters
 
@@ -28,7 +28,10 @@ Today, much of the transport domain still lives elsewhere:
 
 | Current location | Role |
 |------------------|------|
-| `src/ops` | Transport jobs, trips, dispatch, and driver execution (see `src/ops/README.md`) |
+| `src/ops` | Transport jobs, trips, and driver execution (see `src/ops/README.md`) |
+| `src/transport/dispatch` | Dispatch board and route APIs (`/dispatch`) |
+| `src/transport/jobs` | Transport job helpers (invoice readiness; consumed by `src/ops` and Finance) |
+| `src/transport/trips` | Trip-level helpers (trip notes, trip document list; consumed by `src/ops`) |
 | `src/transport/customers` | Customer master data |
 | `src/drivers`, `src/driver` | Driver admin and mobile APIs |
 | `src/transport/vehicles`, `src/transport/fleet/vehicles` | Vehicles and fleet vehicles |
