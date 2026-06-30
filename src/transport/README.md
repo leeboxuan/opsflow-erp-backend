@@ -14,7 +14,7 @@ Transport is responsible for:
 - **Trips** — trip execution, routing, documents, and payouts tied to transport jobs or legacy transport orders; shared helpers in `src/transport/trips` (e.g. trip notes, trip document list)
 - **Dispatch** — dispatch board, route planning, and trip reordering (`src/transport/dispatch`)
 - **Fleet Tracking** — chassis/GPS devices, live positions, and device-gateway ingestion
-- **Documents** — job/trip document and signature helpers in `src/transport/documents` (e.g. signature PDF layout, document uploader utilities)
+- **Documents** — job/trip document and signature helpers in `src/transport/documents` (signature PDF layout, document uploader, DO signature helpers, signature image normalization, driver mobile document selects)
 - **Master Rates** — quotations, trucking rates, DHC references, and driver trip rate masters
 
 ## Transport jobs and trips
@@ -33,7 +33,7 @@ Today, much of the transport domain still lives elsewhere:
 | `src/transport/dispatch` | Dispatch board and route APIs (`/dispatch`) |
 | `src/transport/jobs` | Transport job helpers and import DTOs (`dto/`); consumed by `src/ops` and Finance |
 | `src/transport/trips` | Trip-level helpers (trip notes, trip document list; consumed by `src/ops`) |
-| `src/transport/documents` | Document/signature helpers (signature PDF layout, document uploader; consumed by `src/ops`) |
+| `src/transport/documents` | Document/signature helpers and driver mobile Prisma selects (consumed by `src/ops`) |
 | `src/transport/customers` | Customer master data |
 | `src/drivers`, `src/driver` | Driver admin and mobile APIs |
 | `src/transport/vehicles`, `src/transport/fleet/vehicles` | Vehicles and fleet vehicles |

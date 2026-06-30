@@ -57,12 +57,12 @@ import {
   parseSignedAtFromBody,
   tripStatusAllowsDoSign,
   type SignTripDocumentBody,
-} from "./do-signature.helpers";
+} from "../transport/documents/do-signature.helpers";
 import {
   isContainerCargoJobType,
   jobTripTemplateDisplayLabel,
 } from "./job-workflow.helpers";
-import { DRIVER_ACTIVE_JOB_DOCUMENTS_INCLUDE } from "./driver-mobile-document.select";
+import { DRIVER_ACTIVE_JOB_DOCUMENTS_INCLUDE } from "../transport/documents/driver-mobile-document.select";
 
 const DEFAULT_TENANT_TIMEZONE = "Asia/Singapore";
 const DEFAULT_DRIVER_EARNING_CURRENCY = "SGD";

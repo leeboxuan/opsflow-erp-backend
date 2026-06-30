@@ -11,7 +11,7 @@ Despite the generic name, **`src/ops` is the current home of Transport jobs, tri
 | Dispatch | `/dispatch` | Dispatch board, route optimisation, trip reorder — **code:** `src/transport/dispatch` (registered via `OpsModule`) |
 | Driver execution | `/drivers/jobs`, `/drivers/trips`, `/drivers` | Driver mobile and ops-facing job/trip flows |
 
-Core services include `ops-jobs.service.ts` and `driver-jobs.service.ts`. Dispatch is `src/transport/dispatch/dispatch.service.ts`. Job helpers and import DTOs live in `src/transport/jobs/`. Trip helpers live in `src/transport/trips/`. Document helpers (signature PDF layout, document uploader) live in `src/transport/documents/` (imported by ops services). Prisma `Job` and `Trip` (where `jobId` is set) are **transport-only**.
+Core services include `ops-jobs.service.ts` and `driver-jobs.service.ts`. Dispatch is `src/transport/dispatch/dispatch.service.ts`. Job helpers and import DTOs live in `src/transport/jobs/`. Trip helpers live in `src/transport/trips/`. Document/signature helpers and driver mobile document selects live in `src/transport/documents/`; ops services still orchestrate signing and PDF refresh flows. Prisma `Job` and `Trip` (where `jobId` is set) are **transport-only**.
 
 ## Domain classification
 

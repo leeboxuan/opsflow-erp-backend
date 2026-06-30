@@ -5,7 +5,7 @@ import {
   DO_SIGN_REQUIRES_ONGOING_TRIP_MESSAGE,
   pickPreferredSignatureArtifact,
   type SignableDoType,
-} from "./do-signature.helpers";
+} from "../transport/documents/do-signature.helpers";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";

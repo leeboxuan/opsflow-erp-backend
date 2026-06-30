@@ -1,5 +1,5 @@
 import { JobDocumentType, Prisma } from "@prisma/client";
-import { documentUploadedByInclude } from "../transport/documents/document-uploader.utils";
+import { documentUploadedByInclude } from "./document-uploader.utils";
 
 /** Slim JobDocument fields for driver mobile list/home (no signed URLs). */
 export const JOB_DOCUMENT_MOBILE_SELECT = {

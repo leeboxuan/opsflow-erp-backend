@@ -69,9 +69,9 @@ import {
   warnMissingSignatureImageForSignedDo,
   type SignableDoType,
   type SignTripDocumentBody,
-} from "./do-signature.helpers";
+} from "../transport/documents/do-signature.helpers";
 import { computeDoSignatureImageDrawRect } from "../transport/documents/signature-pdf-layout.helpers";
-import { normalizeSignatureImageForPdf } from "./signature-image-normalize";
+import { normalizeSignatureImageForPdf } from "../transport/documents/signature-image-normalize";
 import {
   documentUploadedByInclude,
   loadUploadActorFields,
