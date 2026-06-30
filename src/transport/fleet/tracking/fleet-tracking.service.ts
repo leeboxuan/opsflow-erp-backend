@@ -1,9 +1,9 @@
-﻿import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { applyQSearch } from "../../../common/listing/listing.search";
 import { buildOrderBy } from "../../../common/listing/listing.sort";
 import { buildPaginationMeta, parsePaginationFromQuery } from "../../../common/pagination";
-import { PrismaService } from "../../../prisma/prisma.service";
+import { PrismaService } from "../../../shared/prisma/prisma.service";
 import { AssignGpsDeviceChassisDto } from "./dto/assign-gps-device-chassis.dto";
 import { CreateChassisDto } from "./dto/create-chassis.dto";
 import { CreateGpsDeviceDto } from "./dto/create-gps-device.dto";

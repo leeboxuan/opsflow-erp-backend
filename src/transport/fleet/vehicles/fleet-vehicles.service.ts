@@ -10,7 +10,7 @@ import {
   buildPaginationMeta,
   parsePaginationFromQuery,
 } from "../../../common/pagination";
-import { PrismaService } from "../../../prisma/prisma.service";
+import { PrismaService } from "../../../shared/prisma/prisma.service";
 import { AssignFleetVehicleDriverDto } from "./dto/assign-fleet-vehicle-driver.dto";
 import { CreateFleetVehicleDto } from "./dto/create-fleet-vehicle.dto";
 import {

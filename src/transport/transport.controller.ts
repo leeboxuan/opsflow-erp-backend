@@ -17,8 +17,8 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { plainToInstance } from "class-transformer";
 import { validate } from "class-validator";
-import { AuthGuard } from "../auth/guards/auth.guard";
-import { TenantGuard } from "../auth/guards/tenant.guard";
+import { AuthGuard } from "../shared/auth/guards/auth.guard";
+import { TenantGuard } from "../shared/auth/guards/tenant.guard";
 import {
   TransportService,
   CreateOrdersBatchResult,
@@ -28,7 +28,7 @@ import { CreateOrdersBatchDto } from "./dto/create-orders-batch.dto";
 import { ListOrdersQueryDto } from "./dto/list-orders-query.dto";
 import { OrderDto } from "./dto/order.dto";
 import { TripDto } from "./dto/trip.dto";
-import { RoleGuard, Roles } from "@/auth/guards/role.guard";
+import { RoleGuard, Roles } from "@/shared/auth/guards/role.guard";
 import { Role } from "@prisma/client";
 import { UpdateOrderDto } from "./dto/update-order.dto";
 

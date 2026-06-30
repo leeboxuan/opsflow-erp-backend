@@ -4,7 +4,7 @@ import {
   BadRequestException,
   ConflictException,
 } from "@nestjs/common";
-import { PrismaService } from "../../prisma/prisma.service";
+import { PrismaService } from "../../shared/prisma/prisma.service";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../../common/pagination";
 import { applyMappedFilter } from "../../common/listing/listing.filters";
 import { buildOrderBy } from "../../common/listing/listing.sort";

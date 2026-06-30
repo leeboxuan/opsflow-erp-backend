@@ -1,9 +1,9 @@
 import { Injectable, NotFoundException, BadRequestException } from "@nestjs/common";
-import { PrismaService } from "../prisma/prisma.service";
+import { PrismaService } from "../shared/prisma/prisma.service";
 import { CreatePodDto } from "./dto/create-pod.dto";
 import { PodDto } from "./dto/trip.dto";
 import { EventLogService } from "./event-log.service";
-import { SupabaseService } from "../auth/supabase.service";
+import { SupabaseService } from "../shared/auth/supabase.service";
 import { randomUUID } from "crypto";
 
 const POD_BUCKET = "pods-photos";

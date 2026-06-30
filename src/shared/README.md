@@ -8,24 +8,32 @@ Modules here should be reusable without belonging to a single product domain. Do
 
 ## Current contents
 
-| Path | Role |
-|------|------|
-| `places/` | Google Places autocomplete and geocoding helpers used by address forms across modules (`/places/*`). |
-| `health/` | Health and tenant-context probe endpoints for ops and monitoring (`/health/*`). |
-| `audit/` | Cross-domain audit logging service (`AuditService`; no HTTP routes). |
-| `users/` | Authenticated user profile and avatar APIs (`/users/me`, `/users/me/avatar`). |
+| Path | Role | Routes (examples) |
+|------|------|-------------------|
+| `auth/` | Supabase auth, JWT verification, guards (`AuthGuard`, `TenantGuard`, `RoleGuard`) | `/auth/*` |
+| `prisma/` | Prisma client module (`PrismaService`) | (no HTTP routes) |
+| `tenants/` | Multi-tenancy and membership APIs | `/tenants/*` |
+| `realtime/` | SSE / realtime event bus (`RealtimeEventsService`) | `/realtime/*` |
+| `notifications/` | In-app notifications fan-out | `/notifications/*` |
+| `push/` | Expo push for drivers | `/push/devices/*` |
+| `places/` | Google Places autocomplete and geocoding helpers | `/places/*` |
+| `health/` | Health and tenant-context probe endpoints | `/health/*` |
+| `audit/` | Cross-domain audit logging (`AuditService`; no HTTP routes) | — |
+| `users/` | Authenticated user profile and avatar APIs | `/users/me`, `/users/me/avatar` |
+
+## Module dependencies (platform)
+
+- `AuthModule` imports `PrismaModule`
+- `TenantsModule` imports `PrismaModule`, `AuthModule`
+- `RealtimeModule` imports `AuthModule`, `NotificationsModule` (with `forwardRef`)
+- `NotificationsModule` imports `PrismaModule`, `AuthModule`, `RealtimeModule`, `PushModule`
+- `PushModule` imports `PrismaModule`, `AuthModule`
+
+`AppModule` wires these from `./shared/<module>/<module>.module`.
 
 ## Future candidates
 
-These modules still live at the `src/` root today and may move under `src/shared/` incrementally (routes and behavior unchanged per move):
-
-- `auth`
-- `tenants`
-- `prisma`
-- `realtime`
-- `notifications`
-- `push`
-- `common` — only utilities that are genuinely cross-domain (transport- or warehousing-specific helpers should move out of `common` over time)
+- `common/` — only utilities that are genuinely cross-domain (transport- or warehousing-specific helpers should move out of `common` over time)
 
 ## Rules
 

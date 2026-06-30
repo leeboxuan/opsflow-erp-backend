@@ -1,4 +1,4 @@
-import { SupabaseService } from "../../auth/supabase.service";
+import { SupabaseService } from "../auth/supabase.service";
 
 export const USER_PROFILE_PICTURES_BUCKET = "user-profile-pictures";
 export const USER_AVATAR_SIGNED_URL_TTL_SECONDS = 60 * 60;

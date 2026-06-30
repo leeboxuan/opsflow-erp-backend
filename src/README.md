@@ -16,14 +16,8 @@ See also domain-specific notes:
 |------|--------|------|
 | [`transport/`](transport/) | **Transport** | Transport execution, submodules, helpers, specs, and legacy transport-orders stack |
 | [`warehousing/`](warehousing/) | **Warehousing** | Inventory and future warehouse jobs |
-| [`shared/`](shared/) | **Shared** | Cross-domain infrastructure and generic utilities |
+| [`shared/`](shared/) | **Shared / Platform** | Cross-domain infrastructure: auth, prisma, tenants, realtime, notifications, push, health, audit, places, users |
 | [`finance/`](finance/) | **Finance** (transport-heavy today) | Invoicing, driver wallets, portal invoices |
-| [`auth/`](auth/) | **Platform** | Authentication, JWT, Supabase, guards |
-| [`tenants/`](tenants/) | **Platform** | Multi-tenancy and membership |
-| [`prisma/`](prisma/) | **Platform** | Database client |
-| [`realtime/`](realtime/) | **Platform** | SSE / realtime events |
-| [`notifications/`](notifications/) | **Platform** | In-app notifications |
-| [`push/`](push/) | **Platform** | Driver push devices and delivery |
 | [`driver/`](driver/) | **Transport** (legacy) | Legacy transport-order mobile API (`/driver/*`) |
 | [`drivers/`](drivers/) | **Transport** | Admin driver CRUD and driver self-profile |
 
@@ -120,7 +114,7 @@ Cross-domain infrastructure used by Transport, Warehousing, Finance, and admin/p
 | `places/` | Google Places helpers (`/places/*`) |
 | `users/` | User profile and avatar (`/users/me`, `/users/me/avatar`) |
 
-**Future candidates** to move here (still at `src/` root today): `auth`, `tenants`, `prisma`, `realtime`, `notifications`, `push`, and truly generic parts of `common/`.
+**Future candidates** to move here: truly generic parts of `common/` (transport- or warehousing-specific helpers should leave `common/` over time).
 
 Shared must stay **infrastructure and generic utilities only**—not transport or warehousing business workflows.
 
@@ -157,16 +151,18 @@ Two modules exist for historical reasons:
 
 ---
 
-## Platform modules (root level, not yet under `shared/`)
+## Platform modules (`src/shared/`)
+
+Platform modules now live under `shared/` (see [`shared/README.md`](shared/README.md)):
 
 | Module | Role |
 |--------|------|
-| `auth/` | Login, token verification, guards |
-| `tenants/` | Tenant and membership APIs |
-| `prisma/` | Prisma client module |
-| `realtime/` | Realtime event bus |
-| `notifications/` | Notification fan-out |
-| `push/` | Expo push for drivers |
+| `shared/auth/` | Login, token verification, guards |
+| `shared/tenants/` | Tenant and membership APIs |
+| `shared/prisma/` | Prisma client module |
+| `shared/realtime/` | Realtime event bus |
+| `shared/notifications/` | Notification fan-out |
+| `shared/push/` | Expo push for drivers |
 
 ---
 
@@ -228,7 +224,7 @@ Recommended next step:
 
 **Delay until deliberately planned:**
 
-| Spec relocation from `src/ops/` | **Done** — specs colocated under `src/transport/*` |
+| Platform module relocation | **Done** — `auth`, `prisma`, `tenants`, `realtime`, `notifications`, `push` under `src/shared/` |
 | `OpsJobsService` / `DriverJobsService` splits | Behavior-sensitive; file moves only, no splits |
 - Finance domain split
 - `src/driver` / `src/drivers` consolidation
@@ -275,16 +271,16 @@ src/warehousing/
 
 ```
 src/shared/
+  auth/               (done)
+  tenants/            (done)
+  prisma/             (done)
+  realtime/           (done)
+  notifications/      (done)
+  push/               (done)
   audit/              (done)
   health/             (done)
   places/             (done)
   users/              (done)
-  auth/               (future)
-  tenants/            (future)
-  prisma/             (future)
-  realtime/           (future)
-  notifications/      (future)
-  push/               (future)
 ```
 
 ### Finance

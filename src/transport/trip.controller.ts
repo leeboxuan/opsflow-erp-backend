@@ -10,10 +10,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { AuthGuard } from '../auth/guards/auth.guard';
-import { TenantGuard } from '../auth/guards/tenant.guard';
-import { RoleGuard } from '../auth/guards/role.guard';
-import { Roles } from '../auth/guards/role.guard';
+import { AuthGuard } from '../shared/auth/guards/auth.guard';
+import { TenantGuard } from '../shared/auth/guards/tenant.guard';
+import { RoleGuard } from '../shared/auth/guards/role.guard';
+import { Roles } from '../shared/auth/guards/role.guard';
 import { TripService } from './trip.service';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { ListTripsQueryDto } from './dto/list-trips-query.dto';

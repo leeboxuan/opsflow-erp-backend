@@ -11,9 +11,9 @@ import {
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { Role } from "@prisma/client";
-import { AuthGuard } from "../../auth/guards/auth.guard";
-import { RoleGuard, Roles } from "../../auth/guards/role.guard";
-import { TenantGuard } from "../../auth/guards/tenant.guard";
+import { AuthGuard } from "../../shared/auth/guards/auth.guard";
+import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
+import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
 import { CustomersService } from "./customers.service";
 import {
   CustomerCompanyDocumentDto,

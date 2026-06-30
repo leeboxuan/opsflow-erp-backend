@@ -11,8 +11,8 @@ import {
   Role,
   UserRole,
 } from "@prisma/client";
-import { PrismaService } from "../../prisma/prisma.service";
-import { SupabaseService } from "../../auth/supabase.service";
+import { PrismaService } from "../../shared/prisma/prisma.service";
+import { SupabaseService } from "../../shared/auth/supabase.service";
 import { AuditService } from "../../shared/audit/audit.service";
 import {
   CreateCustomerCompanyUserDto,
@@ -28,8 +28,8 @@ import { createClient } from "@supabase/supabase-js";
 import { applyMappedFilter } from "../../common/listing/listing.filters";
 import { buildOrderBy } from "../../common/listing/listing.sort";
 import { applyQSearch } from "../../common/listing/listing.search";
-import { RealtimeEventsService } from "../../realtime/realtime-events.service";
-import * as rt from "../../realtime/realtime-publish";
+import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
+import * as rt from "../../shared/realtime/realtime-publish";
 
 const COMPANY_DOCS_BUCKET = "job-documents";
 const INVOICE_DOCUMENTS_BUCKET = "invoice-documents";

@@ -21,8 +21,8 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { FileInterceptor } from "@nestjs/platform-express";
-import { AuthGuard } from "../../auth/guards/auth.guard";
-import { TenantGuard } from "../../auth/guards/tenant.guard";
+import { AuthGuard } from "../../shared/auth/guards/auth.guard";
+import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
 import { MasterDataService } from "./master.service";
 import {
   LogisticsLocationType,
@@ -30,7 +30,7 @@ import {
   MasterRateDatasetType,
   Role,
 } from "@prisma/client";
-import { RoleGuard, Roles } from "../../auth/guards/role.guard";
+import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
 import {
   CreateDriverTripRateMasterDto,
   DriverTripRateImportSummaryDto,

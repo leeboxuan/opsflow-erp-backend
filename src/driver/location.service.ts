@@ -1,11 +1,11 @@
 import { Injectable, NotFoundException, Optional } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '../shared/prisma/prisma.service';
 import { withDriverEndpointPerf } from '../common/driver-endpoint-perf';
 import { parsePaginationFromQuery, buildPaginationMeta } from '../common/pagination';
 import { buildOrderBy } from '../common/listing/listing.sort';
 import { UpdateLocationDto } from './dto/update-location.dto';
 import { LocationDto, DriverLocationDto } from './dto/location.dto';
-import { RealtimeEventsService } from '../realtime/realtime-events.service';
+import { RealtimeEventsService } from '../shared/realtime/realtime-events.service';
 
 @Injectable()
 export class LocationService {

@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { PrismaService } from "../../prisma/prisma.service";
-import { SupabaseService } from "../../auth/supabase.service";
+import { PrismaService } from "../prisma/prisma.service";
+import { SupabaseService } from "../auth/supabase.service";
 import { Role } from "@prisma/client";
 import {
   UpdateMyAvatarResponseDto,

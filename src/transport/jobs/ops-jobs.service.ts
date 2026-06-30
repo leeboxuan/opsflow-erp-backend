@@ -35,9 +35,9 @@ import {
   rgb,
 } from "pdf-lib";
 
-import { PrismaService } from "../../prisma/prisma.service";
+import { PrismaService } from "../../shared/prisma/prisma.service";
 import { AuditService } from "../../shared/audit/audit.service";
-import { SupabaseService } from "../../auth/supabase.service";
+import { SupabaseService } from "../../shared/auth/supabase.service";
 import {
   parsePaginationFromQuery,
   buildPaginationMeta,
@@ -86,10 +86,10 @@ import {
   syncJobInvoiceReadiness,
   type JobInvoiceSyncPrisma,
 } from "./job-invoice-readiness";
-import { RealtimeEventsService } from "../../realtime/realtime-events.service";
-import * as rt from "../../realtime/realtime-publish";
-import { tripDocumentTypeLabel } from "../../notifications/document-type-label";
-import { resolveTripDetailsNotificationKind } from "../../notifications/trip-details-notification";
+import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
+import * as rt from "../../shared/realtime/realtime-publish";
+import { tripDocumentTypeLabel } from "../../shared/notifications/document-type-label";
+import { resolveTripDetailsNotificationKind } from "../../shared/notifications/trip-details-notification";
 import {
   normalizeOptionalNotes,
   resolveTripNotesResponseFields,

@@ -5,7 +5,7 @@ import {
   Optional,
 } from "@nestjs/common";
 import { VehicleStatus, VehicleType } from "@prisma/client";
-import { PrismaService } from "../../prisma/prisma.service";
+import { PrismaService } from "../../shared/prisma/prisma.service";
 import {
   parsePaginationFromQuery,
   buildPaginationMeta,
@@ -20,8 +20,8 @@ import {
   VEHICLE_SORT_FIELDS,
 } from "./dto/list-vehicles.query.dto";
 import type { VehicleDto, ListVehiclesResult } from "./vehicles.types";
-import { RealtimeEventsService } from "../../realtime/realtime-events.service";
-import * as rt from "../../realtime/realtime-publish";
+import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
+import * as rt from "../../shared/realtime/realtime-publish";
 
 function toVehicleDto(v: any): VehicleDto {
   return {

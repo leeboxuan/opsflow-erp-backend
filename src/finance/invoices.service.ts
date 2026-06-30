@@ -5,7 +5,7 @@ import {
   NotFoundException,
   Optional,
 } from "@nestjs/common";
-import { PrismaService } from "../prisma/prisma.service";
+import { PrismaService } from "../shared/prisma/prisma.service";
 import {
   parsePaginationFromQuery,
   buildPaginationMeta,
@@ -17,14 +17,14 @@ import { CreateInvoiceDto, InvoiceDto } from "./dto/invoice.dto";
 import { InvoicePrefillResponseDto } from "./dto/invoice.dto";
 import { PortalInvoiceDto } from "./dto/portal-invoice.dto";
 import { JobStatus, OrderStatus, Role, TripStatus } from "@prisma/client";
-import { SupabaseService } from "../auth/supabase.service";
+import { SupabaseService } from "../shared/auth/supabase.service";
 import { AuditService } from "../shared/audit/audit.service";
 import { loadInvoiceAssetBuffer, renderInvoiceHtml } from "./invoice-render";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { evaluateJobInvoiceReadiness } from "../transport/jobs/job-invoice-readiness";
 import { buildTripDisplayRef } from "../common/trip-display-ref";
-import { RealtimeEventsService } from "../realtime/realtime-events.service";
-import * as rt from "../realtime/realtime-publish";
+import { RealtimeEventsService } from "../shared/realtime/realtime-events.service";
+import * as rt from "../shared/realtime/realtime-publish";
 
 const INVOICE_DOCUMENTS_BUCKET = "invoice-documents";
 

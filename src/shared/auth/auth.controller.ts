@@ -19,7 +19,7 @@ import { LoginResponseDto } from './dto/login-response.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RefreshResponseDto } from './dto/refresh-response.dto';
 import { PrismaService } from '../prisma/prisma.service';
-import { getUserAvatarSignedUrl } from '../shared/users/user-avatar';
+import { getUserAvatarSignedUrl } from '../users/user-avatar';
 import { SkipTenantGuard } from './guards/skip-tenant-guard.decorator';
 
 @ApiTags('auth')

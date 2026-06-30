@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
 import { InventoryController } from './inventory.controller';
 import { InventoryService } from './inventory.service';
-import { PrismaModule } from '../../prisma/prisma.module';
-import { AuthModule } from '@/auth/auth.module';
+import { PrismaModule } from '../../shared/prisma/prisma.module';
+import { AuthModule } from '@/shared/auth/auth.module';
 
 @Module({
   imports: [AuthModule,PrismaModule],

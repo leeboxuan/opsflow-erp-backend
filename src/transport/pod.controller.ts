@@ -20,8 +20,8 @@ import {
 } from "@nestjs/swagger";
 import { FileInterceptor } from "@nestjs/platform-express";
 
-import { AuthGuard } from "../auth/guards/auth.guard";
-import { TenantGuard } from "../auth/guards/tenant.guard";
+import { AuthGuard } from "../shared/auth/guards/auth.guard";
+import { TenantGuard } from "../shared/auth/guards/tenant.guard";
 
 import { PodService } from "./pod.service";
 import { StopService } from "./stop.service";

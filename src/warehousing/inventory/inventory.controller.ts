@@ -12,8 +12,8 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiOkResponse } from '@nestjs/swagger';
-import { AuthGuard } from '../../auth/guards/auth.guard';
-import { TenantGuard } from '../../auth/guards/tenant.guard';
+import { AuthGuard } from '../../shared/auth/guards/auth.guard';
+import { TenantGuard } from '../../shared/auth/guards/tenant.guard';
 import { InventoryService } from './inventory.service';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { ReceiveStockDto } from './dto/receive-stock.dto';
@@ -27,7 +27,7 @@ import { StockInDto } from './dto/stock-in.dto';
 import { SearchUnitsQueryDto } from './dto/search-units-query.dto';
 import { ListItemsQueryDto, ListBatchesQueryDto, ListUnitsQueryDto } from './dto/list-query.dto';
 import { Patch } from '@nestjs/common';
-import { RoleGuard, Roles } from '../../auth/guards/role.guard';
+import { RoleGuard, Roles } from '../../shared/auth/guards/role.guard';
 import { UpdateUnitStatusDto } from './dto/update-unit-status.dto';
 import { Role } from '@prisma/client';
 

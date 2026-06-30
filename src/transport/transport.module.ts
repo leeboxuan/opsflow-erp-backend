@@ -7,8 +7,8 @@ import { PodController } from './pod.controller';
 import { PodService } from './pod.service';
 import { StopService } from './stop.service';
 import { EventLogService } from './event-log.service';
-import { PrismaModule } from '../prisma/prisma.module';
-import { AuthModule } from '../auth/auth.module';
+import { PrismaModule } from '../shared/prisma/prisma.module';
+import { AuthModule } from '../shared/auth/auth.module';
 
 @Module({
   imports: [PrismaModule, AuthModule],

@@ -13,11 +13,11 @@ import {
   TripStatus,
   TripDocumentType,
 } from "@prisma/client";
-import { PrismaService } from "../../prisma/prisma.service";
+import { PrismaService } from "../../shared/prisma/prisma.service";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../../common/pagination";
 import { buildOrderBy } from "../../common/listing/listing.sort";
 import { AuditService } from "../../shared/audit/audit.service";
-import { SupabaseService } from "../../auth/supabase.service";
+import { SupabaseService } from "../../shared/auth/supabase.service";
 import { buildDocumentFileDisplayFields } from "../../common/document-file-display";
 import {
   buildDocumentSignedUrlResponse,
@@ -47,8 +47,8 @@ import {
   syncJobInvoiceReadiness,
   type JobInvoiceSyncPrisma,
 } from "../jobs/job-invoice-readiness";
-import { RealtimeEventsService } from "../../realtime/realtime-events.service";
-import * as rt from "../../realtime/realtime-publish";
+import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
+import * as rt from "../../shared/realtime/realtime-publish";
 import { OpsJobsService } from "../jobs/ops-jobs.service";
 import { resolveTripNotesResponseFields } from "../trips/trip-notes.helpers";
 import {

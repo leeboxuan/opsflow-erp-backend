@@ -28,10 +28,10 @@ import {
   FileFieldsInterceptor,
 } from "@nestjs/platform-express";
 import { TripDocumentType } from "@prisma/client";
-import { AuthGuard } from "../../auth/guards/auth.guard";
-import { TenantGuard } from "../../auth/guards/tenant.guard";
-import { RoleGuard } from "../../auth/guards/role.guard";
-import { Roles } from "../../auth/guards/role.guard";
+import { AuthGuard } from "../../shared/auth/guards/auth.guard";
+import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
+import { RoleGuard } from "../../shared/auth/guards/role.guard";
+import { Roles } from "../../shared/auth/guards/role.guard";
 import { Role } from "@prisma/client";
 import {
   DriverJobsService,

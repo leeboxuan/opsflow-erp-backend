@@ -1,6 +1,6 @@
 import { Controller, Get, UseGuards, Request } from '@nestjs/common';
-import { AuthGuard } from '../../auth/guards/auth.guard';
-import { TenantGuard } from '../../auth/guards/tenant.guard';
+import { AuthGuard } from '../auth/guards/auth.guard';
+import { TenantGuard } from '../auth/guards/tenant.guard';
 
 @Controller('health')
 export class HealthController {

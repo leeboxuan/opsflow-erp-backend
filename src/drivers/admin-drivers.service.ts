@@ -5,8 +5,8 @@ import {
   Optional,
 } from "@nestjs/common";
 import { MembershipStatus, Role, UserRole } from "@prisma/client";
-import { PrismaService } from "../prisma/prisma.service";
-import { SupabaseService } from "../auth/supabase.service";
+import { PrismaService } from "../shared/prisma/prisma.service";
+import { SupabaseService } from "../shared/auth/supabase.service";
 import { UsersService } from "../shared/users/users.service";
 import {
   parsePaginationFromQuery,
@@ -21,8 +21,8 @@ import type {
   DriverWalletDto,
   DriverWalletTransactionDto,
 } from "../driver/dto/driver-trip.dto";
-import { RealtimeEventsService } from "../realtime/realtime-events.service";
-import * as rt from "../realtime/realtime-publish";
+import { RealtimeEventsService } from "../shared/realtime/realtime-events.service";
+import * as rt from "../shared/realtime/realtime-publish";
 
 @Injectable()
 export class AdminDriversService {

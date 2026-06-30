@@ -1,7 +1,7 @@
 import { Controller, Get, Req, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
-import { AuthGuard } from "../auth/guards/auth.guard";
-import { TenantGuard } from "../auth/guards/tenant.guard";
+import { AuthGuard } from "../shared/auth/guards/auth.guard";
+import { TenantGuard } from "../shared/auth/guards/tenant.guard";
 import { DashboardService } from "./dashboard.service";
 
 @ApiTags("Dashboard")

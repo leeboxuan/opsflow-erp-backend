@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, Optional } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
-import { PrismaService } from "../../../prisma/prisma.service";
-import { RealtimeEventsService } from "../../../realtime/realtime-events.service";
+import { PrismaService } from "../../../shared/prisma/prisma.service";
+import { RealtimeEventsService } from "../../../shared/realtime/realtime-events.service";
 import { DeviceGatewayEventDto, DeviceGatewayLocationPayloadDto } from "./dto/device-gateway-event.dto";
 
 export type DeviceGatewayEventResult = {

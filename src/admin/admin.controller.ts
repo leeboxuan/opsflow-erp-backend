@@ -14,11 +14,11 @@ import {
   Req,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
-import { AuthGuard } from "../auth/guards/auth.guard";
-import { TenantGuard } from "../auth/guards/tenant.guard";
-import { RoleGuard } from "../auth/guards/role.guard";
-import { Roles } from "../auth/guards/role.guard";
-import { PrismaService } from "../prisma/prisma.service";
+import { AuthGuard } from "../shared/auth/guards/auth.guard";
+import { TenantGuard } from "../shared/auth/guards/tenant.guard";
+import { RoleGuard } from "../shared/auth/guards/role.guard";
+import { Roles } from "../shared/auth/guards/role.guard";
+import { PrismaService } from "../shared/prisma/prisma.service";
 import { LocationService } from "../driver/location.service";
 import { Role, MembershipStatus } from "@prisma/client";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
@@ -28,7 +28,7 @@ import { applyQSearch } from "../common/listing/listing.search";
 import { CreateVehicleDto } from "./dto/create-vehicle.dto";
 import { VehicleDto } from "./dto/vehicle.dto";
 import { DriverLocationDto } from "../driver/dto/location.dto";
-import { SupabaseService } from "../auth/supabase.service";
+import { SupabaseService } from "../shared/auth/supabase.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { UserDto } from "./dto/user.dto";

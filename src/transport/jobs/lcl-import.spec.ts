@@ -3,9 +3,9 @@
  * Run: npx jest src/transport/jobs/lcl-import.spec.ts
  */
 import { Test, TestingModule } from "@nestjs/testing";
-import { PrismaService } from "../../prisma/prisma.service";
+import { PrismaService } from "../../shared/prisma/prisma.service";
 import { AuditService } from "../../shared/audit/audit.service";
-import { SupabaseService } from "../../auth/supabase.service";
+import { SupabaseService } from "../../shared/auth/supabase.service";
 import { OpsJobsService } from "./ops-jobs.service";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const XLSX = require("xlsx");

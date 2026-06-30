@@ -13,9 +13,9 @@ import {
   UseInterceptors,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from "@nestjs/swagger";
-import { AuthGuard } from "../auth/guards/auth.guard";
-import { TenantGuard } from "../auth/guards/tenant.guard";
-import { RoleGuard, Roles } from "@/auth/guards/role.guard";
+import { AuthGuard } from "../shared/auth/guards/auth.guard";
+import { TenantGuard } from "../shared/auth/guards/tenant.guard";
+import { RoleGuard, Roles } from "@/shared/auth/guards/role.guard";
 import { Role } from "@prisma/client";
 import { InvoicesService } from "./invoices.service";
 import {

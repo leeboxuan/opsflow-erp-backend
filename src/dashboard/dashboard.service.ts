@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { JobStatus, InventoryUnitStatus, OrderStatus, TripStatus } from "@prisma/client";
-import { PrismaService } from "../prisma/prisma.service";
+import { PrismaService } from "../shared/prisma/prisma.service";
 import {
   INVOICED_INVOICE_STATUSES,
   buildDashboardJobMetrics,

@@ -25,10 +25,10 @@ import {
   getSchemaPath,
 } from "@nestjs/swagger";
 import { FileInterceptor } from "@nestjs/platform-express";
-import { AuthGuard } from "../../auth/guards/auth.guard";
-import { TenantGuard } from "../../auth/guards/tenant.guard";
-import { RoleGuard } from "../../auth/guards/role.guard";
-import { Roles } from "../../auth/guards/role.guard";
+import { AuthGuard } from "../../shared/auth/guards/auth.guard";
+import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
+import { RoleGuard } from "../../shared/auth/guards/role.guard";
+import { Roles } from "../../shared/auth/guards/role.guard";
 import { Role, JobType, TripPendingState } from "@prisma/client";
 import { OpsJobsService } from "./ops-jobs.service";
 import { InvoicesService } from "../../finance/invoices.service";

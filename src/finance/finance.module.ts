@@ -1,7 +1,7 @@
 import { Module } from "@nestjs/common";
-import { PrismaService } from "../prisma/prisma.service";
+import { PrismaService } from "../shared/prisma/prisma.service";
 
-import { AuthModule } from "../auth/auth.module";
+import { AuthModule } from "../shared/auth/auth.module";
 
 import { FinanceController } from "./finance.controller";
 import { FinanceService } from "./finance.service";

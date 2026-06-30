@@ -1,6 +1,6 @@
-﻿import { Module } from "@nestjs/common";
-import { AuthModule } from "../../../auth/auth.module";
-import { PrismaModule } from "../../../prisma/prisma.module";
+import { Module } from "@nestjs/common";
+import { AuthModule } from "../../../shared/auth/auth.module";
+import { PrismaModule } from "../../../shared/prisma/prisma.module";
 import { FleetTrackingController } from "./fleet-tracking.controller";
 import { FleetTrackingService } from "./fleet-tracking.service";
 

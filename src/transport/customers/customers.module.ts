@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
-import { PrismaModule } from '../../prisma/prisma.module';
-import { AuthModule } from '@/auth/auth.module';
+import { PrismaModule } from '../../shared/prisma/prisma.module';
+import { AuthModule } from '@/shared/auth/auth.module';
 import { AuditModule } from '../../shared/audit/audit.module';
 import { MasterModule } from '../master-rates/master.module';
 import { CustomerCompanyDocumentsController } from './customer-company-documents.controller';

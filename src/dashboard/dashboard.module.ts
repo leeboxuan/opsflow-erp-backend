@@ -1,8 +1,8 @@
 import { Module } from "@nestjs/common";
-import { PrismaModule } from "../prisma/prisma.module";
+import { PrismaModule } from "../shared/prisma/prisma.module";
 import { DashboardController } from "./dashboard.controller";
 import { DashboardService } from "./dashboard.service";
-import { AuthModule } from "@/auth/auth.module";
+import { AuthModule } from "@/shared/auth/auth.module";
 
 @Module({
     imports: [PrismaModule, AuthModule], // ✅ AuthModule is the key fix

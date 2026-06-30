@@ -11,8 +11,8 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
-import { AuthGuard } from "../../../auth/guards/auth.guard";
-import { TenantGuard } from "../../../auth/guards/tenant.guard";
+import { AuthGuard } from "../../../shared/auth/guards/auth.guard";
+import { TenantGuard } from "../../../shared/auth/guards/tenant.guard";
 import { AssignFleetVehicleDriverDto } from "./dto/assign-fleet-vehicle-driver.dto";
 import { CreateFleetVehicleDto } from "./dto/create-fleet-vehicle.dto";
 import { ListFleetVehiclesQueryDto } from "./dto/list-fleet-vehicles.query.dto";

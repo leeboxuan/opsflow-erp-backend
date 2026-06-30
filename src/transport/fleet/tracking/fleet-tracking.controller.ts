@@ -1,4 +1,4 @@
-﻿import {
+import {
   Body,
   Controller,
   Delete,
@@ -11,8 +11,8 @@
   UseGuards,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
-import { AuthGuard } from "../../../auth/guards/auth.guard";
-import { TenantGuard } from "../../../auth/guards/tenant.guard";
+import { AuthGuard } from "../../../shared/auth/guards/auth.guard";
+import { TenantGuard } from "../../../shared/auth/guards/tenant.guard";
 import { AssignGpsDeviceChassisDto } from "./dto/assign-gps-device-chassis.dto";
 import { ChassisHistoryQueryDto } from "./dto/chassis-history-query.dto";
 import { CreateChassisDto } from "./dto/create-chassis.dto";

@@ -8,7 +8,7 @@ import {
   } from '@nestjs/common';
   import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
   import { FinanceService } from './finance.service';
-  import { AuthGuard } from '../auth/guards/auth.guard';
+  import { AuthGuard } from '../shared/auth/guards/auth.guard';
   
   @ApiTags('Finance')
   @ApiBearerAuth()

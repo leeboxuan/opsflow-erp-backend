@@ -1,7 +1,7 @@
 import { INestApplication, ValidationPipe } from "@nestjs/common";
 import { Test, TestingModule } from "@nestjs/testing";
 import request from "supertest";
-import { PrismaService } from "../../../prisma/prisma.service";
+import { PrismaService } from "../../../shared/prisma/prisma.service";
 import { DeviceGatewayModule } from "./device-gateway.module";
 
 describe("DeviceGatewayController registration", () => {

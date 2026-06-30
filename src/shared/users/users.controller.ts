@@ -19,8 +19,8 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { FileInterceptor } from "@nestjs/platform-express";
-import { AuthGuard } from "../../auth/guards/auth.guard";
-import { TenantGuard } from "../../auth/guards/tenant.guard";
+import { AuthGuard } from "../auth/guards/auth.guard";
+import { TenantGuard } from "../auth/guards/tenant.guard";
 import {
   UpdateMyAvatarResponseDto,
   UpdateMyProfileDto,
