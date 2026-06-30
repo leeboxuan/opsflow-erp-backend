@@ -1,7 +1,7 @@
 import { Module } from "@nestjs/common";
 import { PrismaModule } from "../prisma/prisma.module";
 import { AuthModule } from "../auth/auth.module";
-import { AuditModule } from "../audit/audit.module";
+import { AuditModule } from "../shared/audit/audit.module";
 import { OpsJobsController } from "./ops-jobs.controller";
 import { OpsTripsController } from "./ops-trips.controller";
 import { DriverJobsController } from "./driver-jobs.controller";

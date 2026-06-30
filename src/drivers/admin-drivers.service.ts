@@ -7,7 +7,7 @@ import {
 import { MembershipStatus, Role, UserRole } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { SupabaseService } from "../auth/supabase.service";
-import { UsersService } from "../users/users.service";
+import { UsersService } from "../shared/users/users.service";
 import {
   parsePaginationFromQuery,
   buildPaginationMeta,

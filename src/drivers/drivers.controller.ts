@@ -16,7 +16,7 @@ import { Roles } from '../auth/guards/role.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { Role } from '@prisma/client';
 import { UpdateDriverDto } from './dto/update-driver.dto';
-import { UsersService } from '../users/users.service';
+import { UsersService } from '../shared/users/users.service';
 
 export interface DriverDto {
   id: string;

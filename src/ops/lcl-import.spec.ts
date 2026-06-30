@@ -4,7 +4,7 @@
  */
 import { Test, TestingModule } from "@nestjs/testing";
 import { PrismaService } from "../prisma/prisma.service";
-import { AuditService } from "../audit/audit.service";
+import { AuditService } from "../shared/audit/audit.service";
 import { SupabaseService } from "../auth/supabase.service";
 import { OpsJobsService } from "./ops-jobs.service";
 // eslint-disable-next-line @typescript-eslint/no-var-requires

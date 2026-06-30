@@ -18,7 +18,7 @@ import { InvoicePrefillResponseDto } from "./dto/invoice.dto";
 import { PortalInvoiceDto } from "./dto/portal-invoice.dto";
 import { JobStatus, OrderStatus, Role, TripStatus } from "@prisma/client";
 import { SupabaseService } from "../auth/supabase.service";
-import { AuditService } from "../audit/audit.service";
+import { AuditService } from "../shared/audit/audit.service";
 import { loadInvoiceAssetBuffer, renderInvoiceHtml } from "./invoice-render";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { evaluateJobInvoiceReadiness } from "../ops/job-invoice-readiness";

@@ -16,7 +16,7 @@ import {
 import { PrismaService } from "../prisma/prisma.service";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
 import { buildOrderBy } from "../common/listing/listing.sort";
-import { AuditService } from "../audit/audit.service";
+import { AuditService } from "../shared/audit/audit.service";
 import { SupabaseService } from "../auth/supabase.service";
 import { buildDocumentFileDisplayFields } from "../common/document-file-display";
 import {

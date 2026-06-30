@@ -9,7 +9,7 @@ import { FinanceService } from "./finance.service";
 import { InvoicesController } from "./invoices.controller";
 import { InvoicesService } from "./invoices.service";
 import { PortalInvoicesController } from "./portal-invoices.controller";
-import { AuditModule } from "../audit/audit.module";
+import { AuditModule } from "../shared/audit/audit.module";
 
 @Module({
   imports: [AuthModule, AuditModule],

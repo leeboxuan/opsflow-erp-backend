@@ -36,7 +36,7 @@ import {
 } from "pdf-lib";
 
 import { PrismaService } from "../prisma/prisma.service";
-import { AuditService } from "../audit/audit.service";
+import { AuditService } from "../shared/audit/audit.service";
 import { SupabaseService } from "../auth/supabase.service";
 import {
   parsePaginationFromQuery,

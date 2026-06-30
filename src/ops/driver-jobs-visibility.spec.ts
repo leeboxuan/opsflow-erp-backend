@@ -1421,10 +1421,34 @@ describe("DriverJobsService.listActiveByDriver trip execution card", () => {
       sortDir: "asc",
     });
     const trip = result.data[0].trips?.[0] as any;
-    expect(trip.notes).toBe("Handle with care");
+    expect(trip.notes).toBeNull();
+    expect(trip.jobNotes).toBe("Handle with care");
+    expect(trip.tripInstruction).toBe("Handle with care");
     expect(trip.driverEarningCents).toBe(5000);
     expect(trip.earningLabelSnapshot).toBe("Linehaul");
     expect(trip.trailerNumber).toBe("TN99");
+  });
+
+  it("returns trip-level notes separately from job notes", async () => {
+    const prisma: any = {
+      job: {
+        count: jest.fn().mockResolvedValue(1),
+        findMany: jest.fn().mockResolvedValue([
+          makeActiveJobWithTrip({ notes: "Call before arrival" }),
+        ]),
+      },
+      vehicle: { findMany: jest.fn().mockResolvedValue([]) },
+      fleetVehicle: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const svc = new DriverJobsService(prisma, {} as any, {} as any);
+    const result = await svc.listActiveByDriver(tenantId, driverUserId, {
+      sortBy: "createdAt",
+      sortDir: "asc",
+    });
+    const trip = result.data[0].trips?.[0] as any;
+    expect(trip.notes).toBe("Call before arrival");
+    expect(trip.jobNotes).toBe("Handle with care");
+    expect(trip.tripInstruction).toBe("Handle with care");
   });
 
   it("falls back to job pickup/delivery when trip route address lines are missing", async () => {
@@ -1466,6 +1490,8 @@ describe("DriverJobsService.listActiveByDriver trip execution card", () => {
     expect(trip.driverEarningCents).toBeNull();
     expect(trip.earningLabelSnapshot).toBeNull();
     expect(trip.trailerNumber).toBeNull();
-    expect(trip.notes).toBe("Handle with care");
+    expect(trip.notes).toBeNull();
+    expect(trip.jobNotes).toBe("Handle with care");
+    expect(trip.tripInstruction).toBe("Handle with care");
   });
 });
