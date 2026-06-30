@@ -25,22 +25,22 @@ import {
   getSchemaPath,
 } from "@nestjs/swagger";
 import { FileInterceptor } from "@nestjs/platform-express";
-import { AuthGuard } from "../auth/guards/auth.guard";
-import { TenantGuard } from "../auth/guards/tenant.guard";
-import { RoleGuard } from "../auth/guards/role.guard";
-import { Roles } from "../auth/guards/role.guard";
+import { AuthGuard } from "../../auth/guards/auth.guard";
+import { TenantGuard } from "../../auth/guards/tenant.guard";
+import { RoleGuard } from "../../auth/guards/role.guard";
+import { Roles } from "../../auth/guards/role.guard";
 import { Role, JobType, TripPendingState } from "@prisma/client";
 import { OpsJobsService } from "./ops-jobs.service";
-import { InvoicesService } from "../finance/invoices.service";
-import { CreateJobDto } from "../transport/jobs/dto/create-job.dto";
-import { UpdateJobDto } from "../transport/jobs/dto/update-job.dto";
-import { AssignJobDto } from "../transport/jobs/dto/assign-job.dto";
-import { CancelJobDto } from "../transport/jobs/dto/cancel-job.dto";
-import { JobListQueryDto } from "../transport/jobs/dto/job-list-query.dto";
-import { ImportConfirmRequestDto } from "../transport/jobs/dto/import-job-row.dto";
-import { LclImportConfirmRequestDto } from "../transport/jobs/dto/lcl-import.dto";
-import { JobBatchImportConfirmRequestDto } from "../transport/jobs/dto/job-batch-import.dto";
-import { SaveJobChargesDto } from "../transport/jobs/dto/save-job-charges.dto";
+import { InvoicesService } from "../../finance/invoices.service";
+import { CreateJobDto } from "./dto/create-job.dto";
+import { UpdateJobDto } from "./dto/update-job.dto";
+import { AssignJobDto } from "./dto/assign-job.dto";
+import { CancelJobDto } from "./dto/cancel-job.dto";
+import { JobListQueryDto } from "./dto/job-list-query.dto";
+import { ImportConfirmRequestDto } from "./dto/import-job-row.dto";
+import { LclImportConfirmRequestDto } from "./dto/lcl-import.dto";
+import { JobBatchImportConfirmRequestDto } from "./dto/job-batch-import.dto";
+import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
 import {
   AppendJobTripDto,
   AssignJobTripDto,
@@ -51,9 +51,9 @@ import {
   PutTripPayoutLinesDto,
   ReorderJobTripsDto,
   SuggestJobTripOrderDto,
-} from "./dto/job-trip.dto";
-import { JobDto, JobDocumentDto, JobTripResponseDto } from "../transport/jobs/dto/job.dto";
-import { SignTripDocumentDto } from "./dto/sign-trip-document.dto";
+} from "../trips/dto/job-trip.dto";
+import { JobDto, JobDocumentDto, JobTripResponseDto } from "./dto/job.dto";
+import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
 
 @ApiTags("ops-jobs")
 @Controller("jobs")

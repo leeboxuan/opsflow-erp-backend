@@ -1,6 +1,6 @@
 import { JobStatus, TripStatus } from "@prisma/client";
 import { DriverJobsService } from "./driver-jobs.service";
-import { JOB_DOCUMENT_MOBILE_SELECT } from "../transport/documents/driver-mobile-document.select";
+import { JOB_DOCUMENT_MOBILE_SELECT } from "../documents/driver-mobile-document.select";
 
 describe("DriverJobsService.listActiveByDriver driver-scoped home list", () => {
   const tenantId = "tenant-1";

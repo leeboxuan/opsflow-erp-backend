@@ -1,11 +1,11 @@
 import { CollectionType, JobTripTemplate, JobType, Role } from "@prisma/client";
-import { tripCreateManyForJob } from "./job-workflow.helpers";
+import { tripCreateManyForJob } from "../workflows/job-workflow.helpers";
 import {
   assertExportDestinationFieldsConsistent,
   parseValidJobItemsFromInput,
   resolveCollectionTypeForJobCreate,
   resolveExportDestinationFields,
-} from "../transport/jobs/create-job-validation.helpers";
+} from "./create-job-validation.helpers";
 import { OpsJobsService } from "./ops-jobs.service";
 
 describe("job create: EXPORT and COLLECTION", () => {
@@ -785,7 +785,7 @@ describe("getTripDetail COLLECTION cargo sealNo", () => {
 
 describe("getTripDetailForDriver pickupReference", () => {
   it("returns collectionType on job summary", async () => {
-    const { DriverJobsService } = await import("./driver-jobs.service");
+    const { DriverJobsService } = await import("../driver-app/driver-jobs.service");
     const prisma: any = {
       trip: {
         findFirst: jest.fn().mockResolvedValue({
@@ -817,7 +817,7 @@ describe("getTripDetailForDriver pickupReference", () => {
   });
 
   it("returns pickupReference on container cargo rows", async () => {
-    const { DriverJobsService } = await import("./driver-jobs.service");
+    const { DriverJobsService } = await import("../driver-app/driver-jobs.service");
     const prisma: any = {
       trip: {
         findFirst: jest.fn().mockResolvedValue({

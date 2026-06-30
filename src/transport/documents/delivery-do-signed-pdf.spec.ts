@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import { TripDocumentType } from "@prisma/client";
-import { OpsJobsService } from "./ops-jobs.service";
-import * as signatureImageNormalize from "../transport/documents/signature-image-normalize";
+import { OpsJobsService } from "../jobs/ops-jobs.service";
+import * as signatureImageNormalize from "./signature-image-normalize";
 
 const TINY_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",

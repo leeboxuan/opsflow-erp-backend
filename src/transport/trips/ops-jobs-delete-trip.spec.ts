@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { TripStatus } from "@prisma/client";
-import { OpsJobsService } from "./ops-jobs.service";
+import { OpsJobsService } from "../jobs/ops-jobs.service";
 
 describe("OpsJobsService.deleteTrip", () => {
   function makeService(prismaOverrides?: Record<string, any>) {

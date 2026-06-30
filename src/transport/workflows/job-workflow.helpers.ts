@@ -6,7 +6,7 @@ import {
   TripPendingState,
   TripStatus,
 } from "@prisma/client";
-import { GUL_CIRCLE_LOCATION } from "../common/gul-circle-location";
+import { GUL_CIRCLE_LOCATION } from "../../common/gul-circle-location";
 
 export type TripCompletionRule = {
   requireGeneratedDoSigned: boolean;

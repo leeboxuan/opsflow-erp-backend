@@ -1,6 +1,6 @@
 # LCL Order In import – test cases (grouping by Order Ref)
 
-These cases can be run via the spec file `src/ops/lcl-import.spec.ts` once Jest is configured for TypeScript (e.g. ts-jest), or verified manually via the API.
+These cases can be run via the spec file `src/transport/jobs/lcl-import.spec.ts` once Jest is configured for TypeScript (e.g. ts-jest), or verified manually via the API.
 
 ---
 

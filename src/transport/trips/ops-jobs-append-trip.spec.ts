@@ -1,9 +1,9 @@
 import { plainToInstance } from "class-transformer";
 import { validate } from "class-validator";
 import { JobStatus, JobTripTemplate } from "@prisma/client";
-import { OpsJobsService } from "./ops-jobs.service";
+import { OpsJobsService } from "../jobs/ops-jobs.service";
 import { AppendJobTripDto } from "./dto/job-trip.dto";
-import { GUL_CIRCLE_ROUTE_DEFAULTS } from "./job-workflow.helpers";
+import { GUL_CIRCLE_ROUTE_DEFAULTS } from "../workflows/job-workflow.helpers";
 
 describe("AppendJobTripDto validation", () => {
   it("accepts CUSTOM and operational route fields", async () => {

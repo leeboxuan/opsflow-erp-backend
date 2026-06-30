@@ -9,8 +9,8 @@ import { BadRequestException } from "@nestjs/common";
 import {
   OpsJobsService,
   assertTripDetailsEditAllowed,
-} from "./ops-jobs.service";
-import { DriverJobsService } from "./driver-jobs.service";
+} from "../jobs/ops-jobs.service";
+import { DriverJobsService } from "../driver-app/driver-jobs.service";
 
 function makeOpsService(prisma: any): OpsJobsService {
   const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;

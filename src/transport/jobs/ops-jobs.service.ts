@@ -35,22 +35,22 @@ import {
   rgb,
 } from "pdf-lib";
 
-import { PrismaService } from "../prisma/prisma.service";
-import { AuditService } from "../shared/audit/audit.service";
-import { SupabaseService } from "../auth/supabase.service";
+import { PrismaService } from "../../prisma/prisma.service";
+import { AuditService } from "../../shared/audit/audit.service";
+import { SupabaseService } from "../../auth/supabase.service";
 import {
   parsePaginationFromQuery,
   buildPaginationMeta,
   type PaginatedResponse,
-} from "../common/pagination";
-import { applyMappedFilter } from "../common/listing/listing.filters";
-import { buildOrderBy } from "../common/listing/listing.sort";
-import { applyQSearch } from "../common/listing/listing.search";
-import { buildDocumentFileDisplayFields } from "../common/document-file-display";
+} from "../../common/pagination";
+import { applyMappedFilter } from "../../common/listing/listing.filters";
+import { buildOrderBy } from "../../common/listing/listing.sort";
+import { applyQSearch } from "../../common/listing/listing.search";
+import { buildDocumentFileDisplayFields } from "../../common/document-file-display";
 import {
   buildDocumentSignedUrlResponse,
   JOB_DOCUMENTS_BUCKET,
-} from "../common/job-document-signed-url";
+} from "../../common/job-document-signed-url";
 import {
   buildSignedDoSignatureStorageKey,
   doFileSuffixForType,
@@ -69,50 +69,50 @@ import {
   warnMissingSignatureImageForSignedDo,
   type SignableDoType,
   type SignTripDocumentBody,
-} from "../transport/documents/do-signature.helpers";
-import { computeDoSignatureImageDrawRect } from "../transport/documents/signature-pdf-layout.helpers";
-import { normalizeSignatureImageForPdf } from "../transport/documents/signature-image-normalize";
+} from "../documents/do-signature.helpers";
+import { computeDoSignatureImageDrawRect } from "../documents/signature-pdf-layout.helpers";
+import { normalizeSignatureImageForPdf } from "../documents/signature-image-normalize";
 import {
   documentUploadedByInclude,
   loadUploadActorFields,
   resolveDocumentUploadedByFields,
-} from "../transport/documents/document-uploader.utils";
-import { DocumentSignedUrlDto, JobListItemDto } from "../transport/jobs/dto/job.dto";
-import { buildTripDisplayRef } from "../common/trip-display-ref";
-import { suggestTripOrderByNearestNeighbour } from "../common/trip-order-suggest";
+} from "../documents/document-uploader.utils";
+import { DocumentSignedUrlDto, JobListItemDto } from "./dto/job.dto";
+import { buildTripDisplayRef } from "../../common/trip-display-ref";
+import { suggestTripOrderByNearestNeighbour } from "../../common/trip-order-suggest";
 import {
   evaluateJobInvoiceReadiness,
   assertJobHasNoTripsForCancelOrDelete,
   syncJobInvoiceReadiness,
   type JobInvoiceSyncPrisma,
-} from "../transport/jobs/job-invoice-readiness";
-import { RealtimeEventsService } from "../realtime/realtime-events.service";
-import * as rt from "../realtime/realtime-publish";
-import { tripDocumentTypeLabel } from "../notifications/document-type-label";
-import { resolveTripDetailsNotificationKind } from "../notifications/trip-details-notification";
+} from "./job-invoice-readiness";
+import { RealtimeEventsService } from "../../realtime/realtime-events.service";
+import * as rt from "../../realtime/realtime-publish";
+import { tripDocumentTypeLabel } from "../../notifications/document-type-label";
+import { resolveTripDetailsNotificationKind } from "../../notifications/trip-details-notification";
 import {
   normalizeOptionalNotes,
   resolveTripNotesResponseFields,
-} from "../transport/trips/trip-notes.helpers";
+} from "../trips/trip-notes.helpers";
 import {
   ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES,
   deriveTripDocumentStatus,
   groupTripDocumentsByTripId,
-} from "../transport/trips/trip-document-list.helpers";
+} from "../trips/trip-document-list.helpers";
 
-import { CreateJobDto } from "../transport/jobs/dto/create-job.dto";
-import { UpdateJobDto } from "../transport/jobs/dto/update-job.dto";
-import { AssignJobDto } from "../transport/jobs/dto/assign-job.dto";
-import { CancelJobDto } from "../transport/jobs/dto/cancel-job.dto";
-import { JobListQueryDto } from "../transport/jobs/dto/job-list-query.dto";
+import { CreateJobDto } from "./dto/create-job.dto";
+import { UpdateJobDto } from "./dto/update-job.dto";
+import { AssignJobDto } from "./dto/assign-job.dto";
+import { CancelJobDto } from "./dto/cancel-job.dto";
+import { JobListQueryDto } from "./dto/job-list-query.dto";
 import {
   JobDto,
   JobDocumentDto,
   JobTrackingDto,
   JobTripResponseDto,
   AuditLogEntryDto,
-} from "../transport/jobs/dto/job.dto";
-import { SaveJobChargesDto } from "../transport/jobs/dto/save-job-charges.dto";
+} from "./dto/job.dto";
+import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
 import {
   AppendJobTripDto,
   AssignJobTripDto,
@@ -123,7 +123,7 @@ import {
   ReorderJobTripsDto,
   SuggestJobTripOrderDto,
   TripPayoutLineInputDto,
-} from "./dto/job-trip.dto";
+} from "../trips/dto/job-trip.dto";
 import {
   tripCreateManyForJob,
   lclPickupToDeliveryRouteSnapshot,
@@ -133,30 +133,30 @@ import {
   resolveAppendTripRouteSnapshot,
   resolveTripRouteAddressResponseFields,
   isContainerCargoJobType,
-} from "./job-workflow.helpers";
+} from "../workflows/job-workflow.helpers";
 import type {
   ImportJobRowDto,
   ImportPreviewRowDto,
   ImportConfirmRowDto,
-} from "../transport/jobs/dto/import-job-row.dto";
+} from "./dto/import-job-row.dto";
 import type {
   LclImportPreviewRowDto,
   LclImportPreviewResponseDto,
   LclImportConfirmRequestDto,
   LclImportConfirmResponseDto,
-} from "../transport/jobs/dto/lcl-import.dto";
+} from "./dto/lcl-import.dto";
 import type {
   JobBatchImportPreviewResponseDto,
   JobBatchImportConfirmRequestDto,
   JobBatchImportConfirmResponseDto,
-} from "../transport/jobs/dto/job-batch-import.dto";
+} from "./dto/job-batch-import.dto";
 import {
   buildBatchImportJobCreateData,
   buildJobBatchImportRowDto,
   normalizeJobBatchImportRowFromBody,
   parseJobBatchImportSheet,
   validateJobBatchImportRowFields,
-} from "../transport/jobs/job-batch-import.helpers";
+} from "./job-batch-import.helpers";
 import {
   assertCreateJobItemsRequiredForJobType,
   assertDeliveryLocationForCreate,
@@ -170,7 +170,7 @@ import {
   resolveCollectionTypeForJobCreate,
   resolveExportDestinationFields,
   resolveExportPickupFields,
-} from "../transport/jobs/create-job-validation.helpers";
+} from "./create-job-validation.helpers";
 
 
 const QUOTATION_MIMES = [

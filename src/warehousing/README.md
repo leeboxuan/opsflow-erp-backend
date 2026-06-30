@@ -16,8 +16,8 @@ Warehousing is responsible for:
 | | Transport Jobs | Warehouse Jobs |
 |---|----------------|----------------|
 | **Purpose** | Trucking/logistics execution (pickup, delivery, driver trips) | Warehouse operations (receiving, putaway, picking, internal handling) |
-| **Current backend** | Prisma `Job` / `Trip` in `src/ops` and related transport modules | **Does not exist yet** |
-| **Rule** | Use existing `Job`/`Trip` flows | Must **not** reuse the transport `Job` model or `src/ops` job services |
+| **Current backend** | Prisma `Job` / `Trip` in `src/transport` (jobs, trips, driver-app) | **Does not exist yet** |
+| **Rule** | Use existing `Job`/`Trip` flows | Must **not** reuse the transport `Job` model or transport job services |
 
 When warehouse jobs are implemented, they should use dedicated `WarehouseJob` (or equivalent) models, services, and routes under this domain—not transport job tables or APIs.
 
@@ -29,4 +29,4 @@ Inventory today integrates with transport at the data level (e.g. inventory unit
 
 ## What not to put here
 
-Do not add transport job logic, trip execution, dispatch board code, or driver mobile job flows into warehousing modules. Those belong to the Transport domain (`src/transport`, `src/ops`, and related folders).
+Do not add transport job logic, trip execution, dispatch board code, or driver mobile job flows into warehousing modules. Those belong to the Transport domain (`src/transport` and related folders).

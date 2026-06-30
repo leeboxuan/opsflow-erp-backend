@@ -14,7 +14,7 @@ import { CustomersModule } from './transport/customers/customers.module';
 import { DashboardModule } from "./dashboard/dashboard.module";
 import { FinanceModule } from './finance/finance.module';
 import { AuditModule } from './shared/audit/audit.module';
-import { OpsModule } from './ops/ops.module';
+import { TransportExecutionModule } from './transport/transport-execution.module';
 import { VehiclesModule } from './transport/vehicles/vehicles.module';
 import { MasterModule } from './transport/master-rates/master.module';
 import { FleetVehiclesModule } from "./transport/fleet/vehicles/fleet-vehicles.module";
@@ -45,7 +45,7 @@ import { FleetTrackingModule } from "./transport/fleet/tracking/fleet-tracking.m
     DashboardModule,
     FinanceModule,
     AuditModule,
-    OpsModule,
+    TransportExecutionModule,
     VehiclesModule,
     FleetVehiclesModule,
     MasterModule,

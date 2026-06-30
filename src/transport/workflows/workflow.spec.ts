@@ -11,11 +11,11 @@ import {
   tripCreateManyForJob,
   TRIP_COMPLETION_RULES,
 } from "./job-workflow.helpers";
-import { resolveTripNotesResponseFields } from "../transport/trips/trip-notes.helpers";
+import { resolveTripNotesResponseFields } from "../trips/trip-notes.helpers";
 import {
   parseQuotationRateLinesFromDocxBuffer,
   parseQuotationRateLinesFromXlsxBuffer,
-} from "../transport/customers/quotation-parse.helpers";
+} from "../customers/quotation-parse.helpers";
 
 describe("workflow helpers", () => {
   describe("default trip generation rules", () => {
@@ -785,7 +785,7 @@ describe("portal user name", () => {
   it("CreateCustomerCompanyUserDto requires name via class-validator", async () => {
     const { validate } = await import("class-validator");
     const { CreateCustomerCompanyUserDto } = await import(
-      "../transport/customers/dto/customers.dto"
+      "../customers/dto/customers.dto"
     );
     const dto = Object.assign(new CreateCustomerCompanyUserDto(), {
       email: "a@b.com",

@@ -1,6 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { JobStatus, TripStatus } from "@prisma/client";
-import { OpsJobsService } from "./ops-jobs.service";
+import { OpsJobsService } from "../jobs/ops-jobs.service";
 
 describe("OpsJobsService route planning", () => {
   function makeService(overrides?: Partial<any>) {

@@ -1,6 +1,6 @@
 import { JobStatus, JobType, Role, TripStatus } from "@prisma/client";
-import { DriverJobsService } from "./driver-jobs.service";
-import { OpsJobsService } from "./ops-jobs.service";
+import { DriverJobsService } from "../driver-app/driver-jobs.service";
+import { OpsJobsService } from "../jobs/ops-jobs.service";
 
 describe("Trip PIC fields", () => {
   it("patchTrip can set and clear tripPICName/tripPICContact/containerNumber/shipping refs without touching job PIC", async () => {

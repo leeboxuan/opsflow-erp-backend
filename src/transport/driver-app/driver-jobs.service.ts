@@ -13,42 +13,44 @@ import {
   TripStatus,
   TripDocumentType,
 } from "@prisma/client";
-import { PrismaService } from "../prisma/prisma.service";
-import { parsePaginationFromQuery, buildPaginationMeta } from "../common/pagination";
-import { buildOrderBy } from "../common/listing/listing.sort";
-import { AuditService } from "../shared/audit/audit.service";
-import { SupabaseService } from "../auth/supabase.service";
-import { buildDocumentFileDisplayFields } from "../common/document-file-display";
+import { PrismaService } from "../../prisma/prisma.service";
+import { parsePaginationFromQuery, buildPaginationMeta } from "../../common/pagination";
+import { buildOrderBy } from "../../common/listing/listing.sort";
+import { AuditService } from "../../shared/audit/audit.service";
+import { SupabaseService } from "../../auth/supabase.service";
+import { buildDocumentFileDisplayFields } from "../../common/document-file-display";
 import {
   buildDocumentSignedUrlResponse,
   JOB_DOCUMENTS_BUCKET,
-} from "../common/job-document-signed-url";
+} from "../../common/job-document-signed-url";
 import {
   documentUploadedByInclude,
   loadUploadActorFields,
   resolveDocumentUploadedByFields,
-} from "../transport/documents/document-uploader.utils";
-import { buildTripDisplayRef } from "../common/trip-display-ref";
+} from "../documents/document-uploader.utils";
+import { buildTripDisplayRef } from "../../common/trip-display-ref";
 import {
   createDriverTripDocUploadPerfTimer,
   withDriverEndpointPerf,
-} from "../common/driver-endpoint-perf";
+} from "../../common/driver-endpoint-perf";
 import { JobLocationDto } from "./dto/location.dto";
-import { DocumentSignedUrlDto, JobDto, JobDocumentDto } from "../transport/jobs/dto/job.dto";
+import { DocumentSignedUrlDto, JobDto, JobDocumentDto } from "../jobs/dto/job.dto";
 import {
   buildTripCompletionDocumentGaps,
   trailerCheckoutBlocksCompletion,
-} from "./job-workflow.helpers";
+  resolveTripRouteAddressResponseFields,
+  isContainerCargoJobType,
+  jobTripTemplateDisplayLabel,
+} from "../workflows/job-workflow.helpers";
 import {
   evaluateJobInvoiceReadiness,
   syncJobInvoiceReadiness,
   type JobInvoiceSyncPrisma,
-} from "../transport/jobs/job-invoice-readiness";
-import { RealtimeEventsService } from "../realtime/realtime-events.service";
-import * as rt from "../realtime/realtime-publish";
-import { OpsJobsService } from "./ops-jobs.service";
-import { resolveTripNotesResponseFields } from "../transport/trips/trip-notes.helpers";
-import { resolveTripRouteAddressResponseFields } from "./job-workflow.helpers";
+} from "../jobs/job-invoice-readiness";
+import { RealtimeEventsService } from "../../realtime/realtime-events.service";
+import * as rt from "../../realtime/realtime-publish";
+import { OpsJobsService } from "../jobs/ops-jobs.service";
+import { resolveTripNotesResponseFields } from "../trips/trip-notes.helpers";
 import {
   DO_SIGN_REQUIRES_ONGOING_TRIP_MESSAGE,
   isSignableDoType,
@@ -57,12 +59,8 @@ import {
   parseSignedAtFromBody,
   tripStatusAllowsDoSign,
   type SignTripDocumentBody,
-} from "../transport/documents/do-signature.helpers";
-import {
-  isContainerCargoJobType,
-  jobTripTemplateDisplayLabel,
-} from "./job-workflow.helpers";
-import { DRIVER_ACTIVE_JOB_DOCUMENTS_INCLUDE } from "../transport/documents/driver-mobile-document.select";
+} from "../documents/do-signature.helpers";
+import { DRIVER_ACTIVE_JOB_DOCUMENTS_INCLUDE } from "../documents/driver-mobile-document.select";
 
 const DEFAULT_TENANT_TIMEZONE = "Asia/Singapore";
 const DEFAULT_DRIVER_EARNING_CURRENCY = "SGD";

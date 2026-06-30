@@ -28,22 +28,22 @@ import {
   FileFieldsInterceptor,
 } from "@nestjs/platform-express";
 import { TripDocumentType } from "@prisma/client";
-import { AuthGuard } from "../auth/guards/auth.guard";
-import { TenantGuard } from "../auth/guards/tenant.guard";
-import { RoleGuard } from "../auth/guards/role.guard";
-import { Roles } from "../auth/guards/role.guard";
+import { AuthGuard } from "../../auth/guards/auth.guard";
+import { TenantGuard } from "../../auth/guards/tenant.guard";
+import { RoleGuard } from "../../auth/guards/role.guard";
+import { Roles } from "../../auth/guards/role.guard";
 import { Role } from "@prisma/client";
 import {
   DriverJobsService,
   DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPES,
 } from "./driver-jobs.service";
-import { JobDocumentDto } from "../transport/jobs/dto/job.dto";
+import { JobDocumentDto } from "../jobs/dto/job.dto";
 import { DriverJobsListQueryDto } from "./dto/driver-jobs-list-query.dto";
 import { DriverJobsHistoryListQueryDto } from "./dto/driver-jobs-history-list-query.dto";
 import { DriverCompleteJobDto } from "./dto/complete-job.dto";
 import { JobLocationDto } from "./dto/location.dto";
 import { DriverTripCompleteDto } from "./dto/driver-trip-complete.dto";
-import { SignTripDocumentDto } from "./dto/sign-trip-document.dto";
+import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
 
 @ApiTags("driver-jobs")
 @Controller("drivers/jobs")

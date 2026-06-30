@@ -1,11 +1,11 @@
 import { TripDocumentType, TripStatus } from "@prisma/client";
-import { OpsJobsService } from "./ops-jobs.service";
+import { OpsJobsService } from "../jobs/ops-jobs.service";
 import { DriverJobsService } from "./driver-jobs.service";
 import {
   DO_SIGN_REQUIRES_ONGOING_TRIP_MESSAGE,
   pickPreferredSignatureArtifact,
   type SignableDoType,
-} from "../transport/documents/do-signature.helpers";
+} from "../documents/do-signature.helpers";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";

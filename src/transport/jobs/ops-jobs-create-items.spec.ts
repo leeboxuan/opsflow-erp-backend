@@ -8,7 +8,7 @@ import {
   importPickupOriginUsesAddressFields,
   readCreateJobItemsInput,
   readUpdateJobItemsInput,
-} from "../transport/jobs/create-job-validation.helpers";
+} from "./create-job-validation.helpers";
 import { OpsJobsService } from "./ops-jobs.service";
 
 describe("create job items (LCL optional)", () => {

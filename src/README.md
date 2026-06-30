@@ -7,7 +7,6 @@ See also domain-specific notes:
 - [`transport/README.md`](transport/README.md)
 - [`warehousing/README.md`](warehousing/README.md)
 - [`shared/README.md`](shared/README.md)
-- [`ops/README.md`](ops/README.md)
 
 ---
 
@@ -15,10 +14,9 @@ See also domain-specific notes:
 
 | Path | Domain | Role |
 |------|--------|------|
-| [`transport/`](transport/) | **Transport** | Relocated transport support modules, extracted job/trip/document helpers, and legacy transport-orders stack |
+| [`transport/`](transport/) | **Transport** | Transport execution, submodules, helpers, specs, and legacy transport-orders stack |
 | [`warehousing/`](warehousing/) | **Warehousing** | Inventory and future warehouse jobs |
 | [`shared/`](shared/) | **Shared** | Cross-domain infrastructure and generic utilities |
-| [`ops/`](ops/) | **Transport** (legacy placement) | Transport job/trip execution: controllers, monolith services, workflow helper, trip-detail edit guards, remaining DTOs and specs |
 | [`finance/`](finance/) | **Finance** (transport-heavy today) | Invoicing, driver wallets, portal invoices |
 | [`auth/`](auth/) | **Platform** | Authentication, JWT, Supabase, guards |
 | [`tenants/`](tenants/) | **Platform** | Multi-tenancy and membership |
@@ -45,9 +43,15 @@ Transport support modules and extracted helpers live under this folder. The **le
 | `fleet/vehicles/` | Fleet vehicle entity (`/fleet-vehicles/*`) |
 | `fleet/tracking/` | Chassis and GPS tracking (`/fleet-tracking/*`) |
 | `fleet/device-gateway/` | Internal GPS ingestion (`/internal/device-gateway/*`) |
-| `dispatch/` | Dispatch board, route planning, trip reorder (`/dispatch/*`) — registered via `OpsModule` |
-| `jobs/` | Job helpers, job ops DTOs, import DTOs, create-job validation (see below) |
-| `trips/` | Trip notes and trip document list helpers |
+| `dispatch/` | Dispatch board, route planning, trip reorder (`/dispatch/*`) — registered via `TransportExecutionModule` |
+| `jobs/` | Ops jobs controller/service, helpers, job ops DTOs, import DTOs, create-job validation |
+| `trips/` | Ops trips controller, trip notes/document helpers, trip/payout DTOs |
+| `driver-app/` | Driver mobile controllers, `DriverJobsService`, driver DTOs |
+| `workflows/` | Job workflow kernel (`job-workflow.helpers.ts`) |
+| `transport-execution.module.ts` | Nest module registering jobs, trips, driver app, and dispatch execution |
+
+Specs are colocated under each transport subfolder (`jobs/*.spec.ts`, `trips/*.spec.ts`, `driver-app/*.spec.ts`, `documents/*.spec.ts`, `workflows/*.spec.ts`, etc.).
+
 | `documents/` | Signature PDF layout, document uploader, DO signing, signature normalization, driver mobile document selects |
 | `dto/` | Legacy transport-orders DTOs (orders, trips, stops, POD) |
 
@@ -55,10 +59,11 @@ Transport support modules and extracted helpers live under this folder. The **le
 
 | File / folder | Role |
 |---------------|------|
-| `job-invoice-readiness.ts` | Invoice readiness evaluation (consumed by `src/ops` and `src/finance`) |
+| `ops-jobs.controller.ts` | `/jobs/*` HTTP routes |
+| `ops-jobs.service.ts` | Main job/trip workflow monolith (~7.7k lines) |
+| `job-invoice-readiness.ts` | Invoice readiness evaluation (consumed by `src/finance`) |
 | `job-batch-import.helpers.ts` | Batch job import parsing helpers |
 | `create-job-validation.helpers.ts` | Pure create-job validation (items parsing, location assertions, collection type resolution) |
-| `dto/create-job.dto.ts` | Create job request DTO |
 | `dto/update-job.dto.ts` | Update job request DTO |
 | `dto/assign-job.dto.ts` | Assign driver/vehicle request DTO |
 | `dto/cancel-job.dto.ts` | Cancel job request DTO |
@@ -70,12 +75,13 @@ Transport support modules and extracted helpers live under this folder. The **le
 | `dto/job-batch-import.dto.ts` | Batch import confirm DTO |
 | `dto/lcl-import.dto.ts` | LCL import confirm DTO |
 
-`OpsJobsService` in `src/ops` imports these helpers and DTOs and still orchestrates the create-job flow. HTTP routes remain `/jobs/*` via ops controllers.
+`OpsJobsService` lives in `src/transport/jobs/` and orchestrates the create-job flow. HTTP routes remain `/jobs/*` via `TransportExecutionModule`.
 
 ### `transport/trips/` (current)
 
 | File | Role |
 |------|------|
+| `ops-trips.controller.ts` | `/trips/:tripId` ops trip detail |
 | `trip-notes.helpers.ts` | Trip notes field resolution for API responses |
 | `trip-document-list.helpers.ts` | Trip document list shaping for ops and driver flows |
 
@@ -89,7 +95,7 @@ Transport support modules and extracted helpers live under this folder. The **le
 | `signature-image-normalize.ts` | Signature image normalization for PDF |
 | `driver-mobile-document.select.ts` | Prisma selects for driver mobile document views |
 
-Transport owns customers, vehicles, fleet, master rates, dispatch, job/trip/document helpers, and transport jobs/trips execution (controllers and monolith services still in `ops`).
+Transport owns customers, vehicles, fleet, master rates, dispatch, job/trip/document helpers, and transport jobs/trips execution under `transport-execution.module.ts`.
 
 ---
 
@@ -120,35 +126,6 @@ Shared must stay **infrastructure and generic utilities only**—not transport o
 
 ---
 
-## Ops (`src/ops/`)
-
-Despite the generic name, **`ops/` is the current home of transport job/trip execution** — controllers, monolith services, and driver routes. Treat it as **Transport domain** code in its current location until service extraction is explicitly planned. Extracted helpers and DTOs live under `src/transport/*`; ops services import and orchestrate them.
-
-| Area | Routes (examples) |
-|------|-------------------|
-| Transport jobs | `/jobs/*` |
-| Trips (ops detail) | `/trips/:tripId` |
-| Dispatch | `/dispatch/*` (code in `src/transport/dispatch`, registered via `OpsModule`) |
-| Driver home | `/drivers/home` |
-| Driver job execution | `/drivers/jobs/*` |
-| Driver trip detail | `/drivers/trips/*` |
-
-### Still owned by `src/ops`
-
-| Category | Files |
-|----------|-------|
-| **Controllers** | `ops-jobs.controller.ts`, `ops-trips.controller.ts`, `driver-jobs.controller.ts`, `driver-home.controller.ts`, `driver-trips.controller.ts` |
-| **Services** | `ops-jobs.service.ts` (~7.7k lines), `driver-jobs.service.ts` (~2.9k lines) — still orchestrate create-job, trip, document, and import flows |
-| **Helpers** | `job-workflow.helpers.ts` (trip templates, completion rules, trip seeding) |
-| **In-service exports** | Trip-details edit constants and `assertTripDetailsEditAllowed` remain in `ops-jobs.service.ts` |
-| **DTOs** | Remaining files in `src/ops/dto/` (trip/payout, driver mobile, signing — job ops and import DTOs are in `transport/jobs/dto/`) |
-| **Specs** | Remaining `*.spec.ts` files in `src/ops/` |
-| **Module** | `ops.module.ts` — registers ops controllers plus `DispatchController`/`DispatchService` from `transport/dispatch/` |
-
-`ops-jobs.service.ts` is the main job/trip workflow monolith. New **warehousing** logic must not be added here.
-
----
-
 ## Finance (`src/finance/`)
 
 Finance is **transport-heavy today** (job invoicing, driver wallets, portal invoices tied to transport jobs). `invoices.service.ts` imports `evaluateJobInvoiceReadiness` from `src/transport/jobs/job-invoice-readiness`.
@@ -168,13 +145,13 @@ Two modules exist for historical reasons:
 - Routes: `/driver/*` (singular prefix)
 - Stack: `TransportOrder` → `Trip` where `jobId` is null; stops, POD, order inbox
 - Also exports `LocationService` and DTOs used by `admin`, `transport`, and `drivers`
-- **Do not add new features here**; prefer `ops` driver execution or future `transport/driver-app`
+- **Do not add new features here**; prefer `transport/driver-app` driver execution
 - **Do not move yet** — shared exports and legacy mobile clients must be audited first
 
 ### `src/drivers/` — admin CRUD and driver profile
 
 - Routes: `/admin/drivers/*` (web Drivers page), `/drivers/me` (self-profile)
-- **Does not own job execution** — that lives in `ops` at `/drivers/jobs/*` and `/drivers/trips/*`
+- **Does not own job execution** — that lives in `transport/driver-app` at `/drivers/jobs/*` and `/drivers/trips/*`
 - Uses `UsersService` from `shared/users` for avatars
 - **Do not move yet** — consolidate only after `src/driver` dependencies are untangled
 
@@ -201,7 +178,7 @@ Two modules exist for historical reasons:
 
 3. **Future Warehouse Jobs must not reuse existing transport `Job` semantics.** Implement dedicated `WarehouseJob` (or equivalent) under `warehousing/` with new schema when ready.
 
-4. **Do not add new warehousing logic into `ops`.** Inventory belongs under `warehousing/inventory`.
+4. **Do not add new warehousing logic into transport job execution.** Inventory belongs under `warehousing/inventory`.
 
 5. **Do not add new transport-specific business logic into `shared`.** Shared is for infrastructure, platform services, and generic cross-domain helpers.
 
@@ -217,10 +194,9 @@ The following are intentionally **out of scope** for the current extraction phas
 
 | Item | Reason |
 |------|--------|
-| `job-workflow.helpers.ts` | High coupling to both monolith services and multiple specs |
-| `ops-jobs.service.ts` | Main orchestration monolith; Nest wiring and all job routes depend on it |
-| `driver-jobs.service.ts` | Optional delegation to `OpsJobsService` for PDF/signing |
-| Ops controllers | Route stability (`/jobs`, `/drivers/jobs`, etc.) |
+| `job-workflow.helpers.ts` | Moved to `transport/workflows/` |
+| `ops-jobs.service.ts`, `driver-jobs.service.ts`, ops controllers | Moved to `src/transport/`; registered via `TransportExecutionModule` |
+| Ops controllers | Route stability preserved (`/jobs`, `/drivers/jobs`, etc.) |
 | `src/finance/` | Separate domain module; only imports transport job readiness today |
 | `src/driver/`, `src/drivers/` | Legacy split; shared `LocationService` and DTO exports |
 | PDF/signing orchestration inside `OpsJobsService` | Behavior-sensitive; helpers already extracted to `transport/documents/` |
@@ -252,8 +228,8 @@ Recommended next step:
 
 **Delay until deliberately planned:**
 
-- `OpsJobsService` / `DriverJobsService` splits or file moves
-- Ops controller relocation
+| Spec relocation from `src/ops/` | **Done** — specs colocated under `src/transport/*` |
+| `OpsJobsService` / `DriverJobsService` splits | Behavior-sensitive; file moves only, no splits |
 - Finance domain split
 - `src/driver` / `src/drivers` consolidation
 - Prisma `Job`/`Trip` model renames
@@ -277,13 +253,13 @@ src/transport/
     vehicles/         (done)
     tracking/         (done)
     device-gateway/   (done)
-  dispatch/           (done — registered via OpsModule)
-  jobs/               (done — helpers, job ops DTOs, import DTOs, create-job validation)
-  trips/              (partial — trip helpers; controllers still in ops)
-  documents/          (done — helpers and selects; orchestration still in ops)
+  dispatch/           (done — TransportExecutionModule)
+  jobs/               (done — controller, service, helpers, DTOs)
+  trips/              (done — ops trips controller, helpers, DTOs)
+  documents/          (done — helpers and selects)
+  driver-app/         (done — driver controllers and DriverJobsService)
+  workflows/          (done — job-workflow.helpers.ts)
   orders/             ← legacy transport/orders module at transport root (future rename)
-  driver-app/         ← ops driver-home, driver-jobs, driver-trips (future)
-  driver-legacy/      ← src/driver (future, after untangling shared exports)
 ```
 
 ### Warehousing
@@ -331,4 +307,4 @@ src/finance/          (current — transport-heavy)
 - **Move leaf modules first** (inventory, fleet tracking, customers, master-rates, dispatch, document/trip/job helpers, job ops DTOs, create-job validation).
 - **Document before moving** monoliths (`ops`, `driver`, `job-workflow.helpers.ts`).
 - **Never change HTTP routes** in a folder-only move.
-- **One domain per folder** over time; `ops` remains the current transport job/trip execution home until service extraction is planned.
+- **One domain per folder** over time; transport execution now lives under `src/transport`.
