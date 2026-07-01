@@ -65,6 +65,12 @@ model Tenant {
   chassis                      Chassis[]
   gpsDevices                   GpsDevice[]
   gpsPositions                 GpsPosition[]
+  warehouseJobs                WarehouseJob[]
+  warehouseJobLines            WarehouseJobLine[]
+  warehouseJobUnits            WarehouseJobUnit[]
+  warehouseJobEvents           WarehouseJobEvent[]
+  warehouseJobInternalRefCounters warehouse_job_internal_ref_counters[]
+  warehouseJobDocuments        WarehouseJobDocument[]
 
   @@map("tenants")
 }
@@ -105,6 +111,11 @@ model User {
   masterFilesUploaded MasterFile[]      @relation("MasterFileUploadedBy")
   jobDocumentsUploaded JobDocument[]   @relation("JobDocumentUploadedBy")
   tripDocumentsUploaded TripDocument[] @relation("TripDocumentUploadedBy")
+  warehouseJobsAssignedTo WarehouseJob[]      @relation("WarehouseJobAssignedTo")
+  warehouseJobsCreated    WarehouseJob[]      @relation("WarehouseJobCreatedBy")
+  warehouseJobEventsActed WarehouseJobEvent[] @relation("WarehouseJobEventActor")
+  warehouseJobDocumentsUploaded WarehouseJobDocument[] @relation("WarehouseJobDocumentUploadedBy")
+  warehouseJobDocumentsReviewed WarehouseJobDocument[] @relation("WarehouseJobDocumentReviewedBy")
 
   @@index([customerCompanyId])
   @@index([customerContactId])
@@ -157,6 +168,7 @@ model customer_companies {
   users           User[]              @relation("UserCustomerCompany")
   transportOrders TransportOrder[]    @relation("TransportOrderCustomerCompany")
   jobs            Job[]               @relation("JobCustomerCompany")
+  warehouseJobs   WarehouseJob[]      @relation("WarehouseJobCustomerCompany")
   quotations      CustomerCompanyQuotation[]
   documents       CustomerCompanyDocument[]
   rateMasterLines CustomerRateMasterLine[]
@@ -1310,6 +1322,20 @@ model job_internal_ref_counters {
   @@map("job_internal_ref_counters")
 }
 
+model warehouse_job_internal_ref_counters {
+  tenantId  String
+  yyyymm    String
+  nextSeq   Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, yyyymm])
+  @@index([tenantId])
+  @@map("warehouse_job_internal_ref_counters")
+}
+
 model inventory_items {
   id                    String                  @id
   tenantId              String
@@ -1323,6 +1349,7 @@ model inventory_items {
   inventory_units       inventory_units[]
   inventory_batch_items inventory_batch_items[]
   transport_order_items transport_order_items[]
+  warehouseJobLines     WarehouseJobLine[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
@@ -1344,6 +1371,7 @@ enum Role {
   FINANCE
   DRIVER
   CUSTOMER
+  WAREHOUSE
 }
 
 enum MembershipStatus {
@@ -1545,6 +1573,82 @@ enum InventoryUnitStatus {
   Cancelled
 }
 
+enum WarehouseJobType {
+  RECEIVE
+  PUTAWAY
+  PICK
+  PACK
+  STOCK_ADJUSTMENT
+  RETURN_PROCESSING
+  INTERNAL_MOVE
+  CYCLE_COUNT
+}
+
+enum WarehouseJobStatus {
+  DRAFT
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum WarehouseJobPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum WarehouseJobUnitLinkStatus {
+  PLANNED
+  CONFIRMED
+  RELEASED
+}
+
+enum WarehouseJobEventType {
+  CREATED
+  STATUS_CHANGED
+  LINE_ADDED
+  LINE_UPDATED
+  LINE_REMOVED
+  UNIT_LINKED
+  UNIT_CONFIRMED
+  UNIT_RELEASED
+  ASSIGNED
+  NOTE_ADDED
+  CANCELLED
+  COMPLETED
+  DOCUMENT_UPLOADED
+  DOCUMENT_UPDATED
+  DOCUMENT_DELETED
+  DOCUMENT_APPROVED
+  DOCUMENT_REJECTED
+  EXECUTION_UPDATED
+}
+
+enum WarehouseJobDocumentType {
+  PACKING_LIST
+  DELIVERY_ORDER
+  INSTRUCTION
+  REFERENCE_PHOTO
+  WAREHOUSE_PHOTO
+  DAMAGE_PHOTO
+  COMPLETION_PHOTO
+  OTHER
+}
+
+enum WarehouseJobDocumentSource {
+  ADMIN
+  OPS
+  WAREHOUSE
+}
+
+enum WarehouseJobDocumentReviewStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
 model inventory_batches {
   id              String @id @default(cuid())
   tenantId        String
@@ -1572,6 +1676,8 @@ model inventory_batches {
   inventory_batch_items inventory_batch_items[]
   inventory_units       inventory_units[]
   transport_order_items transport_order_items[]
+  warehouseJobs         WarehouseJob[]
+  warehouseJobLines     WarehouseJobLine[]
 
   @@unique([tenantId, containerNumber])
   @@index([tenantId, status])
@@ -1617,6 +1723,7 @@ model inventory_units {
   trip             Trip?                        @relation(fields: [tripId], references: [id], onDelete: SetNull)
   stop             Stop?                        @relation(fields: [stopId], references: [id], onDelete: SetNull)
   order_item_links transport_order_item_units[]
+  warehouseJobUnits WarehouseJobUnit[]
 
   @@unique([tenantId, unitSku])
   @@index([tenantId, inventoryItemId, status])
@@ -1624,6 +1731,166 @@ model inventory_units {
   @@index([tenantId, transportOrderId])
   @@index([tenantId, status])
   @@map("inventory_units")
+}
+
+model WarehouseJob {
+  id                String               @id @default(cuid())
+  tenantId          String
+  internalRef       String
+  type              WarehouseJobType
+  status            WarehouseJobStatus   @default(DRAFT)
+  priority          WarehouseJobPriority @default(NORMAL)
+  title             String?
+  description       String?
+  notes             String?
+  customerCompanyId String?
+  inventoryBatchId  String?
+  assignedToUserId  String?
+  createdByUserId   String?
+  scheduledAt       DateTime?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  cancelledAt       DateTime?
+  cancelledReason   String?
+  containerNumber   String?
+  sealNumber        String?
+  warehouseNotes    String?
+  /// Opaque cross-domain pointer (e.g. TRANSPORT_ORDER + id) — no FK to transport tables.
+  externalRefType   String?
+  externalRefId     String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerCompany customer_companies? @relation("WarehouseJobCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: SetNull)
+  inventoryBatch  inventory_batches?  @relation(fields: [inventoryBatchId], references: [id], onDelete: SetNull)
+  assignedToUser  User?               @relation("WarehouseJobAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  createdByUser   User?               @relation("WarehouseJobCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  lines     WarehouseJobLine[]
+  units     WarehouseJobUnit[]
+  events    WarehouseJobEvent[]
+  documents WarehouseJobDocument[]
+
+  @@unique([tenantId, internalRef])
+  @@index([tenantId, status])
+  @@index([tenantId, type])
+  @@index([tenantId, priority])
+  @@index([tenantId, customerCompanyId])
+  @@index([tenantId, inventoryBatchId])
+  @@index([tenantId, assignedToUserId])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, externalRefType, externalRefId])
+  @@map("warehouse_jobs")
+}
+
+model WarehouseJobLine {
+  id               String   @id @default(cuid())
+  tenantId         String
+  warehouseJobId   String
+  inventoryItemId  String?
+  inventoryBatchId String?
+  description      String?
+  requestedQty     Int      @default(0)
+  completedQty     Int      @default(0)
+  sortOrder        Int      @default(0)
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseJob   WarehouseJob       @relation(fields: [warehouseJobId], references: [id], onDelete: Cascade)
+  inventoryItem  inventory_items?   @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+  inventoryBatch inventory_batches? @relation(fields: [inventoryBatchId], references: [id], onDelete: Restrict)
+
+  units WarehouseJobUnit[]
+
+  @@index([tenantId, warehouseJobId])
+  @@index([tenantId, inventoryItemId])
+  @@index([tenantId, inventoryBatchId])
+  @@index([warehouseJobId, sortOrder])
+  @@map("warehouse_job_lines")
+}
+
+model WarehouseJobUnit {
+  id                 String                     @id @default(cuid())
+  tenantId           String
+  warehouseJobId     String
+  warehouseJobLineId String?
+  inventoryUnitId    String
+  linkStatus         WarehouseJobUnitLinkStatus @default(PLANNED)
+  scannedAt          DateTime?
+  confirmedAt        DateTime?
+  releasedAt         DateTime?
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseJob     WarehouseJob      @relation(fields: [warehouseJobId], references: [id], onDelete: Cascade)
+  warehouseJobLine WarehouseJobLine? @relation(fields: [warehouseJobLineId], references: [id], onDelete: SetNull)
+  inventoryUnit    inventory_units   @relation(fields: [inventoryUnitId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, warehouseJobId, inventoryUnitId])
+  @@index([tenantId, warehouseJobId])
+  @@index([tenantId, warehouseJobLineId])
+  @@index([tenantId, inventoryUnitId])
+  @@index([tenantId, linkStatus])
+  @@map("warehouse_job_units")
+}
+
+model WarehouseJobEvent {
+  id             String                @id @default(cuid())
+  tenantId       String
+  warehouseJobId String
+  actorUserId    String?
+  eventType      WarehouseJobEventType
+  fromStatus     WarehouseJobStatus?
+  toStatus       WarehouseJobStatus?
+  payload        Json?
+  createdAt      DateTime              @default(now())
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseJob WarehouseJob @relation(fields: [warehouseJobId], references: [id], onDelete: Cascade)
+  actorUser    User?        @relation("WarehouseJobEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, warehouseJobId, createdAt])
+  @@index([tenantId, eventType])
+  @@index([tenantId, actorUserId])
+  @@map("warehouse_job_events")
+}
+
+model WarehouseJobDocument {
+  id               String                           @id @default(cuid())
+  tenantId         String
+  warehouseJobId   String
+  uploadedByUserId String?
+  type             WarehouseJobDocumentType
+  source           WarehouseJobDocumentSource
+  reviewStatus     WarehouseJobDocumentReviewStatus @default(PENDING_REVIEW)
+  originalName     String?
+  fileName         String?
+  mimeType         String?
+  sizeBytes        Int?
+  storageKey       String
+  url              String?
+  notes            String?
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  rejectedReason   String?
+  createdAt        DateTime                         @default(now())
+  updatedAt        DateTime                         @updatedAt
+
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseJob   WarehouseJob @relation(fields: [warehouseJobId], references: [id], onDelete: Cascade)
+  uploadedByUser User?        @relation("WarehouseJobDocumentUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  reviewedByUser User?        @relation("WarehouseJobDocumentReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, warehouseJobId])
+  @@index([tenantId, type])
+  @@index([tenantId, source])
+  @@index([tenantId, reviewStatus])
+  @@index([tenantId, createdAt])
+  @@map("warehouse_job_documents")
 }
 
 model transport_order_items {

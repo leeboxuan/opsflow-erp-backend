@@ -10,6 +10,7 @@ import { DriversModule } from './transport/drivers/drivers.module';
 import { AdminModule } from './admin/admin.module';
 import { DriverModule } from './transport/legacy-driver/driver.module';
 import { InventoryModule } from './warehousing/inventory/inventory.module';
+import { WarehouseJobsModule } from './warehousing/warehouse-jobs/warehouse-jobs.module';
 import { CustomersModule } from './transport/customers/customers.module';
 import { DashboardModule } from "./dashboard/dashboard.module";
 import { FinanceModule } from './transport/finance/finance.module';
@@ -41,6 +42,7 @@ import { FleetTrackingModule } from "./transport/fleet/tracking/fleet-tracking.m
     AdminModule,
     DriverModule,
     InventoryModule,
+    WarehouseJobsModule,
     CustomersModule,
     DashboardModule,
     FinanceModule,

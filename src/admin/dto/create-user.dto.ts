@@ -17,7 +17,7 @@ export class CreateUserDto {
   name!: string;
 
   @IsEnum(Role)
-  role!: Role; // ADMIN | OPS | FINANCE | CUSTOMER (NOT Driver)
+  role!: Role; // ADMIN | OPS | FINANCE | WAREHOUSE | CUSTOMER (NOT Driver)
 
   @IsOptional()
   @IsBoolean()
