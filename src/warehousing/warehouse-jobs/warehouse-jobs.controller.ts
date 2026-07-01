@@ -29,6 +29,7 @@ import { WarehouseJobsService } from './warehouse-jobs.service';
 import { WarehouseJobLinesService } from './warehouse-job-lines.service';
 import { WarehouseJobUnitsService } from './warehouse-job-units.service';
 import { WarehouseJobDocumentsService } from './warehouse-job-documents.service';
+import { WarehouseJobReportPreviewService } from './warehouse-job-report-preview.service';
 import { CreateWarehouseJobDto } from './dto/create-warehouse-job.dto';
 import { UpdateWarehouseJobDto } from './dto/update-warehouse-job.dto';
 import { ListWarehouseJobsQueryDto } from './dto/list-warehouse-jobs-query.dto';
@@ -60,6 +61,7 @@ export class WarehouseJobsController {
     private readonly warehouseJobLinesService: WarehouseJobLinesService,
     private readonly warehouseJobUnitsService: WarehouseJobUnitsService,
     private readonly warehouseJobDocumentsService: WarehouseJobDocumentsService,
+    private readonly warehouseJobReportPreviewService: WarehouseJobReportPreviewService,
   ) {}
 
   @Post()
@@ -81,6 +83,21 @@ export class WarehouseJobsController {
     const actorRole = req.tenant.role as Role;
     const actorUserId = req.user?.userId as string | undefined;
     return this.warehouseJobsService.list(tenantId, query, actorRole, actorUserId);
+  }
+
+  @Get(':id/report-preview')
+  @ApiOperation({
+    summary: 'Warehouse job report preview (data-only, no PDF generation)',
+  })
+  async reportPreview(@Request() req: any, @Param('id') id: string) {
+    const tenantId = req.tenant.tenantId;
+    const actorRole = req.tenant.role as Role;
+    const actorUserId = req.user?.userId as string | undefined;
+    return this.warehouseJobReportPreviewService.getReportPreview(
+      tenantId,
+      { role: actorRole, userId: actorUserId },
+      id,
+    );
   }
 
   @Get(':id/documents')

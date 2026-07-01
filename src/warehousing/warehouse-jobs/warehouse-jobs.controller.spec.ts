@@ -68,6 +68,7 @@ describe('WarehouseJobsController metadata', () => {
     ['listLines', WarehouseJobsController.prototype.listLines],
     ['listUnits', WarehouseJobsController.prototype.listUnits],
     ['listDocuments', WarehouseJobsController.prototype.listDocuments],
+    ['reportPreview', WarehouseJobsController.prototype.reportPreview],
   ])('read endpoint %s', (_name, handler) => {
     it('allows ADMIN, OPS, FINANCE, WAREHOUSE', () => {
       expect(getEffectiveRoles(handler)).toEqual(READ_ROLES);
@@ -210,6 +211,9 @@ describe('WarehouseJobsController delegation', () => {
       approve: jest.fn().mockResolvedValue({ id: 'doc-1' }),
       reject: jest.fn().mockResolvedValue({ id: 'doc-1' }),
     };
+    const warehouseJobReportPreviewService = {
+      getReportPreview: jest.fn().mockResolvedValue({ job: { id: jobId } }),
+    };
     const warehouseJobsService = {
       create: jest.fn().mockResolvedValue({ id: jobId }),
       list: jest.fn().mockResolvedValue({ data: [], meta: {} }),
@@ -238,6 +242,7 @@ describe('WarehouseJobsController delegation', () => {
       warehouseJobLinesService as any,
       warehouseJobUnitsService as any,
       warehouseJobDocumentsService as any,
+      warehouseJobReportPreviewService as any,
     );
 
     return {
@@ -246,6 +251,7 @@ describe('WarehouseJobsController delegation', () => {
       warehouseJobLinesService,
       warehouseJobUnitsService,
       warehouseJobDocumentsService,
+      warehouseJobReportPreviewService,
     };
   }
 
@@ -320,6 +326,18 @@ describe('WarehouseJobsController delegation', () => {
       jobId,
       dto,
       actorUserId,
+    );
+  });
+
+  it('delegates report preview to WarehouseJobReportPreviewService', async () => {
+    const { controller, warehouseJobReportPreviewService } = makeController();
+
+    await controller.reportPreview(req, jobId);
+
+    expect(warehouseJobReportPreviewService.getReportPreview).toHaveBeenCalledWith(
+      tenantId,
+      { role: Role.OPS, userId: actorUserId },
+      jobId,
     );
   });
 

@@ -188,6 +188,47 @@ Storage: Supabase bucket `warehouse-job-documents` (tenant-scoped keys). Hard de
 
 **Report PDF generation** is a future phase.
 
+## Report preview (data-only)
+
+`GET /warehouse-jobs/:id/report-preview` — roles: ADMIN, OPS, FINANCE, WAREHOUSE (with access policy).
+
+Returns a **data-only** report preview for Admin/Ops review before PDF generation in a future phase. **Does not generate or render PDFs.**
+
+Response includes:
+- **job** — header, execution fields, relations (customer, batch, assignee)
+- **progress** — line/unit counts and `progressPercent`
+- **documents** — flat list, grouped by type and review status, typed arrays (`packingLists`, `warehousePhotos`, etc.)
+- **readiness** — dynamic checklist flags and `blockers`
+- **generatedAt** — server timestamp
+
+`storageKey` is **not** included in preview documents (signed `url` only).
+
+### Readiness rules (v1, dynamic)
+
+Readiness is **calculated on each request**. No `reportReadyAt` / `reportReadyBy` schema fields.
+
+| Flag | Rule |
+|------|------|
+| `hasPackingList` / `hasDeliveryOrder` / `hasInstruction` | ≥1 document of type, not `REJECTED` |
+| `hasWarehousePhoto` / `hasCompletionPhoto` / `hasDamagePhoto` | Same |
+| `hasContainerNumber` / `hasWarehouseNotes` | Non-empty string |
+| `hasExecutionDetails` | container OR seal OR warehouse notes |
+| `jobCompleted` | status = `COMPLETED` |
+| `allDocumentsReviewed` | total > 0 and pending = 0 |
+
+**`readyForReport` (v1)** is `true` only when:
+- job completed
+- total documents > 0
+- no pending or rejected documents
+- execution details present
+- at least one `WAREHOUSE_PHOTO` or `COMPLETION_PHOTO` (not rejected)
+
+Packing list / delivery order are **not** required for `readyForReport` v1 but flags are exposed.
+
+**`blockers`** — human-readable codes such as `JOB_NOT_COMPLETED`, `NO_DOCUMENTS`, `PENDING_DOCUMENT_REVIEW`, `REJECTED_DOCUMENTS`, `MISSING_EXECUTION_DETAILS`, `MISSING_WAREHOUSE_OR_COMPLETION_PHOTO`.
+
+Full readiness lives on `/report-preview` only; list/detail responses are unchanged.
+
 ## Audit events (header + lifecycle)
 
 - **CREATED** on create.

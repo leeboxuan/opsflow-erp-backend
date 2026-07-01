@@ -9,6 +9,7 @@ import { WarehouseJobUnitsService } from './warehouse-job-units.service';
 import { WarehouseJobEventsService } from './warehouse-job-events.service';
 import { WarehouseInventoryBridgeService } from './warehouse-inventory-bridge.service';
 import { WarehouseJobDocumentsService } from './warehouse-job-documents.service';
+import { WarehouseJobReportPreviewService } from './warehouse-job-report-preview.service';
 
 @Module({
   imports: [AuthModule, PrismaModule],
@@ -21,6 +22,7 @@ import { WarehouseJobDocumentsService } from './warehouse-job-documents.service'
     WarehouseJobEventsService,
     WarehouseInventoryBridgeService,
     WarehouseJobDocumentsService,
+    WarehouseJobReportPreviewService,
   ],
   exports: [WarehouseJobsService],
 })
