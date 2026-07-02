@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { WarehouseJobPriority } from '@prisma/client';
-import { IsDateString, IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsDateString, IsEnum, IsOptional, IsString } from 'class-validator';
 
 export class UpdateWarehouseJobDto {
   @ApiPropertyOptional({ enum: WarehouseJobPriority })
@@ -52,4 +52,39 @@ export class UpdateWarehouseJobDto {
   @IsOptional()
   @IsString()
   externalRefId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  orderReference?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  receivingVessel?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  placeOfDelivery?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  destinationCountry?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  arrivalDate?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  departureDate?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  generateDeliveryOrder?: boolean;
 }

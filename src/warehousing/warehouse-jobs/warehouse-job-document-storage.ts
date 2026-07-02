@@ -68,11 +68,25 @@ export async function uploadWarehouseJobDocument(
   storageKey: string,
   file: Express.Multer.File,
 ): Promise<void> {
+  await uploadWarehouseJobDocumentBuffer(
+    supabaseService,
+    storageKey,
+    file.buffer,
+    file.mimetype ?? 'application/octet-stream',
+  );
+}
+
+export async function uploadWarehouseJobDocumentBuffer(
+  supabaseService: SupabaseService,
+  storageKey: string,
+  buffer: Buffer,
+  contentType: string,
+): Promise<void> {
   const supabase = supabaseService.getClient();
   const { error } = await supabase.storage
     .from(WAREHOUSE_JOB_DOCUMENTS_BUCKET)
-    .upload(storageKey, file.buffer, {
-      contentType: file.mimetype ?? 'application/octet-stream',
+    .upload(storageKey, buffer, {
+      contentType,
       upsert: false,
     });
 

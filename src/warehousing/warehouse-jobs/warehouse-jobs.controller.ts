@@ -45,6 +45,9 @@ import {
   UpdateWarehouseJobDocumentDto,
 } from './dto/warehouse-job-document.dto';
 import { UpdateWarehouseJobExecutionDto } from './dto/update-warehouse-job-execution.dto';
+import { CreateWarehouseJobCargoLineDto } from './dto/create-warehouse-job-cargo-line.dto';
+import { UpdateWarehouseJobCargoLineDto } from './dto/update-warehouse-job-cargo-line.dto';
+import { WarehouseJobCargoLinesService } from './warehouse-job-cargo-lines.service';
 
 const READ_ROLES = [Role.ADMIN, Role.OPS, Role.FINANCE, Role.WAREHOUSE];
 const MUTATE_ROLES = [Role.ADMIN, Role.OPS];
@@ -62,6 +65,7 @@ export class WarehouseJobsController {
     private readonly warehouseJobUnitsService: WarehouseJobUnitsService,
     private readonly warehouseJobDocumentsService: WarehouseJobDocumentsService,
     private readonly warehouseJobReportPreviewService: WarehouseJobReportPreviewService,
+    private readonly warehouseJobCargoLinesService: WarehouseJobCargoLinesService,
   ) {}
 
   @Post()
@@ -244,6 +248,65 @@ export class WarehouseJobsController {
       tenantId,
       id,
       dto,
+      actorUserId,
+      actorRole,
+    );
+  }
+
+  @Get(':id/cargo-lines')
+  @ApiOperation({ summary: 'List warehouse job DO cargo lines' })
+  async listCargoLines(@Request() req: any, @Param('id') id: string) {
+    const tenantId = req.tenant.tenantId;
+    return this.warehouseJobCargoLinesService.list(tenantId, id);
+  }
+
+  @Post(':id/cargo-lines')
+  @Roles(...MUTATE_ROLES)
+  @ApiOperation({ summary: 'Create a warehouse job DO cargo line' })
+  async createCargoLine(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body() dto: CreateWarehouseJobCargoLineDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    return this.warehouseJobCargoLinesService.create(tenantId, id, dto);
+  }
+
+  @Patch(':id/cargo-lines/:lineId')
+  @Roles(...MUTATE_ROLES)
+  @ApiOperation({ summary: 'Update a warehouse job DO cargo line' })
+  async updateCargoLine(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body() dto: UpdateWarehouseJobCargoLineDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    return this.warehouseJobCargoLinesService.update(tenantId, id, lineId, dto);
+  }
+
+  @Delete(':id/cargo-lines/:lineId')
+  @Roles(...MUTATE_ROLES)
+  @ApiOperation({ summary: 'Delete a warehouse job DO cargo line' })
+  async deleteCargoLine(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    return this.warehouseJobCargoLinesService.delete(tenantId, id, lineId);
+  }
+
+  @Post(':id/generate-delivery-order')
+  @Roles(...MUTATE_ROLES)
+  @ApiOperation({ summary: 'Generate delivery order / manifest PDF for warehouse job' })
+  async generateDeliveryOrder(@Request() req: any, @Param('id') id: string) {
+    const tenantId = req.tenant.tenantId;
+    const actorRole = req.tenant.role as Role;
+    const actorUserId = req.user?.userId as string | undefined;
+    return this.warehouseJobsService.generateDeliveryOrder(
+      tenantId,
+      id,
       actorUserId,
       actorRole,
     );

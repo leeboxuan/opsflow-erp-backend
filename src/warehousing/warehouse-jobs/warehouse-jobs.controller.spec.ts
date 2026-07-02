@@ -243,6 +243,7 @@ describe('WarehouseJobsController delegation', () => {
       warehouseJobUnitsService as any,
       warehouseJobDocumentsService as any,
       warehouseJobReportPreviewService as any,
+      { list: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() } as any,
     );
 
     return {

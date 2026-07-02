@@ -9,6 +9,8 @@ import {
 import { WarehouseJobEventsService } from './warehouse-job-events.service';
 import { WarehouseJobLifecycleService } from './warehouse-job-lifecycle.service';
 import { WarehouseJobDocumentsService } from './warehouse-job-documents.service';
+import { WarehouseJobCargoLinesService } from './warehouse-job-cargo-lines.service';
+import { WarehouseJobDeliveryOrderService } from './warehouse-job-delivery-order.service';
 import { WarehouseJobsService } from './warehouse-jobs.service';
 
 describe('WarehouseJobsService', () => {
@@ -48,6 +50,12 @@ describe('WarehouseJobsService', () => {
 
     const lifecycleService = {
       allocateInternalRef: jest.fn().mockResolvedValue('WH-2026-07-0001'),
+      resolveCreatorInitial: jest.fn().mockResolvedValue('MU'),
+      allocateCustomerReference: jest.fn().mockResolvedValue({
+        customerReference: 'DB-MU 26KAT#1207',
+        customerReferenceSeq: 1207,
+        yy: '26',
+      }),
       open: jest.fn(),
       start: jest.fn(),
       complete: jest.fn(),
@@ -87,14 +95,36 @@ describe('WarehouseJobsService', () => {
       countDocumentsByReviewStatus: jest.fn().mockResolvedValue(new Map()),
     } as unknown as WarehouseJobDocumentsService;
 
+    const cargoLinesService = {
+      createManyInTransaction: jest.fn().mockResolvedValue([]),
+    } as unknown as WarehouseJobCargoLinesService;
+
+    const deliveryOrderService = {
+      generate: jest.fn().mockResolvedValue({
+        job: makeJob({ deliveryOrderDocumentId: 'doc-1' }),
+        document: { id: 'doc-1' },
+      }),
+    } as unknown as WarehouseJobDeliveryOrderService;
+
     const service = new WarehouseJobsService(
       prisma,
       lifecycleService,
       eventsService,
       documentsService,
+      cargoLinesService,
+      deliveryOrderService,
     );
 
-    return { service, prisma, tx, lifecycleService, eventsService, documentsService };
+    return {
+      service,
+      prisma,
+      tx,
+      lifecycleService,
+      eventsService,
+      documentsService,
+      cargoLinesService,
+      deliveryOrderService,
+    };
   }
 
   describe('create', () => {
@@ -144,6 +174,83 @@ describe('WarehouseJobsService', () => {
           lines: [{ requestedQty: 1 }],
         }),
       ).rejects.toThrow('Lines are not implemented yet.');
+    });
+
+    it('accepts new business service type STUFFING', async () => {
+      const { service, tx } = makeService();
+      const created = makeJob({ type: WarehouseJobType.STUFFING });
+      tx.warehouseJob.create.mockResolvedValue(created);
+
+      const result = await service.create(
+        tenantId,
+        { type: WarehouseJobType.STUFFING, title: 'Container stuffing' },
+        actorUserId,
+      );
+
+      expect(tx.warehouseJob.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: WarehouseJobType.STUFFING,
+          }),
+        }),
+      );
+      expect(result.type).toBe(WarehouseJobType.STUFFING);
+    });
+
+    it('allocates customer reference when generateCustomerReference is true', async () => {
+      const { service, tx, lifecycleService } = makeService();
+      const created = makeJob({
+        type: WarehouseJobType.STUFFING,
+        customerReference: 'DB-MU 26KAT#1207',
+        orderReference: '394-RW265015',
+      });
+      tx.warehouseJob.create.mockResolvedValue(created);
+
+      await service.create(
+        tenantId,
+        {
+          type: WarehouseJobType.STUFFING,
+          title: 'Stuffing job',
+          generateCustomerReference: true,
+          customerInitial: 'KAT',
+          orderReference: '394-RW265015',
+        },
+        actorUserId,
+      );
+
+      expect(lifecycleService.resolveCreatorInitial).toHaveBeenCalled();
+      expect(lifecycleService.allocateCustomerReference).toHaveBeenCalledWith(
+        tx,
+        tenantId,
+        'KAT',
+        'MU',
+      );
+      expect(tx.warehouseJob.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            customerReference: 'DB-MU 26KAT#1207',
+            orderReference: '394-RW265015',
+            customerInitial: 'KAT',
+            creatorInitial: 'MU',
+          }),
+        }),
+      );
+    });
+
+    it('rejects generateCustomerReference without customerInitial', async () => {
+      const { service } = makeService();
+
+      await expect(
+        service.create(
+          tenantId,
+          {
+            type: WarehouseJobType.STUFFING,
+            title: 'Stuffing job',
+            generateCustomerReference: true,
+          },
+          actorUserId,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 

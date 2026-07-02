@@ -87,6 +87,39 @@ describe('WarehouseJobLifecycleService', () => {
     });
   });
 
+  describe('allocateCustomerReference', () => {
+    it('generates DB-<creatorInitial> <YY><customerInitial>#<seq> and scopes counter by tenant+yy+customerInitial', async () => {
+      const { service } = makeService();
+      const tx: any = {
+        warehouse_job_customer_ref_counters: {
+          upsert: jest.fn().mockResolvedValue({ nextSeq: 1207 }),
+        },
+      };
+
+      const result = await service.allocateCustomerReference(
+        tx,
+        tenantA,
+        'kat',
+        'MU',
+        new Date('2026-07-02T00:00:00.000Z'),
+      );
+
+      expect(result.customerReference).toBe('DB-MU 26KAT#1207');
+      expect(result.customerReferenceSeq).toBe(1207);
+      expect(tx.warehouse_job_customer_ref_counters.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            tenantId_yy_customerInitial: {
+              tenantId: tenantA,
+              yy: '26',
+              customerInitial: 'KAT',
+            },
+          },
+        }),
+      );
+    });
+  });
+
   describe('assertTransition', () => {
     it('allows valid transitions', () => {
       const { service } = makeService();

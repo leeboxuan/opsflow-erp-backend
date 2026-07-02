@@ -156,6 +156,14 @@ describe('WarehouseInventoryBridgeService', () => {
       WarehouseJobType.RETURN_PROCESSING,
       WarehouseJobType.INTERNAL_MOVE,
       WarehouseJobType.CYCLE_COUNT,
+      WarehouseJobType.STUFFING,
+      WarehouseJobType.UNSTUFFING,
+      WarehouseJobType.LASHING_CHOKING,
+      WarehouseJobType.PALLETIZING,
+      WarehouseJobType.PACKAGING,
+      WarehouseJobType.CRATING,
+      WarehouseJobType.STORAGE,
+      WarehouseJobType.PICK_AND_PACK,
     ])('rejects %s', (type) => {
       const { service } = makeService();
 

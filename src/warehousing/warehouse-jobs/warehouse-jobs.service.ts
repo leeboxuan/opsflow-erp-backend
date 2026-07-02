@@ -18,6 +18,8 @@ import { buildOrderBy } from '../../shared/common/listing/listing.sort';
 import { WarehouseJobLifecycleService, warehouseJobDetailInclude, warehouseJobListInclude } from './warehouse-job-lifecycle.service';
 import { WarehouseJobEventsService } from './warehouse-job-events.service';
 import { WarehouseJobDocumentsService } from './warehouse-job-documents.service';
+import { WarehouseJobCargoLinesService } from './warehouse-job-cargo-lines.service';
+import { WarehouseJobDeliveryOrderService } from './warehouse-job-delivery-order.service';
 import { CreateWarehouseJobDto } from './dto/create-warehouse-job.dto';
 import { UpdateWarehouseJobDto } from './dto/update-warehouse-job.dto';
 import { ListWarehouseJobsQueryDto } from './dto/list-warehouse-jobs-query.dto';
@@ -42,6 +44,8 @@ export class WarehouseJobsService {
     private readonly lifecycleService: WarehouseJobLifecycleService,
     private readonly eventsService: WarehouseJobEventsService,
     private readonly documentsService: WarehouseJobDocumentsService,
+    private readonly cargoLinesService: WarehouseJobCargoLinesService,
+    private readonly deliveryOrderService: WarehouseJobDeliveryOrderService,
   ) {}
 
   async create(
@@ -53,17 +57,45 @@ export class WarehouseJobsService {
       throw new BadRequestException('Lines are not implemented yet.');
     }
 
+    if (dto.generateCustomerReference && !dto.customerInitial?.trim()) {
+      throw new BadRequestException(
+        'customerInitial is required when generateCustomerReference is true',
+      );
+    }
+
     await this.validateCustomerCompanyId(tenantId, dto.customerCompanyId);
     await this.validateInventoryBatchId(tenantId, dto.inventoryBatchId);
     await this.validateAssignedToUserId(tenantId, dto.assignedToUserId);
 
-    return this.prisma.$transaction(async (tx) => {
+    const shouldGenerateDo = dto.generateDeliveryOrder === true;
+
+    const job = await this.prisma.$transaction(async (tx) => {
       const internalRef = await this.lifecycleService.allocateInternalRef(
         tx,
         tenantId,
       );
 
-      const job = await tx.warehouseJob.create({
+      const creatorInitial = await this.lifecycleService.resolveCreatorInitial(
+        tx,
+        actorUserId,
+      );
+
+      let customerReference: string | null = null;
+      let customerReferenceSeq: number | null = null;
+      const customerInitial = dto.customerInitial?.trim().toUpperCase() || null;
+
+      if (dto.generateCustomerReference && customerInitial) {
+        const allocated = await this.lifecycleService.allocateCustomerReference(
+          tx,
+          tenantId,
+          customerInitial,
+          creatorInitial,
+        );
+        customerReference = allocated.customerReference;
+        customerReferenceSeq = allocated.customerReferenceSeq;
+      }
+
+      const created = await tx.warehouseJob.create({
         data: {
           tenantId,
           internalRef,
@@ -80,24 +112,77 @@ export class WarehouseJobsService {
           scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
           externalRefType: dto.externalRefType?.trim() || null,
           externalRefId: dto.externalRefId?.trim() || null,
+          orderReference: dto.orderReference?.trim() || null,
+          customerReference,
+          customerInitial,
+          creatorInitial,
+          customerReferenceSeq,
+          receivingVessel: dto.receivingVessel?.trim() || null,
+          placeOfDelivery: dto.placeOfDelivery?.trim() || null,
+          destinationCountry: dto.destinationCountry?.trim() || 'Singapore',
+          arrivalDate: dto.arrivalDate ? new Date(dto.arrivalDate) : null,
+          departureDate: dto.departureDate ? new Date(dto.departureDate) : null,
+          generateDeliveryOrder: shouldGenerateDo,
         },
         include: warehouseJobDetailInclude,
       });
 
+      if (dto.cargoLines?.length) {
+        await this.cargoLinesService.createManyInTransaction(
+          tx,
+          tenantId,
+          created.id,
+          dto.cargoLines,
+        );
+      }
+
       await this.eventsService.append(tx, {
         tenantId,
-        warehouseJobId: job.id,
+        warehouseJobId: created.id,
         actorUserId,
         eventType: WarehouseJobEventType.CREATED,
         toStatus: WarehouseJobStatus.DRAFT,
         payload: {
           type: dto.type,
           internalRef,
+          customerReference,
+          orderReference: dto.orderReference?.trim() || null,
         },
       });
 
-      return job;
+      return created;
     });
+
+    if (shouldGenerateDo) {
+      const result = await this.deliveryOrderService.generate(
+        tenantId,
+        job.id,
+        actorUserId,
+        Role.OPS,
+      );
+      return result.job;
+    }
+
+    if (dto.cargoLines?.length) {
+      return this.getById(tenantId, job.id);
+    }
+
+    return job;
+  }
+
+  async generateDeliveryOrder(
+    tenantId: string,
+    id: string,
+    actorUserId?: string,
+    actorRole: Role = Role.OPS,
+  ) {
+    const result = await this.deliveryOrderService.generate(
+      tenantId,
+      id,
+      actorUserId,
+      actorRole,
+    );
+    return result.job;
   }
 
   async list(
@@ -268,6 +353,30 @@ export class WarehouseJobsService {
     if (dto.externalRefId !== undefined) {
       data.externalRefId = dto.externalRefId.trim() || null;
     }
+    if (dto.orderReference !== undefined) {
+      data.orderReference = dto.orderReference.trim() || null;
+    }
+    if (dto.receivingVessel !== undefined) {
+      data.receivingVessel = dto.receivingVessel.trim() || null;
+    }
+    if (dto.placeOfDelivery !== undefined) {
+      data.placeOfDelivery = dto.placeOfDelivery.trim() || null;
+    }
+    if (dto.destinationCountry !== undefined) {
+      data.destinationCountry = dto.destinationCountry.trim() || 'Singapore';
+    }
+    if (dto.arrivalDate !== undefined) {
+      data.arrivalDate = dto.arrivalDate ? new Date(dto.arrivalDate) : null;
+    }
+    if (dto.departureDate !== undefined) {
+      data.departureDate = dto.departureDate ? new Date(dto.departureDate) : null;
+    }
+    if (dto.generateDeliveryOrder !== undefined) {
+      data.generateDeliveryOrder = dto.generateDeliveryOrder;
+    }
+
+    const shouldGenerateDo =
+      dto.generateDeliveryOrder === true && !existing.deliveryOrderDocumentId;
 
     const assignedChanged =
       dto.assignedToUserId !== undefined &&
@@ -305,6 +414,17 @@ export class WarehouseJobsService {
         });
       }
 
+      return updated;
+    }).then(async (updated) => {
+      if (shouldGenerateDo) {
+        const result = await this.deliveryOrderService.generate(
+          tenantId,
+          existing.id,
+          actorUserId,
+          Role.OPS,
+        );
+        return result.job;
+      }
       return updated;
     });
   }

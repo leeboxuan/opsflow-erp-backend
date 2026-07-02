@@ -6,6 +6,11 @@ import {
 import { Prisma, WarehouseJobEventType, WarehouseJobStatus } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import {
+  formatWarehouseCustomerReference,
+  resolveUserInitial,
+  warehouseCustomerRefYear,
+} from './warehouse-job-customer-ref';
+import {
   WarehouseJobDbClient,
   WarehouseJobEventsService,
 } from './warehouse-job-events.service';
@@ -64,6 +69,65 @@ export class WarehouseJobLifecycleService {
 
     const seq = String(row.nextSeq).padStart(4, '0');
     return `${WarehouseJobLifecycleService.INTERNAL_REF_PREFIX}-${yyyy}-${mm}-${seq}`;
+  }
+
+  async allocateCustomerReference(
+    client: WarehouseJobDbClient,
+    tenantId: string,
+    customerInitial: string,
+    creatorInitial: string,
+    now: Date = new Date(),
+  ): Promise<{ customerReference: string; customerReferenceSeq: number; yy: string }> {
+    const normalizedCustomerInitial = customerInitial.trim().toUpperCase();
+    if (!normalizedCustomerInitial) {
+      throw new BadRequestException('customerInitial is required');
+    }
+
+    const yy = warehouseCustomerRefYear(now);
+    const row = await client.warehouse_job_customer_ref_counters.upsert({
+      where: {
+        tenantId_yy_customerInitial: {
+          tenantId,
+          yy,
+          customerInitial: normalizedCustomerInitial,
+        },
+      },
+      create: {
+        tenantId,
+        yy,
+        customerInitial: normalizedCustomerInitial,
+        nextSeq: 1,
+      },
+      update: { nextSeq: { increment: 1 } },
+      select: { nextSeq: true },
+    });
+
+    const customerReference = formatWarehouseCustomerReference(
+      creatorInitial,
+      yy,
+      normalizedCustomerInitial,
+      row.nextSeq,
+    );
+
+    return {
+      customerReference,
+      customerReferenceSeq: row.nextSeq,
+      yy,
+    };
+  }
+
+  async resolveCreatorInitial(
+    client: WarehouseJobDbClient,
+    actorUserId?: string,
+  ): Promise<string> {
+    if (!actorUserId) return 'XX';
+
+    const user = await client.user.findFirst({
+      where: { id: actorUserId },
+      select: { displayName: true, name: true, email: true },
+    });
+
+    return resolveUserInitial(user?.displayName, user?.name, user?.email);
   }
 
   assertTransition(
@@ -325,6 +389,9 @@ export const warehouseJobDetailInclude = {
   },
   assignedToUser: { select: { id: true, name: true, email: true } },
   createdByUser: { select: { id: true, name: true, email: true } },
+  cargoLines: {
+    orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],
+  },
   events: {
     orderBy: { createdAt: 'desc' as const },
     take: 20,
