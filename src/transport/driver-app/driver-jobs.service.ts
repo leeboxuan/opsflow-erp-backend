@@ -7,6 +7,7 @@ import {
 } from "@nestjs/common";
 import {
   JobStatus,
+  JobType,
   Prisma,
   Role,
   TripPendingState,
@@ -53,6 +54,12 @@ import {
   evaluateTripStartDateGate,
   tripStartDateGateErrorMessage,
 } from "./driver-trip-schedule.helpers";
+import {
+  buildContainerDocumentationRequirements,
+  containerDocumentationErrorLabels,
+  getMissingContainerDocumentTypes,
+  type ContainerDocumentationRequirement,
+} from "./container-documentation.helpers";
 import { UpdateDriverOperationalDetailsDto } from "./dto/update-driver-operational-details.dto";
 import {
   evaluateJobInvoiceReadiness,
@@ -210,6 +217,7 @@ function toDocDto(d: any): JobDocumentDto {
     generatedSource: d.generatedSource ?? null,
     jobId: d.jobId ?? null,
     tripId: d.tripId ?? null,
+    jobItemId: d.jobItemId ?? null,
     downloadUrl: d.downloadUrl ?? d.url ?? null,
     previewUrl: d.previewUrl ?? d.url ?? null,
     requiresSignature: isPodSignature ? false : (d.requiresSignature ?? false),
@@ -2397,6 +2405,27 @@ export class DriverJobsService {
     return toJobDto(updated);
   }
 
+  private async buildContainerDocumentationForTrip(
+    tenantId: string,
+    jobId: string,
+    jobType: JobType,
+    documents: Array<{
+      type: TripDocumentType;
+      jobItemId?: string | null;
+      isActive?: boolean | null;
+    }>,
+  ): Promise<ContainerDocumentationRequirement[]> {
+    if (!isContainerCargoJobType(jobType)) return [];
+
+    // JobItem has no soft-delete column; current rows are the active requirement set.
+    const items = await this.prisma.jobItem.findMany({
+      where: { tenantId, jobId },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { id: true, itemCode: true, sealNo: true },
+    });
+    return buildContainerDocumentationRequirements(items, documents);
+  }
+
   async completeTrip(
     tenantId: string,
     jobId: string,
@@ -2430,14 +2459,42 @@ export class DriverJobsService {
           isActive: true,
           type: { in: DriverJobsService.COMPLETION_DOC_QUERY_TYPES },
         },
-        select: { type: true, signedAt: true, isSigned: true },
+        select: {
+          type: true,
+          jobItemId: true,
+          isActive: true,
+          signedAt: true,
+          isSigned: true,
+        },
       }),
       this.computeTrailerCheckoutGapsForTrip(tenantId, driverUserId, trip, {
         trailerParkingLocationCode: payload?.trailerParkingLocationCode,
         hasNewTrailerEndPhotoUpload: !!payload?.trailerEndPhoto?.buffer?.length,
       }),
     ]);
-    const missing = buildTripCompletionDocumentGaps(completionDocs);
+    const containerDocumentation = await this.buildContainerDocumentationForTrip(
+      tenantId,
+      jobId,
+      job.jobType as JobType,
+      completionDocs,
+    );
+    const missingContainerDocumentation = containerDocumentation.filter(
+      (requirement) => requirement.missing.length > 0,
+    );
+    if (missingContainerDocumentation.length > 0) {
+      const labels = containerDocumentationErrorLabels(
+        missingContainerDocumentation,
+        containerDocumentation,
+      );
+      throw new BadRequestException(
+        `Container documentation is incomplete for ${labels.join(" and ")}.`,
+      );
+    }
+
+    const missing = [
+      ...buildTripCompletionDocumentGaps(completionDocs),
+      ...getMissingContainerDocumentTypes(containerDocumentation),
+    ];
 
     if (missing.length > 0) {
       throw new BadRequestException(
@@ -2623,7 +2680,11 @@ export class DriverJobsService {
     tripId: string,
     driverUserId: string,
   ) {
-    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
+    const job = await this.findAssignedJobOrThrow(
+      tenantId,
+      jobId,
+      driverUserId,
+    );
     const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
     if (trip.assignedDriverUserId !== driverUserId) {
       throw new BadRequestException("You are not assigned to this trip");
@@ -2637,11 +2698,29 @@ export class DriverJobsService {
           isActive: true,
           type: { in: DriverJobsService.COMPLETION_DOC_QUERY_TYPES },
         },
-        select: { type: true, signedAt: true, isSigned: true },
+        select: {
+          type: true,
+          jobItemId: true,
+          isActive: true,
+          signedAt: true,
+          isSigned: true,
+        },
       }),
       this.computeTrailerCheckoutGapsForTrip(tenantId, driverUserId, trip),
     ]);
-    const missingDocuments = buildTripCompletionDocumentGaps(completionDocs);
+    const containerDocumentation = await this.buildContainerDocumentationForTrip(
+      tenantId,
+      jobId,
+      job.jobType as JobType,
+      completionDocs,
+    );
+    const missingContainerDocumentation = containerDocumentation.filter(
+      (requirement) => requirement.missing.length > 0,
+    );
+    const missingDocuments = [
+      ...buildTripCompletionDocumentGaps(completionDocs),
+      ...getMissingContainerDocumentTypes(containerDocumentation),
+    ];
     const { requiresTrailerCheckout, missingTrailerCheckoutFields } = trailerCheckout;
     const parkingLocations = await this.listTrailerParkingLocations();
 
@@ -2653,6 +2732,8 @@ export class DriverJobsService {
         missingTrailerCheckoutFields,
       ),
       missingDocuments,
+      containerDocumentation,
+      missingContainerDocumentation,
       requiresTrailerCheckout,
       missingBaseCompletionDocuments: missingDocuments,
       missingTrailerCheckoutFields,
@@ -2850,6 +2931,8 @@ export class DriverJobsService {
       documents: docsWithUrls.map((doc) => ({
         id: doc.id,
         type: doc.type,
+        jobItemId: doc.jobItemId ?? null,
+        isActive: doc.isActive ?? true,
         status: doc.signedAt ? "SIGNED" : "UPLOADED",
         label: doc.type,
         fileName: doc.fileName,
@@ -3097,6 +3180,7 @@ export class DriverJobsService {
     file: Express.Multer.File,
     requiresSignature = false,
     uploadActorHint?: { name?: string | null; email?: string | null },
+    jobItemId?: string | null,
   ): Promise<JobDocumentDto> {
     const perf = createDriverTripDocUploadPerfTimer({
       endpoint: "POST /api/drivers/jobs/:jobId/trips/:tripId/documents",
@@ -3134,14 +3218,56 @@ export class DriverJobsService {
     }
 
     perf.markAuthDbStart();
-    const [, trip] = await Promise.all([
+    const [job, trip] = await Promise.all([
       this.findAssignedJobOrThrow(tenantId, jobId, driverUserId),
       this.findPublishedTripOrThrow(tenantId, jobId, tripId),
     ]);
     perf.markAuthDbEnd();
 
+    if (trip.assignedDriverUserId !== driverUserId) {
+      throw new BadRequestException("You are not assigned to this trip");
+    }
+
+    const isContainerLinkedType =
+      type === TripDocumentType.CONTAINER_PHOTO
+      || type === TripDocumentType.SEAL_PHOTO;
+    const normalizedJobItemId = String(jobItemId ?? "").trim() || null;
+
+    if (isContainerLinkedType && !normalizedJobItemId) {
+      throw new BadRequestException(
+        `jobItemId is required for ${type}`,
+      );
+    }
+    if (!isContainerLinkedType && normalizedJobItemId) {
+      throw new BadRequestException(
+        "jobItemId is only allowed for CONTAINER_PHOTO and SEAL_PHOTO",
+      );
+    }
+    if (isContainerLinkedType) {
+      if (!isContainerCargoJobType(job.jobType as JobType)) {
+        throw new BadRequestException(
+          "Container photo documentation is only valid for container-style jobs",
+        );
+      }
+      // JobItem has no soft deletion; this scoped lookup represents a current row.
+      const item = await this.prisma.jobItem.findFirst({
+        where: {
+          id: normalizedJobItemId!,
+          tenantId,
+          jobId,
+        },
+        select: { id: true },
+      });
+      if (!item) {
+        throw new BadRequestException(
+          "jobItemId does not belong to this trip's job and tenant",
+        );
+      }
+    }
+
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
-    const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/${type.toLowerCase()}/${Date.now()}${ext}`;
+    const itemPath = normalizedJobItemId ? `/${normalizedJobItemId}` : "";
+    const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/${type.toLowerCase()}${itemPath}/${Date.now()}${ext}`;
 
     const supabase = this.supabaseService.getClient();
     perf.markStorageUploadStart();
@@ -3159,7 +3285,15 @@ export class DriverJobsService {
     perf.markDbWriteStart();
     if (DRIVER_SINGLE_ACTIVE_TRIP_DOCUMENT_TYPES.has(type)) {
       await this.prisma.tripDocument.updateMany({
-        where: { tenantId, tripId, type, isActive: true },
+        where: {
+          tenantId,
+          tripId,
+          type,
+          isActive: true,
+          ...(isContainerLinkedType
+            ? { jobItemId: normalizedJobItemId }
+            : {}),
+        },
         data: { isActive: false },
       });
     }
@@ -3173,6 +3307,7 @@ export class DriverJobsService {
       data: {
         tenantId,
         tripId,
+        jobItemId: normalizedJobItemId,
         type,
         isActive: true,
         storageKey: key,
@@ -3193,7 +3328,12 @@ export class DriverJobsService {
       "TRIP_DOC_UPLOAD",
       "TRIP",
       tripId,
-      { jobId, documentId: doc.id, type },
+      {
+        jobId,
+        documentId: doc.id,
+        type,
+        jobItemId: normalizedJobItemId,
+      },
       driverUserId,
     );
     perf.markDbWriteEnd();

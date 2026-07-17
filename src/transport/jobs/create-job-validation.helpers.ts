@@ -80,6 +80,23 @@ export function parseValidJobItemsFromInput(
     .filter((row): row is NonNullable<typeof row> => row != null);
 }
 
+export function parseValidUpdateJobItemsFromInput(
+  rawItems: unknown[],
+  jobType?: JobType,
+): Array<
+  ReturnType<typeof parseValidJobItemsFromInput>[number] & { id: string | null }
+> {
+  return rawItems.flatMap((rawItem) => {
+    const parsed = parseValidJobItemsFromInput([rawItem], jobType);
+    if (!parsed.length) return [];
+    const id =
+      rawItem && typeof rawItem === "object" && "id" in rawItem
+        ? String((rawItem as { id?: unknown }).id ?? "").trim() || null
+        : null;
+    return [{ ...parsed[0], id }];
+  });
+}
+
 export type AutocompleteLocationInput = {
   address1?: string | null;
   placeId?: string | null;

@@ -52,7 +52,12 @@ describe("DriverJobsService wallet summary and trip photos", () => {
   it("keeps OTHER as multi-active and supports image upload", async () => {
     const prisma: any = {
       job: { findFirst: jest.fn().mockResolvedValue({ id: "job-1" }) },
-      trip: { findFirst: jest.fn().mockResolvedValue({ id: "trip-1" }) },
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip-1",
+          assignedDriverUserId: "driver-1",
+        }),
+      },
       tripDocument: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         create: jest.fn().mockResolvedValue({

@@ -386,7 +386,8 @@ function isSignableDoMarkedSigned(doc: TripCompletionDocRow): boolean {
  * Driver trip completion document gaps:
  * - POD photo documentation
  * - delivery DO signing (when a DELIVERY_DO exists)
- * - active CONTAINER_PHOTO and SEAL_PHOTO
+ *
+ * Container/seal requirements are evaluated per JobItem by the driver service.
  */
 export function buildTripCompletionDocumentGaps(
   docs: TripCompletionDocRow[],
@@ -398,18 +399,6 @@ export function buildTripCompletionDocumentGaps(
   );
   if (!hasPhotoDocumentation) {
     missing.push(PHOTO_DOCUMENTATION_MISSING_KEY);
-  }
-
-  const hasContainerPhoto = docs.some(
-    (d) => d.type === TripDocumentType.CONTAINER_PHOTO,
-  );
-  if (!hasContainerPhoto) {
-    missing.push(TripDocumentType.CONTAINER_PHOTO);
-  }
-
-  const hasSealPhoto = docs.some((d) => d.type === TripDocumentType.SEAL_PHOTO);
-  if (!hasSealPhoto) {
-    missing.push(TripDocumentType.SEAL_PHOTO);
   }
 
   const deliveryDo = docs.find((d) => d.type === TripDocumentType.DELIVERY_DO);

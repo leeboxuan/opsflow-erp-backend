@@ -45,6 +45,7 @@ import { DriverCompleteJobDto } from "./dto/complete-job.dto";
 import { JobLocationDto } from "./dto/location.dto";
 import { DriverTripCompleteDto } from "./dto/driver-trip-complete.dto";
 import { UpdateDriverOperationalDetailsDto } from "./dto/update-driver-operational-details.dto";
+import { ContainerDocumentationRequirementDto } from "./dto/container-documentation-requirement.dto";
 import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
 
 @ApiTags("driver-jobs")
@@ -52,7 +53,7 @@ import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
 @Roles(Role.DRIVER)
 @ApiBearerAuth("JWT-auth")
-@ApiExtraModels(JobDocumentDto)
+@ApiExtraModels(JobDocumentDto, ContainerDocumentationRequirementDto)
 export class DriverJobsController {
   constructor(private readonly driverJobs: DriverJobsService) {}
 
@@ -200,6 +201,27 @@ export class DriverJobsController {
 
   @Get(":jobId/trips/:tripId/completion-requirements")
   @ApiOperation({ summary: "Get completion requirements before trip complete" })
+  @ApiOkResponse({
+    schema: {
+      type: "object",
+      properties: {
+        canComplete: { type: "boolean" },
+        missingDocuments: { type: "array", items: { type: "string" } },
+        containerDocumentation: {
+          type: "array",
+          items: {
+            $ref: getSchemaPath(ContainerDocumentationRequirementDto),
+          },
+        },
+        missingContainerDocumentation: {
+          type: "array",
+          items: {
+            $ref: getSchemaPath(ContainerDocumentationRequirementDto),
+          },
+        },
+      },
+    },
+  })
   async getTripCompletionRequirements(
     @Req() req: any,
     @Param("jobId") jobId: string,
@@ -284,7 +306,7 @@ export class DriverJobsController {
   @ApiOperation({
     summary: "Upload trip document (form field type + file)",
     description:
-      "Used for trip/container photo documentation. Upload multiple photos by calling this endpoint repeatedly with type=OTHER or type=POD_PHOTO. Returns document metadata only (no signed URLs); fetch preview via GET .../documents/:documentId/signed-url.",
+      "CONTAINER_PHOTO and SEAL_PHOTO require jobItemId for the exact container row. Other document types reject jobItemId. Returns document metadata only (no signed URLs); fetch preview via GET .../documents/:documentId/signed-url.",
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
@@ -301,9 +323,16 @@ export class DriverJobsController {
             "POD_PHOTO",
             "POD_SIGNATURE",
             "OTHER",
+            "CONTAINER_PHOTO",
+            "SEAL_PHOTO",
             "TRAILER_START_PHOTO",
             "TRAILER_END_PHOTO",
           ],
+        },
+        jobItemId: {
+          type: "string",
+          description:
+            "Required for CONTAINER_PHOTO and SEAL_PHOTO; rejected for other types.",
         },
         requiresSignature: { type: "boolean" },
         file: { type: "string", format: "binary" },
@@ -335,6 +364,7 @@ export class DriverJobsController {
       throw new BadRequestException("Unsupported trip document type");
     }
     const type = typeRaw as TripDocumentType;
+    const jobItemId = String(body?.jobItemId ?? "").trim() || null;
     const requiresSignature = String(body?.requiresSignature ?? "").toLowerCase() === "true";
     return this.driverJobs.uploadTripDocumentForDriver(
       tenantId,
@@ -345,6 +375,7 @@ export class DriverJobsController {
       file,
       requiresSignature,
       { email: req.user?.email ?? null },
+      jobItemId,
     );
   }
 

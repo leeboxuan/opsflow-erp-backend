@@ -946,6 +946,7 @@ model JobItem {
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  tripDocuments TripDocument[]
 
   @@index([tenantId, jobId])
   @@index([tenantId, itemCode])
@@ -1183,6 +1184,9 @@ model TripDocument {
   id               String           @id @default(cuid())
   tenantId         String
   tripId           String
+  /// Container/seal photos link to the exact current JobItem container row.
+  /// Null for trip-level documents such as DO, POD, and trailer photos.
+  jobItemId        String?
   type             TripDocumentType
   storageKey       String
   originalName     String
@@ -1203,11 +1207,14 @@ model TripDocument {
 
   tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   trip       Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  /// Set null when an Ops item row is removed so the document remains for audit/history.
+  jobItem    JobItem? @relation(fields: [jobItemId], references: [id], onDelete: SetNull)
   uploadedBy User?  @relation("TripDocumentUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, tripId])
   @@index([tenantId, type])
   @@index([tenantId, tripId, isActive, type])
+  @@index([tenantId, tripId, jobItemId, type])
   @@map("trip_documents")
 }
 

@@ -71,6 +71,13 @@ export class JobDocumentDto {
   @ApiPropertyOptional()
   tripId?: string | null;
 
+  @ApiPropertyOptional({
+    description:
+      "Linked JobItem id for CONTAINER_PHOTO/SEAL_PHOTO; null for trip-level documents.",
+    nullable: true,
+  })
+  jobItemId?: string | null;
+
   @ApiPropertyOptional()
   signedByUserId?: string | null;
 

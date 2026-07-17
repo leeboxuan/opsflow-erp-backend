@@ -165,6 +165,7 @@ import {
   assertPickupLocationForCreate,
   importPickupOriginUsesAddressFields,
   parseValidJobItemsFromInput,
+  parseValidUpdateJobItemsFromInput,
   readCreateJobItemsInput,
   readUpdateJobItemsInput,
   resolveCollectionTypeForJobCreate,
@@ -230,6 +231,7 @@ function toDocDto(d: any): JobDocumentDto {
     generatedSource: d.generatedSource ?? null,
     jobId: d.jobId ?? null,
     tripId: d.tripId ?? null,
+    jobItemId: d.jobItemId ?? null,
     downloadUrl: d.downloadUrl ?? d.url ?? null,
     previewUrl: d.previewUrl ?? d.url ?? null,
     requiresSignature: d.requiresSignature ?? false,
@@ -2685,29 +2687,67 @@ export class OpsJobsService {
       });
 
       if (inputItems !== null) {
-        const validItems = parseValidJobItemsFromInput(inputItems, effectiveJobType);
+        const validItems = parseValidUpdateJobItemsFromInput(
+          inputItems,
+          effectiveJobType,
+        );
         assertCreateJobItemsRequiredForJobType(
           effectiveJobType,
           inputItems,
           validItems,
         );
 
-        await tx.jobItem.deleteMany({
-          where: { tenantId, jobId },
-        });
-
-        if (validItems.length > 0) {
-          await tx.jobItem.createMany({
-            data: validItems.map((item) => ({
-              tenantId,
-              jobId,
+        const retainedIds = validItems
+          .map((item) => item.id)
+          .filter((id): id is string => !!id);
+        if (!retainedIds.length) {
+          // Backward-compatible replace-all behavior for legacy clients without ids.
+          await tx.jobItem.deleteMany({ where: { tenantId, jobId } });
+          if (validItems.length > 0) {
+            await tx.jobItem.createMany({
+              data: validItems.map((item) => ({
+                tenantId,
+                jobId,
+                itemCode: item.itemCode,
+                description: item.description,
+                sealNo: item.sealNo,
+                pickupReference: item.pickupReference,
+                qty: item.qty,
+              })),
+            });
+          }
+        } else {
+          const existing = await tx.jobItem.findMany({
+            where: { tenantId, jobId, id: { in: retainedIds } },
+            select: { id: true },
+          });
+          if (existing.length !== retainedIds.length) {
+            throw new BadRequestException(
+              "One or more item ids do not belong to this job",
+            );
+          }
+          await tx.jobItem.deleteMany({
+            where: { tenantId, jobId, id: { notIn: retainedIds } },
+          });
+          for (const item of validItems) {
+            const itemData = {
               itemCode: item.itemCode,
               description: item.description,
               sealNo: item.sealNo,
               pickupReference: item.pickupReference,
               qty: item.qty,
-            })),
-          });
+            };
+            if (item.id) {
+              await tx.jobItem.update({
+                where: { id: item.id },
+                data: itemData,
+              });
+            } else {
+              await tx.jobItem.create({
+                data: { tenantId, jobId, ...itemData },
+              });
+            }
+          }
         }
       }
 
@@ -4671,25 +4711,65 @@ export class OpsJobsService {
         await tx.trip.update({ where: { id: tripId }, data: tripData });
       }
       if (inputItems !== null) {
-        const validItems = parseValidJobItemsFromInput(inputItems, job.jobType);
+        const validItems = parseValidUpdateJobItemsFromInput(
+          inputItems,
+          job.jobType,
+        );
         assertCreateJobItemsRequiredForJobType(
           job.jobType,
           inputItems,
           validItems,
         );
-        await tx.jobItem.deleteMany({ where: { tenantId, jobId } });
-        if (validItems.length > 0) {
-          await tx.jobItem.createMany({
-            data: validItems.map((item) => ({
-              tenantId,
-              jobId,
+        const retainedIds = validItems
+          .map((item) => item.id)
+          .filter((id): id is string => !!id);
+        if (!retainedIds.length) {
+          await tx.jobItem.deleteMany({ where: { tenantId, jobId } });
+          if (validItems.length > 0) {
+            await tx.jobItem.createMany({
+              data: validItems.map((item) => ({
+                tenantId,
+                jobId,
+                itemCode: item.itemCode,
+                description: item.description,
+                sealNo: item.sealNo,
+                pickupReference: item.pickupReference,
+                qty: item.qty,
+              })),
+            });
+          }
+        } else {
+          const existing = await tx.jobItem.findMany({
+            where: { tenantId, jobId, id: { in: retainedIds } },
+            select: { id: true },
+          });
+          if (existing.length !== retainedIds.length) {
+            throw new BadRequestException(
+              "One or more item ids do not belong to this job",
+            );
+          }
+          await tx.jobItem.deleteMany({
+            where: { tenantId, jobId, id: { notIn: retainedIds } },
+          });
+          for (const item of validItems) {
+            const itemData = {
               itemCode: item.itemCode,
               description: item.description,
               sealNo: item.sealNo,
               pickupReference: item.pickupReference,
               qty: item.qty,
-            })),
-          });
+            };
+            if (item.id) {
+              await tx.jobItem.update({
+                where: { id: item.id },
+                data: itemData,
+              });
+            } else {
+              await tx.jobItem.create({
+                data: { tenantId, jobId, ...itemData },
+              });
+            }
+          }
         }
       }
     });

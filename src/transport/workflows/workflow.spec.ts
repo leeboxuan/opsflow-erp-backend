@@ -725,7 +725,7 @@ describe("workflow helpers", () => {
 });
 
 describe("trip completion document gaps", () => {
-  it("returns POD_PHOTO and container/seal photos when documentation is missing", () => {
+  it("returns POD_PHOTO when base photo documentation is missing", () => {
     const missing = buildTripCompletionDocumentGaps([
       {
         type: TripDocumentType.DELIVERY_DO,
@@ -733,14 +733,10 @@ describe("trip completion document gaps", () => {
         isSigned: true,
       },
     ]);
-    expect(missing).toEqual([
-      "POD_PHOTO",
-      TripDocumentType.CONTAINER_PHOTO,
-      TripDocumentType.SEAL_PHOTO,
-    ]);
+    expect(missing).toEqual(["POD_PHOTO"]);
   });
 
-  it("accepts OTHER as satisfying photo documentation but still requires container/seal photos", () => {
+  it("accepts OTHER as satisfying base photo documentation", () => {
     const missing = buildTripCompletionDocumentGaps([
       {
         type: TripDocumentType.OTHER,
@@ -753,10 +749,7 @@ describe("trip completion document gaps", () => {
         isSigned: true,
       },
     ]);
-    expect(missing).toEqual([
-      TripDocumentType.CONTAINER_PHOTO,
-      TripDocumentType.SEAL_PHOTO,
-    ]);
+    expect(missing).toEqual([]);
   });
 
   it("returns DELIVERY_DO when delivery DO is unsigned", () => {

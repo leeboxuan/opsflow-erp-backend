@@ -13,6 +13,14 @@ import { Type } from "class-transformer";
 import { IsArray, ValidateNested } from "class-validator";
 
 export class UpdateJobItemDto {
+  @ApiPropertyOptional({
+    description:
+      "Existing JobItem id. Include when editing a container so linked photos retain their stable association.",
+  })
+  @IsOptional()
+  @IsString()
+  id?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
