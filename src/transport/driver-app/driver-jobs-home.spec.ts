@@ -354,4 +354,33 @@ describe("DriverJobsService.getDriverHome", () => {
       customerName: "ACME",
     });
   });
+
+  it("orders today trips by pickup time, not insertion/creation order", async () => {
+    const twoPm = tripRow({
+      id: "trip-2pm",
+      plannedStartAt: new Date("2026-05-25T06:00:00.000Z"), // 14:00 SGT
+      createdAt: new Date("2026-05-24T18:00:00.000Z"),
+      tripSequence: null,
+      jobSequence: null,
+    });
+    const threePm = tripRow({
+      id: "trip-3pm",
+      plannedStartAt: new Date("2026-05-25T07:00:00.000Z"), // 15:00 SGT
+      createdAt: new Date("2026-05-24T10:00:00.000Z"),
+      tripSequence: null,
+      jobSequence: null,
+    });
+    // Insertion order: 3pm created first, then 2pm — display must still be 2pm then 3pm.
+    const { svc } = makeService({
+      runSheetTrips: [threePm, twoPm],
+      activeAssignedTrips: [threePm, twoPm],
+    });
+
+    const res = await svc.getDriverHome(tenantId, driver1, date);
+    expect(res.today.trips.map((t) => t.tripId)).toEqual(["trip-2pm", "trip-3pm"]);
+    expect(res.today.runSheet.trips.map((t: any) => t.tripId)).toEqual([
+      "trip-2pm",
+      "trip-3pm",
+    ]);
+  });
 });

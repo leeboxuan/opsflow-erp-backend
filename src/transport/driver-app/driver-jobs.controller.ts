@@ -2,6 +2,7 @@ import {
   Controller,
   Delete,
   Get,
+  Patch,
   Post,
   Param,
   Query,
@@ -43,6 +44,7 @@ import { DriverJobsHistoryListQueryDto } from "./dto/driver-jobs-history-list-qu
 import { DriverCompleteJobDto } from "./dto/complete-job.dto";
 import { JobLocationDto } from "./dto/location.dto";
 import { DriverTripCompleteDto } from "./dto/driver-trip-complete.dto";
+import { UpdateDriverOperationalDetailsDto } from "./dto/update-driver-operational-details.dto";
 import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
 
 @ApiTags("driver-jobs")
@@ -170,6 +172,29 @@ export class DriverJobsController {
       tripId,
       userId,
       { trailerNumber, trailerPhoto },
+    );
+  }
+
+  @Patch(":jobId/trips/:tripId/operational-details")
+  @ApiOperation({
+    summary: "Update driver operational details for an assigned trip",
+    description:
+      "Allows the assigned driver to update container number, seal number, and driver remarks while the trip is PUBLISHED or ONGOING. Does not overwrite Job.description.",
+  })
+  async updateOperationalDetails(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Body() dto: UpdateDriverOperationalDetailsDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.updateOperationalDetails(
+      tenantId,
+      jobId,
+      tripId,
+      userId,
+      dto,
     );
   }
 

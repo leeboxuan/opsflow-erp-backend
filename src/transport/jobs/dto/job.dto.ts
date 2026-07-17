@@ -196,6 +196,9 @@ export class JobTripResponseDto {
   /** Trip-specific ops/driver instructions (Trip.notes). */
   @ApiPropertyOptional()
   notes?: string | null;
+  /** Driver-owned remarks (Trip.driverRemarks). */
+  @ApiPropertyOptional()
+  driverRemarks?: string | null;
   /** Job-level notes (Job.notes). */
   @ApiPropertyOptional()
   jobNotes?: string | null;
@@ -333,6 +336,14 @@ export class JobDto {
   computedInvoiceReadinessReason?: string | null;
   notes?: string | null;
 
+  /** Job-level pickup reference (container-style). Legacy item-level values fall back on read. */
+  pickupReference?: string | null;
+  /** Job-level description (all types). Distinct from LCL item descriptions. */
+  description?: string | null;
+  carrierName?: string | null;
+  voyage?: string | null;
+  shipper?: string | null;
+
   createdByUserId?: string | null;
   createdByName?: string | null;
   createdByEmail?: string | null;
@@ -427,6 +438,12 @@ export class JobItemDto {
   itemCode: string;
   description: string | null;
   sealNo: string | null;
+  /** API alias for sealNo when clients prefer sealNumber. */
+  sealNumber?: string | null;
+  /**
+   * Deprecated for container-style jobs: use JobDto.pickupReference.
+   * May be null on new container rows; legacy rows may still have a value.
+   */
   pickupReference: string | null;
   qty: number | null;
   createdAt: Date;

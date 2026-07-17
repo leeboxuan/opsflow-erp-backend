@@ -631,17 +631,79 @@ describe("job create: EXPORT and COLLECTION", () => {
       expect.objectContaining({
         itemCode: "CONT123",
         sealNo: "SEAL9",
-        pickupReference: "REF-88",
+        pickupReference: null,
+        description: null,
         qty: null,
       }),
     ]);
   });
+
+  it("COLLECTION create persists job-level pickupReference and description", async () => {
+    const prisma = makeExportCreatePrisma();
+    prisma.job.create = jest.fn().mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: "job1",
+        jobType: JobType.COLLECTION,
+        customerCompany: { id: "comp1", name: "ACME" },
+        items: data.items?.create ?? [],
+      }),
+    );
+    prisma.job.findFirst = jest.fn().mockResolvedValue({
+      id: "job1",
+      tenantId: "t1",
+      jobType: JobType.COLLECTION,
+      collectionType: CollectionType.LOADED,
+      status: "ONGOING",
+      pickupReference: "REF-88",
+      description: "Job desc",
+      customerCompany: { id: "comp1", name: "ACME" },
+      assignedDriver: null,
+      createdBy: null,
+      items: [],
+      trips: [],
+      charges: [],
+      documents: [],
+    });
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.COLLECTION,
+        collectionType: CollectionType.LOADED,
+        customerCompanyId: "comp1",
+        pickupAddress1: "7 Gul Cir",
+        deliveryAddress1: "8 Gul Cir",
+        pickupReference: "REF-88",
+        description: "Job desc",
+        carrierName: "Maersk",
+        voyage: "V1",
+        shipper: "Ship Co",
+        vesselName: "Vessel A",
+        items: [{ containerNumber: "CONT123", sealNo: "SEAL9" }],
+      } as any,
+      { userId: "u1", role: Role.OPS },
+    );
+
+    const createData = prisma.job.create.mock.calls[0][0].data;
+    expect(createData.pickupReference).toBe("REF-88");
+    expect(createData.description).toBe("Job desc");
+    expect(createData.carrierName).toBe("Maersk");
+    expect(createData.voyage).toBe("V1");
+    expect(createData.shipper).toBe("Ship Co");
+    expect(createData.vesselName).toBe("Vessel A");
+  });
 });
 
 describe("parseValidJobItemsFromInput container cargo", () => {
-  it("IMPORT/EXPORT/COLLECTION do not require qty", () => {
+  it("IMPORT/EXPORT/COLLECTION do not require qty and ignore item pickupReference/description", () => {
     const rows = parseValidJobItemsFromInput(
-      [{ containerNumber: "ABCD1234567", sealNo: "S1", pickupReference: "PU-REF-1" }],
+      [{
+        containerNumber: "ABCD1234567",
+        sealNo: "S1",
+        pickupReference: "PU-REF-1",
+        description: "should-ignore",
+      }],
       JobType.IMPORT,
     );
     expect(rows).toEqual([
@@ -649,7 +711,7 @@ describe("parseValidJobItemsFromInput container cargo", () => {
         itemCode: "ABCD1234567",
         description: null,
         sealNo: "S1",
-        pickupReference: "PU-REF-1",
+        pickupReference: null,
         qty: null,
       },
     ]);
@@ -778,8 +840,10 @@ describe("getTripDetail COLLECTION cargo sealNo", () => {
     expect(result.cargo.containers[0]).toMatchObject({
       containerNumber: "CONT-777",
       sealNo: "SEAL-42",
-      pickupReference: "PU-REF-9",
+      sealNumber: "SEAL-42",
+      pickupReference: null,
     });
+    expect(result.job.pickupReference).toBe("PU-REF-9");
   });
 });
 
@@ -816,7 +880,7 @@ describe("getTripDetailForDriver pickupReference", () => {
     expect(result.job.collectionType).toBe(CollectionType.LOADED);
   });
 
-  it("returns pickupReference on container cargo rows", async () => {
+  it("returns job-level pickupReference with legacy item fallback (not duplicated on rows)", async () => {
     const { DriverJobsService } = await import("../driver-app/driver-jobs.service");
     const prisma: any = {
       trip: {
@@ -832,6 +896,7 @@ describe("getTripDetailForDriver pickupReference", () => {
             internalRef: "WFL-2026-05-0001-COL",
             jobType: "COLLECTION",
             collectionType: CollectionType.EMPTY,
+            pickupReference: null,
             items: [
               {
                 id: "it1",
@@ -855,6 +920,7 @@ describe("getTripDetailForDriver pickupReference", () => {
 
     const result = await svc.getTripDetailForDriver("t1", "trip1", "driver-1");
     expect(result.cargo.mode).toBe("CONTAINER");
-    expect(result.cargo.containers[0].pickupReference).toBe("REF-DRIVER");
+    expect(result.job.pickupReference).toBe("REF-DRIVER");
+    expect(result.cargo.containers[0].pickupReference).toBeNull();
   });
 });

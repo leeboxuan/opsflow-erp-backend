@@ -9,6 +9,8 @@ export const ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES: TripDocumentType[] = [
   TripDocumentType.PICKUP_SIGNATURE,
   TripDocumentType.DELIVERY_SIGNATURE,
   TripDocumentType.OTHER,
+  TripDocumentType.CONTAINER_PHOTO,
+  TripDocumentType.SEAL_PHOTO,
   TripDocumentType.TRAILER_START_PHOTO,
   TripDocumentType.TRAILER_END_PHOTO,
   TripDocumentType.TRAILER_PARKING_PHOTO,

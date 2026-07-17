@@ -35,6 +35,26 @@ describe("DriverJobsService trip completion requirements", () => {
     };
   }
 
+  function containerPhoto() {
+    return {
+      type: TripDocumentType.CONTAINER_PHOTO,
+      signedAt: null,
+      isSigned: false,
+    };
+  }
+
+  function sealPhoto() {
+    return {
+      type: TripDocumentType.SEAL_PHOTO,
+      signedAt: null,
+      isSigned: false,
+    };
+  }
+
+  function baseCompletionDocs() {
+    return [signedDeliveryDo(), podPhoto(), containerPhoto(), sealPhoto()];
+  }
+
   function makePrisma(completionDocs: Array<{
     type: TripDocumentType;
     signedAt: Date | null;
@@ -94,7 +114,7 @@ describe("DriverJobsService trip completion requirements", () => {
   }
 
   it("returns canComplete false and missing POD_PHOTO when photo documentation is absent", async () => {
-    const { prisma } = makePrisma([signedDeliveryDo()]);
+    const { prisma } = makePrisma([signedDeliveryDo(), containerPhoto(), sealPhoto()]);
     const svc = makeSvc(prisma);
 
     const res = await svc.getTripCompletionRequirements(
@@ -109,8 +129,73 @@ describe("DriverJobsService trip completion requirements", () => {
     expect(res.missingBaseCompletionDocuments).toContain("POD_PHOTO");
   });
 
+  it("reports missing CONTAINER_PHOTO and SEAL_PHOTO when neither is uploaded", async () => {
+    const { prisma } = makePrisma([signedDeliveryDo(), podPhoto()]);
+    const svc = makeSvc(prisma);
+
+    const res = await svc.getTripCompletionRequirements(
+      tenantId,
+      jobId,
+      tripId,
+      driverUserId,
+    );
+
+    expect(res.canComplete).toBe(false);
+    expect(res.missingDocuments).toEqual(
+      expect.arrayContaining(["CONTAINER_PHOTO", "SEAL_PHOTO"]),
+    );
+  });
+
+  it("reports missing SEAL_PHOTO when only container photo uploaded", async () => {
+    const { prisma } = makePrisma([signedDeliveryDo(), podPhoto(), containerPhoto()]);
+    const svc = makeSvc(prisma);
+
+    const res = await svc.getTripCompletionRequirements(
+      tenantId,
+      jobId,
+      tripId,
+      driverUserId,
+    );
+
+    expect(res.canComplete).toBe(false);
+    expect(res.missingDocuments).toContain("SEAL_PHOTO");
+    expect(res.missingDocuments).not.toContain("CONTAINER_PHOTO");
+  });
+
+  it("reports missing CONTAINER_PHOTO when only seal photo uploaded", async () => {
+    const { prisma } = makePrisma([signedDeliveryDo(), podPhoto(), sealPhoto()]);
+    const svc = makeSvc(prisma);
+
+    const res = await svc.getTripCompletionRequirements(
+      tenantId,
+      jobId,
+      tripId,
+      driverUserId,
+    );
+
+    expect(res.canComplete).toBe(false);
+    expect(res.missingDocuments).toContain("CONTAINER_PHOTO");
+    expect(res.missingDocuments).not.toContain("SEAL_PHOTO");
+  });
+
+  it("treats inactive/deleted container photo as missing", async () => {
+    // Query already filters isActive=true; inactive docs are simply absent from the result set.
+    const { prisma } = makePrisma([signedDeliveryDo(), podPhoto(), sealPhoto()]);
+    const svc = makeSvc(prisma);
+
+    const res = await svc.getTripCompletionRequirements(
+      tenantId,
+      jobId,
+      tripId,
+      driverUserId,
+    );
+
+    expect(res.missingDocuments).toContain("CONTAINER_PHOTO");
+    expect(res.canComplete).toBe(false);
+  });
+
   it("rejects complete trip API when photo documentation is missing", async () => {
-    const { prisma } = makePrisma([signedDeliveryDo()]);
+    const { prisma } = makePrisma([signedDeliveryDo(), containerPhoto(), sealPhoto()]);
     const svc = makeSvc(prisma);
 
     await expect(
@@ -118,9 +203,20 @@ describe("DriverJobsService trip completion requirements", () => {
     ).rejects.toThrow(/Missing required trip documents: POD_PHOTO/);
   });
 
+  it("rejects complete trip when container or seal photo is missing", async () => {
+    const { prisma } = makePrisma([signedDeliveryDo(), podPhoto(), containerPhoto()]);
+    const svc = makeSvc(prisma);
+
+    await expect(
+      svc.completeTrip(tenantId, jobId, tripId, driverUserId),
+    ).rejects.toThrow(/Missing required trip documents:.*SEAL_PHOTO/);
+  });
+
   it("rejects complete trip when delivery DO is unsigned", async () => {
     const { prisma } = makePrisma([
       podPhoto(),
+      containerPhoto(),
+      sealPhoto(),
       {
         type: TripDocumentType.DELIVERY_DO,
         signedAt: null,
@@ -135,7 +231,7 @@ describe("DriverJobsService trip completion requirements", () => {
   });
 
   it("rejects complete trip when trailer end photo is required but missing", async () => {
-    const { prisma } = makePrisma([signedDeliveryDo(), podPhoto()], {
+    const { prisma } = makePrisma(baseCompletionDocs(), {
       openTrips: 1,
       hasTrailerEndPhoto: false,
     });
@@ -146,8 +242,8 @@ describe("DriverJobsService trip completion requirements", () => {
     ).rejects.toThrow("Missing trailer checkout fields: trailerEndPhoto");
   });
 
-  it("allows complete when photo, signed DO, and trailer end photo exist even without parking code", async () => {
-    const { prisma, tripUpdate } = makePrisma([signedDeliveryDo(), podPhoto()], {
+  it("allows complete when photo, signed DO, container/seal, and trailer end photo exist even without parking code", async () => {
+    const { prisma, tripUpdate } = makePrisma(baseCompletionDocs(), {
       openTrips: 1,
       hasTrailerEndPhoto: true,
     });
@@ -170,7 +266,7 @@ describe("DriverJobsService trip completion requirements", () => {
   });
 
   it("succeeds when all required completion documents are satisfied", async () => {
-    const { prisma, tripUpdate } = makePrisma([signedDeliveryDo(), podPhoto()]);
+    const { prisma, tripUpdate } = makePrisma(baseCompletionDocs());
     const svc = makeSvc(prisma);
     jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: tripId }] } as any);
 

@@ -171,6 +171,11 @@ import {
   resolveExportDestinationFields,
   resolveExportPickupFields,
 } from "./create-job-validation.helpers";
+import {
+  normalizeOptionalTrimmedText,
+  resolveJobDescription,
+  resolveJobPickupReference,
+} from "./job-field-resolution.helpers";
 
 
 const QUOTATION_MIMES = [
@@ -317,6 +322,16 @@ function toJobDto(j: any): JobDto {
       (j.status === JobStatus.READY_FOR_INVOICE ? true : trips.length > 0 ? false : undefined),
     computedInvoiceReadinessReason: computedReadiness?.reason ?? null,
     notes: j.notes ?? null,
+    pickupReference: resolveJobPickupReference(
+      j,
+      isContainerCargoJobType(j.jobType) ? j.items : null,
+    ),
+    description: resolveJobDescription(j, j.items, {
+      useItemFallback: isContainerCargoJobType(j.jobType),
+    }),
+    carrierName: j.carrierName ?? null,
+    voyage: j.voyage ?? null,
+    shipper: j.shipper ?? null,
 
     createdByUserId: j.createdByUserId ?? null,
     createdByName,
@@ -378,14 +393,24 @@ function toJobDto(j: any): JobDto {
     updatedAt: j.updatedAt,
 
     items:
-      j.items?.map((item: any) => ({
-        id: item.id,
-        itemCode: item.itemCode,
-        description: item.description ?? null,
-        sealNo: item.sealNo ?? null,
-        pickupReference: item.pickupReference ?? null,
-        qty: item.qty ?? null,
-      })) ?? [],
+      j.items?.map((item: any) => {
+        const containerStyle = isContainerCargoJobType(j.jobType);
+        const sealNo = item.sealNo ?? null;
+        return {
+          id: item.id,
+          tenantId: item.tenantId ?? j.tenantId,
+          jobId: item.jobId ?? j.id,
+          itemCode: item.itemCode,
+          // Container rows: description/pickupReference live on the job (with read fallback).
+          description: containerStyle ? null : (item.description ?? null),
+          sealNo,
+          sealNumber: sealNo,
+          pickupReference: containerStyle ? null : (item.pickupReference ?? null),
+          qty: item.qty ?? null,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        };
+      }) ?? [],
 
     documents: j.documents?.map((d: any) => toDocDto(d)) ?? [],
 
@@ -427,6 +452,7 @@ function toJobDto(j: any): JobDto {
         carrier: t.carrier ?? null,
         shipper: t.shipper ?? null,
         vessel: t.vessel ?? null,
+        driverRemarks: t.driverRemarks ?? null,
         originSummary: null,
         destinationSummary: null,
         origin: null,
@@ -2146,6 +2172,11 @@ export class OpsJobsService {
         collectionType,
         status: JobStatus.ONGOING,
         notes: dto.notes ?? null,
+        pickupReference: normalizeOptionalTrimmedText(dto.pickupReference),
+        description: normalizeOptionalTrimmedText(dto.description),
+        carrierName: normalizeOptionalTrimmedText(dto.carrierName),
+        voyage: normalizeOptionalTrimmedText(dto.voyage),
+        shipper: normalizeOptionalTrimmedText(dto.shipper),
         createdByUserId: actorUserId,
         pickupDate: pickupDateParsed,
         pickupAddress1:
@@ -2565,6 +2596,21 @@ export class OpsJobsService {
       data.customerCompanyId = dto.customerCompanyId;
     }
     if (dto.notes !== undefined) data.notes = dto.notes;
+    if (dto.pickupReference !== undefined) {
+      data.pickupReference = normalizeOptionalTrimmedText(dto.pickupReference);
+    }
+    if (dto.description !== undefined) {
+      data.description = normalizeOptionalTrimmedText(dto.description);
+    }
+    if (dto.carrierName !== undefined) {
+      data.carrierName = normalizeOptionalTrimmedText(dto.carrierName);
+    }
+    if (dto.voyage !== undefined) {
+      data.voyage = normalizeOptionalTrimmedText(dto.voyage);
+    }
+    if (dto.shipper !== undefined) {
+      data.shipper = normalizeOptionalTrimmedText(dto.shipper);
+    }
     if (dto.pickupDate !== undefined) {
       data.pickupDate = dto.pickupDate ? new Date(dto.pickupDate) : null;
     }
@@ -5340,6 +5386,7 @@ export class OpsJobsService {
       carrier: t.carrier ?? null,
       shipper: t.shipper ?? null,
       vessel: t.vessel ?? null,
+      driverRemarks: t.driverRemarks ?? null,
       jobSequence: t.jobSequence ?? null,
       tripSequence: t.tripSequence ?? t.jobSequence ?? null,
       jobTripTemplate: t.jobTripTemplate ?? null,
@@ -5863,6 +5910,9 @@ export class OpsJobsService {
             collectionType: true,
             status: true,
             notes: true,
+            pickupReference: true,
+            description: true,
+            pickupDate: true,
             receiverName: true,
             receiverPhone: true,
             pickupAddress1: true,
@@ -5875,6 +5925,9 @@ export class OpsJobsService {
             deliveryPostal: true,
             vesselName: true,
             vesselEta: true,
+            carrierName: true,
+            voyage: true,
+            shipper: true,
             returningDepotCode: true,
             createdAt: true,
             createdByUserId: true,
@@ -5989,18 +6042,30 @@ export class OpsJobsService {
         : routeOriginLabel || routeDestinationLabel || null;
     const cargoItems = Array.isArray(trip.job?.items) ? trip.job.items : [];
     const isContainerMode = isContainerCargoJobType(trip.job?.jobType);
+    const jobPickupReference = resolveJobPickupReference(
+      trip.job,
+      isContainerMode ? cargoItems : null,
+    );
+    const jobDescription = resolveJobDescription(trip.job, cargoItems, {
+      useItemFallback: isContainerMode,
+    });
     const cargo = isContainerMode
       ? {
           mode: "CONTAINER",
-          containers: cargoItems.map((item: any) => ({
-            id: item.id,
-            containerNumber: item.itemCode,
-            containerSize: null,
-            sealNo: item.sealNo ?? null,
-            pickupReference: item.pickupReference ?? null,
-            weight: null,
-            remarks: item.description ?? null,
-          })),
+          containers: cargoItems.map((item: any) => {
+            const sealNo = item.sealNo ?? null;
+            return {
+              id: item.id,
+              containerNumber: item.itemCode,
+              containerSize: null,
+              sealNo,
+              sealNumber: sealNo,
+              // Job-level field; do not duplicate on every container row.
+              pickupReference: null,
+              weight: null,
+              remarks: null,
+            };
+          }),
         }
       : {
           mode: "ITEMS",
@@ -6055,6 +6120,7 @@ export class OpsJobsService {
       shipper: trip.shipper ?? null,
       vessel: trip.vessel ?? null,
       plannedStartAt: trip.plannedStartAt ?? null,
+      driverRemarks: trip.driverRemarks ?? null,
       ...resolveTripNotesResponseFields(trip, trip.job),
       ...resolveTripRouteAddressResponseFields(trip),
       startedAt: trip.startedAt ?? null,
@@ -6071,6 +6137,9 @@ export class OpsJobsService {
             customerCompanyId: trip.job.customerCompanyId,
             customerCompanyName: trip.job.customerCompany?.name ?? null,
             notes: trip.job.notes ?? null,
+            pickupReference: jobPickupReference,
+            description: jobDescription,
+            pickupDate: trip.job.pickupDate ?? null,
             contactName: trip.job.receiverName ?? null,
             contactPhone: trip.job.receiverPhone ?? null,
             pickupAddress1: trip.job.pickupAddress1 ?? null,
@@ -6089,6 +6158,9 @@ export class OpsJobsService {
             deliveryLng: trip.destinationLng ?? null,
             vesselName: trip.job.vesselName ?? null,
             vesselEta: trip.job.vesselEta ?? null,
+            carrierName: trip.job.carrierName ?? null,
+            voyage: trip.job.voyage ?? null,
+            shipper: trip.job.shipper ?? null,
             returningDepotCode: trip.job.returningDepotCode ?? null,
             createdAt: trip.job.createdAt,
             createdByName:

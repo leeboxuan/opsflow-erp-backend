@@ -725,7 +725,7 @@ describe("workflow helpers", () => {
 });
 
 describe("trip completion document gaps", () => {
-  it("returns POD_PHOTO when photo documentation is missing", () => {
+  it("returns POD_PHOTO and container/seal photos when documentation is missing", () => {
     const missing = buildTripCompletionDocumentGaps([
       {
         type: TripDocumentType.DELIVERY_DO,
@@ -733,10 +733,14 @@ describe("trip completion document gaps", () => {
         isSigned: true,
       },
     ]);
-    expect(missing).toEqual(["POD_PHOTO"]);
+    expect(missing).toEqual([
+      "POD_PHOTO",
+      TripDocumentType.CONTAINER_PHOTO,
+      TripDocumentType.SEAL_PHOTO,
+    ]);
   });
 
-  it("accepts OTHER as satisfying photo documentation", () => {
+  it("accepts OTHER as satisfying photo documentation but still requires container/seal photos", () => {
     const missing = buildTripCompletionDocumentGaps([
       {
         type: TripDocumentType.OTHER,
@@ -749,7 +753,10 @@ describe("trip completion document gaps", () => {
         isSigned: true,
       },
     ]);
-    expect(missing).toEqual([]);
+    expect(missing).toEqual([
+      TripDocumentType.CONTAINER_PHOTO,
+      TripDocumentType.SEAL_PHOTO,
+    ]);
   });
 
   it("returns DELIVERY_DO when delivery DO is unsigned", () => {
@@ -760,12 +767,48 @@ describe("trip completion document gaps", () => {
         isSigned: false,
       },
       {
+        type: TripDocumentType.CONTAINER_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
+      {
+        type: TripDocumentType.SEAL_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
+      {
         type: TripDocumentType.DELIVERY_DO,
         signedAt: null,
         isSigned: false,
       },
     ]);
     expect(missing).toEqual([TripDocumentType.DELIVERY_DO]);
+  });
+
+  it("is complete when POD, container, seal, and signed DO are present", () => {
+    const missing = buildTripCompletionDocumentGaps([
+      {
+        type: TripDocumentType.POD_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
+      {
+        type: TripDocumentType.CONTAINER_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
+      {
+        type: TripDocumentType.SEAL_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: new Date(),
+        isSigned: true,
+      },
+    ]);
+    expect(missing).toEqual([]);
   });
 
   it("does not block completion for trailerParkingLocationCode alone", () => {

@@ -56,10 +56,23 @@ export function parseValidJobItemsFromInput(
       } else {
         qty = Math.max(1, Number(rawQty) || 1);
       }
+      const sealNo =
+        String(i?.sealNo ?? i?.sealNumber ?? "").trim() || null;
+      // Container-style jobs: pickup reference + description are job-level only.
+      // Do not persist per-item pickupReference/description on new writes.
+      if (containerStyle) {
+        return {
+          itemCode,
+          description: null,
+          sealNo,
+          pickupReference: null,
+          qty,
+        };
+      }
       return {
         itemCode,
         description: i?.description?.trim() || null,
-        sealNo: i?.sealNo?.trim() || null,
+        sealNo,
         pickupReference: i?.pickupReference?.trim() || null,
         qty,
       };

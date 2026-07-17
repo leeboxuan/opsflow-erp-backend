@@ -308,6 +308,8 @@ model Trip {
   trailerLastLocationCode String?
   /// Trip-specific ops/driver instructions (distinct from job-level notes).
   notes                   String?                   @db.Text
+  /// Driver-owned operational remarks (distinct from Job.description / Job.notes).
+  driverRemarks           String?                   @db.Text
   tripPICName             String?
   tripPICContact          String?
   containerNumber         String?
@@ -843,6 +845,10 @@ model Job {
   collectionType     CollectionType?
   status             JobStatus @default(ONGOING)
   notes              String?
+  /// Job-level pickup reference (container-style jobs). Prefer over JobItem.pickupReference.
+  pickupReference    String?
+  /// Job-level description (distinct from LCL item descriptions and Job.notes).
+  description        String?   @db.Text
   pickupDate         DateTime?
   pickupAddress1     String
   pickupAddress2     String?
@@ -892,6 +898,10 @@ model Job {
   psaStorageRentLastDay DateTime?
   vesselName       String?
   vesselEta        DateTime?
+  /// Optional shipping refs for all job types (IMPORT/EXPORT/COLLECTION/LCL).
+  carrierName      String?
+  voyage           String?
+  shipper          String?
   portnetReady     Boolean  @default(false)
   permitReady      Boolean  @default(false)
   returningDepotCode   String?
@@ -1541,6 +1551,10 @@ enum TripDocumentType {
   /// Handwritten signature image captured when signing Delivery DO.
   DELIVERY_SIGNATURE
   OTHER
+  /// Driver-uploaded container number photo (required before trip completion).
+  CONTAINER_PHOTO
+  /// Driver-uploaded seal number photo (required before trip completion).
+  SEAL_PHOTO
   /// legacy values kept for backward compatibility with existing rows
   SIGNATURE
   OFFLOADING

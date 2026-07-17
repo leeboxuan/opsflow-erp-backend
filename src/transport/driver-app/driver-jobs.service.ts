@@ -43,6 +43,18 @@ import {
   jobTripTemplateDisplayLabel,
 } from "../workflows/job-workflow.helpers";
 import {
+  resolveJobDescription,
+  resolveJobPickupReference,
+  normalizeOptionalTrimmedText,
+  resolveSealNoFromItemInput,
+} from "../jobs/job-field-resolution.helpers";
+import {
+  compareTripsByEffectiveSchedule,
+  evaluateTripStartDateGate,
+  tripStartDateGateErrorMessage,
+} from "./driver-trip-schedule.helpers";
+import { UpdateDriverOperationalDetailsDto } from "./dto/update-driver-operational-details.dto";
+import {
   evaluateJobInvoiceReadiness,
   syncJobInvoiceReadiness,
   type JobInvoiceSyncPrisma,
@@ -91,6 +103,8 @@ export const DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPES = [
   TripDocumentType.POD_PHOTO,
   TripDocumentType.POD_SIGNATURE,
   TripDocumentType.OTHER,
+  TripDocumentType.CONTAINER_PHOTO,
+  TripDocumentType.SEAL_PHOTO,
   TripDocumentType.TRAILER_START_PHOTO,
   TripDocumentType.TRAILER_END_PHOTO,
 ] as const;
@@ -103,6 +117,8 @@ const DRIVER_SINGLE_ACTIVE_TRIP_DOCUMENT_TYPES = new Set<TripDocumentType>([
   TripDocumentType.PICKUP_DO,
   TripDocumentType.DELIVERY_DO,
   TripDocumentType.POD_SIGNATURE,
+  TripDocumentType.CONTAINER_PHOTO,
+  TripDocumentType.SEAL_PHOTO,
   TripDocumentType.TRAILER_START_PHOTO,
   TripDocumentType.TRAILER_END_PHOTO,
 ]);
@@ -387,6 +403,8 @@ export class DriverJobsService {
     TripDocumentType.PICKUP_DO,
     TripDocumentType.POD_PHOTO,
     TripDocumentType.OTHER,
+    TripDocumentType.CONTAINER_PHOTO,
+    TripDocumentType.SEAL_PHOTO,
   ];
 
   private buildMissingTrailerCheckoutFields(
@@ -596,6 +614,9 @@ export class DriverJobsService {
               internalRef: true,
               jobType: true,
               notes: true,
+              pickupDate: true,
+              pickupReference: true,
+              description: true,
               pickupAddress1: true,
               pickupAddress2: true,
               pickupPostal: true,
@@ -609,17 +630,26 @@ export class DriverJobsService {
       }),
     ]);
 
-    const sorted = [...(trips ?? [])].sort((a: any, b: any) => {
-      const aSeq = a.tripSequence ?? a.jobSequence ?? null;
-      const bSeq = b.tripSequence ?? b.jobSequence ?? null;
-      if (aSeq != null && bSeq != null && aSeq !== bSeq) return aSeq - bSeq;
-      if (aSeq != null && bSeq == null) return -1;
-      if (aSeq == null && bSeq != null) return 1;
-      const aStart = a.plannedStartAt ? new Date(a.plannedStartAt).getTime() : Number.POSITIVE_INFINITY;
-      const bStart = b.plannedStartAt ? new Date(b.plannedStartAt).getTime() : Number.POSITIVE_INFINITY;
-      if (aStart !== bStart) return aStart - bStart;
-      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-    });
+    const sorted = [...(trips ?? [])].sort((a: any, b: any) =>
+      compareTripsByEffectiveSchedule(
+        {
+          id: a.id,
+          plannedStartAt: a.plannedStartAt,
+          jobPickupDate: a.job?.pickupDate,
+          tripSequence: a.tripSequence,
+          jobSequence: a.jobSequence,
+          createdAt: a.createdAt,
+        },
+        {
+          id: b.id,
+          plannedStartAt: b.plannedStartAt,
+          jobPickupDate: b.job?.pickupDate,
+          tripSequence: b.tripSequence,
+          jobSequence: b.jobSequence,
+          createdAt: b.createdAt,
+        },
+      ),
+    );
 
     const isCompleted = (s: TripStatus) => s === TripStatus.COMPLETED || s === TripStatus.DONE;
     const current = sorted.find((t: any) => t.status === TripStatus.ONGOING) ?? null;
@@ -692,6 +722,9 @@ export class DriverJobsService {
         carrier: t.carrier ?? null,
         shipper: t.shipper ?? null,
         vessel: t.vessel ?? null,
+        pickupDate: t.job?.pickupDate ?? null,
+        pickupReference: t.job?.pickupReference ?? null,
+        driverRemarks: t.driverRemarks ?? null,
         canStart,
         canContinue,
         canComplete,
@@ -1340,6 +1373,8 @@ export class DriverJobsService {
         id: true,
         internalRef: true,
         pickupDate: true,
+        pickupReference: true,
+        description: true,
         pickupAddress1: true,
         pickupAddress2: true,
         pickupPostal: true,
@@ -1400,11 +1435,30 @@ export class DriverJobsService {
     tenantId: string,
     driverUserId: string,
   ) {
-    return this.prisma.trip.findMany({
+    const trips = await this.prisma.trip.findMany({
       where: this.buildDriverHomeActiveTripsWhere(tenantId, driverUserId),
       include: this.driverHomeTripInclude,
-      orderBy: [{ plannedStartAt: "asc" }, { createdAt: "asc" }],
     });
+    return [...trips].sort((a: any, b: any) =>
+      compareTripsByEffectiveSchedule(
+        {
+          id: a.id,
+          plannedStartAt: a.plannedStartAt,
+          jobPickupDate: a.job?.pickupDate,
+          tripSequence: a.tripSequence,
+          jobSequence: a.jobSequence,
+          createdAt: a.createdAt,
+        },
+        {
+          id: b.id,
+          plannedStartAt: b.plannedStartAt,
+          jobPickupDate: b.job?.pickupDate,
+          tripSequence: b.tripSequence,
+          jobSequence: b.jobSequence,
+          createdAt: b.createdAt,
+        },
+      ),
+    );
   }
 
   private classifyOutsideTodayBucket(
@@ -1476,6 +1530,8 @@ export class DriverJobsService {
       status: t.status,
       pendingState: t.pendingState ?? TripPendingState.NONE,
       plannedStartAt: t.plannedStartAt ?? null,
+      pickupDate: j?.pickupDate ?? null,
+      pickupReference: j?.pickupReference ?? null,
       startedAt: t.startedAt ?? null,
       originSummary: exec.originSummary,
       destinationSummary: exec.destinationSummary,
@@ -1484,6 +1540,7 @@ export class DriverJobsService {
       deliveryAddress1: exec.deliveryAddress1,
       deliveryPostal: exec.deliveryPostal,
       trailerNumber: t.trailerNumber ?? null,
+      driverRemarks: t.driverRemarks ?? null,
       driverEarningCents: resolveDriverTripEarningCents(t),
       driverEarningCurrency: DEFAULT_DRIVER_EARNING_CURRENCY,
     };
@@ -2163,6 +2220,16 @@ export class DriverJobsService {
       throw new BadRequestException("Trip already started");
     }
 
+    const tz = await this.getTenantTimeZone(tenantId);
+    const startGate = evaluateTripStartDateGate({
+      plannedStartAt: trip.plannedStartAt ?? null,
+      jobPickupDate: (job as { pickupDate?: Date | null }).pickupDate ?? null,
+      timeZone: tz,
+    });
+    if (startGate.allowed === false) {
+      throw new BadRequestException(tripStartDateGateErrorMessage(startGate));
+    }
+
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
     const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/trailer-start/${Date.now()}${ext}`;
 
@@ -2627,6 +2694,8 @@ export class DriverJobsService {
             TripDocumentType.POD_PHOTO,
             TripDocumentType.POD_SIGNATURE,
             TripDocumentType.OTHER,
+            TripDocumentType.CONTAINER_PHOTO,
+            TripDocumentType.SEAL_PHOTO,
             TripDocumentType.TRAILER_PARKING_PHOTO,
             TripDocumentType.TRAILER_START_PHOTO,
             TripDocumentType.TRAILER_END_PHOTO,
@@ -2711,6 +2780,16 @@ export class DriverJobsService {
     const trailerStartPhotoUrl: string | null = null;
     const trailerEndPhotoUrl: string | null = null;
 
+    const cargoItems = trip.job?.items ?? [];
+    const isContainerMode = isContainerCargoJobType(trip.job?.jobType);
+    const jobPickupReference = resolveJobPickupReference(
+      trip.job,
+      isContainerMode ? cargoItems : null,
+    );
+    const jobDescription = resolveJobDescription(trip.job, cargoItems, {
+      useItemFallback: isContainerMode,
+    });
+
     return {
       id: trip.id,
       jobId: trip.jobId,
@@ -2729,6 +2808,7 @@ export class DriverJobsService {
       vessel: trip.vessel ?? null,
       status: trip.status,
       plannedStartAt: trip.plannedStartAt ?? null,
+      driverRemarks: trip.driverRemarks ?? null,
       ...resolveTripNotesResponseFields(trip, trip.job),
       ...resolveTripRouteAddressResponseFields(trip),
       jobSequence: trip.jobSequence ?? null,
@@ -2756,6 +2836,14 @@ export class DriverJobsService {
             customerName: trip.job.customerCompany?.name ?? null,
             notes: trip.job.notes ?? null,
             jobNotes: trip.job.notes ?? null,
+            pickupDate: trip.job.pickupDate ?? null,
+            pickupReference: jobPickupReference,
+            description: jobDescription,
+            vesselName: (trip.job as any).vesselName ?? null,
+            vesselEta: (trip.job as any).vesselEta ?? null,
+            carrierName: (trip.job as any).carrierName ?? null,
+            voyage: (trip.job as any).voyage ?? null,
+            shipper: (trip.job as any).shipper ?? null,
           }
         : null,
 
@@ -2783,19 +2871,22 @@ export class DriverJobsService {
       })),
 
       cargo: (() => {
-        const cargoItems = trip.job?.items ?? [];
-        if (isContainerCargoJobType(trip.job?.jobType)) {
+        if (isContainerMode) {
           return {
             mode: "CONTAINER",
-            containers: cargoItems.map((item: any) => ({
-              id: item.id,
-              containerNumber: item.itemCode,
-              containerSize: null,
-              sealNo: item.sealNo ?? null,
-              pickupReference: item.pickupReference ?? null,
-              weight: null,
-              remarks: item.description ?? null,
-            })),
+            containers: cargoItems.map((item: any) => {
+              const sealNo = item.sealNo ?? null;
+              return {
+                id: item.id,
+                containerNumber: item.itemCode,
+                containerSize: null,
+                sealNo,
+                sealNumber: sealNo,
+                pickupReference: null,
+                weight: null,
+                remarks: null,
+              };
+            }),
           };
         }
         return {
@@ -2832,6 +2923,169 @@ export class DriverJobsService {
         closedAt: trip.closedAt ?? null,
       },
     };
+  }
+
+  async updateOperationalDetails(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    driverUserId: string,
+    dto: UpdateDriverOperationalDetailsDto,
+  ): Promise<any> {
+    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
+    const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
+    if (trip.assignedDriverUserId !== driverUserId) {
+      throw new BadRequestException("You are not assigned to this trip");
+    }
+    if (
+      trip.status !== TripStatus.PUBLISHED
+      && trip.status !== TripStatus.ONGOING
+    ) {
+      throw new BadRequestException(
+        "Operational details can only be edited while the trip is PUBLISHED or ONGOING",
+      );
+    }
+
+    const containers = dto.containers ?? [];
+    const changedFields: string[] = [];
+    const itemUpdates: Array<{
+      itemId: string;
+      previousContainerNumber: string;
+      containerNumber?: string | null;
+      sealNo?: string | null;
+    }> = [];
+
+    if (containers.length > 0) {
+      const itemIds = containers.map((c) => String(c.itemId ?? "").trim()).filter(Boolean);
+      if (itemIds.length !== containers.length) {
+        throw new BadRequestException("Each container update requires itemId");
+      }
+      const uniqueIds = new Set(itemIds);
+      if (uniqueIds.size !== itemIds.length) {
+        throw new BadRequestException("Duplicate itemId in containers payload");
+      }
+
+      const jobItems = await this.prisma.jobItem.findMany({
+        where: { tenantId, jobId, id: { in: itemIds } },
+        select: { id: true, itemCode: true, sealNo: true },
+      });
+      if (jobItems.length !== itemIds.length) {
+        throw new BadRequestException(
+          "One or more container itemIds do not belong to this job",
+        );
+      }
+      const itemsById = new Map<string, { id: string; itemCode: string; sealNo: string | null }>(
+        jobItems.map((i) => [i.id, i]),
+      );
+
+      for (const row of containers) {
+        const itemId = String(row.itemId).trim();
+        const existing = itemsById.get(itemId);
+        if (!existing) {
+          throw new BadRequestException(
+            "One or more container itemIds do not belong to this job",
+          );
+        }
+        const next: {
+          itemId: string;
+          previousContainerNumber: string;
+          containerNumber?: string | null;
+          sealNo?: string | null;
+        } = {
+          itemId,
+          previousContainerNumber: existing.itemCode,
+        };
+        if (row.containerNumber !== undefined) {
+          const containerNumber = normalizeOptionalTrimmedText(row.containerNumber);
+          if (!containerNumber) {
+            throw new BadRequestException("containerNumber cannot be empty");
+          }
+          next.containerNumber = containerNumber;
+          changedFields.push("containerNumber");
+        }
+        if (row.sealNumber !== undefined || row.sealNo !== undefined) {
+          next.sealNo = resolveSealNoFromItemInput({
+            sealNo: row.sealNo,
+            sealNumber: row.sealNumber,
+          });
+          changedFields.push("sealNumber");
+        }
+        if (next.containerNumber !== undefined || next.sealNo !== undefined) {
+          itemUpdates.push(next);
+        }
+      }
+    }
+
+    let driverRemarksValue: string | null | undefined;
+    if (dto.driverRemarks !== undefined) {
+      driverRemarksValue = normalizeOptionalTrimmedText(dto.driverRemarks);
+      changedFields.push("driverRemarks");
+    }
+
+    if (!changedFields.length) {
+      return this.getTripDetailForDriver(tenantId, tripId, driverUserId);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const update of itemUpdates) {
+        const data: { itemCode?: string; sealNo?: string | null } = {};
+        if (update.containerNumber !== undefined) {
+          data.itemCode = update.containerNumber!;
+        }
+        if (update.sealNo !== undefined) {
+          data.sealNo = update.sealNo;
+        }
+        await tx.jobItem.update({
+          where: { id: update.itemId },
+          data,
+        });
+
+        // Preserve 1:1 trip.containerNumber when it matched the previous item code.
+        if (
+          update.containerNumber !== undefined
+          && trip.containerNumber === update.previousContainerNumber
+        ) {
+          await tx.trip.update({
+            where: { id: tripId },
+            data: { containerNumber: update.containerNumber },
+          });
+        }
+      }
+
+      if (driverRemarksValue !== undefined) {
+        await tx.trip.update({
+          where: { id: tripId },
+          data: { driverRemarks: driverRemarksValue },
+        });
+      }
+    });
+
+    await this.audit.log(
+      tenantId,
+      "TRIP_OPERATIONAL_DETAILS_UPDATE",
+      "TRIP",
+      tripId,
+      {
+        jobId,
+        changedFields: [...new Set(changedFields)],
+        containers: itemUpdates.map((u) => ({
+          itemId: u.itemId,
+          containerNumber: u.containerNumber,
+          sealNumber: u.sealNo,
+        })),
+        driverRemarks: driverRemarksValue,
+      },
+      driverUserId,
+    );
+
+    rt.publishTripEvent(this.realtime, "trip.updated", tenantId, jobId, tripId, {
+      driverUserId,
+      actorUserId: driverUserId,
+      actorRole: Role.DRIVER,
+      tripStatus: trip.status as TripStatus,
+    });
+
+    return this.getTripDetailForDriver(tenantId, tripId, driverUserId);
   }
 
   async uploadTripDocumentForDriver(

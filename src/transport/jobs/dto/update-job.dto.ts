@@ -23,17 +23,29 @@ export class UpdateJobItemDto {
   @IsString()
   containerNumber?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: "Seal number (persisted as sealNo)" })
   @IsOptional()
   @IsString()
   sealNo?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: "API alias for sealNo" })
+  @IsOptional()
+  @IsString()
+  sealNumber?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Deprecated for container-style jobs: use job-level pickupReference. Ignored on IMPORT/EXPORT/COLLECTION writes.",
+    deprecated: true,
+  })
   @IsOptional()
   @IsString()
   pickupReference?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      "LCL item description. Ignored on container-style job writes (use job-level description).",
+  })
   @IsOptional()
   @IsString()
   description?: string;
@@ -67,6 +79,46 @@ export class UpdateJobDto {
   @IsOptional()
   @IsDateString()
   pickupDate?: string;
+
+  @ApiPropertyOptional({
+    description: "Job-level pickup reference",
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  pickupReference?: string | null;
+
+  @ApiPropertyOptional({
+    description: "Job-level description (distinct from LCL item descriptions)",
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  description?: string | null;
+
+  @ApiPropertyOptional({
+    description: "Carrier name (all job types)",
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  carrierName?: string | null;
+
+  @ApiPropertyOptional({
+    description: "Voyage (all job types)",
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  voyage?: string | null;
+
+  @ApiPropertyOptional({
+    description: "Shipper (all job types)",
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  shipper?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()
