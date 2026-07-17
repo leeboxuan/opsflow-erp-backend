@@ -47,6 +47,7 @@ import {
 import { UpdateWarehouseJobExecutionDto } from './dto/update-warehouse-job-execution.dto';
 import { CreateWarehouseJobCargoLineDto } from './dto/create-warehouse-job-cargo-line.dto';
 import { UpdateWarehouseJobCargoLineDto } from './dto/update-warehouse-job-cargo-line.dto';
+import { ListWarehousingUsersQueryDto } from './dto/list-warehousing-users-query.dto';
 import { WarehouseJobCargoLinesService } from './warehouse-job-cargo-lines.service';
 
 const READ_ROLES = [Role.ADMIN, Role.OPS, Role.FINANCE, Role.WAREHOUSE];
@@ -75,6 +76,19 @@ export class WarehouseJobsController {
     const tenantId = req.tenant.tenantId;
     const actorUserId = req.user?.userId as string | undefined;
     return this.warehouseJobsService.create(tenantId, dto, actorUserId);
+  }
+
+  @Get('warehousing-users')
+  @Roles(...MUTATE_ROLES)
+  @ApiOperation({
+    summary: 'List OPS and WAREHOUSE tenant users for warehousing user management',
+  })
+  async listWarehousingUsers(
+    @Request() req: any,
+    @Query() query: ListWarehousingUsersQueryDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    return this.warehouseJobsService.listWarehousingUsers(tenantId, query);
   }
 
   @Get()

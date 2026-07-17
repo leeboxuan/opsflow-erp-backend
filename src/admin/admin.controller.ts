@@ -33,6 +33,7 @@ import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { UserDto } from "./dto/user.dto";
 import { AdminListQueryDto } from "./dto/list-query.dto";
+import { parseTenantRoleFilter } from "./admin-users.util";
 import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
 
 @ApiTags("admin")
@@ -76,6 +77,11 @@ export class AdminController {
       suspended: { status: MembershipStatus.Suspended },
     });
 
+    const roleFilter = parseTenantRoleFilter(query.role, query.roles);
+    if (roleFilter?.length) {
+      where.role = { in: roleFilter };
+    }
+
     let orderBy: any;
     if (query.sortBy === "name" || query.sortBy === "email") {
       orderBy = { user: { [query.sortBy]: query.sortDir === "desc" ? "desc" : "asc" } };
@@ -103,6 +109,7 @@ export class AdminController {
       id: m.user.id,
       email: m.user.email,
       name: m.user.name,
+      phone: m.user.phone,
       role: m.role,
       status: m.status,
       membershipId: m.id,
@@ -113,124 +120,121 @@ export class AdminController {
     return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
-  // @Post("users")
-  // @ApiOperation({ summary: "Create/invite a web user (Admin/Ops only)" })
-  // async createUser(@Request() req: any, @Body() dto: CreateUserDto): Promise<UserDto> {
-  //   const tenantId = req.tenant.tenantId;
+  @Post("users")
+  @ApiOperation({ summary: "Create/invite a web user (Admin/Ops only)" })
+  async createUser(@Request() req: any, @Body() dto: CreateUserDto): Promise<UserDto> {
+    const tenantId = req.tenant.tenantId;
 
-  //   if (dto.role === Role.DRIVER) {
-  //     throw new BadRequestException("Use /admin/drivers to create drivers");
-  //   }
+    if (dto.role === Role.DRIVER) {
+      throw new BadRequestException("Use /admin/drivers to create drivers");
+    }
 
-  //   const normalizeCompanyName = (name: string) =>
-  //     String(name ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+    const normalizeCompanyName = (name: string) =>
+      String(name ?? "").trim().replace(/\s+/g, " ").toLowerCase();
 
-  //   const normalizeEmail = (email: string) =>
-  //     String(email ?? "").trim().toLowerCase();
+    const normalizeEmail = (email: string) =>
+      String(email ?? "").trim().toLowerCase();
 
-  //   const result = await this.prisma.$transaction(async (tx) => {
-  //     // 1) Upsert internal user (public.users)
-  //     const user = await tx.user.upsert({
-  //       where: { email: dto.email },
-  //       update: { name: dto.name ?? undefined },
-  //       create: { email: dto.email, name: dto.name ?? null },
-  //     });
+    const result = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.upsert({
+        where: { email: dto.email },
+        update: { name: dto.name ?? undefined },
+        create: { email: dto.email, name: dto.name ?? null },
+      });
 
-  //     // 2) If CUSTOMER, create/upsert customer company + contact, then link to user
-  //     if (dto.role === Role.CUSTOMER) {
-  //       const companyName = String(dto.customerCompanyName ?? "").trim();
-  //       if (!companyName) {
-  //         throw new BadRequestException("customerCompanyName is required for CUSTOMER users");
-  //       }
+      if (dto.role === Role.CUSTOMER) {
+        const companyName = String(dto.customerCompanyName ?? "").trim();
+        if (!companyName) {
+          throw new BadRequestException("customerCompanyName is required for CUSTOMER users");
+        }
 
-  //       const contactName = String(dto.customerContactName ?? dto.name ?? "").trim() || "Customer";
-  //       const contactEmail = normalizeEmail(dto.customerContactEmail ?? dto.email);
+        const contactName = String(dto.customerContactName ?? dto.name ?? "").trim() || "Customer";
+        const contactEmail = normalizeEmail(dto.customerContactEmail ?? dto.email);
 
-  //       const company = await tx.customer_companies.upsert({
-  //         where: {
-  //           tenantId_normalizedName: {
-  //             tenantId,
-  //             normalizedName: normalizeCompanyName(companyName),
-  //           },
-  //         },
-  //         update: {
-  //           name: companyName,
-  //         },
-  //         create: {
-  //           tenantId,
-  //           name: companyName,
-  //           normalizedName: normalizeCompanyName(companyName),
-  //         },
-  //         select: { id: true },
-  //       });
+        const company = await tx.customer_companies.upsert({
+          where: {
+            tenantId_normalizedName: {
+              tenantId,
+              normalizedName: normalizeCompanyName(companyName),
+            },
+          },
+          update: {
+            name: companyName,
+          },
+          create: {
+            tenantId,
+            name: companyName,
+            normalizedName: normalizeCompanyName(companyName),
+          },
+          select: { id: true },
+        });
 
-  //       const contact = await tx.customer_contacts.upsert({
-  //         where: {
-  //           companyId_normalizedEmail: {
-  //             companyId: company.id,
-  //             normalizedEmail: contactEmail,
-  //           },
-  //         },
-  //         update: {
-  //           name: contactName,
-  //           email: contactEmail,
-  //         },
-  //         create: {
-  //           companyId: company.id,
-  //           name: contactName,
-  //           email: contactEmail,
-  //           normalizedEmail: contactEmail,
-  //         },
-  //         select: { id: true },
-  //       });
+        const contact = await tx.customer_contacts.upsert({
+          where: {
+            companyId_normalizedEmail: {
+              companyId: company.id,
+              normalizedEmail: contactEmail,
+            },
+          },
+          update: {
+            name: contactName,
+            email: contactEmail,
+          },
+          create: {
+            companyId: company.id,
+            name: contactName,
+            email: contactEmail,
+            normalizedEmail: contactEmail,
+          },
+          select: { id: true },
+        });
 
-  //       await tx.user.update({
-  //         where: { id: user.id },
-  //         data: {
-  //           customerCompanyId: company.id,
-  //           customerContactId: contact.id,
-  //         },
-  //       });
-  //     }
+        await tx.user.update({
+          where: { id: user.id },
+          data: {
+            customerCompanyId: company.id,
+            customerContactId: contact.id,
+          },
+        });
+      }
 
-  //     // 3) Upsert membership for this tenant
-  //     const membership = await tx.tenantMembership.upsert({
-  //       where: { tenantId_userId: { tenantId, userId: user.id } },
-  //       update: {
-  //         role: dto.role,
-  //         status: dto.sendInvite === false ? "Active" : "Invited",
-  //       },
-  //       create: {
-  //         tenantId,
-  //         userId: user.id,
-  //         role: dto.role,
-  //         status: dto.sendInvite === false ? "Active" : "Invited",
-  //       },
-  //     });
+      const membership = await tx.tenantMembership.upsert({
+        where: { tenantId_userId: { tenantId, userId: user.id } },
+        update: {
+          role: dto.role,
+          status: dto.sendInvite === false ? "Active" : "Invited",
+        },
+        create: {
+          tenantId,
+          userId: user.id,
+          role: dto.role,
+          status: dto.sendInvite === false ? "Active" : "Invited",
+        },
+      });
 
-  //     return { user, membership };
-  //   });
+      return { user, membership };
+    });
 
-  //   // 4) Invite/create Supabase Auth user (outside tx)
-  //   if (dto.sendInvite !== false) {
-  //     const supabase = this.supabaseService.getClient();
-  //     const { error } = await supabase.auth.admin.inviteUserByEmail(dto.email);
-  //     if (error) {
-  //       throw new BadRequestException(`Supabase invite failed: ${error.message}`);
-  //     }
-  //   }
+    if (dto.sendInvite !== false) {
+      const supabase = this.supabaseService.getClient();
+      const { error } = await supabase.auth.admin.inviteUserByEmail(dto.email);
+      if (error) {
+        throw new BadRequestException(`Supabase invite failed: ${error.message}`);
+      }
+    }
 
-  //   return {
-  //     id: result.user.id,
-  //     email: result.user.email,
-  //     name: result.user.name,
-  //     role: result.membership.role,
-  //     status: result.membership.status,
-  //     membershipId: result.membership.id,
-  //     createdAt: result.user.createdAt,
-  //     updatedAt: result.user.updatedAt,
-  //   };
-  // }
+    return {
+      id: result.user.id,
+      email: result.user.email,
+      name: result.user.name,
+      phone: result.user.phone,
+      role: result.membership.role,
+      status: result.membership.status,
+      membershipId: result.membership.id,
+      createdAt: result.user.createdAt,
+      updatedAt: result.user.updatedAt,
+    };
+  }
 
   @Patch("users/:userId")
   @ApiOperation({ summary: "Update web user (Admin/Ops only)" })
@@ -271,6 +275,7 @@ export class AdminController {
       id: user.id,
       email: user.email,
       name: user.name,
+      phone: user.phone,
       role: updatedMembership.role,
       status: updatedMembership.status,
       membershipId: updatedMembership.id,

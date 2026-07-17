@@ -85,6 +85,34 @@ describe("AuthController getMe", () => {
     ]);
   });
 
+  it("returns WAREHOUSE tenant membership in getMe", async () => {
+    const { controller } = makeController({
+      tenantMembership: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            tenantId: "t1",
+            role: "WAREHOUSE",
+            status: "Active",
+            tenant: { id: "t1", name: "Tenant One" },
+            createdAt: new Date("2026-05-08T00:00:00.000Z"),
+          },
+        ]),
+        findFirst: jest.fn().mockResolvedValue({
+          id: "m1",
+          status: "Active",
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    });
+    const res = await controller.getMe({
+      user: { sub: "auth-u1", email: "warehouse@example.com" },
+    } as any);
+
+    expect(res.tenantMemberships).toEqual([
+      expect.objectContaining({ role: "WAREHOUSE", status: "Active" }),
+    ]);
+  });
+
   it("returns avatarUrl when avatarKey exists", async () => {
     const { controller, createSignedUrl } = makeController();
     const res = await controller.getMe({

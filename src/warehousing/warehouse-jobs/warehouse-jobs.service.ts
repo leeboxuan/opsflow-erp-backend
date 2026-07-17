@@ -7,6 +7,7 @@ import {
 import {
   Prisma,
   Role,
+  MembershipStatus,
   WarehouseJobEventType,
   WarehouseJobPriority,
   WarehouseJobStatus,
@@ -23,6 +24,7 @@ import { WarehouseJobDeliveryOrderService } from './warehouse-job-delivery-order
 import { CreateWarehouseJobDto } from './dto/create-warehouse-job.dto';
 import { UpdateWarehouseJobDto } from './dto/update-warehouse-job.dto';
 import { ListWarehouseJobsQueryDto } from './dto/list-warehouse-jobs-query.dto';
+import { ListWarehousingUsersQueryDto } from './dto/list-warehousing-users-query.dto';
 import { UpdateWarehouseJobExecutionDto } from './dto/update-warehouse-job-execution.dto';
 import {
   assertJobAllowsExecutionUpdate,
@@ -31,6 +33,12 @@ import {
   isOpsLikeRole,
   WarehouseJobAccessRef,
 } from './warehouse-job-access';
+import {
+  WAREHOUSE_ASSIGNMENT_VALIDATION_MESSAGE,
+  WAREHOUSE_JOB_ASSIGNABLE_ROLES,
+  WAREHOUSING_USER_ROLES,
+} from './warehouse-job-assignment';
+import { applyMappedFilter } from '../../shared/common/listing/listing.filters';
 
 const UPDATABLE_STATUSES = new Set<WarehouseJobStatus>([
   WarehouseJobStatus.DRAFT,
@@ -248,6 +256,73 @@ export class WarehouseJobsService {
         pendingReviewDocumentCount: counts.pendingReviewDocuments,
       };
     });
+
+    return { data, meta: buildPaginationMeta(page, pageSize, total) };
+  }
+
+  async listWarehousingUsers(
+    tenantId: string,
+    query: ListWarehousingUsersQueryDto,
+  ) {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
+
+    const where: Prisma.TenantMembershipWhereInput = {
+      tenantId,
+      role: { in: [...WAREHOUSING_USER_ROLES] },
+    };
+
+    const searchTerm = query.q?.trim();
+    if (searchTerm) {
+      where.user = {
+        OR: [
+          { name: { contains: searchTerm, mode: 'insensitive' } },
+          { email: { contains: searchTerm, mode: 'insensitive' } },
+        ],
+      };
+    }
+
+    applyMappedFilter(where, query.filter, {
+      active: { status: MembershipStatus.Active },
+      invited: { status: MembershipStatus.Invited },
+      suspended: { status: MembershipStatus.Suspended },
+    });
+
+    const orderBy =
+      query.sortBy === 'name' || query.sortBy === 'email'
+        ? {
+            user: {
+              [query.sortBy]: query.sortDir === 'desc' ? 'desc' : 'asc',
+            },
+          }
+        : buildOrderBy(
+            query.sortBy,
+            query.sortDir,
+            ['createdAt', 'updatedAt'],
+            { createdAt: 'desc' },
+          );
+
+    const [total, memberships] = await this.prisma.$transaction([
+      this.prisma.tenantMembership.count({ where }),
+      this.prisma.tenantMembership.findMany({
+        where,
+        include: { user: true },
+        orderBy: orderBy as Prisma.TenantMembershipOrderByWithRelationInput,
+        skip,
+        take,
+      }),
+    ]);
+
+    const data = memberships.map((membership) => ({
+      id: membership.user.id,
+      email: membership.user.email,
+      name: membership.user.name,
+      phone: membership.user.phone,
+      role: membership.role,
+      status: membership.status,
+      membershipId: membership.id,
+      createdAt: membership.user.createdAt,
+      updatedAt: membership.user.updatedAt,
+    }));
 
     return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
@@ -608,16 +683,17 @@ export class WarehouseJobsService {
   ) {
     if (!assignedToUserId) return;
 
-    const user = await this.prisma.user.findFirst({
+    const membership = await this.prisma.tenantMembership.findFirst({
       where: {
-        id: assignedToUserId,
-        memberships: { some: { tenantId } },
+        tenantId,
+        userId: assignedToUserId,
+        status: MembershipStatus.Active,
       },
-      select: { id: true },
+      select: { role: true },
     });
 
-    if (!user) {
-      throw new BadRequestException('Assigned user not found in this tenant');
+    if (!membership || !WAREHOUSE_JOB_ASSIGNABLE_ROLES.has(membership.role)) {
+      throw new BadRequestException(WAREHOUSE_ASSIGNMENT_VALIDATION_MESSAGE);
     }
   }
 }

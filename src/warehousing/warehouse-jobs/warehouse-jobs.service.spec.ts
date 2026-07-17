@@ -5,6 +5,7 @@ import {
   WarehouseJobStatus,
   WarehouseJobType,
   Role,
+  MembershipStatus,
 } from '@prisma/client';
 import { WarehouseJobEventsService } from './warehouse-job-events.service';
 import { WarehouseJobLifecycleService } from './warehouse-job-lifecycle.service';
@@ -88,6 +89,11 @@ describe('WarehouseJobsService', () => {
       },
       user: {
         findFirst: jest.fn().mockResolvedValue({ id: 'user-2' }),
+      },
+      tenantMembership: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue({ role: Role.WAREHOUSE }),
       },
     };
 
@@ -487,6 +493,102 @@ describe('WarehouseJobsService', () => {
           Role.WAREHOUSE,
         ),
       ).resolves.toBeDefined();
+    });
+  });
+
+  describe('assignedToUserId validation', () => {
+    it('accepts WAREHOUSE assignee on create', async () => {
+      const { service, tx, prisma } = makeService();
+      prisma.tenantMembership.findFirst.mockResolvedValue({ role: Role.WAREHOUSE });
+      tx.warehouseJob.create.mockResolvedValue(makeJob({ assignedToUserId: 'user-wh' }));
+
+      await service.create(
+        tenantId,
+        {
+          type: WarehouseJobType.STUFFING,
+          title: 'Stuffing',
+          assignedToUserId: 'user-wh',
+        },
+        actorUserId,
+      );
+
+      expect(prisma.tenantMembership.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            tenantId,
+            userId: 'user-wh',
+            status: MembershipStatus.Active,
+          }),
+        }),
+      );
+    });
+
+    it('accepts OPS and ADMIN assignees on update', async () => {
+      const { service, prisma, tx } = makeService();
+      prisma.warehouseJob.findFirst.mockResolvedValue(makeJob());
+      prisma.tenantMembership.findFirst.mockResolvedValue({ role: Role.OPS });
+      tx.warehouseJob.update.mockResolvedValue(makeJob({ assignedToUserId: 'user-ops' }));
+
+      await service.update(tenantId, jobId, { assignedToUserId: 'user-ops' }, actorUserId);
+
+      prisma.tenantMembership.findFirst.mockResolvedValue({ role: Role.ADMIN });
+      tx.warehouseJob.update.mockResolvedValue(makeJob({ assignedToUserId: 'user-admin' }));
+      await service.update(tenantId, jobId, { assignedToUserId: 'user-admin' }, actorUserId);
+    });
+
+    it.each([Role.DRIVER, Role.CUSTOMER, Role.FINANCE])(
+      'rejects %s assignee',
+      async (role) => {
+        const { service, tx, prisma } = makeService();
+        prisma.tenantMembership.findFirst.mockResolvedValue({ role });
+
+        await expect(
+          service.create(
+            tenantId,
+            {
+              type: WarehouseJobType.STUFFING,
+              title: 'Stuffing',
+              assignedToUserId: 'user-bad',
+            },
+            actorUserId,
+          ),
+        ).rejects.toThrow('Assigned user must be a warehouse, ops, or admin user.');
+        expect(tx.warehouseJob.create).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  describe('listWarehousingUsers', () => {
+    it('returns only OPS and WAREHOUSE memberships', async () => {
+      const { service, prisma } = makeService();
+      prisma.tenantMembership.count.mockResolvedValue(1);
+      prisma.tenantMembership.findMany.mockResolvedValue([
+        {
+          id: 'm-wh',
+          role: Role.WAREHOUSE,
+          status: MembershipStatus.Active,
+          user: {
+            id: 'u-wh',
+            email: 'wh@example.com',
+            name: 'Warehouse',
+            phone: null,
+            createdAt: new Date('2026-07-01T00:00:00.000Z'),
+            updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+          },
+        },
+      ]);
+
+      const result = await service.listWarehousingUsers(tenantId, { page: 1, pageSize: 25 });
+
+      expect(prisma.tenantMembership.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            tenantId,
+            role: { in: [Role.OPS, Role.WAREHOUSE] },
+          }),
+        }),
+      );
+      expect(result.data[0]?.role).toBe(Role.WAREHOUSE);
     });
   });
 });
