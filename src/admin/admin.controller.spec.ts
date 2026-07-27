@@ -130,7 +130,7 @@ describe('AdminController users', () => {
     );
   });
 
-  it('creates transport-staff user but stores OPS during compatibility window', async () => {
+  it('creates transport-staff user and stores TRANSPORT_STAFF', async () => {
     const { controller, prisma } = makeController();
 
     prisma.user.upsert.mockResolvedValue({
@@ -143,7 +143,7 @@ describe('AdminController users', () => {
     });
     prisma.tenantMembership.upsert.mockResolvedValue({
       id: 'm-ops',
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
       status: MembershipStatus.Invited,
     });
 
@@ -156,11 +156,11 @@ describe('AdminController users', () => {
       },
     );
 
-    expect(result.role).toBe(Role.OPS);
+    expect(result.role).toBe(Role.TRANSPORT_STAFF);
     expect(prisma.tenantMembership.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        create: expect.objectContaining({ role: Role.OPS }),
-        update: expect.objectContaining({ role: Role.OPS }),
+        create: expect.objectContaining({ role: Role.TRANSPORT_STAFF }),
+        update: expect.objectContaining({ role: Role.TRANSPORT_STAFF }),
       }),
     );
   });

@@ -31,7 +31,7 @@ export const TRANSPORT_STAFF_COMPAT_ROLES: readonly Role[] = [
  *
  * Until then, transport-staff memberships must continue to be stored as OPS.
  */
-export const STORE_TRANSPORT_STAFF_AS_CANONICAL = false;
+export const STORE_TRANSPORT_STAFF_AS_CANONICAL = true;
 
 export function isTransportStaffRole(
   role: Role | string | null | undefined,

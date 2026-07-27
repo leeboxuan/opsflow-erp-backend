@@ -31,10 +31,10 @@ describe('role-compat', () => {
     ).toBe(false);
   });
 
-  it('persists transport staff as OPS while canonical writes are disabled', () => {
-    expect(STORE_TRANSPORT_STAFF_AS_CANONICAL).toBe(false);
-    expect(toPersistedMembershipRole(Role.TRANSPORT_STAFF)).toBe(Role.OPS);
-    expect(toPersistedMembershipRole(Role.OPS)).toBe(Role.OPS);
+  it('persists transport staff as TRANSPORT_STAFF when canonical writes are enabled', () => {
+    expect(STORE_TRANSPORT_STAFF_AS_CANONICAL).toBe(true);
+    expect(toPersistedMembershipRole(Role.TRANSPORT_STAFF)).toBe(Role.TRANSPORT_STAFF);
+    expect(toPersistedMembershipRole(Role.OPS)).toBe(Role.TRANSPORT_STAFF);
     expect(toPersistedMembershipRole(Role.WAREHOUSE)).toBe(Role.WAREHOUSE);
     expect(toPersistedMembershipRole(Role.ADMIN)).toBe(Role.ADMIN);
     expect(toPersistedMembershipRole(Role.FINANCE)).toBe(Role.FINANCE);
