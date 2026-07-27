@@ -152,6 +152,19 @@ export class WarehouseJobLifecycleService {
   }
 
   async start(tenantId: string, id: string, actorUserId?: string) {
+    const existing = await this.prisma.warehouseJob.findFirst({
+      where: { id, tenantId },
+      include: warehouseJobDetailInclude,
+    });
+
+    if (!existing) {
+      throw new NotFoundException('Warehouse job not found');
+    }
+
+    if (existing.status === WarehouseJobStatus.IN_PROGRESS) {
+      return existing;
+    }
+
     return this.transition(
       tenantId,
       id,

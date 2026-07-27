@@ -129,18 +129,6 @@ export function computeWarehouseJobReadiness(
       message: 'No documents have been uploaded.',
     });
   }
-  if (pendingReviewDocuments > 0) {
-    blockers.push({
-      code: 'PENDING_DOCUMENT_REVIEW',
-      message: 'Some documents are still pending review.',
-    });
-  }
-  if (hasRejectedDocuments) {
-    blockers.push({
-      code: 'REJECTED_DOCUMENTS',
-      message: 'Some documents were rejected.',
-    });
-  }
   if (!hasExecutionDetails) {
     blockers.push({
       code: 'MISSING_EXECUTION_DETAILS',
@@ -158,8 +146,6 @@ export function computeWarehouseJobReadiness(
   const readyForReport =
     jobCompleted &&
     totalDocuments > 0 &&
-    pendingReviewDocuments === 0 &&
-    rejectedDocuments === 0 &&
     hasExecutionDetails &&
     (hasWarehousePhoto || hasCompletionPhoto);
 

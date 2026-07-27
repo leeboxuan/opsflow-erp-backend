@@ -1,11 +1,6 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Prisma, Role, WarehouseJobStatus } from '@prisma/client';
 
-const WAREHOUSE_QUEUE_STATUSES: WarehouseJobStatus[] = [
-  WarehouseJobStatus.OPEN,
-  WarehouseJobStatus.IN_PROGRESS,
-];
-
 const TERMINAL_STATUSES = new Set<WarehouseJobStatus>([
   WarehouseJobStatus.COMPLETED,
   WarehouseJobStatus.CANCELLED,
@@ -22,54 +17,38 @@ export function isOpsLikeRole(role: Role): boolean {
 }
 
 /**
- * WAREHOUSE v1 access policy:
- * - Assigned job: only assignedToUserId may access.
- * - Unassigned job: OPEN/IN_PROGRESS queue visible to any WAREHOUSE user in tenant.
+ * WAREHOUSE access policy:
+ * - Any active WAREHOUSE user in the tenant may view and work all tenant warehouse jobs.
+ * - assignedToUserId is PIC metadata only — not a visibility ACL.
  */
 export function assertWarehouseUserCanAccessJob(
-  job: WarehouseJobAccessRef,
+  _job: WarehouseJobAccessRef,
   userId: string | undefined,
 ): void {
   if (!userId) {
     throw new ForbiddenException('User context required');
   }
-
-  if (job.assignedToUserId) {
-    if (job.assignedToUserId !== userId) {
-      throw new ForbiddenException(
-        'Warehouse job is assigned to another user',
-      );
-    }
-    return;
-  }
-
-  if (!WAREHOUSE_QUEUE_STATUSES.includes(job.status)) {
-    throw new ForbiddenException(
-      'Warehouse job is not available in the open queue',
-    );
-  }
 }
 
 export function buildWarehouseUserListWhere(
   tenantId: string,
-  userId: string,
+  _userId: string,
 ): Prisma.WarehouseJobWhereInput {
-  return {
-    tenantId,
-    OR: [
-      { assignedToUserId: userId },
-      {
-        assignedToUserId: null,
-        status: { in: WAREHOUSE_QUEUE_STATUSES },
-      },
-    ],
-  };
+  return { tenantId };
 }
 
 export function assertJobAllowsExecutionUpdate(status: WarehouseJobStatus): void {
   if (TERMINAL_STATUSES.has(status)) {
     throw new BadRequestException(
       `Cannot update execution when warehouse job status is ${status}`,
+    );
+  }
+}
+
+export function assertJobAllowsFloorMutation(status: WarehouseJobStatus): void {
+  if (TERMINAL_STATUSES.has(status)) {
+    throw new BadRequestException(
+      `Cannot modify warehouse job when status is ${status}`,
     );
   }
 }

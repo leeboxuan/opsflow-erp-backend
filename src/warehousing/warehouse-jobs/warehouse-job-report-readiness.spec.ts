@@ -93,7 +93,7 @@ describe('computeWarehouseJobReadiness', () => {
     expect(result.blockers.some((b) => b.code === 'NO_DOCUMENTS')).toBe(true);
   });
 
-  it('readyForReport false when pending review documents exist', () => {
+  it('readyForReport true when pending review documents exist', () => {
     const result = computeWarehouseJobReadiness(
       baseInput({
         documents: [
@@ -104,13 +104,13 @@ describe('computeWarehouseJobReadiness', () => {
         ],
       }),
     );
-    expect(result.readyForReport).toBe(false);
+    expect(result.readyForReport).toBe(true);
     expect(
       result.blockers.some((b) => b.code === 'PENDING_DOCUMENT_REVIEW'),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it('readyForReport false when rejected documents exist', () => {
+  it('readyForReport true when rejected documents exist', () => {
     const result = computeWarehouseJobReadiness(
       baseInput({
         documents: [
@@ -125,9 +125,9 @@ describe('computeWarehouseJobReadiness', () => {
         ],
       }),
     );
-    expect(result.readyForReport).toBe(false);
+    expect(result.readyForReport).toBe(true);
     expect(result.blockers.some((b) => b.code === 'REJECTED_DOCUMENTS')).toBe(
-      true,
+      false,
     );
   });
 

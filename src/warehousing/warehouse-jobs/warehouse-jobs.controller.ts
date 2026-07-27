@@ -132,6 +132,25 @@ export class WarehouseJobsController {
     );
   }
 
+  @Get(':id/documents/:documentId/signed-url')
+  @ApiOperation({ summary: 'Get signed URLs for warehouse job document preview/download' })
+  async getDocumentSignedUrl(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Param('documentId') documentId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const actorRole = req.tenant.role as Role;
+    const actorUserId = req.user?.userId as string | undefined;
+    return this.warehouseJobDocumentsService.getSignedUrl(
+      tenantId,
+      id,
+      documentId,
+      actorRole,
+      actorUserId,
+    );
+  }
+
   @Post(':id/documents')
   @Roles(...FLOOR_ROLES)
   @ApiOperation({ summary: 'Upload warehouse job document or photo' })

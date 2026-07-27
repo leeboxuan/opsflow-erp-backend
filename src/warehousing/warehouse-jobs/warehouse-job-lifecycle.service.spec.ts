@@ -44,6 +44,9 @@ describe('WarehouseJobLifecycleService', () => {
 
     const prisma: any = {
       $transaction: jest.fn(async (cb: any) => cb(tx)),
+      warehouseJob: {
+        findFirst: jest.fn(),
+      },
     };
 
     const service = new WarehouseJobLifecycleService(prisma, eventsService);
@@ -193,10 +196,10 @@ describe('WarehouseJobLifecycleService', () => {
     });
 
     it('start sets startedAt when empty', async () => {
-      const { service, tx } = makeService();
-      tx.warehouseJob.findFirst.mockResolvedValue(
-        makeJob({ status: WarehouseJobStatus.OPEN }),
-      );
+      const { service, tx, prisma } = makeService();
+      const openJob = makeJob({ status: WarehouseJobStatus.OPEN });
+      prisma.warehouseJob.findFirst.mockResolvedValue(openJob);
+      tx.warehouseJob.findFirst.mockResolvedValue(openJob);
       tx.warehouseJob.update.mockResolvedValue(
         makeJob({ status: WarehouseJobStatus.IN_PROGRESS }),
       );
@@ -211,6 +214,20 @@ describe('WarehouseJobLifecycleService', () => {
           }),
         }),
       );
+    });
+
+    it('start is idempotent when job already IN_PROGRESS', async () => {
+      const { service, tx, prisma } = makeService();
+      const inProgressJob = makeJob({
+        status: WarehouseJobStatus.IN_PROGRESS,
+        startedAt: new Date('2026-07-01'),
+      });
+      prisma.warehouseJob.findFirst.mockResolvedValue(inProgressJob);
+
+      const result = await service.start(tenantA, jobId, 'user-1');
+
+      expect(result).toBe(inProgressJob);
+      expect(tx.warehouseJob.update).not.toHaveBeenCalled();
     });
 
     it('complete sets completedAt', async () => {

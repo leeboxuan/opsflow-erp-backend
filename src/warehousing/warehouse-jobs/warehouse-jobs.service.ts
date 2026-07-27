@@ -28,6 +28,7 @@ import { ListWarehousingUsersQueryDto } from './dto/list-warehousing-users-query
 import { UpdateWarehouseJobExecutionDto } from './dto/update-warehouse-job-execution.dto';
 import {
   assertJobAllowsExecutionUpdate,
+  assertJobAllowsFloorMutation,
   assertWarehouseUserCanAccessJob,
   buildWarehouseUserListWhere,
   isOpsLikeRole,
@@ -631,6 +632,7 @@ export class WarehouseJobsService {
         throw new NotFoundException('Warehouse job not found');
       }
       assertWarehouseUserCanAccessJob(job, actorUserId);
+      assertJobAllowsFloorMutation(job.status);
     }
 
     return fn(tenantId, id, actorUserId);

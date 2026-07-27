@@ -18,6 +18,7 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
 import { WarehouseJobEventsService } from './warehouse-job-events.service';
 import {
   assertWarehouseUserCanAccessJob,
+  assertJobAllowsFloorMutation,
   isOpsLikeRole,
   mapRoleToDocumentSource,
   WAREHOUSE_UPLOAD_TYPES,
@@ -76,9 +77,14 @@ export class WarehouseJobDocumentsService {
     assertAllowedWarehouseJobDocumentFile(file);
     this.assertCanUploadType(type, actorRole);
 
+    if (!actorUserId) {
+      throw new ForbiddenException('User context required to upload documents');
+    }
+
     const job = await this.findJobOrThrow(tenantId, warehouseJobId);
     if (actorRole === Role.WAREHOUSE) {
       assertWarehouseUserCanAccessJob(job, actorUserId);
+      assertJobAllowsFloorMutation(job.status);
     }
 
     const source = mapRoleToDocumentSource(actorRole) as WarehouseJobDocumentSource;
@@ -97,7 +103,7 @@ export class WarehouseJobDocumentsService {
         data: {
           tenantId,
           warehouseJobId,
-          uploadedByUserId: actorUserId ?? null,
+          uploadedByUserId: actorUserId,
           type,
           source,
           reviewStatus: WarehouseJobDocumentReviewStatus.PENDING_REVIEW,
@@ -285,6 +291,34 @@ export class WarehouseJobDocumentsService {
     });
 
     return this.attachSignedUrl(updated);
+  }
+
+  async getSignedUrl(
+    tenantId: string,
+    warehouseJobId: string,
+    documentId: string,
+    actorRole: Role,
+    actorUserId?: string,
+  ) {
+    const job = await this.findJobOrThrow(tenantId, warehouseJobId);
+    this.assertCanViewJob(job, actorRole, actorUserId);
+
+    const doc = await this.findDocumentOrThrow(
+      tenantId,
+      warehouseJobId,
+      documentId,
+    );
+
+    const signedUrl = await createWarehouseJobDocumentSignedUrl(
+      this.supabaseService,
+      doc.storageKey,
+    );
+
+    return {
+      previewUrl: signedUrl,
+      downloadUrl: signedUrl,
+      expiresInSeconds: 60 * 60,
+    };
   }
 
   async countDocumentsByReviewStatus(

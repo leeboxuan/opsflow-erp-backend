@@ -452,13 +452,16 @@ describe('WarehouseJobsService', () => {
       );
     });
 
-    it('WAREHOUSE rejects job assigned to another user', async () => {
-      const { service, prisma } = makeService();
+    it('WAREHOUSE allows job assigned to another user', async () => {
+      const { service, prisma, tx } = makeService();
       prisma.warehouseJob.findFirst.mockResolvedValue(
         makeJob({
           status: WarehouseJobStatus.IN_PROGRESS,
           assignedToUserId: 'other-user',
         }),
+      );
+      tx.warehouseJob.update.mockResolvedValue(
+        makeJob({ warehouseNotes: 'n' }),
       );
 
       await expect(
@@ -469,7 +472,7 @@ describe('WarehouseJobsService', () => {
           actorUserId,
           Role.WAREHOUSE,
         ),
-      ).rejects.toThrow('assigned to another user');
+      ).resolves.toBeDefined();
     });
 
     it('WAREHOUSE allows unassigned OPEN job', async () => {

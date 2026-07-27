@@ -141,7 +141,7 @@ describe('WarehouseJobReportPreviewService', () => {
     ).resolves.toBeDefined();
   });
 
-  it('rejects WAREHOUSE access to inaccessible job', async () => {
+  it('allows WAREHOUSE access to terminal job assigned to another user', async () => {
     const { service } = makeService(
       makeJob({
         assignedToUserId: 'other-user',
@@ -155,7 +155,7 @@ describe('WarehouseJobReportPreviewService', () => {
         { role: Role.WAREHOUSE, userId: actorUserId },
         warehouseJobId,
       ),
-    ).rejects.toThrow(ForbiddenException);
+    ).resolves.toBeDefined();
   });
 
   it('includes execution fields', async () => {

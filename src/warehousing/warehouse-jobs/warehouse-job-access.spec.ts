@@ -1,5 +1,7 @@
+import { ForbiddenException } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import {
+  assertJobAllowsFloorMutation,
   assertWarehouseUserCanAccessJob,
   buildWarehouseUserListWhere,
 } from './warehouse-job-access';
@@ -10,20 +12,33 @@ describe('warehouse-job-access', () => {
     expect(Object.values(Role)).toContain(Role.WAREHOUSE);
   });
 
-  it('allows assigned WAREHOUSE user', () => {
+  it('allows any WAREHOUSE user with user context regardless of assignee', () => {
     expect(() =>
       assertWarehouseUserCanAccessJob(
         {
           id: 'job-1',
           status: WarehouseJobStatus.IN_PROGRESS,
-          assignedToUserId: 'user-1',
+          assignedToUserId: 'other-user',
         },
         'user-1',
       ),
     ).not.toThrow();
   });
 
-  it('allows unassigned OPEN/IN_PROGRESS queue job', () => {
+  it('allows WAREHOUSE user on terminal COMPLETED job', () => {
+    expect(() =>
+      assertWarehouseUserCanAccessJob(
+        {
+          id: 'job-1',
+          status: WarehouseJobStatus.COMPLETED,
+          assignedToUserId: 'other-user',
+        },
+        'user-1',
+      ),
+    ).not.toThrow();
+  });
+
+  it('requires user context for WAREHOUSE access', () => {
     expect(() =>
       assertWarehouseUserCanAccessJob(
         {
@@ -31,21 +46,26 @@ describe('warehouse-job-access', () => {
           status: WarehouseJobStatus.OPEN,
           assignedToUserId: null,
         },
-        'user-1',
+        undefined,
       ),
-    ).not.toThrow();
+    ).toThrow(ForbiddenException);
   });
 
-  it('builds list filter for assigned or open queue', () => {
+  it('builds tenant-wide list filter for WAREHOUSE users', () => {
     expect(buildWarehouseUserListWhere('tenant-1', 'user-1')).toEqual({
       tenantId: 'tenant-1',
-      OR: [
-        { assignedToUserId: 'user-1' },
-        {
-          assignedToUserId: null,
-          status: { in: [WarehouseJobStatus.OPEN, WarehouseJobStatus.IN_PROGRESS] },
-        },
-      ],
     });
+  });
+
+  it('blocks floor mutation on terminal statuses', () => {
+    expect(() =>
+      assertJobAllowsFloorMutation(WarehouseJobStatus.COMPLETED),
+    ).toThrow('Cannot modify warehouse job when status is COMPLETED');
+    expect(() =>
+      assertJobAllowsFloorMutation(WarehouseJobStatus.CANCELLED),
+    ).toThrow('Cannot modify warehouse job when status is CANCELLED');
+    expect(() =>
+      assertJobAllowsFloorMutation(WarehouseJobStatus.IN_PROGRESS),
+    ).not.toThrow();
   });
 });
