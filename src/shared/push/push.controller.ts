@@ -28,7 +28,7 @@ import { PushDevicesService } from "./push-devices.service";
 @ApiTags("push")
 @Controller("push/devices")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.DRIVER)
+@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.DRIVER)
 @ApiBearerAuth("JWT-auth")
 @ApiHeader({ name: "x-tenant-id", required: true })
 export class PushController {

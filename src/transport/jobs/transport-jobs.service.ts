@@ -1011,7 +1011,7 @@ function toTripLocationDto(prefix: "origin" | "destination", trip: any) {
 }
 
 @Injectable()
-export class OpsJobsService {
+export class TransportJobsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -1349,7 +1349,7 @@ export class OpsJobsService {
 
     const seq = String(row.nextSeq).padStart(4, "0");
     const typeCode = this.getJobTypeCode(jobType);
-    return `${OpsJobsService.JOB_INTERNAL_REF_PREFIX}-${yyyy}-${MM}-${seq}-${typeCode}`;
+    return `${TransportJobsService.JOB_INTERNAL_REF_PREFIX}-${yyyy}-${MM}-${seq}-${typeCode}`;
   }
 
   /** Metadata only — no Supabase round-trip. */
@@ -1448,7 +1448,7 @@ export class OpsJobsService {
 
     if (error || !data) {
       console.warn(
-        `[OpsJobsService] Failed to download job document ${storageKey}: ${error?.message ?? "no data"}`,
+        `[TransportJobsService] Failed to download job document ${storageKey}: ${error?.message ?? "no data"}`,
       );
       return null;
     }
@@ -1513,7 +1513,7 @@ export class OpsJobsService {
     // Don't hard-fail if storage object is already gone.
     if (error) {
       console.warn(
-        `[OpsJobsService] Failed to remove storage object ${storageKey}: ${error.message}`,
+        `[TransportJobsService] Failed to remove storage object ${storageKey}: ${error.message}`,
       );
     }
   }
@@ -2378,7 +2378,7 @@ export class OpsJobsService {
         );
       } catch (error: any) {
         console.error(
-          `[OpsJobsService] Auto-generate trip DELIVERY_DO failed for job ${job.id}, trip ${trip.id}:`,
+          `[TransportJobsService] Auto-generate trip DELIVERY_DO failed for job ${job.id}, trip ${trip.id}:`,
           error?.message ?? error,
         );
       }
@@ -7164,47 +7164,47 @@ export class OpsJobsService {
         continue;
       }
 
-      const orderRef = OpsJobsService.cell(row, idx.orderRef);
+      const orderRef = TransportJobsService.cell(row, idx.orderRef);
       if (!orderRef) continue;
 
-      const deliveryAddress1 = OpsJobsService.cell(row, idx.deliveryAddress1);
+      const deliveryAddress1 = TransportJobsService.cell(row, idx.deliveryAddress1);
       const deliveryAddress2 =
         idx.deliveryAddress2 >= 0
-          ? OpsJobsService.cell(row, idx.deliveryAddress2)
+          ? TransportJobsService.cell(row, idx.deliveryAddress2)
           : "";
       const deliveryCity =
-        idx.deliveryCity >= 0 ? OpsJobsService.cell(row, idx.deliveryCity) : "";
+        idx.deliveryCity >= 0 ? TransportJobsService.cell(row, idx.deliveryCity) : "";
       const deliveryPostalCode =
         idx.deliveryPostalCode >= 0
-          ? OpsJobsService.cell(row, idx.deliveryPostalCode)
+          ? TransportJobsService.cell(row, idx.deliveryPostalCode)
           : "";
       const deliveryCountry =
         idx.deliveryCountry >= 0
-          ? OpsJobsService.cell(row, idx.deliveryCountry)
+          ? TransportJobsService.cell(row, idx.deliveryCountry)
           : "";
       const deliveryFirstName =
         idx.deliveryFirstName >= 0
-          ? OpsJobsService.cell(row, idx.deliveryFirstName)
+          ? TransportJobsService.cell(row, idx.deliveryFirstName)
           : "";
       const deliveryLastName =
         idx.deliveryLastName >= 0
-          ? OpsJobsService.cell(row, idx.deliveryLastName)
+          ? TransportJobsService.cell(row, idx.deliveryLastName)
           : "";
       const firstName =
-        idx.firstName >= 0 ? OpsJobsService.cell(row, idx.firstName) : "";
+        idx.firstName >= 0 ? TransportJobsService.cell(row, idx.firstName) : "";
       const lastName =
-        idx.lastName >= 0 ? OpsJobsService.cell(row, idx.lastName) : "";
+        idx.lastName >= 0 ? TransportJobsService.cell(row, idx.lastName) : "";
       const phone =
-        idx.phone >= 0 ? OpsJobsService.normalizePhone(row[idx.phone]) : "";
+        idx.phone >= 0 ? TransportJobsService.normalizePhone(row[idx.phone]) : "";
       const mobile =
-        idx.mobile >= 0 ? OpsJobsService.normalizePhone(row[idx.mobile]) : "";
+        idx.mobile >= 0 ? TransportJobsService.normalizePhone(row[idx.mobile]) : "";
       const itemCode =
-        idx.itemCode >= 0 ? OpsJobsService.cell(row, idx.itemCode) : "";
+        idx.itemCode >= 0 ? TransportJobsService.cell(row, idx.itemCode) : "";
       const itemQty =
-        idx.itemQty >= 0 ? OpsJobsService.cell(row, idx.itemQty) : "";
+        idx.itemQty >= 0 ? TransportJobsService.cell(row, idx.itemQty) : "";
       const specialRequest =
         idx.specialRequest >= 0
-          ? OpsJobsService.cell(row, idx.specialRequest)
+          ? TransportJobsService.cell(row, idx.specialRequest)
           : "";
 
       let g = groups.get(orderRef);

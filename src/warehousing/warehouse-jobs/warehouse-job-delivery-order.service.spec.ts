@@ -100,7 +100,7 @@ describe('WarehouseJobDeliveryOrderService', () => {
   it('generates delivery order document and links it to the job', async () => {
     const { service, tx } = makeService();
 
-    const result = await service.generate(tenantId, jobId, 'user-1', Role.OPS);
+    const result = await service.generate(tenantId, jobId, 'user-1', Role.TRANSPORT_STAFF);
 
     expect(result.document.id).toBe('doc-1');
     expect(result.job.deliveryOrderDocumentId).toBe('doc-1');

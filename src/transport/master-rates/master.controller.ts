@@ -84,14 +84,14 @@ export class MasterDataController {
   }
 
   @Get("driver-trip-rates")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "List tenant-scoped driver trip rate master rows" })
   listDriverTripRates(@Req() req: any) {
     return this.master.listDriverTripRateMasters(req.tenant.tenantId);
   }
 
   @Post("driver-trip-rates")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Create tenant-scoped driver trip rate master row" })
   createDriverTripRate(
     @Req() req: any,
@@ -101,7 +101,7 @@ export class MasterDataController {
   }
 
   @Patch("driver-trip-rates/:id")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Update tenant-scoped driver trip rate master row" })
   updateDriverTripRate(
     @Req() req: any,
@@ -112,14 +112,14 @@ export class MasterDataController {
   }
 
   @Patch("driver-trip-rates/:id/deactivate")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Deactivate/archive a driver trip rate master row" })
   deactivateDriverTripRate(@Req() req: any, @Param("id") id: string) {
     return this.master.deactivateDriverTripRateMaster(req.tenant.tenantId, id);
   }
 
   @Post("driver-trip-rates/import")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
     summary:
       "Import DriverTripRateMaster from Excel and upsert by tenantId+code",
@@ -149,7 +149,7 @@ export class MasterDataController {
   }
 
   @Post("trucking-rates/import")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
     summary: "Import tenant trucking rates dataset from Excel (source file stored for audit only)",
   })
@@ -177,14 +177,14 @@ export class MasterDataController {
   }
 
   @Get("trucking-rates/items")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "List tenant trucking rates dataset rows" })
   listTruckingRateItems(@Req() req: any) {
     return this.master.listDriverTripRateMasters(req.tenant.tenantId);
   }
 
   @Get("trucking-rates/metadata")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Get tenant trucking rates dataset metadata (uploader/time)" })
   getTruckingRateMetadata(@Req() req: any) {
     return this.master.getDatasetMetadata(
@@ -194,7 +194,7 @@ export class MasterDataController {
   }
 
   @Patch("trucking-rates/items")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Replace tenant trucking rates dataset rows" })
   saveTruckingRateItems(
     @Req() req: any,
@@ -208,7 +208,7 @@ export class MasterDataController {
   }
 
   @Post("dhc-rates/import")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
     summary: "Import tenant DHC rates dataset from Excel (source file stored for audit only)",
   })
@@ -233,14 +233,14 @@ export class MasterDataController {
   }
 
   @Get("dhc-rates/items")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "List tenant DHC rates dataset rows" })
   listDhcRateItems(@Req() req: any) {
     return this.master.listDhcRateDatasetItems(req.tenant.tenantId);
   }
 
   @Get("dhc-rates/metadata")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Get tenant DHC rates dataset metadata (uploader/time)" })
   getDhcRateMetadata(@Req() req: any) {
     return this.master.getDatasetMetadata(
@@ -250,7 +250,7 @@ export class MasterDataController {
   }
 
   @Patch("dhc-rates/items")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Replace tenant DHC rates dataset rows" })
   saveDhcRateItems(@Req() req: any, @Body() dto: SaveDhcRatesDatasetDto) {
     return this.master.replaceDhcRatesDataset(
@@ -261,7 +261,7 @@ export class MasterDataController {
   }
 
   @Post("files/:type/upload")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Upload and parse a master file version" })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
@@ -297,7 +297,7 @@ export class MasterDataController {
   }
 
   @Post("quotation/import")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
     summary: "Import tenant quotation dataset from Excel (source file stored for audit only)",
   })
@@ -325,21 +325,21 @@ export class MasterDataController {
   }
 
   @Get("quotation/items")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "List tenant quotation dataset rows" })
   getQuotationItems(@Req() req: any) {
     return this.master.listQuotationDatasetItems(req.tenant.tenantId);
   }
 
   @Get("quotation/metadata")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Get tenant quotation dataset metadata (uploader/time)" })
   getQuotationMetadata(@Req() req: any) {
     return this.master.getDatasetMetadata(req.tenant.tenantId, MasterRateDatasetType.QUOTATION);
   }
 
   @Patch("quotation/items")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Replace tenant quotation dataset rows" })
   saveQuotationItems(@Req() req: any, @Body() dto: SaveQuotationDatasetDto) {
     return this.master.replaceQuotationDatasetItems(
@@ -350,14 +350,14 @@ export class MasterDataController {
   }
 
   @Get("files")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "List uploaded master files" })
   listMasterFiles(@Req() req: any) {
     return this.master.listMasterFiles(req.tenant.tenantId);
   }
 
   @Get("files/:type/active/items")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Get active parsed items for a master file type" })
   getActiveMasterItems(
     @Req() req: any,
@@ -375,14 +375,14 @@ export class MasterDataController {
   }
 
   @Patch("files/:id/activate")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Activate a specific master file version" })
   activateMasterFile(@Req() req: any, @Param("id") id: string) {
     return this.master.activateMasterFile(req.tenant.tenantId, id);
   }
 
   @Post("files/:id/reprocess")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
     summary:
       "Reprocess by downloading stored source file and replacing parsed rows for this master file",
@@ -392,7 +392,7 @@ export class MasterDataController {
   }
 
   @Patch("files/:id/items")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
     summary: "Replace parsed items for a QUOTATION master file version",
   })

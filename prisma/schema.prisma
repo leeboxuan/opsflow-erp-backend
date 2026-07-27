@@ -1401,7 +1401,9 @@ model profiles {
 
 enum Role {
   ADMIN
+  // Deprecated compatibility alias for TRANSPORT_STAFF — do not assign to new memberships.
   OPS
+  TRANSPORT_STAFF
   FINANCE
   DRIVER
   CUSTOMER

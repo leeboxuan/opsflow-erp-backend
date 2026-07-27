@@ -17,7 +17,7 @@ import { RealtimeEventsService } from "./realtime-events.service";
 @ApiTags("realtime")
 @Controller("realtime")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.DRIVER)
+@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.DRIVER)
 @ApiBearerAuth("JWT-auth")
 @ApiHeader({
   name: "x-tenant-id",
@@ -29,7 +29,7 @@ export class RealtimeController {
 
   @Get("events")
   @Sse()
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.DRIVER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.DRIVER)
   @ApiOperation({
     summary: "Tenant-scoped Server-Sent Events stream (metadata only, no full records)",
   })

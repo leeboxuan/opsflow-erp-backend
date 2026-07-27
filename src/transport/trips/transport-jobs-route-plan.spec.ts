@@ -1,8 +1,8 @@
 import { BadRequestException } from "@nestjs/common";
 import { JobStatus, TripStatus } from "@prisma/client";
-import { OpsJobsService } from "../jobs/ops-jobs.service";
+import { TransportJobsService } from "../jobs/transport-jobs.service";
 
-describe("OpsJobsService route planning", () => {
+describe("TransportJobsService route planning", () => {
   function makeService(overrides?: Partial<any>) {
     const prisma: any = {
       job: {
@@ -31,7 +31,7 @@ describe("OpsJobsService route planning", () => {
       ...overrides,
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
-    const svc = new OpsJobsService(prisma, audit, {} as any);
+    const svc = new TransportJobsService(prisma, audit, {} as any);
     return { svc, prisma, audit };
   }
 

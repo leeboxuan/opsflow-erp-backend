@@ -33,14 +33,14 @@ describe("resolveRecipientUserIds", () => {
       tenantId: "t1",
       audience: NotificationAudience.ROLE,
       userId: null,
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
     });
 
     expect(ids).toEqual(["ops-a", "ops-b"]);
     expect(prisma.tenantMembership.findMany).toHaveBeenCalledWith({
       where: {
         tenantId: "t1",
-        role: Role.OPS,
+        role: { in: [Role.TRANSPORT_STAFF, Role.OPS] },
         status: MembershipStatus.Active,
       },
       select: { userId: true },
@@ -64,7 +64,9 @@ describe("resolveRecipientUserIds", () => {
     expect(prisma.tenantMembership.findMany).toHaveBeenCalledWith({
       where: {
         tenantId: "t1",
-        role: { in: [Role.ADMIN, Role.OPS, Role.FINANCE] },
+        role: {
+          in: [Role.ADMIN, Role.TRANSPORT_STAFF, Role.OPS, Role.FINANCE],
+        },
         status: MembershipStatus.Active,
       },
       select: { userId: true },

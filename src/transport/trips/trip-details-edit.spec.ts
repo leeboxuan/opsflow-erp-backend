@@ -7,15 +7,15 @@ import {
 } from "@prisma/client";
 import { BadRequestException } from "@nestjs/common";
 import {
-  OpsJobsService,
+  TransportJobsService,
   assertTripDetailsEditAllowed,
-} from "../jobs/ops-jobs.service";
+} from "../jobs/transport-jobs.service";
 import { DriverJobsService } from "../driver-app/driver-jobs.service";
 
-function makeOpsService(prisma: any): OpsJobsService {
+function makeOpsService(prisma: any): TransportJobsService {
   const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
   const supabaseService = { getClient: jest.fn() } as any;
-  return new OpsJobsService(prisma, audit, supabaseService);
+  return new TransportJobsService(prisma, audit, supabaseService);
 }
 
 describe("assertTripDetailsEditAllowed", () => {
@@ -56,11 +56,11 @@ describe("assertTripDetailsEditAllowed", () => {
   });
 });
 
-describe("OpsJobsService.patchTripDetails", () => {
+describe("TransportJobsService.patchTripDetails", () => {
   const tenantId = "t1";
   const jobId = "job1";
   const tripId = "trip1";
-  const user = { userId: "u1", role: Role.OPS };
+  const user = { userId: "u1", role: Role.TRANSPORT_STAFF };
 
   function basePrisma(overrides: {
     job?: Record<string, unknown>;

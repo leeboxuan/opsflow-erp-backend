@@ -68,7 +68,7 @@ import {
 } from "../jobs/job-invoice-readiness";
 import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
 import * as rt from "../../shared/realtime/realtime-publish";
-import { OpsJobsService } from "../jobs/ops-jobs.service";
+import { TransportJobsService } from "../jobs/transport-jobs.service";
 import { resolveTripNotesResponseFields } from "../trips/trip-notes.helpers";
 import {
   DO_SIGN_REQUIRES_ONGOING_TRIP_MESSAGE,
@@ -373,7 +373,7 @@ export class DriverJobsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly supabaseService: SupabaseService,
-    @Optional() private readonly opsJobs?: OpsJobsService,
+    @Optional() private readonly opsJobs?: TransportJobsService,
     @Optional() private readonly realtime?: RealtimeEventsService,
   ) {}
 

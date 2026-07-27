@@ -4,15 +4,15 @@ import { Role } from "@prisma/client";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
-import { OpsJobsService } from "../jobs/ops-jobs.service";
+import { TransportJobsService } from "../jobs/transport-jobs.service";
 
 @ApiTags("ops-trips")
 @Controller("trips")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
 @ApiBearerAuth("JWT-auth")
-export class OpsTripsController {
-  constructor(private readonly jobs: OpsJobsService) {}
+export class TransportTripsController {
+  constructor(private readonly jobs: TransportJobsService) {}
 
   @Get(":tripId")
   @ApiOperation({

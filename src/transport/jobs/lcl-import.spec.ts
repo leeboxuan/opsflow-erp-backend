@@ -6,7 +6,7 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { PrismaService } from "../../shared/prisma/prisma.service";
 import { AuditService } from "../../shared/audit/audit.service";
 import { SupabaseService } from "../../shared/auth/supabase.service";
-import { OpsJobsService } from "./ops-jobs.service";
+import { TransportJobsService } from "./transport-jobs.service";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const XLSX = require("xlsx");
 
@@ -35,7 +35,7 @@ function buildLclExcelBuffer(rows: any[]): Buffer {
 }
 
 describe("LCL Import – grouping by Order Ref", () => {
-  let service: OpsJobsService;
+  let service: TransportJobsService;
   const tenantId = "tenant-1";
   const customerCompanyId = "company-1";
 
@@ -50,14 +50,14 @@ describe("LCL Import – grouping by Order Ref", () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        OpsJobsService,
+        TransportJobsService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: AuditService, useValue: mockAudit },
         { provide: SupabaseService, useValue: mockSupabase },
       ],
     }).compile();
 
-    service = module.get<OpsJobsService>(OpsJobsService);
+    service = module.get<TransportJobsService>(TransportJobsService);
   });
 
   it("groups multiple rows with same Order Ref into one preview job", async () => {

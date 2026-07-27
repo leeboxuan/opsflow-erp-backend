@@ -8,8 +8,8 @@ Specs live next to the code they exercise:
 
 | Folder | Spec examples |
 |--------|----------------|
-| `jobs/` | `ops-jobs-create-items.spec.ts`, `lcl-import.spec.ts`, `job-charge-workflow.spec.ts` |
-| `trips/` | `trip-details-edit.spec.ts`, `ops-jobs-append-trip.spec.ts`, `ops-jobs-unpublish.spec.ts`, `trip-display-ref.spec.ts`, `ops-jobs-route-plan.spec.ts` |
+| `jobs/` | `transport-jobs-create-items.spec.ts`, `lcl-import.spec.ts`, `job-charge-workflow.spec.ts` |
+| `trips/` | `trip-details-edit.spec.ts`, `transport-jobs-append-trip.spec.ts`, `transport-jobs-unpublish.spec.ts`, `trip-display-ref.spec.ts`, `transport-jobs-route-plan.spec.ts` |
 | `driver-app/` | `driver-jobs-home.spec.ts`, `driver-jobs-do-sign.spec.ts`, `driver-endpoint-perf.spec.ts` |
 | `documents/` | `delivery-do-signed-pdf.spec.ts`, `do-signature.helpers.spec.ts`, `document-file-display.spec.ts`, `job-document-signed-url.spec.ts` |
 | `workflows/` | `workflow.spec.ts` (tests `job-workflow.helpers.ts` and related trip-note helpers), `gul-circle-location.spec.ts` |
@@ -47,36 +47,36 @@ src/transport/
 
 | Controller | Route prefix | Service dependencies |
 |------------|--------------|----------------------|
-| `jobs/ops-jobs.controller.ts` | `/jobs` | `OpsJobsService` |
-| `trips/ops-trips.controller.ts` | `/trips` | `OpsJobsService` |
+| `jobs/transport-jobs.controller.ts` | `/jobs` | `TransportJobsService` |
+| `trips/transport-trips.controller.ts` | `/trips` | `TransportJobsService` |
 | `driver-app/driver-home.controller.ts` | `/drivers` | `DriverJobsService` |
 | `driver-app/driver-jobs.controller.ts` | `/drivers/jobs` | `DriverJobsService` |
 | `driver-app/driver-trips.controller.ts` | `/drivers/trips` | `DriverJobsService` |
 | `dispatch/dispatch.controller.ts` | `/dispatch` | `DispatchService` |
 
-Providers: `OpsJobsService`, `DriverJobsService`, `DispatchService`. Imports: `PrismaModule`, `AuthModule`, `AuditModule`, `FinanceModule`.
+Providers: `TransportJobsService`, `DriverJobsService`, `DispatchService`. Imports: `PrismaModule`, `AuthModule`, `AuditModule`, `FinanceModule`.
 
 ## What Transport owns
 
 Transport is responsible for:
 
-- **Customers** — customer companies, contacts, and company documents (`src/transport/customers`)
+- **Customers** — customer companies, contacts, and company documents (`src/customers`)
 - **Drivers** — driver profiles and admin driver management (`src/transport/drivers`); legacy order mobile API in `src/transport/legacy-driver` (`/driver/*`); modern job execution under `src/transport/driver-app` (`/drivers/jobs/*`, `/drivers/trips/*`)
 - **Vehicles** — tenant vehicle records (`src/transport/vehicles`)
 - **Fleet** — fleet vehicles, fleet list aliases, and fleet operations (`src/transport/fleet/vehicles`)
 - **Fleet Tracking** — chassis/GPS devices, live positions, and device-gateway ingestion (`src/transport/fleet/tracking`, `src/transport/fleet/device-gateway`)
 - **Master Rates** — quotations, trucking rates, DHC references, and driver trip rate masters (`src/transport/master-rates`)
 - **Dispatch** — dispatch board, route planning, and trip reordering (`src/transport/dispatch`)
-- **Transport Jobs** — job-centric workflows (LCL, IMPORT, EXPORT, COLLECTION); `OpsJobsService` orchestrates create-job, trips, documents, imports (`src/transport/jobs`)
+- **Transport Jobs** — job-centric workflows (LCL, IMPORT, EXPORT, COLLECTION); `TransportJobsService` orchestrates create-job, trips, documents, imports (`src/transport/jobs`)
 - **Trips** — trip execution, routing, documents, and payouts (`src/transport/trips`)
-- **Documents** — job/trip document and signature helpers (`src/transport/documents`); PDF/signing orchestration in `OpsJobsService`
+- **Documents** — job/trip document and signature helpers (`src/transport/documents`); PDF/signing orchestration in `TransportJobsService`
 
 ## `src/transport/jobs/` (current)
 
 | File / folder | Role |
 |---------------|------|
-| `ops-jobs.controller.ts` | `/jobs/*` HTTP routes |
-| `ops-jobs.service.ts` | Main job/trip workflow monolith (~7.7k lines); trip-details edit guards exported from here |
+| `transport-jobs.controller.ts` | `/jobs/*` HTTP routes |
+| `transport-jobs.service.ts` | Main job/trip workflow monolith (~7.7k lines); trip-details edit guards exported from here |
 | `job-invoice-readiness.ts` | Invoice readiness evaluation (used by `finance/invoices.service.ts`) |
 | `job-batch-import.helpers.ts` | Batch job import parsing |
 | `create-job-validation.helpers.ts` | Pure create-job validation helpers |
@@ -117,7 +117,7 @@ Temporary/legacy until old clients retire. **Do not merge** with `driver-app`.
 
 | File / folder | Role |
 |---------------|------|
-| `ops-trips.controller.ts` | `/trips/:tripId` ops trip detail |
+| `transport-trips.controller.ts` | `/trips/:tripId` ops trip detail |
 | `trip-notes.helpers.ts` | Trip notes field resolution |
 | `trip-document-list.helpers.ts` | Trip document list shaping |
 | `trip-display-ref.ts` | Human-readable trip display refs (job ref + sequence) |
@@ -132,7 +132,7 @@ Temporary/legacy until old clients retire. **Do not merge** with `driver-app`.
 | `driver-home.controller.ts` | `/drivers/home` |
 | `driver-jobs.controller.ts` | `/drivers/jobs/*` |
 | `driver-trips.controller.ts` | `/drivers/trips/*` |
-| `driver-jobs.service.ts` | Driver mobile execution (~2.9k lines); optional `OpsJobsService` delegation for PDF/signing |
+| `driver-jobs.service.ts` | Driver mobile execution (~2.9k lines); optional `TransportJobsService` delegation for PDF/signing |
 | `driver-endpoint-perf.ts` | Optional driver API timing logs (`DRIVER_API_PERF_LOG`); used by `DriverJobsService` and `drivers/location/LocationService` |
 | `dto/*` | Driver home, jobs list/history, completion, location DTOs |
 
@@ -143,7 +143,7 @@ Temporary/legacy until old clients retire. **Do not merge** with `driver-app`.
 | `job-workflow.helpers.ts` | Trip templates, completion rules, trip seeding, route snapshots |
 | `gul-circle-location.ts` | Canonical 7 Gul Circle depot coords and legacy coord repair helper |
 
-Consumed by `ops-jobs.service.ts`, `driver-jobs.service.ts`, and `workflow.spec.ts`.
+Consumed by `transport-jobs.service.ts`, `driver-jobs.service.ts`, and `workflow.spec.ts`.
 
 ## `src/transport/documents/` (current)
 
@@ -157,7 +157,7 @@ Consumed by `ops-jobs.service.ts`, `driver-jobs.service.ts`, and `workflow.spec.
 | `signature-image-normalize.ts` | Signature image normalization |
 | `driver-mobile-document.select.ts` | Prisma selects for driver mobile documents |
 | `dto/sign-trip-document.dto.ts`, `do-signature-submit.dto.ts` | Signing request DTOs |
-| `delivery-do-signed-pdf.spec.ts` | DO signed PDF integration tests (via `OpsJobsService`) |
+| `delivery-do-signed-pdf.spec.ts` | DO signed PDF integration tests (via `TransportJobsService`) |
 
 ## `src/transport/finance/` (Transport Finance)
 
@@ -196,7 +196,7 @@ The original transport-orders Nest module remains at the `transport/` root:
 
 | Item | Reason |
 |------|--------|
-| `OpsJobsService` / `DriverJobsService` splits | Behavior-sensitive orchestration monoliths |
+| `TransportJobsService` / `DriverJobsService` splits | Behavior-sensitive orchestration monoliths |
 | `driver-mvp.service.ts` refactor / retirement | Legacy API still in use |
 | Prisma `Job`/`Trip` renames | Schema change |
 

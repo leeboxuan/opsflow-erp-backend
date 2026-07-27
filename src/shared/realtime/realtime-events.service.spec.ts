@@ -19,7 +19,7 @@ describe("RealtimeEventsService", () => {
   it("publish delivers matching tenant events to ops subscribers", async () => {
     const stream$ = svc.stream({
       tenantId: "tenant-1",
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
       userId: "ops-1",
     });
 
@@ -92,7 +92,7 @@ describe("RealtimeEventsService", () => {
     const events: string[] = [];
     const sub = {
       tenantId: "tenant-1",
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
       userId: "ops-1",
     };
     const stream$ = svc.stream(sub);
@@ -116,7 +116,7 @@ describe("RealtimeEventsService", () => {
     jest.useFakeTimers();
     const stream$ = svc.stream({
       tenantId: "tenant-1",
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
       userId: "ops-1",
     });
 
@@ -139,7 +139,7 @@ describe("RealtimeEventsService", () => {
   it("removes subscriber on stream unsubscribe", () => {
     const stream$ = svc.stream({
       tenantId: "tenant-1",
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
       userId: "ops-1",
     });
     const sub = stream$.subscribe();

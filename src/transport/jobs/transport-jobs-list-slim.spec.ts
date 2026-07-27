@@ -1,7 +1,7 @@
 import { JobStatus, JobType, Role, TripStatus } from "@prisma/client";
-import { OpsJobsService } from "./ops-jobs.service";
+import { TransportJobsService } from "./transport-jobs.service";
 
-describe("OpsJobsService.list (slim)", () => {
+describe("TransportJobsService.list (slim)", () => {
   it("returns list rows without full trips/items/documents", async () => {
     const prisma: any = {
       $transaction: jest.fn((ops: any[]) => Promise.all(ops.map((fn) => fn))),
@@ -32,8 +32,8 @@ describe("OpsJobsService.list (slim)", () => {
       },
     };
 
-    const svc = new OpsJobsService(prisma, { log: jest.fn() } as any, {} as any);
-    const res = await svc.list("t1", {} as any, { role: Role.OPS, customerCompanyId: null });
+    const svc = new TransportJobsService(prisma, { log: jest.fn() } as any, {} as any);
+    const res = await svc.list("t1", {} as any, { role: Role.TRANSPORT_STAFF, customerCompanyId: null });
 
     expect(res.data).toHaveLength(1);
     expect(res.data[0]).toEqual(

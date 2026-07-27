@@ -1,6 +1,11 @@
 import { Role, TripStatus } from "@prisma/client";
 
-const OPS_NOTIFY_ROLES = new Set<Role>([Role.ADMIN, Role.OPS, Role.FINANCE]);
+const OPS_NOTIFY_ROLES = new Set<Role>([
+  Role.ADMIN,
+  Role.TRANSPORT_STAFF,
+  Role.OPS,
+  Role.FINANCE,
+]);
 
 /** Trips visible to drivers in mobile (excludes DRAFT/CANCELLED). */
 export const DRIVER_VISIBLE_TRIP_STATUSES = new Set<TripStatus>([

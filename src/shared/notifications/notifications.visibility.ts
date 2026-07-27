@@ -1,7 +1,16 @@
 import { ForbiddenException } from "@nestjs/common";
 import { NotificationAudience, Prisma, Role } from "@prisma/client";
+import {
+  isTransportStaffRole,
+  TRANSPORT_STAFF_COMPAT_ROLES,
+} from "../auth/role-compat";
 
-const OPS_ROLES = new Set<Role>([Role.ADMIN, Role.OPS, Role.FINANCE]);
+const OFFICE_NOTIFY_ROLES = new Set<Role>([
+  Role.ADMIN,
+  Role.TRANSPORT_STAFF,
+  Role.OPS,
+  Role.FINANCE,
+]);
 
 export interface NotificationViewerContext {
   tenantId: string;
@@ -32,14 +41,18 @@ export function buildNotificationVisibilityWhere(
       audience: NotificationAudience.ROLE,
       role: Role.DRIVER,
     });
-  } else if (OPS_ROLES.has(ctx.role)) {
+  } else if (isTransportStaffRole(ctx.role)) {
+    or.push({
+      audience: NotificationAudience.ROLE,
+      role: { in: [...TRANSPORT_STAFF_COMPAT_ROLES] },
+    });
+    or.push({ audience: NotificationAudience.TENANT });
+  } else if (OFFICE_NOTIFY_ROLES.has(ctx.role)) {
     or.push({
       audience: NotificationAudience.ROLE,
       role: ctx.role,
     });
-    if (OPS_ROLES.has(ctx.role)) {
-      or.push({ audience: NotificationAudience.TENANT });
-    }
+    or.push({ audience: NotificationAudience.TENANT });
   }
 
   return {
@@ -69,15 +82,18 @@ export function canViewerAccessNotification(
   ) {
     return true;
   }
-  if (
-    notification.audience === NotificationAudience.ROLE &&
-    notification.role === ctx.role
-  ) {
-    return true;
+  if (notification.audience === NotificationAudience.ROLE) {
+    if (notification.role === ctx.role) return true;
+    if (
+      isTransportStaffRole(ctx.role) &&
+      isTransportStaffRole(notification.role)
+    ) {
+      return true;
+    }
   }
   if (
     notification.audience === NotificationAudience.TENANT &&
-    OPS_ROLES.has(ctx.role)
+    OFFICE_NOTIFY_ROLES.has(ctx.role)
   ) {
     return true;
   }

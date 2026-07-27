@@ -1,6 +1,6 @@
 import { JobStatus, JobType, Role, TripStatus } from "@prisma/client";
 import { DriverJobsService } from "../driver-app/driver-jobs.service";
-import { OpsJobsService } from "../jobs/ops-jobs.service";
+import { TransportJobsService } from "../jobs/transport-jobs.service";
 
 describe("Trip PIC fields", () => {
   it("patchTrip can set and clear tripPICName/tripPICContact/containerNumber/shipping refs without touching job PIC", async () => {
@@ -16,7 +16,7 @@ describe("Trip PIC fields", () => {
       },
       job: { update: jest.fn() },
     };
-    const svc = new OpsJobsService(
+    const svc = new TransportJobsService(
       prisma,
       { log: jest.fn().mockResolvedValue(undefined) } as any,
       {} as any,
@@ -35,7 +35,7 @@ describe("Trip PIC fields", () => {
         shipper: "  ACME ",
         vessel: "  VESSEL-A ",
       } as any,
-      { userId: "u1", role: Role.OPS, customerCompanyId: null },
+      { userId: "u1", role: Role.TRANSPORT_STAFF, customerCompanyId: null },
     );
     expect(prisma.trip.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -63,7 +63,7 @@ describe("Trip PIC fields", () => {
         shipper: " ",
         vessel: "",
       } as any,
-      { userId: "u1", role: Role.OPS, customerCompanyId: null },
+      { userId: "u1", role: Role.TRANSPORT_STAFF, customerCompanyId: null },
     );
     expect(prisma.trip.update).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -92,7 +92,7 @@ describe("Trip PIC fields", () => {
         update: jest.fn().mockResolvedValue({}),
       },
     };
-    const svc = new OpsJobsService(
+    const svc = new TransportJobsService(
       prisma,
       { log: jest.fn().mockResolvedValue(undefined) } as any,
       {} as any,
@@ -112,7 +112,7 @@ describe("Trip PIC fields", () => {
         shipper: null,
         vessel: null,
       } as any,
-      { userId: "u1", role: Role.OPS, customerCompanyId: null },
+      { userId: "u1", role: Role.TRANSPORT_STAFF, customerCompanyId: null },
     );
 
     expect(prisma.trip.update).toHaveBeenCalledWith(
@@ -157,8 +157,8 @@ describe("Trip PIC fields", () => {
         ]),
       },
     };
-    const svc = new OpsJobsService(prisma, { log: jest.fn() } as any, {} as any);
-    const res = await svc.list("t1", {} as any, { role: Role.OPS, customerCompanyId: null });
+    const svc = new TransportJobsService(prisma, { log: jest.fn() } as any, {} as any);
+    const res = await svc.list("t1", {} as any, { role: Role.TRANSPORT_STAFF, customerCompanyId: null });
     expect(res.data[0]).toEqual(
       expect.objectContaining({
         id: "job1",

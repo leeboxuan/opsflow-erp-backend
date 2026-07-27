@@ -132,7 +132,7 @@ describe('WarehouseJobDocumentsService', () => {
           warehouseJobId,
           WarehouseJobDocumentType.OTHER,
           makeFile(),
-          Role.OPS,
+          Role.TRANSPORT_STAFF,
           actorUserId,
         ),
       ).rejects.toBeInstanceOf(NotFoundException);
@@ -147,7 +147,7 @@ describe('WarehouseJobDocumentsService', () => {
         warehouseJobId,
         WarehouseJobDocumentType.PACKING_LIST,
         makeFile({ originalname: 'packing.pdf', mimetype: 'application/pdf' }),
-        Role.OPS,
+        Role.TRANSPORT_STAFF,
         actorUserId,
         'notes',
       );

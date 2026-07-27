@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import { TripDocumentType } from "@prisma/client";
-import { OpsJobsService } from "../jobs/ops-jobs.service";
+import { TransportJobsService } from "../jobs/transport-jobs.service";
 import * as signatureImageNormalize from "./signature-image-normalize";
 
 const TINY_PNG = Buffer.from(
@@ -119,7 +119,7 @@ function makeRefreshPrisma(doType: TripDocumentType) {
 }
 
 function makeSvc(prisma: ReturnType<typeof makeRefreshPrisma>["prisma"], storage: any) {
-  return new OpsJobsService(
+  return new TransportJobsService(
     prisma as any,
     { log: jest.fn() } as any,
     {

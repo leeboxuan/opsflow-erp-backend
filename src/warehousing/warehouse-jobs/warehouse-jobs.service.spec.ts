@@ -404,7 +404,7 @@ describe('WarehouseJobsService', () => {
             jobId,
             { containerNumber: 'CONT-1' },
             actorUserId,
-            Role.OPS,
+            Role.TRANSPORT_STAFF,
           ),
         ).rejects.toThrow('Cannot update execution');
       }
@@ -432,7 +432,7 @@ describe('WarehouseJobsService', () => {
           warehouseNotes: 'Floor note',
         },
         actorUserId,
-        Role.OPS,
+        Role.TRANSPORT_STAFF,
       );
 
       expect(tx.warehouseJob.update).toHaveBeenCalledWith(
@@ -529,7 +529,7 @@ describe('WarehouseJobsService', () => {
     it('accepts OPS and ADMIN assignees on update', async () => {
       const { service, prisma, tx } = makeService();
       prisma.warehouseJob.findFirst.mockResolvedValue(makeJob());
-      prisma.tenantMembership.findFirst.mockResolvedValue({ role: Role.OPS });
+      prisma.tenantMembership.findFirst.mockResolvedValue({ role: Role.TRANSPORT_STAFF });
       tx.warehouseJob.update.mockResolvedValue(makeJob({ assignedToUserId: 'user-ops' }));
 
       await service.update(tenantId, jobId, { assignedToUserId: 'user-ops' }, actorUserId);
@@ -555,7 +555,7 @@ describe('WarehouseJobsService', () => {
             },
             actorUserId,
           ),
-        ).rejects.toThrow('Assigned user must be a warehouse, ops, or admin user.');
+        ).rejects.toThrow('Assigned user must be a warehouse, transport staff, or admin user.');
         expect(tx.warehouseJob.create).not.toHaveBeenCalled();
       },
     );
@@ -587,7 +587,7 @@ describe('WarehouseJobsService', () => {
         expect.objectContaining({
           where: expect.objectContaining({
             tenantId,
-            role: { in: [Role.OPS, Role.WAREHOUSE] },
+            role: { in: [Role.TRANSPORT_STAFF, Role.OPS, Role.WAREHOUSE] },
           }),
         }),
       );

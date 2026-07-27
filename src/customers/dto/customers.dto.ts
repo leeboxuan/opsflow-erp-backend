@@ -8,7 +8,7 @@ import {
   MinLength,
 } from "class-validator";
 import { Type } from "class-transformer";
-import { ListQueryBaseDto } from "../../../shared/common/dto";
+import { ListQueryBaseDto } from "../../shared/common/dto";
 
 export class ListCompaniesQueryDto extends ListQueryBaseDto {
   @ApiPropertyOptional({ description: "Search by company name" })

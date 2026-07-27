@@ -11,9 +11,9 @@ import {
   Role,
   UserRole,
 } from "@prisma/client";
-import { PrismaService } from "../../shared/prisma/prisma.service";
-import { SupabaseService } from "../../shared/auth/supabase.service";
-import { AuditService } from "../../shared/audit/audit.service";
+import { PrismaService } from "../shared/prisma/prisma.service";
+import { SupabaseService } from "../shared/auth/supabase.service";
+import { AuditService } from "../shared/audit/audit.service";
 import {
   CreateCustomerCompanyUserDto,
   CustomerCompanyDocumentDto,
@@ -23,13 +23,13 @@ import {
   CreateCustomerCompanyDto,
   UpdateCustomerCompanyDto,
 } from "./dto/customers.dto";
-import { parsePaginationFromQuery, buildPaginationMeta } from "../../shared/common/pagination";
+import { parsePaginationFromQuery, buildPaginationMeta } from "../shared/common/pagination";
 import { createClient } from "@supabase/supabase-js";
-import { applyMappedFilter } from "../../shared/common/listing/listing.filters";
-import { buildOrderBy } from "../../shared/common/listing/listing.sort";
-import { applyQSearch } from "../../shared/common/listing/listing.search";
-import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
-import * as rt from "../../shared/realtime/realtime-publish";
+import { applyMappedFilter } from "../shared/common/listing/listing.filters";
+import { buildOrderBy } from "../shared/common/listing/listing.sort";
+import { applyQSearch } from "../shared/common/listing/listing.search";
+import { RealtimeEventsService } from "../shared/realtime/realtime-events.service";
+import * as rt from "../shared/realtime/realtime-publish";
 
 const COMPANY_DOCS_BUCKET = "job-documents";
 const INVOICE_DOCUMENTS_BUCKET = "invoice-documents";

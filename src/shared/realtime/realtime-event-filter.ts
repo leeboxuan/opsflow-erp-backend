@@ -1,7 +1,7 @@
 import { Role } from "@prisma/client";
 import type { RealtimeEvent, RealtimeSubscriberContext } from "./realtime-event.types";
 
-const OPS_ROLES = new Set<Role>([Role.ADMIN, Role.OPS, Role.FINANCE]);
+const OPS_ROLES = new Set<Role>([Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE]);
 
 const DRIVER_TRIP_EVENT_TYPES = new Set([
   "trip.created",

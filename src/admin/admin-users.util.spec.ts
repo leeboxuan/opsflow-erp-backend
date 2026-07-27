@@ -3,10 +3,18 @@ import { Role } from '@prisma/client';
 import { parseTenantRoleFilter } from './admin-users.util';
 
 describe('parseTenantRoleFilter', () => {
-  it('parses comma-separated roles', () => {
+  it('parses comma-separated roles and expands OPS to include TRANSPORT_STAFF', () => {
     expect(parseTenantRoleFilter(undefined, 'OPS,WAREHOUSE')).toEqual([
-      Role.OPS,
       Role.WAREHOUSE,
+      Role.TRANSPORT_STAFF,
+      Role.OPS,
+    ]);
+  });
+
+  it('expands TRANSPORT_STAFF filter to include legacy OPS', () => {
+    expect(parseTenantRoleFilter(Role.TRANSPORT_STAFF)).toEqual([
+      Role.TRANSPORT_STAFF,
+      Role.OPS,
     ]);
   });
 

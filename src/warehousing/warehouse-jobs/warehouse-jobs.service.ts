@@ -167,7 +167,7 @@ export class WarehouseJobsService {
         tenantId,
         job.id,
         actorUserId,
-        Role.OPS,
+        Role.TRANSPORT_STAFF,
       );
       return result.job;
     }
@@ -183,7 +183,7 @@ export class WarehouseJobsService {
     tenantId: string,
     id: string,
     actorUserId?: string,
-    actorRole: Role = Role.OPS,
+    actorRole: Role = Role.TRANSPORT_STAFF,
   ) {
     const result = await this.deliveryOrderService.generate(
       tenantId,
@@ -497,7 +497,7 @@ export class WarehouseJobsService {
           tenantId,
           existing.id,
           actorUserId,
-          Role.OPS,
+          Role.TRANSPORT_STAFF,
         );
         return result.job;
       }

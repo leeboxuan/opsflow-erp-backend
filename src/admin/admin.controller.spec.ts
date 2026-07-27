@@ -14,7 +14,7 @@ describe('AdminController users', () => {
         findMany: jest.fn().mockResolvedValue([
           {
             id: 'm-ops',
-            role: Role.OPS,
+            role: Role.TRANSPORT_STAFF,
             status: MembershipStatus.Active,
             user: {
               id: 'u-ops',
@@ -83,12 +83,15 @@ describe('AdminController users', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           tenantId: 'tenant-1',
-          role: { in: [Role.OPS, Role.WAREHOUSE] },
+          role: { in: [Role.WAREHOUSE, Role.TRANSPORT_STAFF, Role.OPS] },
           NOT: { role: Role.DRIVER },
         }),
       }),
     );
-    expect(result.data.map((row) => row.role)).toEqual([Role.OPS, Role.WAREHOUSE]);
+    expect(result.data.map((row) => row.role)).toEqual([
+      Role.TRANSPORT_STAFF,
+      Role.WAREHOUSE,
+    ]);
     expect(result.data[0]?.phone).toBe('+6512345678');
   });
 
@@ -127,7 +130,7 @@ describe('AdminController users', () => {
     );
   });
 
-  it('creates OPS user membership', async () => {
+  it('creates transport-staff user but stores OPS during compatibility window', async () => {
     const { controller, prisma } = makeController();
 
     prisma.user.upsert.mockResolvedValue({
@@ -149,11 +152,17 @@ describe('AdminController users', () => {
       {
         email: 'cs@example.com',
         name: 'CS User',
-        role: Role.OPS,
+        role: Role.TRANSPORT_STAFF,
       },
     );
 
     expect(result.role).toBe(Role.OPS);
+    expect(prisma.tenantMembership.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ role: Role.OPS }),
+        update: expect.objectContaining({ role: Role.OPS }),
+      }),
+    );
   });
 
   it('rejects DRIVER role on create', async () => {

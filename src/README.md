@@ -53,8 +53,8 @@ Specs are colocated under each transport subfolder (`jobs/*.spec.ts`, `trips/*.s
 
 | File / folder | Role |
 |---------------|------|
-| `ops-jobs.controller.ts` | `/jobs/*` HTTP routes |
-| `ops-jobs.service.ts` | Main job/trip workflow monolith (~7.7k lines) |
+| `transport-jobs.controller.ts` | `/jobs/*` HTTP routes |
+| `transport-jobs.service.ts` | Main job/trip workflow monolith (~7.7k lines) |
 | `job-invoice-readiness.ts` | Invoice readiness evaluation (consumed by `transport/finance/invoices.service.ts`) |
 | `job-batch-import.helpers.ts` | Batch job import parsing helpers |
 | `create-job-validation.helpers.ts` | Pure create-job validation (items parsing, location assertions, collection type resolution) |
@@ -70,13 +70,13 @@ Specs are colocated under each transport subfolder (`jobs/*.spec.ts`, `trips/*.s
 | `dto/lcl-import.dto.ts` | LCL import confirm DTO |
 | `assets/` | Job PDF branding assets (`db-logo.png`) |
 
-`OpsJobsService` lives in `src/transport/jobs/` and orchestrates the create-job flow. HTTP routes remain `/jobs/*` via `TransportExecutionModule`.
+`TransportJobsService` lives in `src/transport/jobs/` and orchestrates the create-job flow. HTTP routes remain `/jobs/*` via `TransportExecutionModule`.
 
 ### `transport/trips/` (current)
 
 | File | Role |
 |------|------|
-| `ops-trips.controller.ts` | `/trips/:tripId` ops trip detail |
+| `transport-trips.controller.ts` | `/trips/:tripId` ops trip detail |
 | `trip-notes.helpers.ts` | Trip notes field resolution for API responses |
 | `trip-document-list.helpers.ts` | Trip document list shaping for ops and driver flows |
 
@@ -193,11 +193,11 @@ The following are intentionally **out of scope** for the current extraction phas
 | Item | Reason |
 |------|--------|
 | `job-workflow.helpers.ts` | Moved to `transport/workflows/` |
-| `ops-jobs.service.ts`, `driver-jobs.service.ts`, ops controllers | Moved to `src/transport/`; registered via `TransportExecutionModule` |
+| `transport-jobs.service.ts`, `driver-jobs.service.ts`, ops controllers | Moved to `src/transport/`; registered via `TransportExecutionModule` |
 | Ops controllers | Route stability preserved (`/jobs`, `/drivers/jobs`, etc.) |
 | Transport finance relocation | **Done** — `src/transport/finance/` |
 | `src/transport/legacy-driver/` | Legacy `/driver/*` order-trip mobile API; retire after client migration |
-| PDF/signing orchestration inside `OpsJobsService` | Behavior-sensitive; helpers already extracted to `transport/documents/` |
+| PDF/signing orchestration inside `TransportJobsService` | Behavior-sensitive; helpers already extracted to `transport/documents/` |
 | Prisma `Job`/`Trip` model renames | Schema change, not a folder refactor |
 
 ---
@@ -222,12 +222,12 @@ The following **leaf moves are done** (import path updates only; routes and beha
 
 Recommended next step:
 
-1. **Audit and plan** `job-workflow.helpers.ts` before any move — map consumers (`ops-jobs.service.ts`, `driver-jobs.service.ts`, specs) and decide target folder (e.g. `transport/jobs/` or `transport/workflows/`).
+1. **Audit and plan** `job-workflow.helpers.ts` before any move — map consumers (`transport-jobs.service.ts`, `driver-jobs.service.ts`, specs) and decide target folder (e.g. `transport/jobs/` or `transport/workflows/`).
 
 **Delay until deliberately planned:**
 
 | Platform module relocation | **Done** — `auth`, `prisma`, `tenants`, `realtime`, `notifications`, `push` under `src/shared/` |
-| `OpsJobsService` / `DriverJobsService` splits | Behavior-sensitive; file moves only, no splits |
+| `TransportJobsService` / `DriverJobsService` splits | Behavior-sensitive; file moves only, no splits |
 - Finance domain split
 - `src/transport/legacy-driver` API retirement after client migration
 - Prisma `Job`/`Trip` model renames

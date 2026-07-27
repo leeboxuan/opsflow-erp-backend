@@ -6,7 +6,7 @@ import {
   resolveCollectionTypeForJobCreate,
   resolveExportDestinationFields,
 } from "./create-job-validation.helpers";
-import { OpsJobsService } from "./ops-jobs.service";
+import { TransportJobsService } from "./transport-jobs.service";
 
 describe("job create: EXPORT and COLLECTION", () => {
   function makeExportCreatePrisma() {
@@ -64,7 +64,7 @@ describe("job create: EXPORT and COLLECTION", () => {
   }
 
   function makeSvc(prisma: ReturnType<typeof makeExportCreatePrisma>) {
-    const svc = new OpsJobsService(
+    const svc = new TransportJobsService(
       prisma as any,
       { log: jest.fn().mockResolvedValue(undefined) } as any,
       { getClient: jest.fn() } as any,
@@ -135,7 +135,7 @@ describe("job create: EXPORT and COLLECTION", () => {
         receiverName: "PIC",
         receiverPhone: "91234567",
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     expect(prisma.masterLogisticsLocation.findFirst).not.toHaveBeenCalled();
@@ -161,7 +161,7 @@ describe("job create: EXPORT and COLLECTION", () => {
           receiverName: "PIC",
           receiverPhone: "91234567",
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow(/Pickup location is required/i);
     expect(prisma.job.create).not.toHaveBeenCalled();
@@ -183,7 +183,7 @@ describe("job create: EXPORT and COLLECTION", () => {
         receiverName: "PIC",
         receiverPhone: "91234567",
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
@@ -215,7 +215,7 @@ describe("job create: EXPORT and COLLECTION", () => {
           stuffingPostal: "629356",
         },
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
@@ -242,7 +242,7 @@ describe("job create: EXPORT and COLLECTION", () => {
             stuffingAddress1: "99 Other Street",
           },
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow(/deliveryAddress1 must match/i);
     expect(prisma.job.create).not.toHaveBeenCalled();
@@ -267,7 +267,7 @@ describe("job create: EXPORT and COLLECTION", () => {
             stuffingAddress1: "Stuffing Street 1",
           },
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).resolves.toBeTruthy();
 
@@ -315,7 +315,7 @@ describe("job create: EXPORT and COLLECTION", () => {
             stuffingAddress1: "Stuffing Street 1",
           },
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).resolves.toBeTruthy();
 
@@ -340,7 +340,7 @@ describe("job create: EXPORT and COLLECTION", () => {
           receiverName: "PIC",
           receiverPhone: "91234567",
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).resolves.toBeTruthy();
 
@@ -360,7 +360,7 @@ describe("job create: EXPORT and COLLECTION", () => {
         pickupAddress1: "7 Gul Circle",
         deliveryAddress1: "20 Gul Way",
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     expect(prisma.job.create.mock.calls[0][0].data.receiverName).toBe("");
@@ -382,7 +382,7 @@ describe("job create: EXPORT and COLLECTION", () => {
           receiverName: "Receiver",
           receiverPhone: "91234567",
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow(/collectionType is required/i);
     expect(prisma.job.create).not.toHaveBeenCalled();
@@ -428,7 +428,7 @@ describe("job create: EXPORT and COLLECTION", () => {
           receiverName: "Receiver",
           receiverPhone: "91234567",
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).resolves.toBeTruthy();
 
@@ -475,7 +475,7 @@ describe("job create: EXPORT and COLLECTION", () => {
         receiverName: "Receiver",
         receiverPhone: "91234567",
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     expect(prisma.job.create.mock.calls[0][0].data.collectionType).toBe(
@@ -530,7 +530,7 @@ describe("job create: EXPORT and COLLECTION", () => {
       }
 
       await expect(
-        svc.create("t1", payload, { userId: "u1", role: Role.OPS }),
+        svc.create("t1", payload, { userId: "u1", role: Role.TRANSPORT_STAFF }),
       ).resolves.toBeTruthy();
       expect(prisma.job.create.mock.calls[0][0].data.collectionType).toBeNull();
     }
@@ -575,7 +575,7 @@ describe("job create: EXPORT and COLLECTION", () => {
           receiverName: "Receiver",
           receiverPhone: "91234567",
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).resolves.toBeTruthy();
 
@@ -623,7 +623,7 @@ describe("job create: EXPORT and COLLECTION", () => {
         receiverPhone: "91234567",
         items: [{ containerNumber: "CONT123", sealNo: "SEAL9", pickupReference: "REF-88" }],
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     const itemsCreate = prisma.job.create.mock.calls[0][0].data.items.create;
@@ -682,7 +682,7 @@ describe("job create: EXPORT and COLLECTION", () => {
         vesselName: "Vessel A",
         items: [{ containerNumber: "CONT123", sealNo: "SEAL9" }],
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     const createData = prisma.job.create.mock.calls[0][0].data;
@@ -778,13 +778,13 @@ describe("getTripDetail COLLECTION cargo sealNo", () => {
       tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
       driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
     };
-    const svc = new OpsJobsService(
+    const svc = new TransportJobsService(
       prisma,
       { log: jest.fn() } as any,
       { getClient: jest.fn() } as any,
     );
 
-    const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
+    const result = await svc.getTripDetail("t1", "trip1", { role: Role.TRANSPORT_STAFF });
     expect(result.job.collectionType).toBe(CollectionType.EMPTY);
   });
 
@@ -829,13 +829,13 @@ describe("getTripDetail COLLECTION cargo sealNo", () => {
       tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
       driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
     };
-    const svc = new OpsJobsService(
+    const svc = new TransportJobsService(
       prisma,
       { log: jest.fn() } as any,
       { getClient: jest.fn() } as any,
     );
 
-    const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
+    const result = await svc.getTripDetail("t1", "trip1", { role: Role.TRANSPORT_STAFF });
     expect(result.cargo.mode).toBe("CONTAINER");
     expect(result.cargo.containers[0]).toMatchObject({
       containerNumber: "CONT-777",

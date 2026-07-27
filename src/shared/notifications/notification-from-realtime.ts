@@ -212,7 +212,7 @@ export function buildNotificationSpecsFromRealtimeEvent(
     case "vehicle.updated":
     case "vehicle.deleted":
       return [
-        opsRoleSpec(Role.OPS, {
+        opsRoleSpec(Role.TRANSPORT_STAFF, {
           ...base,
           title: vehicleEventTitle(event.type),
           description: event.entityId ? `Vehicle ${event.entityId}` : null,
@@ -280,7 +280,7 @@ function opsRoleSpec(
 function opsAdminAndOpsRoleSpecs(
   partial: Omit<NotificationCreateSpec, "audience" | "userId" | "role">,
 ): NotificationCreateSpec[] {
-  return [opsRoleSpec(Role.ADMIN, partial), opsRoleSpec(Role.OPS, partial)];
+  return [opsRoleSpec(Role.ADMIN, partial), opsRoleSpec(Role.TRANSPORT_STAFF, partial)];
 }
 
 function tripEventTitle(type: string): { driver: string; ops: string } {

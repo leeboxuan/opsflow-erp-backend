@@ -26,6 +26,7 @@ import { MembershipStatus, Role } from '@prisma/client';
 import { InviteMemberDto } from './dto/invite-member.dto';
 import { UpdateMembershipDto } from './dto/update-membership.dto';
 import { TenantListQueryDto } from './dto/list-query.dto';
+import { toPersistedMembershipRole } from '../auth/role-compat';
 
 export interface TenantDto {
   id: string;
@@ -129,7 +130,7 @@ export class TenantsController {
 
   @Get('members')
   @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'List all members of current tenant (Admin/Ops only)' })
   async getMembers(
@@ -231,7 +232,7 @@ export class TenantsController {
       data: {
         tenantId,
         userId: user.id,
-        role: dto.role,
+        role: toPersistedMembershipRole(dto.role),
         status: MembershipStatus.Invited,
       },
       include: {
@@ -279,10 +280,12 @@ export class TenantsController {
     }
 
     // Update membership
+    const persistedRole =
+      dto.role !== undefined ? toPersistedMembershipRole(dto.role) : undefined;
     const updated = await this.prisma.tenantMembership.update({
       where: { id: membershipId },
       data: {
-        ...(dto.role !== undefined && { role: dto.role }),
+        ...(persistedRole !== undefined && { role: persistedRole }),
         ...(dto.status !== undefined && { status: dto.status }),
       },
       include: {

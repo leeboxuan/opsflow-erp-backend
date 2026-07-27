@@ -122,7 +122,7 @@ describe("UsersService", () => {
 
   it("OPS/FINANCE can update own displayName", async () => {
     const { service, prisma } = makeService();
-    await service.updateMyProfile("t1", "u1", Role.OPS, {
+    await service.updateMyProfile("t1", "u1", Role.TRANSPORT_STAFF, {
       displayName: "Ops Name",
     } as any);
     await service.updateMyProfile("t1", "u1", Role.FINANCE, {

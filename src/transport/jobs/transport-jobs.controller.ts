@@ -30,7 +30,7 @@ import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
 import { RoleGuard } from "../../shared/auth/guards/role.guard";
 import { Roles } from "../../shared/auth/guards/role.guard";
 import { Role, JobType, TripPendingState } from "@prisma/client";
-import { OpsJobsService } from "./ops-jobs.service";
+import { TransportJobsService } from "./transport-jobs.service";
 import { InvoicesService } from "../finance/invoices.service";
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
@@ -55,21 +55,21 @@ import {
 import { JobDto, JobDocumentDto, JobTripResponseDto } from "./dto/job.dto";
 import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
 
-@ApiTags("ops-jobs")
+@ApiTags("transport-jobs")
 @Controller("jobs")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
 @ApiBearerAuth("JWT-auth")
 @ApiExtraModels(JobDocumentDto)
-export class OpsJobsController {
+export class TransportJobsController {
   constructor(
-    private readonly jobs: OpsJobsService,
+    private readonly jobs: TransportJobsService,
     private readonly invoices: InvoicesService,
   ) {}
 
   @Get(":jobId/documents/:documentId/signed-url")
   @ApiOperation({ summary: "Get signed preview/download URLs for a job document" })
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
   async getJobDocumentSignedUrl(
     @Req() req: any,
     @Param("jobId") jobId: string,
@@ -91,7 +91,7 @@ export class OpsJobsController {
 
   @Get(":jobId/trips/:tripId/documents/:documentId/signed-url")
   @ApiOperation({ summary: "Get signed preview/download URLs for a trip document" })
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
   async getTripDocumentSignedUrl(
     @Req() req: any,
     @Param("jobId") jobId: string,
@@ -115,7 +115,7 @@ export class OpsJobsController {
 
   @Get()
   @ApiOperation({ summary: "List jobs with filters (slim rows for table view)" })
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
   async list(@Req() req: any, @Query() query: JobListQueryDto) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -332,7 +332,7 @@ export class OpsJobsController {
 
   @Get("tracking/live")
   @ApiOperation({ summary: "List live trip tracking rows for active/published trips" })
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
   async listLiveTracking(@Req() req: any) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -345,7 +345,7 @@ export class OpsJobsController {
 
   @Get(":jobId")
   @ApiOperation({ summary: "Get job by id" })
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
   async getOne(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -358,7 +358,7 @@ export class OpsJobsController {
 
   @Get(":jobId/invoice-prefill")
   @ApiOperation({ summary: "Build create-invoice prefill payload from job" })
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   async invoicePrefill(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -535,7 +535,7 @@ export class OpsJobsController {
       ],
     },
   })
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
   async listDocuments(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -600,7 +600,7 @@ export class OpsJobsController {
       ],
     },
   })
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
   async getActivity(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -613,7 +613,7 @@ export class OpsJobsController {
 
   @Get(":jobId/audit")
   @ApiOperation({ summary: "Get audit log for job" })
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
   async getAudit(
     @Req() req: any,
     @Param("jobId") jobId: string,
@@ -635,7 +635,7 @@ export class OpsJobsController {
 
   @Get(":jobId/tracking")
   @ApiOperation({ summary: "Get job tracking (last location, driver, vehicle)" })
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
   async getTracking(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -649,7 +649,7 @@ export class OpsJobsController {
   @Get(":jobId/trips")
   @ApiOperation({ summary: "List all trips for a job ordered by sequence" })
   @ApiOkResponse({ type: JobTripResponseDto, isArray: true })
-  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async listTrips(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -969,7 +969,7 @@ export class OpsJobsController {
       ],
     },
   })
-  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async listTripDocuments(
     @Req() req: any,
     @Param("jobId") jobId: string,

@@ -15,7 +15,7 @@ import { resolveTripNotesResponseFields } from "../trips/trip-notes.helpers";
 import {
   parseQuotationRateLinesFromDocxBuffer,
   parseQuotationRateLinesFromXlsxBuffer,
-} from "../customers/quotation-parse.helpers";
+} from "../../customers/quotation-parse.helpers";
 
 describe("workflow helpers", () => {
   describe("default trip generation rules", () => {
@@ -821,7 +821,7 @@ describe("portal user name", () => {
   it("CreateCustomerCompanyUserDto requires name via class-validator", async () => {
     const { validate } = await import("class-validator");
     const { CreateCustomerCompanyUserDto } = await import(
-      "../customers/dto/customers.dto"
+      "../../customers/dto/customers.dto"
     );
     const dto = Object.assign(new CreateCustomerCompanyUserDto(), {
       email: "a@b.com",

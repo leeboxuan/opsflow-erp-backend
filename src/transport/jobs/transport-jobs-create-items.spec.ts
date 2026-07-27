@@ -9,7 +9,7 @@ import {
   readCreateJobItemsInput,
   readUpdateJobItemsInput,
 } from "./create-job-validation.helpers";
-import { OpsJobsService } from "./ops-jobs.service";
+import { TransportJobsService } from "./transport-jobs.service";
 
 describe("create job items (LCL optional)", () => {
   describe("readUpdateJobItemsInput", () => {
@@ -123,7 +123,7 @@ describe("create job items (LCL optional)", () => {
     });
   });
 
-  describe("OpsJobsService.create", () => {
+  describe("TransportJobsService.create", () => {
     const freshJobShape = () => ({
       id: "job1",
       tenantId: "t1",
@@ -208,7 +208,7 @@ describe("create job items (LCL optional)", () => {
     }
 
     function makeSvc(prisma: ReturnType<typeof makeCreatePrisma>) {
-      const svc = new OpsJobsService(
+      const svc = new TransportJobsService(
         prisma as any,
         { log: jest.fn().mockResolvedValue(undefined) } as any,
         { getClient: jest.fn() } as any,
@@ -232,7 +232,7 @@ describe("create job items (LCL optional)", () => {
       const svc = makeSvc(prisma);
 
       await expect(
-        svc.create("t1", baseLclDto as any, { userId: "u1", role: Role.OPS }),
+        svc.create("t1", baseLclDto as any, { userId: "u1", role: Role.TRANSPORT_STAFF }),
       ).resolves.toBeTruthy();
 
       const createArg = prisma.job.create.mock.calls[0][0];
@@ -248,7 +248,7 @@ describe("create job items (LCL optional)", () => {
         svc.create(
           "t1",
           { ...baseLclDto, items: [] } as any,
-          { userId: "u1", role: Role.OPS },
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
       ).resolves.toBeTruthy();
     });
@@ -261,7 +261,7 @@ describe("create job items (LCL optional)", () => {
         svc.create(
           "t1",
           { ...baseLclDto, cargoItems: [] } as any,
-          { userId: "u1", role: Role.OPS },
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
       ).resolves.toBeTruthy();
     });
@@ -289,7 +289,7 @@ describe("create job items (LCL optional)", () => {
             pickupPortCode: "JURONG",
           },
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       );
 
       expect(prisma.job.create.mock.calls[0][0].data.pickupPortCode).toBe("JURONG");
@@ -330,7 +330,7 @@ describe("create job items (LCL optional)", () => {
             pickupPortCode: "JURONG",
           },
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       );
 
       expect(prisma.trip.createMany.mock.calls[0][0].data[0].originAddressLine1).toBeUndefined();
@@ -357,7 +357,7 @@ describe("create job items (LCL optional)", () => {
               pickupPortCode: "JURONG",
             },
           } as any,
-          { userId: "u1", role: Role.OPS },
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
       ).resolves.toBeTruthy();
 
@@ -378,7 +378,7 @@ describe("create job items (LCL optional)", () => {
             pickupPostal: "639201",
             pickupPlaceId: "ChIJ-import-pickup",
           } as any,
-          { userId: "u1", role: Role.OPS },
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
       ).resolves.toBeTruthy();
 
@@ -404,7 +404,7 @@ describe("create job items (LCL optional)", () => {
             pickupAddress1: "   ",
             pickupPostal: "629356",
           } as any,
-          { userId: "u1", role: Role.OPS },
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
       ).rejects.toThrow(/Pickup location is required/i);
       expect(prisma.job.create).not.toHaveBeenCalled();
@@ -424,7 +424,7 @@ describe("create job items (LCL optional)", () => {
             pickupPostal: "117352",
             pickupPlaceId: "ChIJ-import-pickup",
           } as any,
-          { userId: "u1", role: Role.OPS },
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
       ).resolves.toBeTruthy();
 
@@ -447,7 +447,7 @@ describe("create job items (LCL optional)", () => {
             pickupAddress1: "1 Harbour Drive",
             pickupPostal: "117352",
           } as any,
-          { userId: "u1", role: Role.OPS },
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
       ).resolves.toBeTruthy();
 
@@ -473,7 +473,7 @@ describe("create job items (LCL optional)", () => {
               returningDepotCode: "GUL",
             },
           } as any,
-          { userId: "u1", role: Role.OPS },
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
       ).resolves.toBeTruthy();
 
@@ -500,7 +500,7 @@ describe("create job items (LCL optional)", () => {
               pickupPortCode: "JURONG",
             },
           } as any,
-          { userId: "u1", role: Role.OPS },
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
       ).resolves.toBeTruthy();
 
@@ -529,7 +529,7 @@ describe("create job items (LCL optional)", () => {
               returnLastDay: "2026-06-30",
             },
           } as any,
-          { userId: "u1", role: Role.OPS },
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
       ).resolves.toBeTruthy();
 
@@ -560,7 +560,7 @@ describe("create job items (LCL optional)", () => {
               returningDepotCode: "GUL",
             },
           } as any,
-          { userId: "u1", role: Role.OPS },
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
       ).resolves.toBeTruthy();
 
@@ -571,7 +571,7 @@ describe("create job items (LCL optional)", () => {
     });
   });
 
-  describe("OpsJobsService.update", () => {
+  describe("TransportJobsService.update", () => {
     const jobRow = {
       id: "job1",
       tenantId: "t1",
@@ -662,7 +662,7 @@ describe("create job items (LCL optional)", () => {
 
     it("allows LCL PATCH with items: [] to clear cargo lines", async () => {
       const prisma = makeUpdatePrisma();
-      const svc = new OpsJobsService(
+      const svc = new TransportJobsService(
         prisma as any,
         { log: jest.fn() } as any,
         {} as any,
@@ -674,7 +674,7 @@ describe("create job items (LCL optional)", () => {
           "t1",
           "job1",
           { receiverName: "Updated", items: [] } as any,
-          { userId: "u1", role: Role.OPS },
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
       ).resolves.toBeTruthy();
 
@@ -684,7 +684,7 @@ describe("create job items (LCL optional)", () => {
 
     it("allows IMPORT PATCH with items: [] to clear cargo lines", async () => {
       const prisma = makeUpdatePrisma(JobType.IMPORT);
-      const svc = new OpsJobsService(
+      const svc = new TransportJobsService(
         prisma as any,
         { log: jest.fn() } as any,
         {} as any,
@@ -694,7 +694,7 @@ describe("create job items (LCL optional)", () => {
       await expect(
         svc.update("t1", "job1", { items: [] } as any, {
           userId: "u1",
-          role: Role.OPS,
+          role: Role.TRANSPORT_STAFF,
         }),
       ).resolves.toBeTruthy();
 

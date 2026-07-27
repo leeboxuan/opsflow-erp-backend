@@ -13,7 +13,7 @@ function event(partial: Partial<RealtimeEvent>): RealtimeEvent {
 }
 
 describe("shouldDeliverRealtimeEvent", () => {
-  const ops = { tenantId: "tenant-1", role: Role.OPS, userId: "ops-1" };
+  const ops = { tenantId: "tenant-1", role: Role.TRANSPORT_STAFF, userId: "ops-1" };
   const driver = { tenantId: "tenant-1", role: Role.DRIVER, userId: "drv-1" };
   const customer = { tenantId: "tenant-1", role: Role.CUSTOMER, userId: "cust-1" };
 

@@ -50,9 +50,9 @@ import { UpdateWarehouseJobCargoLineDto } from './dto/update-warehouse-job-cargo
 import { ListWarehousingUsersQueryDto } from './dto/list-warehousing-users-query.dto';
 import { WarehouseJobCargoLinesService } from './warehouse-job-cargo-lines.service';
 
-const READ_ROLES = [Role.ADMIN, Role.OPS, Role.FINANCE, Role.WAREHOUSE];
-const MUTATE_ROLES = [Role.ADMIN, Role.OPS];
-const FLOOR_ROLES = [Role.ADMIN, Role.OPS, Role.WAREHOUSE];
+const READ_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.WAREHOUSE];
+const MUTATE_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF];
+const FLOOR_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF, Role.WAREHOUSE];
 
 @ApiTags('warehouse-jobs')
 @Controller('warehouse-jobs')

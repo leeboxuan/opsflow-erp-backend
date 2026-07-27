@@ -9,9 +9,9 @@ import { WarehouseJobsController } from './warehouse-jobs.controller';
 const controllerPath = join(__dirname, 'warehouse-jobs.controller.ts');
 const controllerSource = readFileSync(controllerPath, 'utf8');
 
-const READ_ROLES = [Role.ADMIN, Role.OPS, Role.FINANCE, Role.WAREHOUSE];
-const MUTATE_ROLES = [Role.ADMIN, Role.OPS];
-const FLOOR_ROLES = [Role.ADMIN, Role.OPS, Role.WAREHOUSE];
+const READ_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.WAREHOUSE];
+const MUTATE_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF];
+const FLOOR_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF, Role.WAREHOUSE];
 const BLOCKED_ROLES = [Role.DRIVER, Role.CUSTOMER];
 
 function getEffectiveRoles(
@@ -135,7 +135,7 @@ describe('RoleGuard + WarehouseJobsController', () => {
   describe('read routes', () => {
     const handler = WarehouseJobsController.prototype.list;
 
-    it.each([Role.ADMIN, Role.OPS, Role.FINANCE, Role.WAREHOUSE])(
+    it.each([Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.WAREHOUSE])(
       'allows %s',
       (role) => {
         expect(guard.canActivate(ctxForHandler(handler, role))).toBe(true);
@@ -198,7 +198,7 @@ describe('WarehouseJobsController delegation', () => {
   const lineId = 'line-1';
   const actorUserId = 'user-ops';
   const req = {
-    tenant: { tenantId, role: Role.OPS },
+    tenant: { tenantId, role: Role.TRANSPORT_STAFF },
     user: { userId: actorUserId },
   };
 
@@ -278,7 +278,7 @@ describe('WarehouseJobsController delegation', () => {
     expect(warehouseJobsService.list).toHaveBeenCalledWith(
       tenantId,
       query,
-      Role.OPS,
+      Role.TRANSPORT_STAFF,
       actorUserId,
     );
   });
@@ -300,13 +300,13 @@ describe('WarehouseJobsController delegation', () => {
       tenantId,
       jobId,
       actorUserId,
-      Role.OPS,
+      Role.TRANSPORT_STAFF,
     );
     expect(warehouseJobsService.complete).toHaveBeenCalledWith(
       tenantId,
       jobId,
       actorUserId,
-      Role.OPS,
+      Role.TRANSPORT_STAFF,
     );
     expect(warehouseJobsService.cancel).toHaveBeenCalledWith(
       tenantId,
@@ -337,7 +337,7 @@ describe('WarehouseJobsController delegation', () => {
 
     expect(warehouseJobReportPreviewService.getReportPreview).toHaveBeenCalledWith(
       tenantId,
-      { role: Role.OPS, userId: actorUserId },
+      { role: Role.TRANSPORT_STAFF, userId: actorUserId },
       jobId,
     );
   });

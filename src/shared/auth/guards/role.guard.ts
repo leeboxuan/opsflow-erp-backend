@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Role } from '@prisma/client';
+import { roleSatisfiesRequirement } from '../role-compat';
 
 export const Roles = (...roles: Role[]) => SetMetadata('roles', roles);
 
@@ -30,7 +31,7 @@ export class RoleGuard implements CanActivate {
     }
 
     const userRole = tenant.role;
-    if (!requiredRoles.includes(userRole)) {
+    if (!roleSatisfiesRequirement(userRole, requiredRoles)) {
       throw new ForbiddenException(
         `Required role: ${requiredRoles.join(' or ')}`,
       );

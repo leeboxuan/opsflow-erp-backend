@@ -1,8 +1,8 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { TripStatus } from "@prisma/client";
-import { OpsJobsService } from "../jobs/ops-jobs.service";
+import { TransportJobsService } from "../jobs/transport-jobs.service";
 
-describe("OpsJobsService.deleteTrip", () => {
+describe("TransportJobsService.deleteTrip", () => {
   function makeService(prismaOverrides?: Record<string, any>) {
     const prisma: any = {
       trip: {
@@ -18,7 +18,7 @@ describe("OpsJobsService.deleteTrip", () => {
       $transaction: jest.fn(async (cb: any) => cb(prisma)),
       ...prismaOverrides,
     };
-    const svc = new OpsJobsService(
+    const svc = new TransportJobsService(
       prisma,
       { log: jest.fn().mockResolvedValue(undefined) } as any,
       {} as any,

@@ -45,7 +45,7 @@ describe("notification-from-realtime", () => {
       userId: "drv-1",
     });
     expect(specs[1].role).toBe(Role.ADMIN);
-    expect(specs[2].role).toBe(Role.OPS);
+    expect(specs[2].role).toBe(Role.TRANSPORT_STAFF);
     expect(specs.every((s) => s.audience !== NotificationAudience.TENANT)).toBe(
       true,
     );
@@ -69,7 +69,7 @@ describe("notification-from-realtime", () => {
       (s) => s.audience === NotificationAudience.USER,
     );
     expect(driverSpecs).toHaveLength(0);
-    expect(specs.some((s) => s.role === Role.OPS)).toBe(true);
+    expect(specs.some((s) => s.role === Role.TRANSPORT_STAFF)).toBe(true);
   });
 
   it("notifies assigned driver when ops uploads trip document", () => {
@@ -84,7 +84,7 @@ describe("notification-from-realtime", () => {
         tripDisplayRef: "TRIP-T01",
         driverUserId: "drv-1",
         actorUserId: "ops-1",
-        actorRole: Role.OPS,
+        actorRole: Role.TRANSPORT_STAFF,
         tripStatus: TripStatus.PUBLISHED,
         notificationKind: "DOCUMENT_ADDED",
         documentTypeLabel: "Delivery DO",
@@ -118,7 +118,7 @@ describe("notification-from-realtime", () => {
         tripDisplayRef: "TRIP-T01",
         driverUserId: "drv-1",
         actorUserId: "ops-1",
-        actorRole: Role.OPS,
+        actorRole: Role.TRANSPORT_STAFF,
         tripStatus: TripStatus.PUBLISHED,
         notificationKind: "TRIP_NOTES_UPDATED",
       }),
@@ -145,7 +145,7 @@ describe("notification-from-realtime", () => {
         tripDisplayRef: "TRIP-T01",
         driverUserId: "drv-1",
         actorUserId: "ops-1",
-        actorRole: Role.OPS,
+        actorRole: Role.TRANSPORT_STAFF,
         tripStatus: TripStatus.PUBLISHED,
         notificationKind: "TRIP_INSTRUCTIONS_UPDATED",
       }),
@@ -191,7 +191,7 @@ describe("notification-from-realtime", () => {
         tripDisplayRef: "TRIP-T01",
         driverUserId: "drv-1",
         actorUserId: "ops-1",
-        actorRole: Role.OPS,
+        actorRole: Role.TRANSPORT_STAFF,
         tripStatus: TripStatus.PUBLISHED,
         notificationKind: "EARNINGS_UPDATED",
         earningsAmountCents: 2800,

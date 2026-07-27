@@ -30,6 +30,7 @@ import { VehicleDto } from "./dto/vehicle.dto";
 import { DriverLocationDto } from "../transport/drivers/location/dto/location.dto";
 import { SupabaseService } from "../shared/auth/supabase.service";
 import { CreateUserDto } from "./dto/create-user.dto";
+import { toPersistedMembershipRole } from "../shared/auth/role-compat";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { UserDto } from "./dto/user.dto";
 import { AdminListQueryDto } from "./dto/list-query.dto";
@@ -39,7 +40,7 @@ import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
 @ApiTags("admin")
 @Controller("admin")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.ADMIN, Role.OPS)
+@Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
 @ApiBearerAuth("JWT-auth")
 export class AdminController {
   constructor(
@@ -129,6 +130,8 @@ export class AdminController {
       throw new BadRequestException("Use /admin/drivers to create drivers");
     }
 
+    const persistedRole = toPersistedMembershipRole(dto.role);
+
     const normalizeCompanyName = (name: string) =>
       String(name ?? "").trim().replace(/\s+/g, " ").toLowerCase();
 
@@ -201,13 +204,13 @@ export class AdminController {
       const membership = await tx.tenantMembership.upsert({
         where: { tenantId_userId: { tenantId, userId: user.id } },
         update: {
-          role: dto.role,
+          role: persistedRole,
           status: dto.sendInvite === false ? "Active" : "Invited",
         },
         create: {
           tenantId,
           userId: user.id,
-          role: dto.role,
+          role: persistedRole,
           status: dto.sendInvite === false ? "Active" : "Invited",
         },
       });
@@ -256,6 +259,9 @@ export class AdminController {
       throw new BadRequestException("Drivers are managed under Drivers");
     }
 
+    const persistedRole =
+      dto.role !== undefined ? toPersistedMembershipRole(dto.role) : undefined;
+
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -266,7 +272,7 @@ export class AdminController {
     const updatedMembership = await this.prisma.tenantMembership.update({
       where: { id: membership.id },
       data: {
-        ...(dto.role !== undefined && { role: dto.role }),
+        ...(persistedRole !== undefined && { role: persistedRole }),
         ...(dto.status !== undefined && { status: dto.status }),
       },
     });

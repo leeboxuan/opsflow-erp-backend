@@ -41,7 +41,7 @@ describe("NotificationsService", () => {
   const opsCtx = {
     tenantId: "tenant-1",
     userId: "ops-1",
-    role: Role.OPS,
+    role: Role.TRANSPORT_STAFF,
   };
 
   it("createFromRealtimeEvent persists recipients and publishes notification.created", async () => {
@@ -209,7 +209,7 @@ describe("NotificationsService", () => {
       id: "n-0",
       tenantId: "tenant-1",
       userId: null,
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
       audience: NotificationAudience.TENANT,
       type: "job.created",
       title: "Job",

@@ -75,7 +75,7 @@ export class InventoryController {
 
   @Post('batches')
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
   @ApiOperation({ summary: 'Create a new inventory batch' })
   async createBatch(
     @Request() req: any,

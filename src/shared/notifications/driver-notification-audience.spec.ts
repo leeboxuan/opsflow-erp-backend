@@ -8,7 +8,7 @@ describe("shouldNotifyAssignedDriver", () => {
     expect(
       shouldNotifyAssignedDriver({
         actorUserId: "ops-1",
-        actorRole: Role.OPS,
+        actorRole: Role.TRANSPORT_STAFF,
         assignedDriverUserId: null,
         tripStatus: TripStatus.PUBLISHED,
         isDriverVisibleEvent: true,
@@ -44,7 +44,7 @@ describe("shouldNotifyAssignedDriver", () => {
     expect(
       shouldNotifyAssignedDriver({
         actorUserId: "ops-1",
-        actorRole: Role.OPS,
+        actorRole: Role.TRANSPORT_STAFF,
         assignedDriverUserId: assigned,
         tripStatus: TripStatus.DRAFT,
         isDriverVisibleEvent: true,
@@ -53,7 +53,7 @@ describe("shouldNotifyAssignedDriver", () => {
     expect(
       shouldNotifyAssignedDriver({
         actorUserId: "ops-1",
-        actorRole: Role.OPS,
+        actorRole: Role.TRANSPORT_STAFF,
         assignedDriverUserId: assigned,
         tripStatus: TripStatus.DRAFT,
         isDriverVisibleEvent: true,
@@ -66,7 +66,7 @@ describe("shouldNotifyAssignedDriver", () => {
     expect(
       shouldNotifyAssignedDriver({
         actorUserId: "ops-1",
-        actorRole: Role.OPS,
+        actorRole: Role.TRANSPORT_STAFF,
         assignedDriverUserId: assigned,
         tripStatus: TripStatus.PUBLISHED,
         isDriverVisibleEvent: true,

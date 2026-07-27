@@ -1,7 +1,7 @@
 import { JobDocumentType } from "@prisma/client";
-import { OpsJobsService } from "./ops-jobs.service";
+import { TransportJobsService } from "./transport-jobs.service";
 
-describe("OpsJobsService document signed URLs", () => {
+describe("TransportJobsService document signed URLs", () => {
   it("listDocuments returns metadata without signed URLs", async () => {
     const prisma: any = {
       job: {
@@ -37,7 +37,7 @@ describe("OpsJobsService document signed URLs", () => {
         },
       }),
     };
-    const svc = new OpsJobsService(prisma, { log: jest.fn() } as any, supabase as any);
+    const svc = new TransportJobsService(prisma, { log: jest.fn() } as any, supabase as any);
     const docs = await svc.listDocuments("t1", "job1", { role: "ADMIN", customerCompanyId: null });
     expect(docs[0].previewUrl).toBeNull();
     expect(docs[0].uploadedByName).toBe("Ops");
@@ -65,7 +65,7 @@ describe("OpsJobsService document signed URLs", () => {
         storage: { from: jest.fn().mockReturnValue({ createSignedUrl }) },
       }),
     };
-    const svc = new OpsJobsService(prisma, { log: jest.fn() } as any, supabase as any);
+    const svc = new TransportJobsService(prisma, { log: jest.fn() } as any, supabase as any);
     const first = await svc.getJobDocumentSignedUrl("t1", "job1", "doc1", {
       role: "ADMIN",
       customerCompanyId: null,

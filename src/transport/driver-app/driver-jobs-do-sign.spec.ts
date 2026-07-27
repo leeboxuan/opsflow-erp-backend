@@ -1,5 +1,5 @@
 import { TripDocumentType, TripStatus } from "@prisma/client";
-import { OpsJobsService } from "../jobs/ops-jobs.service";
+import { TransportJobsService } from "../jobs/transport-jobs.service";
 import { DriverJobsService } from "./driver-jobs.service";
 import {
   DO_SIGN_REQUIRES_ONGOING_TRIP_MESSAGE,
@@ -96,7 +96,7 @@ function makeService(tripStatus: TripStatus, doc: ReturnType<typeof makeDoDoc>) 
           data: { isActive: false },
         });
       }),
-  } as unknown as OpsJobsService;
+  } as unknown as TransportJobsService;
 
   const svc = new DriverJobsService(
     prisma,

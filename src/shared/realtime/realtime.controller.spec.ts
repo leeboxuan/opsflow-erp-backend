@@ -32,7 +32,7 @@ describe("RealtimeController", () => {
     for (const roles of [classRoles, handlerRoles]) {
       expect(roles).toEqual([
         Role.ADMIN,
-        Role.OPS,
+        Role.TRANSPORT_STAFF,
         Role.FINANCE,
         Role.DRIVER,
       ]);

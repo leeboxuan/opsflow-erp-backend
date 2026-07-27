@@ -18,12 +18,12 @@ describe("tenant-context.cache", () => {
     nowSpy.mockReturnValueOnce(0);
     writeTenantContextCache(key, {
       tenantId: "t1",
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
       isSuperadmin: false,
     });
 
     nowSpy.mockReturnValue(TENANT_CONTEXT_CACHE_TTL_MS - 1);
-    expect(readTenantContextCache(key)?.role).toBe(Role.OPS);
+    expect(readTenantContextCache(key)?.role).toBe(Role.TRANSPORT_STAFF);
     nowSpy.mockRestore();
   });
 
@@ -33,7 +33,7 @@ describe("tenant-context.cache", () => {
     nowSpy.mockReturnValueOnce(0);
     writeTenantContextCache(key, {
       tenantId: "t1",
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
       isSuperadmin: false,
     });
 

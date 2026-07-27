@@ -12,17 +12,20 @@ describe("notifications.visibility", () => {
     ).toThrow(/not available for customer/i);
   });
 
-  it("OPS sees USER, ROLE OPS, and TENANT", () => {
+  it("transport staff sees USER, ROLE OPS/TRANSPORT_STAFF, and TENANT", () => {
     const where = buildNotificationVisibilityWhere({
       tenantId: "t1",
       userId: "ops-1",
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
     });
     expect(where).toEqual({
       tenantId: "t1",
       OR: [
         { audience: NotificationAudience.USER, userId: "ops-1" },
-        { audience: NotificationAudience.ROLE, role: Role.OPS },
+        {
+          audience: NotificationAudience.ROLE,
+          role: { in: [Role.TRANSPORT_STAFF, Role.OPS] },
+        },
         { audience: NotificationAudience.TENANT },
       ],
     });

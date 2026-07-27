@@ -1,5 +1,5 @@
 import { JobStatus, JobType, Role, TripDocumentType, TripStatus } from "@prisma/client";
-import { OpsJobsService } from "./ops-jobs.service";
+import { TransportJobsService } from "./transport-jobs.service";
 
 function makeService(overrides?: {
   tripDocuments?: any[];
@@ -87,7 +87,7 @@ function makeService(overrides?: {
     fleetVehicle: { findFirst: jest.fn().mockResolvedValue(null) },
   };
 
-  const svc = new OpsJobsService(
+  const svc = new TransportJobsService(
     prisma,
     { log: jest.fn() } as any,
     { getClient: jest.fn() } as any,
@@ -98,8 +98,8 @@ function makeService(overrides?: {
   return { svc, prisma };
 }
 
-describe("OpsJobsService admin trip documents", () => {
-  const user = { userId: "ops-1", role: Role.OPS };
+describe("TransportJobsService admin trip documents", () => {
+  const user = { userId: "ops-1", role: Role.TRANSPORT_STAFF };
   const trailerStartDoc = {
     id: "doc-trailer-start",
     tenantId: "t1",

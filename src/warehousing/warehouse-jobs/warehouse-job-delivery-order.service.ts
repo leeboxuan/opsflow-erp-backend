@@ -33,7 +33,7 @@ export class WarehouseJobDeliveryOrderService {
     tenantId: string,
     warehouseJobId: string,
     actorUserId?: string,
-    actorRole: Role = Role.OPS,
+    actorRole: Role = Role.TRANSPORT_STAFF,
   ) {
     const job = await this.prisma.warehouseJob.findFirst({
       where: { id: warehouseJobId, tenantId },

@@ -38,12 +38,12 @@ describe("NotificationsService per-user read state", () => {
   const opsA = {
     tenantId: "tenant-1",
     userId: "ops-a",
-    role: Role.OPS,
+    role: Role.TRANSPORT_STAFF,
   };
   const opsB = {
     tenantId: "tenant-1",
     userId: "ops-b",
-    role: Role.OPS,
+    role: Role.TRANSPORT_STAFF,
   };
   const driver = {
     tenantId: "tenant-1",
@@ -167,7 +167,7 @@ describe("NotificationsService per-user read state", () => {
       ...tenantNotification,
       id: "notif-role-ops",
       audience: NotificationAudience.ROLE,
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
     };
     prisma.notification.findFirst.mockResolvedValue(roleNotification);
     prisma.notificationRecipient.upsert.mockResolvedValue({

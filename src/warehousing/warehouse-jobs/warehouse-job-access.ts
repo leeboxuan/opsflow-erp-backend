@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Prisma, Role, WarehouseJobStatus } from '@prisma/client';
+import { isTransportStaffRole } from '../../shared/auth/role-compat';
 
 const TERMINAL_STATUSES = new Set<WarehouseJobStatus>([
   WarehouseJobStatus.COMPLETED,
@@ -12,8 +13,13 @@ export type WarehouseJobAccessRef = {
   assignedToUserId: string | null;
 };
 
+/** Admin / transport staff / finance — office roles for warehouse job access. */
 export function isOpsLikeRole(role: Role): boolean {
-  return role === Role.ADMIN || role === Role.OPS || role === Role.FINANCE;
+  return (
+    role === Role.ADMIN ||
+    isTransportStaffRole(role) ||
+    role === Role.FINANCE
+  );
 }
 
 /**
@@ -53,6 +59,11 @@ export function assertJobAllowsFloorMutation(status: WarehouseJobStatus): void {
   }
 }
 
+/**
+ * Maps membership role → warehouse document provenance.
+ * Transport staff (including deprecated OPS) still store source `OPS` until a
+ * separate domain-neutral migration (proposed: OFFICE) is approved.
+ */
 export function mapRoleToDocumentSource(role: Role): 'ADMIN' | 'OPS' | 'WAREHOUSE' {
   if (role === Role.ADMIN) return 'ADMIN';
   if (role === Role.WAREHOUSE) return 'WAREHOUSE';

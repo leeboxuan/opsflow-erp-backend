@@ -1,8 +1,8 @@
 import { Role, TripStatus } from "@prisma/client";
 import { DriverJobsService } from "../driver-app/driver-jobs.service";
-import { OpsJobsService } from "../jobs/ops-jobs.service";
+import { TransportJobsService } from "../jobs/transport-jobs.service";
 
-describe("OpsJobsService.unpublishTrip", () => {
+describe("TransportJobsService.unpublishTrip", () => {
   function makeService(status: TripStatus, overrides?: Partial<any>) {
     const prisma: any = {
       trip: {
@@ -34,11 +34,11 @@ describe("OpsJobsService.unpublishTrip", () => {
       ...overrides,
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
-    const svc = new OpsJobsService(prisma, audit, {} as any);
+    const svc = new TransportJobsService(prisma, audit, {} as any);
     return { svc, prisma, audit };
   }
 
-  const opsUser = { userId: "u1", role: Role.OPS, customerCompanyId: null };
+  const opsUser = { userId: "u1", role: Role.TRANSPORT_STAFF, customerCompanyId: null };
 
   it("PUBLISHED trip can be unpublished to DRAFT", async () => {
     const { svc, prisma, audit } = makeService(TripStatus.PUBLISHED);

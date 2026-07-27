@@ -1,5 +1,5 @@
 import { JobTripTemplate, JobStatus, JobType, Role } from "@prisma/client";
-import { OpsJobsService } from "./ops-jobs.service";
+import { TransportJobsService } from "./transport-jobs.service";
 import { InvoicesService } from "../finance/invoices.service";
 
 /** Minimal job row for syncJobInvoiceReadinessForJob after create/publish/unpublish. */
@@ -143,7 +143,7 @@ describe("job charge workflow hardening", () => {
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
 
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
 
     await svc.create(
@@ -175,7 +175,7 @@ describe("job charge workflow hardening", () => {
           ],
         },
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     expect(jobChargeDeleteMany).not.toHaveBeenCalled();
@@ -281,7 +281,7 @@ describe("job charge workflow hardening", () => {
       masterLogisticsLocation: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
-    const svc = new OpsJobsService(prisma, audit, {} as any);
+    const svc = new TransportJobsService(prisma, audit, {} as any);
     jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
     jest
       .spyOn(svc as any, "getNextInternalRef")
@@ -308,7 +308,7 @@ describe("job charge workflow hardening", () => {
         receiverPhone: "91234565",
         items: [{ itemCode: "01", description: "Metal", qty: 5 }],
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     expect(prisma.trip.createMany).toHaveBeenCalledWith(
@@ -371,7 +371,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     const rows = await svc.listDriverTripRateMasters("t1");
 
@@ -418,11 +418,11 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     const result = await svc.getBillingChargeOptionsForJob("t1", "job1", {
       userId: "u1",
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
     });
 
     expect(prisma.masterRateDatasetRow.findMany).toHaveBeenCalledWith({
@@ -493,11 +493,11 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     const result = await svc.getBillingChargeOptionsForJob("t1", "job1", {
       userId: "u1",
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
     });
 
     expect(prisma.masterRateDatasetRow.findMany).toHaveBeenCalledWith({
@@ -632,7 +632,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
 
     await svc.create(
@@ -652,7 +652,7 @@ describe("job charge workflow hardening", () => {
           returningDepotCode: "GUL_DEFAULT",
         },
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     const data = prisma.job.create.mock.calls[0][0].data;
@@ -701,7 +701,7 @@ describe("job charge workflow hardening", () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
     };
-    const svc = new OpsJobsService(
+    const svc = new TransportJobsService(
       prisma,
       { log: jest.fn() } as any,
       { getClient: jest.fn() } as any,
@@ -721,7 +721,7 @@ describe("job charge workflow hardening", () => {
         receiverPhone: "123",
         importDetails: { pickupPortCode: "JURONG" },
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     const data = prisma.job.create.mock.calls[0][0].data;
@@ -839,7 +839,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
 
     await svc.create(
@@ -863,7 +863,7 @@ describe("job charge workflow hardening", () => {
           exportPortCode: "PSA",
         },
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     const data = prisma.job.create.mock.calls[0][0].data;
@@ -958,7 +958,7 @@ describe("job charge workflow hardening", () => {
     const ok = await svc.getInvoiceDraftFromJobs(
       "t1",
       ["j1", "j2"],
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
     expect(ok.sourceJobIds).toEqual(["j1", "j2"]);
     expect(ok.suggestedLineItems).toEqual([
@@ -981,7 +981,7 @@ describe("job charge workflow hardening", () => {
     await expect(
       svc.getInvoiceDraftFromJobs("t1", ["j1", "j2"], {
         userId: "u1",
-        role: Role.OPS,
+        role: Role.TRANSPORT_STAFF,
       }),
     ).rejects.toThrow(
       "Selected jobs must have saved JobCharge rows before invoicing. Missing charges for: JOB-2",
@@ -1007,10 +1007,10 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     await expect(
-      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS }),
+      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).rejects.toThrow("Set driver payout before publishing trip.");
     expect(prisma.trip.update).not.toHaveBeenCalled();
   });
@@ -1034,10 +1034,10 @@ describe("job charge workflow hardening", () => {
     });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
 
-    await svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS });
+    await svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF });
 
     expect(prisma.trip.update).toHaveBeenCalledWith({
       where: { id: "trip1" },
@@ -1075,9 +1075,9 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     await expect(
-      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS }),
+      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).rejects.toThrow('Payout line "Manual line" requires manual amount before publish');
   });
 
@@ -1122,9 +1122,9 @@ describe("job charge workflow hardening", () => {
     });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
-    await svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS });
+    await svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF });
     expect(prisma.trip.update).toHaveBeenCalledWith({
       where: { id: "trip1" },
       data: expect.objectContaining({ status: "PUBLISHED" }),
@@ -1159,11 +1159,11 @@ describe("job charge workflow hardening", () => {
     });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
 
     await expect(
-      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS }),
+      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).resolves.toBeTruthy();
   });
 
@@ -1195,10 +1195,10 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     await expect(
-      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS }),
+      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).rejects.toThrow('Payout line "hjhjhj" requires manual amount before publish');
   });
 
@@ -1230,10 +1230,10 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     await expect(
-      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS }),
+      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).rejects.toThrow('Payout line "hjhjhj" requires manual amount before publish');
   });
 
@@ -1254,10 +1254,10 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     await expect(
-      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS }),
+      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).rejects.toThrow("Assign driver before publishing trip.");
   });
 
@@ -1279,11 +1279,11 @@ describe("job charge workflow hardening", () => {
     });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
 
     await expect(
-      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.OPS }),
+      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).resolves.toBeTruthy();
   });
 
@@ -1310,7 +1310,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({
       id: "job1",
       status: "READY_FOR_INVOICE",
@@ -1319,7 +1319,7 @@ describe("job charge workflow hardening", () => {
 
     const result = await svc.sendJobToInvoice("t1", "job1", {
       userId: "u1",
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
     });
 
     expect(result).toMatchObject({
@@ -1356,10 +1356,10 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     await expect(
-      svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
+      svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).rejects.toThrow("All non-cancelled trips must be completed or done before invoicing.");
   });
 
@@ -1387,12 +1387,12 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
 
     const result = await svc.sendJobToInvoice("t1", "job1", {
       userId: "u1",
-      role: Role.OPS,
+      role: Role.TRANSPORT_STAFF,
     });
     expect(result.readyForInvoice).toBe(true);
   });
@@ -1420,10 +1420,10 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     await expect(
-      svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
+      svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).rejects.toThrow("No completed trips available for invoicing.");
   });
 
@@ -1453,10 +1453,10 @@ describe("job charge workflow hardening", () => {
       };
       const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
       const supabaseService = { getClient: jest.fn() } as any;
-      const svc = new OpsJobsService(prisma, audit, supabaseService);
+      const svc = new TransportJobsService(prisma, audit, supabaseService);
 
       await expect(
-        svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.OPS }),
+        svc.sendJobToInvoice("t1", "job1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
       ).rejects.toThrow("All non-cancelled trips must be completed or done before invoicing.");
     },
   );
@@ -1481,10 +1481,10 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
 
-    await svc.markTripDone("t1", "job1", "trip1", { userId: "u1", role: Role.OPS });
+    await svc.markTripDone("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF });
 
     expect(prisma.job.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1517,10 +1517,10 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
 
-    await svc.markTripDone("t1", "job1", "trip1", { userId: "u1", role: Role.OPS });
+    await svc.markTripDone("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF });
 
     expect(prisma.job.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1588,7 +1588,7 @@ describe("job charge workflow hardening", () => {
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new InvoicesService(prisma, supabaseService, audit);
 
-    await svc.issueInvoice("t1", "inv1", { userId: "u1", role: Role.OPS });
+    await svc.issueInvoice("t1", "inv1", { userId: "u1", role: Role.TRANSPORT_STAFF });
 
     expect(tx.job.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1633,7 +1633,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     await expect(
       svc.saveJobCharges(
@@ -1651,7 +1651,7 @@ describe("job charge workflow hardening", () => {
             },
           ],
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow(
       'Manual amount is required for quotation item "Season Parking" before saving charges',
@@ -1683,7 +1683,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
 
     await svc.patchTrip(
@@ -1691,7 +1691,7 @@ describe("job charge workflow hardening", () => {
       "job1",
       "trip1",
       { earningRateMasterId: "cmo946tmb0001ku5ekac6in1g" } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
     expect(tripUpdate).toHaveBeenCalledWith({
       where: { id: "trip1" },
@@ -1719,14 +1719,14 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     await expect(
       svc.patchTrip(
         "t1",
         "job1",
         "trip1",
         { earningRateMasterId: "master_file_id_123" } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow("Driver trip rate master not found");
   });
@@ -1747,14 +1747,14 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     await expect(
       svc.patchTrip(
         "t1",
         "job1",
         "trip1",
         { earningRateMasterId: "inactive_or_nonselectable_item" } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow("Driver trip rate master not found");
   });
@@ -1780,14 +1780,14 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     await expect(
       svc.patchTrip(
         "t1",
         "job1",
         "trip1",
         { earningRateMasterId: "item-manual" } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow(
       'Selected payout item "Manual" requires manual amount before assignment',
@@ -1808,7 +1808,7 @@ describe("job charge workflow hardening", () => {
       },
     };
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
 
     await svc.patchTrip(
@@ -1816,7 +1816,7 @@ describe("job charge workflow hardening", () => {
       "job1",
       "trip1",
       { plannedStartAt: "2026-04-27T09:00:00.000Z" } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     expect(tripUpdate).toHaveBeenCalledWith({
@@ -1853,7 +1853,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
 
     await svc.patchTrip(
@@ -1884,7 +1884,7 @@ describe("job charge workflow hardening", () => {
           locationId: "loc-destination",
         },
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     expect(tripUpdate).toHaveBeenCalledWith({
@@ -1926,7 +1926,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
 
     await svc.patchTrip(
@@ -1938,7 +1938,7 @@ describe("job charge workflow hardening", () => {
         originSummary: "Origin Summary",
         destinationSummary: "Destination Summary",
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     expect(tripUpdate).toHaveBeenCalledWith({
@@ -1960,7 +1960,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     await expect(
       svc.patchTrip(
@@ -1968,7 +1968,7 @@ describe("job charge workflow hardening", () => {
         "job1",
         "trip1",
         { status: "DONE" } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow("Trip status cannot be changed from PATCH /jobs/:jobId/trips/:tripId");
   });
@@ -2010,7 +2010,7 @@ describe("job charge workflow hardening", () => {
       };
       const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
       const supabaseService = { getClient: jest.fn() } as any;
-      const svc = new OpsJobsService(prisma, audit, supabaseService);
+      const svc = new TransportJobsService(prisma, audit, supabaseService);
       jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
 
       await expect(
@@ -2019,7 +2019,7 @@ describe("job charge workflow hardening", () => {
           "job1",
           "trip1",
           { driverId: "new-driver", vehicleType: "TRAILER" } as any,
-          { userId: "ops-1", role: Role.OPS },
+          { userId: "ops-1", role: Role.TRANSPORT_STAFF },
         ),
       ).resolves.toBeTruthy();
       expect(prisma.trip.update).toHaveBeenCalledWith({
@@ -2053,7 +2053,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     await expect(
       svc.updateTripPendingState(
@@ -2061,7 +2061,7 @@ describe("job charge workflow hardening", () => {
         "job1",
         "trip1",
         "PENDING_AT_PORT" as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow(
       'pendingState "PENDING_AT_PORT" is invalid when trip status is COMPLETED. Allowed only for PUBLISHED or ONGOING',
@@ -2078,7 +2078,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     await expect(
       svc.updateTripPendingState(
@@ -2086,7 +2086,7 @@ describe("job charge workflow hardening", () => {
         "job1",
         "trip1",
         "PENDING_AT_DEPOT" as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow(
       'pendingState "PENDING_AT_DEPOT" is invalid when trip status is DRAFT. Allowed only for PUBLISHED or ONGOING',
@@ -2103,7 +2103,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
     await expect(
       svc.updateTripPendingState(
@@ -2111,7 +2111,7 @@ describe("job charge workflow hardening", () => {
         "job1",
         "trip1",
         "PENDING_AT_PORT" as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow(
       'pendingState "PENDING_AT_PORT" is invalid when trip status is DONE. Allowed only for PUBLISHED or ONGOING',
@@ -2134,10 +2134,10 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
 
-    await svc.markTripDone("t1", "job1", "trip1", { userId: "u1", role: Role.OPS });
+    await svc.markTripDone("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF });
 
     expect(prisma.trip.update).toHaveBeenCalledWith({
       where: { id: "trip1" },
@@ -2200,9 +2200,9 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
-    const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
+    const result = await svc.getTripDetail("t1", "trip1", { role: Role.TRANSPORT_STAFF });
     expect(result.cargo.mode).toBe("CONTAINER");
     expect(result.cargo.containers[0].containerNumber).toBe("CONT-001");
     expect(result.cargo.containers[0].sealNo).toBe("SEAL-A");
@@ -2245,9 +2245,9 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
-    const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
+    const result = await svc.getTripDetail("t1", "trip1", { role: Role.TRANSPORT_STAFF });
     expect(result.cargo.mode).toBe("CONTAINER");
     expect(result.cargo.containers[0].containerNumber).toBe("CONT-EXP-01");
   });
@@ -2303,9 +2303,9 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
-    const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
+    const result = await svc.getTripDetail("t1", "trip1", { role: Role.TRANSPORT_STAFF });
     expect(result.cargo.mode).toBe("ITEMS");
     expect(result.cargo.items[0].itemCode).toBe("ITEM-001");
     expect(result.createdByName).toBe("Ops User");
@@ -2362,9 +2362,9 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
-    const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
+    const result = await svc.getTripDetail("t1", "trip1", { role: Role.TRANSPORT_STAFF });
     expect(result.canPublish).toBe(false);
   });
 
@@ -2415,9 +2415,9 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
 
-    const result = await svc.getTripDetail("t1", "trip1", { role: Role.OPS });
+    const result = await svc.getTripDetail("t1", "trip1", { role: Role.TRANSPORT_STAFF });
     expect(result.canPublish).toBe(true);
   });
 
@@ -2444,7 +2444,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
     await svc.saveTripPayoutDraft(
       "t1",
@@ -2463,7 +2463,7 @@ describe("job charge workflow hardening", () => {
           } as any,
         ],
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
     expect(tripUpdate).toHaveBeenCalledWith({
       where: { id: "trip1" },
@@ -2491,7 +2491,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
     await svc.saveTripPayoutDraft(
       "t1",
@@ -2504,7 +2504,7 @@ describe("job charge workflow hardening", () => {
           { label: "L2", quantity: 2, amountCents: 2000, totalCents: 4000, isManual: true } as any,
         ],
       } as any,
-      { userId: "u1", role: Role.OPS },
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
     expect(tripUpdate).toHaveBeenCalledWith({
       where: { id: "trip1" },
@@ -2527,7 +2527,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
     await expect(
       svc.saveTripPayoutDraft(
@@ -2538,7 +2538,7 @@ describe("job charge workflow hardening", () => {
           earningRateMasterId: null,
           payoutLines: [{ label: "Manual", quantity: 1, amountCents: 1500, totalCents: 1500, isManual: true }] as any,
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).resolves.toBeTruthy();
   });
@@ -2552,7 +2552,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     await expect(
       svc.saveTripPayoutDraft(
         "t1",
@@ -2562,7 +2562,7 @@ describe("job charge workflow hardening", () => {
           earningRateMasterId: null,
           payoutLines: [{ sourceRateMasterItemId: "bad", label: "Bad", quantity: 1, amountCents: 1, totalCents: 1 }] as any,
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow("Invalid sourceRateMasterItemId");
   });
@@ -2576,7 +2576,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     await expect(
       svc.saveTripPayoutDraft(
         "t1",
@@ -2586,7 +2586,7 @@ describe("job charge workflow hardening", () => {
           earningRateMasterId: null,
           payoutLines: [{ sourceRateMasterItemId: "non-selectable", label: "Bad", quantity: 1, amountCents: 1, totalCents: 1 }] as any,
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow("Invalid sourceRateMasterItemId");
   });
@@ -2607,7 +2607,7 @@ describe("job charge workflow hardening", () => {
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
-    const svc = new OpsJobsService(prisma, audit, supabaseService);
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
     await expect(
       svc.saveTripPayoutDraft(
         "t1",
@@ -2617,7 +2617,7 @@ describe("job charge workflow hardening", () => {
           earningRateMasterId: null,
           payoutLines: [{ sourceRateMasterItemId: "manual-source", label: "Manual", quantity: 1, totalCents: 10 }] as any,
         } as any,
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow("requires amountCents");
   });

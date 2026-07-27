@@ -30,11 +30,11 @@ import { FileInterceptor } from "@nestjs/platform-express";
 @ApiTags("Finance")
 @Controller("finance/invoices")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER) // add Role.FINANCE later if you have it
+@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER) // add Role.FINANCE later if you have it
 @ApiBearerAuth("JWT-auth")
 export class InvoicesController {
   @Get("jobs/:jobId/prefill")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   async prefillFromJob(
     @Request() req: any,
     @Param("jobId") jobId: string,
@@ -49,7 +49,7 @@ export class InvoicesController {
   }
 
   @Get("companies/:companyId/invoiceable-jobs")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   async listInvoiceableJobs(
     @Request() req: any,
     @Param("companyId") companyId: string,
@@ -64,7 +64,7 @@ export class InvoicesController {
   }
 
   @Get("companies/:companyId/quotation-options")
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   async listQuotationOptions(
     @Request() req: any,
     @Param("companyId") companyId: string,
@@ -81,7 +81,7 @@ export class InvoicesController {
   constructor(private readonly invoices: InvoicesService) {}
 
   @Get()
-  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async list(@Request() req: any, @Query() query: ListInvoicesQueryDto) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -93,7 +93,7 @@ export class InvoicesController {
   }
 
   @Get(":id")
-  @Roles(Role.ADMIN, Role.OPS, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async get(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {

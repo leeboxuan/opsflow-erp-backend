@@ -1,7 +1,7 @@
 import { plainToInstance } from "class-transformer";
 import { validate } from "class-validator";
 import { JobStatus, JobTripTemplate } from "@prisma/client";
-import { OpsJobsService } from "../jobs/ops-jobs.service";
+import { TransportJobsService } from "../jobs/transport-jobs.service";
 import { AppendJobTripDto } from "./dto/job-trip.dto";
 import { GUL_CIRCLE_ROUTE_DEFAULTS } from "../workflows/job-workflow.helpers";
 
@@ -95,7 +95,7 @@ describe("AppendJobTripDto validation", () => {
   });
 });
 
-describe("OpsJobsService.appendTrip", () => {
+describe("TransportJobsService.appendTrip", () => {
   function makeService(overrides?: Partial<any>) {
     const prisma: any = {
       job: {
@@ -124,7 +124,7 @@ describe("OpsJobsService.appendTrip", () => {
       },
       ...overrides,
     };
-    const svc = new OpsJobsService(
+    const svc = new TransportJobsService(
       prisma,
       { log: jest.fn().mockResolvedValue(undefined) } as any,
       {} as any,

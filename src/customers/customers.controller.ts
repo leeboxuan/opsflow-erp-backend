@@ -23,9 +23,9 @@ import {
 import { FileInterceptor } from "@nestjs/platform-express";
 import { MembershipStatus, Role } from "@prisma/client";
 
-import { AuthGuard } from "../../shared/auth/guards/auth.guard";
-import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
-import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
+import { AuthGuard } from "../shared/auth/guards/auth.guard";
+import { RoleGuard, Roles } from "../shared/auth/guards/role.guard";
+import { TenantGuard } from "../shared/auth/guards/tenant.guard";
 import { CustomersService } from "./customers.service";
 import {
   CreateCustomerCompanyDto,
@@ -58,7 +58,7 @@ export class CustomersController {
 
   @Post("companies")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Create a customer company (Admin/Ops/Finance only)" })
   async createCompany(
     @Request() req: any,
@@ -81,7 +81,7 @@ export class CustomersController {
 
   @Post("companies/:companyId/contacts")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
     summary:
       "Create/upsert a contact under a customer company (Admin/Ops/Finance only)",
@@ -97,7 +97,7 @@ export class CustomersController {
 
   @Post("companies/:companyId/quotation")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
     summary:
       "Upload signed company quotation for record only (no parsing); supersedes prior ACTIVE",
@@ -139,7 +139,7 @@ export class CustomersController {
 
   @Get("companies/:companyId/quotations")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "List quotation versions for a company" })
   async listCompanyQuotations(
     @Request() req: any,
@@ -151,7 +151,7 @@ export class CustomersController {
 
   @Get("companies/:companyId/quotation/active")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Get ACTIVE quotation with signed URL" })
   async getActiveQuotation(
     @Request() req: any,
@@ -163,7 +163,7 @@ export class CustomersController {
 
   @Get("companies/:companyId/quotation/lines")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
     summary:
       "[Deprecated] Customer signed quotation lines endpoint (returns empty; use tenant master QUOTATION active items)",
@@ -178,7 +178,7 @@ export class CustomersController {
 
   @Get("companies/:companyId/users")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
     summary:
       "List portal users linked to a customer company (Admin/Ops/Finance only)",
@@ -193,7 +193,7 @@ export class CustomersController {
 
   @Post("companies/:companyId/users")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
     summary:
       "Create/invite a portal user linked to a customer company (Admin/Ops/Finance only)",
@@ -216,7 +216,7 @@ export class CustomersController {
 
   @Patch("companies/:companyId")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
     summary: "Update a customer company profile (Admin/Ops/Finance only)",
   })
@@ -232,7 +232,7 @@ export class CustomersController {
   // ✅ NEW: suspend/unsuspend endpoints
   @Patch("companies/:companyId/suspend")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Suspend a customer company and all its users" })
   async suspendCompany(@Request() req: any, @Param("companyId") companyId: string) {
     const tenantId = req.tenant.tenantId;
@@ -241,7 +241,7 @@ export class CustomersController {
 
   @Patch("companies/:companyId/unsuspend")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({ summary: "Unsuspend a customer company and all its users" })
   async unsuspendCompany(@Request() req: any, @Param("companyId") companyId: string) {
     const tenantId = req.tenant.tenantId;
@@ -250,7 +250,7 @@ export class CustomersController {
 
   @Patch("companies/:companyId/users/:userId/suspend")
 @UseGuards(RoleGuard)
-@Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
 @ApiOperation({ summary: "Suspend a customer portal user under a company" })
 async suspendCompanyUser(
   @Request() req: any,
@@ -268,7 +268,7 @@ async suspendCompanyUser(
 
 @Patch("companies/:companyId/users/:userId/unsuspend")
 @UseGuards(RoleGuard)
-@Roles(Role.ADMIN, Role.OPS, Role.FINANCE)
+@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
 @ApiOperation({ summary: "Unsuspend a customer portal user under a company" })
 async unsuspendCompanyUser(
   @Request() req: any,

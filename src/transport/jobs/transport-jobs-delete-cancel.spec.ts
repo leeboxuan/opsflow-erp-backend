@@ -4,9 +4,9 @@ import {
   JOBS_WITH_TRIPS_CANNOT_CANCEL_OR_DELETE_MSG,
   assertJobHasNoTripsForCancelOrDelete,
 } from "./job-invoice-readiness";
-import { OpsJobsService } from "./ops-jobs.service";
+import { TransportJobsService } from "./transport-jobs.service";
 
-describe("OpsJobsService job delete/cancel guards", () => {
+describe("TransportJobsService job delete/cancel guards", () => {
   function makeService(overrides?: Partial<any>) {
     const prisma: any = {
       job: {
@@ -62,7 +62,7 @@ describe("OpsJobsService job delete/cancel guards", () => {
       ),
       ...overrides,
     };
-    const svc = new OpsJobsService(
+    const svc = new TransportJobsService(
       prisma,
       { log: jest.fn().mockResolvedValue(undefined) } as any,
       {} as any,
@@ -81,7 +81,7 @@ describe("OpsJobsService job delete/cancel guards", () => {
     });
 
     await expect(
-      svc.delete("t1", "job1", { userId: "u1", role: Role.OPS }),
+      svc.delete("t1", "job1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).resolves.toBeUndefined();
     expect(prisma.$transaction).toHaveBeenCalled();
   });
@@ -105,7 +105,7 @@ describe("OpsJobsService job delete/cancel guards", () => {
     });
 
     await expect(
-      svc.delete("t1", "job1", { userId: "u1", role: Role.OPS }),
+      svc.delete("t1", "job1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).rejects.toThrow(JOBS_WITH_TRIPS_CANNOT_CANCEL_OR_DELETE_MSG);
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
@@ -131,7 +131,7 @@ describe("OpsJobsService job delete/cancel guards", () => {
         "t1",
         "job1",
         { reason: "x" },
-        { userId: "u1", role: Role.OPS },
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
     ).rejects.toThrow(JOBS_WITH_TRIPS_CANNOT_CANCEL_OR_DELETE_MSG);
   });
@@ -145,7 +145,7 @@ describe("OpsJobsService job delete/cancel guards", () => {
     });
 
     await expect(
-      svc.cancel("t1", "job1", { reason: "x" }, { userId: "u1", role: Role.OPS }),
+      svc.cancel("t1", "job1", { reason: "x" }, { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).resolves.toBeTruthy();
   });
 
@@ -154,10 +154,10 @@ describe("OpsJobsService job delete/cancel guards", () => {
     prisma.job.findFirst.mockResolvedValue(null);
 
     await expect(
-      svc.delete("t1", "missing", { userId: "u1", role: Role.OPS }),
+      svc.delete("t1", "missing", { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).rejects.toThrow(NotFoundException);
     await expect(
-      svc.cancel("t1", "missing", { reason: "x" }, { userId: "u1", role: Role.OPS }),
+      svc.cancel("t1", "missing", { reason: "x" }, { userId: "u1", role: Role.TRANSPORT_STAFF }),
     ).rejects.toThrow(NotFoundException);
   });
 

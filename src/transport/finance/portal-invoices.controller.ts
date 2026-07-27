@@ -20,7 +20,7 @@ import { PortalInvoiceDto } from "./dto/portal-invoice.dto";
 @ApiTags("Portal - Invoices")
 @Controller("portal/invoices")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.CUSTOMER, Role.ADMIN, Role.OPS, Role.FINANCE)
+@Roles(Role.CUSTOMER, Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
 @ApiBearerAuth("JWT-auth")
 export class PortalInvoicesController {
   constructor(private readonly invoices: InvoicesService) {}
