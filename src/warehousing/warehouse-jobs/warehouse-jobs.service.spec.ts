@@ -465,6 +465,39 @@ describe('WarehouseJobsService', () => {
         }),
       );
     });
+
+    it('clears nullable string fields when payload sends null', async () => {
+      const { service, prisma, tx } = makeService();
+      prisma.warehouseJob.findFirst.mockResolvedValue(
+        makeJob({ description: 'old', notes: 'old notes' }),
+      );
+      tx.warehouseJob.update.mockResolvedValue(
+        makeJob({ description: null, notes: null }),
+      );
+
+      await service.update(
+        tenantId,
+        jobId,
+        {
+          description: null as unknown as string,
+          notes: null as unknown as string,
+          externalRefType: null as unknown as string,
+          externalRefId: null as unknown as string,
+        },
+        actorUserId,
+      );
+
+      expect(tx.warehouseJob.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            description: null,
+            notes: null,
+            externalRefType: null,
+            externalRefId: null,
+          }),
+        }),
+      );
+    });
   });
 
   describe('lifecycle delegation', () => {

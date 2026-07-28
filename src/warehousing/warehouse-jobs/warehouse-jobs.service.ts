@@ -429,11 +429,11 @@ export class WarehouseJobsService {
 
     if (dto.type !== undefined) data.type = dto.type;
     if (dto.priority !== undefined) data.priority = dto.priority;
-    if (dto.title !== undefined) data.title = dto.title.trim() || null;
+    if (dto.title !== undefined) data.title = dto.title?.trim() || null;
     if (dto.description !== undefined) {
-      data.description = dto.description.trim() || null;
+      data.description = dto.description?.trim() || null;
     }
-    if (dto.notes !== undefined) data.notes = dto.notes.trim() || null;
+    if (dto.notes !== undefined) data.notes = dto.notes?.trim() || null;
 
     const replaceContainers = dto.containers !== undefined;
     const normalizedContainers = replaceContainers
@@ -447,13 +447,13 @@ export class WarehouseJobsService {
       data.warehouseNotes = legacy.warehouseNotes;
     } else {
       if (dto.containerNumber !== undefined) {
-        data.containerNumber = dto.containerNumber.trim() || null;
+        data.containerNumber = dto.containerNumber?.trim() || null;
       }
       if (dto.sealNumber !== undefined) {
-        data.sealNumber = dto.sealNumber.trim() || null;
+        data.sealNumber = dto.sealNumber?.trim() || null;
       }
       if (dto.warehouseNotes !== undefined) {
-        data.warehouseNotes = dto.warehouseNotes.trim() || null;
+        data.warehouseNotes = dto.warehouseNotes?.trim() || null;
       }
     }
     if (dto.customerCompanyId !== undefined) {
@@ -475,22 +475,22 @@ export class WarehouseJobsService {
       data.scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : null;
     }
     if (dto.externalRefType !== undefined) {
-      data.externalRefType = dto.externalRefType.trim() || null;
+      data.externalRefType = dto.externalRefType?.trim() || null;
     }
     if (dto.externalRefId !== undefined) {
-      data.externalRefId = dto.externalRefId.trim() || null;
+      data.externalRefId = dto.externalRefId?.trim() || null;
     }
     if (dto.orderReference !== undefined) {
-      data.orderReference = dto.orderReference.trim() || null;
+      data.orderReference = dto.orderReference?.trim() || null;
     }
     if (dto.receivingVessel !== undefined) {
-      data.receivingVessel = dto.receivingVessel.trim() || null;
+      data.receivingVessel = dto.receivingVessel?.trim() || null;
     }
     if (dto.placeOfDelivery !== undefined) {
-      data.placeOfDelivery = dto.placeOfDelivery.trim() || null;
+      data.placeOfDelivery = dto.placeOfDelivery?.trim() || null;
     }
     if (dto.destinationCountry !== undefined) {
-      data.destinationCountry = dto.destinationCountry.trim() || 'Singapore';
+      data.destinationCountry = dto.destinationCountry?.trim() || 'Singapore';
     }
     if (dto.arrivalDate !== undefined) {
       data.arrivalDate = dto.arrivalDate ? new Date(dto.arrivalDate) : null;
@@ -510,7 +510,7 @@ export class WarehouseJobsService {
       (dto.assignedToUserId ?? null) !== (existing.assignedToUserId ?? null);
     const notesChanged =
       dto.notes !== undefined &&
-      (dto.notes.trim() || null) !== (existing.notes ?? null);
+      (dto.notes?.trim() || null) !== (existing.notes ?? null);
 
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.warehouseJob.update({
@@ -638,17 +638,17 @@ export class WarehouseJobsService {
     const changedFields: Record<string, unknown> = {};
 
     if (dto.containerNumber !== undefined) {
-      const value = dto.containerNumber.trim() || null;
+      const value = dto.containerNumber?.trim() || null;
       data.containerNumber = value;
       changedFields.containerNumber = value;
     }
     if (dto.sealNumber !== undefined) {
-      const value = dto.sealNumber.trim() || null;
+      const value = dto.sealNumber?.trim() || null;
       data.sealNumber = value;
       changedFields.sealNumber = value;
     }
     if (dto.warehouseNotes !== undefined) {
-      const value = dto.warehouseNotes.trim() || null;
+      const value = dto.warehouseNotes?.trim() || null;
       data.warehouseNotes = value;
       changedFields.warehouseNotes = value;
     }
