@@ -11,6 +11,7 @@ import { WarehouseJobEventsService } from './warehouse-job-events.service';
 import { WarehouseJobLifecycleService } from './warehouse-job-lifecycle.service';
 import { WarehouseJobDocumentsService } from './warehouse-job-documents.service';
 import { WarehouseJobCargoLinesService } from './warehouse-job-cargo-lines.service';
+import { WarehouseJobContainersService } from './warehouse-job-containers.service';
 import { WarehouseJobDeliveryOrderService } from './warehouse-job-delivery-order.service';
 import { WarehouseJobsService } from './warehouse-jobs.service';
 
@@ -67,6 +68,7 @@ describe('WarehouseJobsService', () => {
       warehouseJob: {
         create: jest.fn(),
         update: jest.fn(),
+        findFirstOrThrow: jest.fn(),
       },
     };
 
@@ -105,6 +107,51 @@ describe('WarehouseJobsService', () => {
       createManyInTransaction: jest.fn().mockResolvedValue([]),
     } as unknown as WarehouseJobCargoLinesService;
 
+    const containersService = {
+      normalize: jest.fn((containers?: Array<Record<string, unknown>>) => {
+        if (!containers?.length) return [];
+        return containers
+          .map((dto, index) => ({
+            containerNumber:
+              typeof dto.containerNumber === 'string'
+                ? dto.containerNumber.trim() || null
+                : null,
+            sealNumber:
+              typeof dto.sealNumber === 'string'
+                ? dto.sealNumber.trim() || null
+                : null,
+            notes:
+              typeof dto.notes === 'string' ? dto.notes.trim() || null : null,
+            sortOrder:
+              typeof dto.sortOrder === 'number' ? dto.sortOrder : index,
+          }))
+          .filter(
+            (row) =>
+              Boolean(row.containerNumber) ||
+              Boolean(row.sealNumber) ||
+              Boolean(row.notes),
+          );
+      }),
+      legacyFieldsFromContainers: jest.fn(
+        (
+          containers: Array<{
+            containerNumber: string | null;
+            sealNumber: string | null;
+            notes: string | null;
+          }>,
+        ) => {
+          const first = containers[0];
+          return {
+            containerNumber: first?.containerNumber ?? null,
+            sealNumber: first?.sealNumber ?? null,
+            warehouseNotes: first?.notes ?? null,
+          };
+        },
+      ),
+      createManyInTransaction: jest.fn().mockResolvedValue([]),
+      replaceAllInTransaction: jest.fn().mockResolvedValue([]),
+    } as unknown as WarehouseJobContainersService;
+
     const deliveryOrderService = {
       generate: jest.fn().mockResolvedValue({
         job: makeJob({ deliveryOrderDocumentId: 'doc-1' }),
@@ -118,6 +165,7 @@ describe('WarehouseJobsService', () => {
       eventsService,
       documentsService,
       cargoLinesService,
+      containersService,
       deliveryOrderService,
     );
 
@@ -129,6 +177,7 @@ describe('WarehouseJobsService', () => {
       eventsService,
       documentsService,
       cargoLinesService,
+      containersService,
       deliveryOrderService,
     };
   }
@@ -169,6 +218,37 @@ describe('WarehouseJobsService', () => {
         }),
       );
       expect(result).toEqual(created);
+    });
+
+    it('persists optional containerNumber and sealNumber', async () => {
+      const { service, tx, prisma, containersService } = makeService();
+      const created = makeJob({
+        containerNumber: 'CONT-99',
+        sealNumber: 'SEAL-99',
+      });
+      tx.warehouseJob.create.mockResolvedValue(created);
+      prisma.warehouseJob.findFirst.mockResolvedValue(created);
+
+      await service.create(
+        tenantId,
+        {
+          type: WarehouseJobType.STUFFING,
+          title: 'Stuffing',
+          containerNumber: '  CONT-99  ',
+          sealNumber: '  SEAL-99  ',
+        },
+        actorUserId,
+      );
+
+      expect(tx.warehouseJob.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            containerNumber: 'CONT-99',
+            sealNumber: 'SEAL-99',
+          }),
+        }),
+      );
+      expect(containersService.createManyInTransaction).toHaveBeenCalled();
     });
 
     it('rejects lines payload', async () => {
@@ -349,6 +429,39 @@ describe('WarehouseJobsService', () => {
         expect.objectContaining({
           eventType: WarehouseJobEventType.ASSIGNED,
           payload: { assignedToUserId: 'user-2' },
+        }),
+      );
+    });
+
+    it('persists containerNumber, sealNumber, and warehouseNotes', async () => {
+      const { service, prisma, tx } = makeService();
+      prisma.warehouseJob.findFirst.mockResolvedValue(makeJob());
+      tx.warehouseJob.update.mockResolvedValue(
+        makeJob({
+          containerNumber: 'CONT-1',
+          sealNumber: 'SEAL-1',
+          warehouseNotes: 'Floor note',
+        }),
+      );
+
+      await service.update(
+        tenantId,
+        jobId,
+        {
+          containerNumber: '  CONT-1  ',
+          sealNumber: '  SEAL-1  ',
+          warehouseNotes: '  Floor note  ',
+        },
+        actorUserId,
+      );
+
+      expect(tx.warehouseJob.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            containerNumber: 'CONT-1',
+            sealNumber: 'SEAL-1',
+            warehouseNotes: 'Floor note',
+          }),
         }),
       );
     });

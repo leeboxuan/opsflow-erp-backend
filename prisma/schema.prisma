@@ -73,6 +73,7 @@ model Tenant {
   warehouseJobCustomerRefCounters warehouse_job_customer_ref_counters[]
   warehouseJobDocuments        WarehouseJobDocument[]
   warehouseJobCargoLines       WarehouseJobCargoLine[]
+  warehouseJobContainers       WarehouseJobContainer[]
 
   @@map("tenants")
 }
@@ -1834,6 +1835,7 @@ model WarehouseJob {
   events    WarehouseJobEvent[]
   documents WarehouseJobDocument[]
   cargoLines WarehouseJobCargoLine[]
+  containers WarehouseJobContainer[]
 
   @@unique([tenantId, internalRef])
   @@index([tenantId, status])
@@ -1979,6 +1981,25 @@ model WarehouseJobCargoLine {
   @@index([tenantId, warehouseJobId])
   @@index([warehouseJobId, sortOrder])
   @@map("warehouse_job_cargo_lines")
+}
+
+model WarehouseJobContainer {
+  id              String   @id @default(cuid())
+  tenantId        String
+  warehouseJobId  String
+  containerNumber String?
+  sealNumber      String?
+  notes           String?
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseJob WarehouseJob @relation(fields: [warehouseJobId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, warehouseJobId])
+  @@index([warehouseJobId, sortOrder])
+  @@map("warehouse_job_containers")
 }
 
 model transport_order_items {

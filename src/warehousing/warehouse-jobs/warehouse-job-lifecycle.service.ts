@@ -405,6 +405,9 @@ export const warehouseJobDetailInclude = {
   cargoLines: {
     orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],
   },
+  containers: {
+    orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],
+  },
   events: {
     orderBy: { createdAt: 'desc' as const },
     take: 20,

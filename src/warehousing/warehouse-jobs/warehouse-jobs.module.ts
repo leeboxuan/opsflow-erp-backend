@@ -11,6 +11,7 @@ import { WarehouseInventoryBridgeService } from './warehouse-inventory-bridge.se
 import { WarehouseJobDocumentsService } from './warehouse-job-documents.service';
 import { WarehouseJobReportPreviewService } from './warehouse-job-report-preview.service';
 import { WarehouseJobCargoLinesService } from './warehouse-job-cargo-lines.service';
+import { WarehouseJobContainersService } from './warehouse-job-containers.service';
 import { WarehouseJobDeliveryOrderService } from './warehouse-job-delivery-order.service';
 
 @Module({
@@ -26,6 +27,7 @@ import { WarehouseJobDeliveryOrderService } from './warehouse-job-delivery-order
     WarehouseJobDocumentsService,
     WarehouseJobReportPreviewService,
     WarehouseJobCargoLinesService,
+    WarehouseJobContainersService,
     WarehouseJobDeliveryOrderService,
   ],
   exports: [WarehouseJobsService],

@@ -11,6 +11,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { CreateWarehouseJobCargoLineDto } from './create-warehouse-job-cargo-line.dto';
+import { CreateWarehouseJobContainerDto } from './create-warehouse-job-container.dto';
 import { CreateWarehouseJobLineDto } from './create-warehouse-job-line.dto';
 
 export class CreateWarehouseJobDto {
@@ -37,6 +38,16 @@ export class CreateWarehouseJobDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  containerNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sealNumber?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -129,6 +140,13 @@ export class CreateWarehouseJobDto {
   @ValidateNested({ each: true })
   @Type(() => CreateWarehouseJobCargoLineDto)
   cargoLines?: CreateWarehouseJobCargoLineDto[];
+
+  @ApiPropertyOptional({ type: [CreateWarehouseJobContainerDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateWarehouseJobContainerDto)
+  containers?: CreateWarehouseJobContainerDto[];
 
   @ApiPropertyOptional({ type: [CreateWarehouseJobLineDto] })
   @IsOptional()

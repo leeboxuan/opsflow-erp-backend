@@ -20,6 +20,7 @@ import { WarehouseJobLifecycleService, warehouseJobDetailInclude, warehouseJobLi
 import { WarehouseJobEventsService } from './warehouse-job-events.service';
 import { WarehouseJobDocumentsService } from './warehouse-job-documents.service';
 import { WarehouseJobCargoLinesService } from './warehouse-job-cargo-lines.service';
+import { WarehouseJobContainersService } from './warehouse-job-containers.service';
 import { WarehouseJobDeliveryOrderService } from './warehouse-job-delivery-order.service';
 import { CreateWarehouseJobDto } from './dto/create-warehouse-job.dto';
 import { UpdateWarehouseJobDto } from './dto/update-warehouse-job.dto';
@@ -54,6 +55,7 @@ export class WarehouseJobsService {
     private readonly eventsService: WarehouseJobEventsService,
     private readonly documentsService: WarehouseJobDocumentsService,
     private readonly cargoLinesService: WarehouseJobCargoLinesService,
+    private readonly containersService: WarehouseJobContainersService,
     private readonly deliveryOrderService: WarehouseJobDeliveryOrderService,
   ) {}
 
@@ -77,6 +79,20 @@ export class WarehouseJobsService {
     await this.validateAssignedToUserId(tenantId, dto.assignedToUserId);
 
     const shouldGenerateDo = dto.generateDeliveryOrder === true;
+    const normalizedContainers = this.containersService.normalize(
+      dto.containers ??
+        (dto.containerNumber || dto.sealNumber
+          ? [
+              {
+                containerNumber: dto.containerNumber,
+                sealNumber: dto.sealNumber,
+                notes: undefined,
+              },
+            ]
+          : undefined),
+    );
+    const legacyContainerFields =
+      this.containersService.legacyFieldsFromContainers(normalizedContainers);
 
     const job = await this.prisma.$transaction(async (tx) => {
       const internalRef = await this.lifecycleService.allocateInternalRef(
@@ -114,6 +130,9 @@ export class WarehouseJobsService {
           title: dto.title?.trim() || null,
           description: dto.description?.trim() || null,
           notes: dto.notes?.trim() || null,
+          containerNumber: legacyContainerFields.containerNumber,
+          sealNumber: legacyContainerFields.sealNumber,
+          warehouseNotes: legacyContainerFields.warehouseNotes,
           customerCompanyId: dto.customerCompanyId ?? null,
           inventoryBatchId: dto.inventoryBatchId ?? null,
           assignedToUserId: dto.assignedToUserId ?? null,
@@ -145,6 +164,15 @@ export class WarehouseJobsService {
         );
       }
 
+      if (normalizedContainers.length) {
+        await this.containersService.createManyInTransaction(
+          tx,
+          tenantId,
+          created.id,
+          normalizedContainers,
+        );
+      }
+
       await this.eventsService.append(tx, {
         tenantId,
         warehouseJobId: created.id,
@@ -172,7 +200,7 @@ export class WarehouseJobsService {
       return result.job;
     }
 
-    if (dto.cargoLines?.length) {
+    if (dto.cargoLines?.length || normalizedContainers.length) {
       return this.getById(tenantId, job.id);
     }
 
@@ -399,12 +427,35 @@ export class WarehouseJobsService {
 
     const data: Prisma.WarehouseJobUpdateInput = {};
 
+    if (dto.type !== undefined) data.type = dto.type;
     if (dto.priority !== undefined) data.priority = dto.priority;
     if (dto.title !== undefined) data.title = dto.title.trim() || null;
     if (dto.description !== undefined) {
       data.description = dto.description.trim() || null;
     }
     if (dto.notes !== undefined) data.notes = dto.notes.trim() || null;
+
+    const replaceContainers = dto.containers !== undefined;
+    const normalizedContainers = replaceContainers
+      ? this.containersService.normalize(dto.containers)
+      : null;
+    if (normalizedContainers) {
+      const legacy =
+        this.containersService.legacyFieldsFromContainers(normalizedContainers);
+      data.containerNumber = legacy.containerNumber;
+      data.sealNumber = legacy.sealNumber;
+      data.warehouseNotes = legacy.warehouseNotes;
+    } else {
+      if (dto.containerNumber !== undefined) {
+        data.containerNumber = dto.containerNumber.trim() || null;
+      }
+      if (dto.sealNumber !== undefined) {
+        data.sealNumber = dto.sealNumber.trim() || null;
+      }
+      if (dto.warehouseNotes !== undefined) {
+        data.warehouseNotes = dto.warehouseNotes.trim() || null;
+      }
+    }
     if (dto.customerCompanyId !== undefined) {
       data.customerCompany = dto.customerCompanyId
         ? { connect: { id: dto.customerCompanyId } }
@@ -467,6 +518,19 @@ export class WarehouseJobsService {
         data,
         include: warehouseJobDetailInclude,
       });
+
+      if (normalizedContainers) {
+        await this.containersService.replaceAllInTransaction(
+          tx,
+          tenantId,
+          existing.id,
+          normalizedContainers,
+        );
+        return tx.warehouseJob.findFirstOrThrow({
+          where: { id: existing.id, tenantId },
+          include: warehouseJobDetailInclude,
+        });
+      }
 
       if (assignedChanged) {
         await this.eventsService.append(tx, {
