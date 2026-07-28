@@ -35,6 +35,7 @@ describe('WarehouseJobsService', () => {
       customerCompanyId: null,
       inventoryBatchId: null,
       assignedToUserId: null,
+      csInChargeUserId: null,
       createdByUserId: actorUserId,
       scheduledAt: null,
       externalRefType: null,
@@ -428,7 +429,10 @@ describe('WarehouseJobsService', () => {
         tx,
         expect.objectContaining({
           eventType: WarehouseJobEventType.ASSIGNED,
-          payload: { assignedToUserId: 'user-2' },
+          payload: {
+            assignedToUserId: 'user-2',
+            csInChargeUserId: null,
+          },
         }),
       );
     });
@@ -672,21 +676,67 @@ describe('WarehouseJobsService', () => {
       );
     });
 
-    it('accepts OPS and ADMIN assignees on update', async () => {
+    it('accepts ADMIN as warehouse in charge on update', async () => {
       const { service, prisma, tx } = makeService();
       prisma.warehouseJob.findFirst.mockResolvedValue(makeJob());
-      prisma.tenantMembership.findFirst.mockResolvedValue({ role: Role.TRANSPORT_STAFF });
-      tx.warehouseJob.update.mockResolvedValue(makeJob({ assignedToUserId: 'user-ops' }));
-
-      await service.update(tenantId, jobId, { assignedToUserId: 'user-ops' }, actorUserId);
-
       prisma.tenantMembership.findFirst.mockResolvedValue({ role: Role.ADMIN });
-      tx.warehouseJob.update.mockResolvedValue(makeJob({ assignedToUserId: 'user-admin' }));
-      await service.update(tenantId, jobId, { assignedToUserId: 'user-admin' }, actorUserId);
+      tx.warehouseJob.update.mockResolvedValue(
+        makeJob({ assignedToUserId: 'user-admin' }),
+      );
+
+      await service.update(
+        tenantId,
+        jobId,
+        { assignedToUserId: 'user-admin' },
+        actorUserId,
+      );
+    });
+
+    it('rejects transport staff as warehouse in charge', async () => {
+      const { service, prisma } = makeService();
+      prisma.warehouseJob.findFirst.mockResolvedValue(makeJob());
+      prisma.tenantMembership.findFirst.mockResolvedValue({
+        role: Role.TRANSPORT_STAFF,
+      });
+
+      await expect(
+        service.update(
+          tenantId,
+          jobId,
+          { assignedToUserId: 'user-ops' },
+          actorUserId,
+        ),
+      ).rejects.toThrow('Warehouse in charge must be a warehouse or admin user.');
+    });
+
+    it('accepts TRANSPORT_STAFF as CS in charge', async () => {
+      const { service, prisma, tx } = makeService();
+      prisma.warehouseJob.findFirst.mockResolvedValue(makeJob());
+      prisma.tenantMembership.findFirst.mockResolvedValue({
+        role: Role.TRANSPORT_STAFF,
+      });
+      tx.warehouseJob.update.mockResolvedValue(
+        makeJob({ csInChargeUserId: 'user-cs' }),
+      );
+
+      await service.update(
+        tenantId,
+        jobId,
+        { csInChargeUserId: 'user-cs' },
+        actorUserId,
+      );
+
+      expect(tx.warehouseJob.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            csInChargeUser: { connect: { id: 'user-cs' } },
+          }),
+        }),
+      );
     });
 
     it.each([Role.DRIVER, Role.CUSTOMER, Role.FINANCE])(
-      'rejects %s assignee',
+      'rejects %s as warehouse in charge',
       async (role) => {
         const { service, tx, prisma } = makeService();
         prisma.tenantMembership.findFirst.mockResolvedValue({ role });
@@ -701,14 +751,16 @@ describe('WarehouseJobsService', () => {
             },
             actorUserId,
           ),
-        ).rejects.toThrow('Assigned user must be a warehouse, transport staff, or admin user.');
+        ).rejects.toThrow(
+          'Warehouse in charge must be a warehouse or admin user.',
+        );
         expect(tx.warehouseJob.create).not.toHaveBeenCalled();
       },
     );
   });
 
   describe('listWarehousingUsers', () => {
-    it('returns only OPS and WAREHOUSE memberships', async () => {
+    it('filters to TRANSPORT_STAFF, OPS, and WAREHOUSE memberships', async () => {
       const { service, prisma } = makeService();
       prisma.tenantMembership.count.mockResolvedValue(1);
       prisma.tenantMembership.findMany.mockResolvedValue([

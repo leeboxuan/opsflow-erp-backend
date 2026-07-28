@@ -81,7 +81,9 @@ export class WarehouseJobsController {
   @Get('warehousing-users')
   @Roles(...MUTATE_ROLES)
   @ApiOperation({
-    summary: 'List OPS and WAREHOUSE tenant users for warehousing user management',
+    summary:
+      '[Deprecated] Role-scoped user list — prefer GET /admin/users?roles=TRANSPORT_STAFF,OPS,WAREHOUSE',
+    deprecated: true,
   })
   async listWarehousingUsers(
     @Request() req: any,

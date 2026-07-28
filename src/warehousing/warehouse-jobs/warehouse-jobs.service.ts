@@ -36,11 +36,30 @@ import {
   WarehouseJobAccessRef,
 } from './warehouse-job-access';
 import {
-  WAREHOUSE_ASSIGNMENT_VALIDATION_MESSAGE,
-  WAREHOUSE_JOB_ASSIGNABLE_ROLES,
+  CS_IN_CHARGE_VALIDATION_MESSAGE,
+  WAREHOUSE_IN_CHARGE_VALIDATION_MESSAGE,
+  WAREHOUSE_JOB_CS_IN_CHARGE_ROLES,
+  WAREHOUSE_JOB_WAREHOUSE_IN_CHARGE_ROLES,
   WAREHOUSING_USER_ROLES,
 } from './warehouse-job-assignment';
-import { applyMappedFilter } from '../../shared/common/listing/listing.filters';
+import { publicEmailOrNull } from '../../shared/auth/auth-internal-email';
+import { listTenantUsers } from '../../admin/admin-users.list';
+
+function redactJobUserRef<T extends { email?: string | null } | null | undefined>(
+  user: T,
+): T {
+  if (!user || typeof user !== 'object') return user;
+  return { ...user, email: publicEmailOrNull(user.email) };
+}
+
+function redactWarehouseJobUserEmails<T extends Record<string, any>>(job: T): T {
+  return {
+    ...job,
+    assignedToUser: redactJobUserRef(job.assignedToUser),
+    csInChargeUser: redactJobUserRef(job.csInChargeUser),
+    createdByUser: redactJobUserRef(job.createdByUser),
+  };
+}
 
 const UPDATABLE_STATUSES = new Set<WarehouseJobStatus>([
   WarehouseJobStatus.DRAFT,
@@ -77,6 +96,7 @@ export class WarehouseJobsService {
     await this.validateCustomerCompanyId(tenantId, dto.customerCompanyId);
     await this.validateInventoryBatchId(tenantId, dto.inventoryBatchId);
     await this.validateAssignedToUserId(tenantId, dto.assignedToUserId);
+    await this.validateCsInChargeUserId(tenantId, dto.csInChargeUserId);
 
     const shouldGenerateDo = dto.generateDeliveryOrder === true;
     const normalizedContainers = this.containersService.normalize(
@@ -136,6 +156,7 @@ export class WarehouseJobsService {
           customerCompanyId: dto.customerCompanyId ?? null,
           inventoryBatchId: dto.inventoryBatchId ?? null,
           assignedToUserId: dto.assignedToUserId ?? null,
+          csInChargeUserId: dto.csInChargeUserId ?? null,
           createdByUserId: actorUserId ?? null,
           scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
           externalRefType: dto.externalRefType?.trim() || null,
@@ -240,6 +261,7 @@ export class WarehouseJobsService {
     if (query.customerCompanyId) where.customerCompanyId = query.customerCompanyId;
     if (query.inventoryBatchId) where.inventoryBatchId = query.inventoryBatchId;
     if (query.assignedToUserId) where.assignedToUserId = query.assignedToUserId;
+    if (query.csInChargeUserId) where.csInChargeUserId = query.csInChargeUserId;
 
     const searchTerm = query.search?.trim() || query.q?.trim();
     applyQSearch(where, searchTerm, [
@@ -279,81 +301,28 @@ export class WarehouseJobsService {
         approvedDocuments: 0,
         rejectedDocuments: 0,
       };
-      return {
+      return redactWarehouseJobUserEmails({
         ...row,
         documentCount: counts.totalDocuments,
         pendingReviewDocumentCount: counts.pendingReviewDocuments,
-      };
+      });
     });
 
     return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
+  /**
+   * Compatibility list for warehousing-scoped roles (TRANSPORT_STAFF/OPS/WAREHOUSE).
+   * Delegates to shared admin user list query — prefer GET /admin/users for new callers.
+   */
   async listWarehousingUsers(
     tenantId: string,
     query: ListWarehousingUsersQueryDto,
   ) {
-    const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
-
-    const where: Prisma.TenantMembershipWhereInput = {
-      tenantId,
-      role: { in: [...WAREHOUSING_USER_ROLES] },
-    };
-
-    const searchTerm = query.q?.trim();
-    if (searchTerm) {
-      where.user = {
-        OR: [
-          { name: { contains: searchTerm, mode: 'insensitive' } },
-          { email: { contains: searchTerm, mode: 'insensitive' } },
-        ],
-      };
-    }
-
-    applyMappedFilter(where, query.filter, {
-      active: { status: MembershipStatus.Active },
-      invited: { status: MembershipStatus.Invited },
-      suspended: { status: MembershipStatus.Suspended },
+    return listTenantUsers(this.prisma, tenantId, query, {
+      forcedRoles: WAREHOUSING_USER_ROLES,
+      excludeDriver: true,
     });
-
-    const orderBy =
-      query.sortBy === 'name' || query.sortBy === 'email'
-        ? {
-            user: {
-              [query.sortBy]: query.sortDir === 'desc' ? 'desc' : 'asc',
-            },
-          }
-        : buildOrderBy(
-            query.sortBy,
-            query.sortDir,
-            ['createdAt', 'updatedAt'],
-            { createdAt: 'desc' },
-          );
-
-    const [total, memberships] = await this.prisma.$transaction([
-      this.prisma.tenantMembership.count({ where }),
-      this.prisma.tenantMembership.findMany({
-        where,
-        include: { user: true },
-        orderBy: orderBy as Prisma.TenantMembershipOrderByWithRelationInput,
-        skip,
-        take,
-      }),
-    ]);
-
-    const data = memberships.map((membership) => ({
-      id: membership.user.id,
-      email: membership.user.email,
-      name: membership.user.name,
-      phone: membership.user.phone,
-      role: membership.role,
-      status: membership.status,
-      membershipId: membership.id,
-      createdAt: membership.user.createdAt,
-      updatedAt: membership.user.updatedAt,
-    }));
-
-    return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
   async getById(
@@ -395,10 +364,10 @@ export class WarehouseJobsService {
       rejectedDocuments: 0,
     };
 
-    return {
+    return redactWarehouseJobUserEmails({
       ...job,
       documentCounts: counts,
-    };
+    });
   }
 
   async update(
@@ -424,6 +393,7 @@ export class WarehouseJobsService {
     await this.validateCustomerCompanyId(tenantId, dto.customerCompanyId);
     await this.validateInventoryBatchId(tenantId, dto.inventoryBatchId);
     await this.validateAssignedToUserId(tenantId, dto.assignedToUserId);
+    await this.validateCsInChargeUserId(tenantId, dto.csInChargeUserId);
 
     const data: Prisma.WarehouseJobUpdateInput = {};
 
@@ -471,6 +441,11 @@ export class WarehouseJobsService {
         ? { connect: { id: dto.assignedToUserId } }
         : { disconnect: true };
     }
+    if (dto.csInChargeUserId !== undefined) {
+      data.csInChargeUser = dto.csInChargeUserId
+        ? { connect: { id: dto.csInChargeUserId } }
+        : { disconnect: true };
+    }
     if (dto.scheduledAt !== undefined) {
       data.scheduledAt = dto.scheduledAt ? new Date(dto.scheduledAt) : null;
     }
@@ -508,6 +483,9 @@ export class WarehouseJobsService {
     const assignedChanged =
       dto.assignedToUserId !== undefined &&
       (dto.assignedToUserId ?? null) !== (existing.assignedToUserId ?? null);
+    const csInChargeChanged =
+      dto.csInChargeUserId !== undefined &&
+      (dto.csInChargeUserId ?? null) !== (existing.csInChargeUserId ?? null);
     const notesChanged =
       dto.notes !== undefined &&
       (dto.notes?.trim() || null) !== (existing.notes ?? null);
@@ -526,20 +504,23 @@ export class WarehouseJobsService {
           existing.id,
           normalizedContainers,
         );
-        return tx.warehouseJob.findFirstOrThrow({
-          where: { id: existing.id, tenantId },
-          include: warehouseJobDetailInclude,
-        });
       }
 
-      if (assignedChanged) {
+      if (assignedChanged || csInChargeChanged) {
         await this.eventsService.append(tx, {
           tenantId,
           warehouseJobId: existing.id,
           actorUserId,
           eventType: WarehouseJobEventType.ASSIGNED,
           payload: {
-            assignedToUserId: dto.assignedToUserId ?? null,
+            assignedToUserId:
+              dto.assignedToUserId !== undefined
+                ? (dto.assignedToUserId ?? null)
+                : existing.assignedToUserId,
+            csInChargeUserId:
+              dto.csInChargeUserId !== undefined
+                ? (dto.csInChargeUserId ?? null)
+                : existing.csInChargeUserId,
           },
         });
       }
@@ -551,6 +532,13 @@ export class WarehouseJobsService {
           actorUserId,
           eventType: WarehouseJobEventType.NOTE_ADDED,
           payload: { notes: dto.notes?.trim() || null },
+        });
+      }
+
+      if (normalizedContainers) {
+        return tx.warehouseJob.findFirstOrThrow({
+          where: { id: existing.id, tenantId },
+          include: warehouseJobDetailInclude,
         });
       }
 
@@ -758,8 +746,34 @@ export class WarehouseJobsService {
       select: { role: true },
     });
 
-    if (!membership || !WAREHOUSE_JOB_ASSIGNABLE_ROLES.has(membership.role)) {
-      throw new BadRequestException(WAREHOUSE_ASSIGNMENT_VALIDATION_MESSAGE);
+    if (
+      !membership ||
+      !WAREHOUSE_JOB_WAREHOUSE_IN_CHARGE_ROLES.has(membership.role)
+    ) {
+      throw new BadRequestException(WAREHOUSE_IN_CHARGE_VALIDATION_MESSAGE);
+    }
+  }
+
+  private async validateCsInChargeUserId(
+    tenantId: string,
+    csInChargeUserId?: string | null,
+  ) {
+    if (!csInChargeUserId) return;
+
+    const membership = await this.prisma.tenantMembership.findFirst({
+      where: {
+        tenantId,
+        userId: csInChargeUserId,
+        status: MembershipStatus.Active,
+      },
+      select: { role: true },
+    });
+
+    if (
+      !membership ||
+      !WAREHOUSE_JOB_CS_IN_CHARGE_ROLES.has(membership.role)
+    ) {
+      throw new BadRequestException(CS_IN_CHARGE_VALIDATION_MESSAGE);
     }
   }
 }

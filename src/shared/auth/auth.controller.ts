@@ -10,6 +10,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { MembershipStatus } from '@prisma/client';
 import { AuthService } from './auth.service';
 import { SupabaseService } from './supabase.service';
 import { AuthGuard } from './guards/auth.guard';
@@ -21,6 +22,13 @@ import { RefreshResponseDto } from './dto/refresh-response.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { getUserAvatarSignedUrl } from '../users/user-avatar';
 import { SkipTenantGuard } from './guards/skip-tenant-guard.decorator';
+import {
+  normalizeUsername,
+  publicEmailOrNull,
+} from './auth-internal-email';
+
+const USERNAME_LOGIN_ERROR = 'Invalid username or password';
+const EMAIL_LOGIN_ERROR = 'Invalid email or password';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -33,9 +41,8 @@ export class AuthController {
   ) { }
 
   @Post('login')
-  @ApiOperation({ summary: 'Login with email and password' })
+  @ApiOperation({ summary: 'Login with email or username and password' })
   async login(@Body() dto: LoginDto): Promise<LoginResponseDto> {
-    // Use public anon key for user authentication (not service role)
     const supabaseUrl =
       this.configService.get<string>('SUPABASE_PROJECT_URL') ||
       this.configService.get<string>('SUPABASE_URL') ||
@@ -46,29 +53,48 @@ export class AuthController {
       throw new UnauthorizedException('Supabase configuration is missing. SUPABASE_ANON_KEY is required for login.');
     }
 
-    // Create a public client for user authentication
+    const usernameRaw = dto.username?.trim();
+    const emailRaw = dto.email?.trim();
+    const isUsernameLogin = Boolean(usernameRaw) && !emailRaw;
+    const loginError = isUsernameLogin ? USERNAME_LOGIN_ERROR : EMAIL_LOGIN_ERROR;
+
+    if (!usernameRaw && !emailRaw) {
+      throw new UnauthorizedException(loginError);
+    }
+
+    let authEmail = emailRaw?.toLowerCase() ?? '';
+    let resolvedUserId: string | null = null;
+
+    if (isUsernameLogin) {
+      const resolved = await this.resolveUsernameLogin(
+        usernameRaw!,
+        dto.tenantSlug,
+      );
+      if (!resolved) {
+        throw new UnauthorizedException(USERNAME_LOGIN_ERROR);
+      }
+      authEmail = resolved.authEmail;
+      resolvedUserId = resolved.userId;
+    }
+
     const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
 
-    // Authenticate with Supabase
     const { data, error } = await supabase.auth.signInWithPassword({
-      email: dto.email,
+      email: authEmail,
       password: dto.password,
     });
 
     if (error || !data.session) {
-      throw new UnauthorizedException('Invalid email or password');
+      throw new UnauthorizedException(loginError);
     }
 
-    // From Supabase session (do not log tokens)
     const accessToken = data.session.access_token;
     const refreshToken = data.session.refresh_token ?? '';
     const expiresAt = data.session.expires_at ?? 0;
 
-    // Use AuthService to map Supabase auth user (sub) to public.users via authUserId
     const authUser = await this.authService.verifyToken(accessToken);
 
     if (!authUser) {
-      // Fail with explicit message when HS256 is used but JWT secret is missing (common cause of 401 after signIn)
       const jwtSecret = this.configService.get<string>('SUPABASE_JWT_SECRET');
       if (!jwtSecret) {
         throw new UnauthorizedException(
@@ -80,11 +106,14 @@ export class AuthController {
       );
     }
 
-    // Get active memberships for bootstrap (frontend may choose current tenant)
+    if (resolvedUserId && authUser.userId !== resolvedUserId) {
+      throw new UnauthorizedException(loginError);
+    }
+
     const memberships = await this.prisma.tenantMembership.findMany({
       where: {
         userId: authUser.userId,
-        status: 'Active',
+        status: MembershipStatus.Active,
       },
       include: {
         tenant: {
@@ -96,11 +125,22 @@ export class AuthController {
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    if (isUsernameLogin && memberships.length === 0) {
+      throw new UnauthorizedException(USERNAME_LOGIN_ERROR);
+    }
+
     const activeMembership = memberships[0];
+
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: authUser.userId },
+      select: { email: true, username: true },
+    });
 
     const user = {
       id: authUser.userId,
-      email: authUser.email,
+      email: publicEmailOrNull(dbUser?.email ?? authUser.email),
+      username: dbUser?.username ?? null,
       role: activeMembership?.role ?? null,
       tenantId: activeMembership?.tenantId ?? undefined,
     };
@@ -121,6 +161,58 @@ export class AuthController {
         },
       })),
     };
+  }
+
+  /**
+   * Resolve username (+ optional tenant slug) to the internal Supabase auth email.
+   * Returns null for unknown / ambiguous / inactive — callers must use a generic error.
+   */
+  private async resolveUsernameLogin(
+    usernameRaw: string,
+    tenantSlug?: string,
+  ): Promise<{ authEmail: string; userId: string } | null> {
+    const username = normalizeUsername(usernameRaw);
+    if (!username) return null;
+
+    const slug = tenantSlug?.trim().toLowerCase() || null;
+
+    const candidates = await this.prisma.user.findMany({
+      where: {
+        username,
+        memberships: {
+          some: {
+            ...(slug
+              ? { tenant: { slug } }
+              : {}),
+          },
+        },
+      },
+      select: {
+        id: true,
+        email: true,
+        memberships: {
+          where: slug
+            ? { tenant: { slug } }
+            : undefined,
+          select: {
+            status: true,
+            tenant: { select: { slug: true } },
+          },
+        },
+      },
+      take: 5,
+    });
+
+    if (candidates.length === 0) return null;
+    if (!slug && candidates.length > 1) return null;
+
+    const user = candidates[0];
+    const membership = user.memberships[0];
+    if (!membership || membership.status !== MembershipStatus.Active) {
+      return null;
+    }
+
+    return { authEmail: user.email, userId: user.id };
   }
 
   @Post('refresh')
@@ -241,9 +333,15 @@ export class AuthController {
 
     return {
       id: user.id,
-      email: user.email,
+      email: publicEmailOrNull(user.email),
+      username: (user as any).username ?? null,
       name: (user as any).name ?? null,
-      displayName: (user as any).displayName ?? (user as any).name ?? user.email,
+      displayName:
+        (user as any).displayName ??
+        (user as any).name ??
+        (user as any).username ??
+        publicEmailOrNull(user.email) ??
+        null,
       role: effectiveRole,                // global app role, never null
       authUserId: (user as any).authUserId, // Supabase auth user id
       tenantId: undefined,

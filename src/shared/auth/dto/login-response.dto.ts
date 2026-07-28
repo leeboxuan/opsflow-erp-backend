@@ -14,7 +14,8 @@ export class LoginResponseDto {
   @ApiProperty()
   user: {
     id: string;
-    email: string;
+    email: string | null;
+    username?: string | null;
     role: Role | null;
     tenantId?: string;
   };

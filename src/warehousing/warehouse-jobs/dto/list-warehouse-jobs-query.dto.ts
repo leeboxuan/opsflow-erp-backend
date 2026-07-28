@@ -38,6 +38,11 @@ export class ListWarehouseJobsQueryDto extends ListQueryBaseDto {
   @IsString()
   assignedToUserId?: string;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  csInChargeUserId?: string;
+
   @ApiPropertyOptional({ description: 'Search internalRef, title, or external ref' })
   @IsOptional()
   @IsString()

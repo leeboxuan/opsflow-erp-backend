@@ -83,6 +83,8 @@ model User {
   /// Supabase Auth user id (auth.users.id, UUID). Links JWT sub to this row; not the same as id (cuid).
   authUserId String? @unique
   email      String  @unique
+  /// Optional login username (warehouse mobile). Uniqueness enforced per tenant in app logic.
+  username   String?
   name       String?
   displayName String?
   phone      String?
@@ -115,6 +117,7 @@ model User {
   jobDocumentsUploaded JobDocument[]   @relation("JobDocumentUploadedBy")
   tripDocumentsUploaded TripDocument[] @relation("TripDocumentUploadedBy")
   warehouseJobsAssignedTo WarehouseJob[]      @relation("WarehouseJobAssignedTo")
+  warehouseJobsCsInCharge WarehouseJob[]      @relation("WarehouseJobCsInCharge")
   warehouseJobsCreated    WarehouseJob[]      @relation("WarehouseJobCreatedBy")
   warehouseJobEventsActed WarehouseJobEvent[] @relation("WarehouseJobEventActor")
   warehouseJobDocumentsUploaded WarehouseJobDocument[] @relation("WarehouseJobDocumentUploadedBy")
@@ -124,6 +127,7 @@ model User {
   @@index([customerContactId])
   @@index([email])
   @@index([authUserId])
+  @@index([username])
   @@map("users")
 }
 
@@ -1795,6 +1799,8 @@ model WarehouseJob {
   customerCompanyId String?
   inventoryBatchId  String?
   assignedToUserId  String?
+  /// CS / transport staff person in charge (office).
+  csInChargeUserId  String?
   createdByUserId   String?
   scheduledAt       DateTime?
   startedAt         DateTime?
@@ -1828,6 +1834,7 @@ model WarehouseJob {
   customerCompany customer_companies? @relation("WarehouseJobCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: SetNull)
   inventoryBatch  inventory_batches?  @relation(fields: [inventoryBatchId], references: [id], onDelete: SetNull)
   assignedToUser  User?               @relation("WarehouseJobAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  csInChargeUser  User?               @relation("WarehouseJobCsInCharge", fields: [csInChargeUserId], references: [id], onDelete: SetNull)
   createdByUser   User?               @relation("WarehouseJobCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   lines     WarehouseJobLine[]
@@ -1844,6 +1851,7 @@ model WarehouseJob {
   @@index([tenantId, customerCompanyId])
   @@index([tenantId, inventoryBatchId])
   @@index([tenantId, assignedToUserId])
+  @@index([tenantId, csInChargeUserId])
   @@index([tenantId, createdAt])
   @@index([tenantId, externalRefType, externalRefId])
   @@map("warehouse_jobs")

@@ -392,6 +392,7 @@ export const warehouseJobListInclude = {
   customerCompany: { select: { id: true, name: true } },
   inventoryBatch: { select: { id: true, containerNumber: true } },
   assignedToUser: { select: { id: true, name: true, email: true } },
+  csInChargeUser: { select: { id: true, name: true, email: true } },
   _count: { select: { lines: true, units: true, events: true } },
 } satisfies Prisma.WarehouseJobInclude;
 
@@ -401,6 +402,7 @@ export const warehouseJobDetailInclude = {
     select: { id: true, containerNumber: true, batchDescription: true },
   },
   assignedToUser: { select: { id: true, name: true, email: true } },
+  csInChargeUser: { select: { id: true, name: true, email: true } },
   createdByUser: { select: { id: true, name: true, email: true } },
   cargoLines: {
     orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],

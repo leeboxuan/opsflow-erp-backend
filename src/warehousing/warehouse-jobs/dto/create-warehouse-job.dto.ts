@@ -64,6 +64,13 @@ export class CreateWarehouseJobDto {
   @IsString()
   assignedToUserId?: string;
 
+  @ApiPropertyOptional({
+    description: 'CS / transport staff person in charge',
+  })
+  @IsOptional()
+  @IsString()
+  csInChargeUserId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsDateString()
