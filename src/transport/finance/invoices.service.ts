@@ -2397,6 +2397,16 @@ export class InvoicesService {
       .download(inv.pdfKey);
 
     if (error || !data) {
+      // Stale pdfKey: clear so portal list stops advertising a missing blob.
+      // Do not restore per-row storage probes on list; download remains the verifier.
+      await this.prisma.invoice.updateMany({
+        where: {
+          tenantId,
+          id: invoiceId,
+          pdfKey: inv.pdfKey,
+        },
+        data: { pdfKey: null },
+      });
       throw new NotFoundException("Invoice PDF not found");
     }
 
