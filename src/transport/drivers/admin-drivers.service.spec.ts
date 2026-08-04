@@ -98,10 +98,21 @@ describe("AdminDriversService", () => {
       }),
     };
     const supabaseService: any = { getClient: jest.fn() };
+    const tripEarnings: any = {
+      getEarningsTotals: jest.fn(),
+      listEarningsTransactions: jest.fn(),
+      getWalletSummaryByMonth: jest.fn(),
+    };
     return {
-      service: new AdminDriversService(prisma, supabaseService, usersService),
+      service: new AdminDriversService(
+        prisma,
+        supabaseService,
+        usersService,
+        tripEarnings,
+      ),
       prisma,
       usersService,
+      tripEarnings,
     };
   }
 

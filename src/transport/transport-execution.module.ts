@@ -12,9 +12,10 @@ import { TransportJobsService } from "./jobs/transport-jobs.service";
 import { DriverJobsService } from "./driver-app/driver-jobs.service";
 import { DispatchService } from "./dispatch/dispatch.service";
 import { FinanceModule } from "./finance/finance.module";
+import { DriversModule } from "./drivers/drivers.module";
 
 @Module({
-  imports: [PrismaModule, AuthModule, AuditModule, FinanceModule],
+  imports: [PrismaModule, AuthModule, AuditModule, FinanceModule, DriversModule],
   controllers: [
     TransportJobsController,
     TransportTripsController,

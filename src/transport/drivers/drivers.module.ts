@@ -6,12 +6,13 @@ import { UsersModule } from "../../shared/users/users.module";
 import { DriversController } from "./drivers.controller";
 import { AdminDriversController } from "./admin-drivers.controller";
 import { AdminDriversService } from "./admin-drivers.service";
+import { DriverTripEarningsService } from "./driver-trip-earnings.service";
 import { LocationService } from "./location/location.service";
 
 @Module({
   imports: [PrismaModule, AuthModule, UsersModule],
   controllers: [DriversController, AdminDriversController],
-  providers: [AdminDriversService, LocationService],
-  exports: [LocationService],
+  providers: [AdminDriversService, DriverTripEarningsService, LocationService],
+  exports: [LocationService, DriverTripEarningsService],
 })
 export class DriversModule {}

@@ -4,7 +4,7 @@ import {
   NotFoundException,
   Optional,
 } from "@nestjs/common";
-import { MembershipStatus, Role, UserRole } from "@prisma/client";
+import { MembershipStatus, Role, StopStatus, TripStatus, UserRole } from "@prisma/client";
 import { PrismaService } from "../../shared/prisma/prisma.service";
 import { SupabaseService } from "../../shared/auth/supabase.service";
 import { UsersService } from "../../shared/users/users.service";
@@ -18,11 +18,30 @@ import { AdminCreateDriverDto } from "./dto/admin-create-driver.dto";
 import { AdminUpdateDriverDto } from "./dto/admin-update-driver.dto";
 import { AdminDriverDto } from "./dto/admin-driver.dto";
 import type {
+  AdminDriverAssignedTripDto,
+  AdminDriverEarningsDto,
+  AdminDriverEarningsTransactionDto,
+  AdminDriverSummaryDto,
+  AdminDriverTripHistoryItemDto,
+} from "./dto/admin-driver-detail.dto";
+import type {
   DriverWalletDto,
   DriverWalletTransactionDto,
 } from "./dto/driver-wallet.dto";
 import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
 import * as rt from "../../shared/realtime/realtime-publish";
+import { DriverTripEarningsService } from "./driver-trip-earnings.service";
+import { resolveDriverTripEarningCents } from "./driver-trip-earnings.helpers";
+
+function firstNonEmptyText(...values: Array<unknown>): string | null {
+  for (const value of values) {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed) return trimmed;
+    }
+  }
+  return null;
+}
 
 @Injectable()
 export class AdminDriversService {
@@ -30,6 +49,7 @@ export class AdminDriversService {
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
     private readonly usersService: UsersService,
+    private readonly tripEarnings: DriverTripEarningsService,
     @Optional() private readonly realtime?: RealtimeEventsService,
   ) {}
 
@@ -539,5 +559,387 @@ export class AdminDriversService {
         }),
       ),
     };
+  }
+
+  private async requireDriverMembership(tenantId: string, driverUserId: string) {
+    const membership = await this.prisma.tenantMembership.findUnique({
+      where: { tenantId_userId: { tenantId, userId: driverUserId } },
+      include: { user: true },
+    });
+    if (!membership || membership.role !== Role.DRIVER) {
+      throw new NotFoundException("Driver not found");
+    }
+    return membership;
+  }
+
+  private async buildAdminDriverDto(
+    tenantId: string,
+    membership: {
+      id: string;
+      status: MembershipStatus;
+      user: {
+        id: string;
+        email: string;
+        name: string | null;
+        displayName?: string | null;
+        phone?: string | null;
+        avatarKey?: string | null;
+        avatarUpdatedAt?: Date | null;
+        createdAt: Date;
+        updatedAt: Date;
+      };
+    },
+  ): Promise<AdminDriverDto> {
+    const userId = membership.user.id;
+    const [profile, vehicle, fleetVehicle] = await Promise.all([
+      this.prisma.drivers.findFirst({
+        where: { tenantId, userId },
+        select: {
+          name: true,
+          assignedVehicleId: true,
+          assignedFleetVehicleId: true,
+        },
+      }),
+      this.prisma.vehicle.findFirst({
+        where: { tenantId, driverId: userId },
+        select: { id: true, plateNo: true, type: true },
+      }),
+      this.prisma.fleetVehicle.findFirst({
+        where: { tenantId, driverId: userId },
+        select: { id: true, plateNo: true, type: true },
+      }),
+    ]);
+
+    const displayName =
+      profile?.name ??
+      membership.user.displayName ??
+      membership.user.name ??
+      membership.user.email ??
+      null;
+    const avatarUrl = await this.usersService.getUserAvatarSignedUrl(
+      membership.user.avatarKey ?? null,
+    );
+
+    return {
+      userId,
+      id: userId,
+      email: membership.user.email,
+      name: displayName,
+      displayName,
+      userName: membership.user.name ?? null,
+      userEmail: membership.user.email ?? null,
+      phone: membership.user.phone ?? null,
+      status: membership.status,
+      isSuspended: membership.status === MembershipStatus.Suspended,
+      membershipId: membership.id,
+      createdAt: membership.user.createdAt,
+      updatedAt: membership.user.updatedAt,
+      avatarUrl,
+      avatarUpdatedAt: membership.user.avatarUpdatedAt ?? null,
+      defaultVehicleId: profile?.assignedVehicleId ?? null,
+      defaultFleetVehicleId: profile?.assignedFleetVehicleId ?? null,
+      assignedVehicleId: vehicle?.id ?? null,
+      assignedVehiclePlateNo: vehicle?.plateNo ?? null,
+      assignedVehicleType: vehicle?.type ?? null,
+      assignedFleetVehicleId: fleetVehicle?.id ?? null,
+      assignedFleetVehiclePlateNo: fleetVehicle?.plateNo ?? null,
+      assignedFleetVehicleType: fleetVehicle?.type ?? null,
+    };
+  }
+
+  private tripRouteSummaries(trip: {
+    originLabel?: string | null;
+    originAddressLine1?: string | null;
+    originAddressLine2?: string | null;
+    originPostalCode?: string | null;
+    destinationLabel?: string | null;
+    destinationAddressLine1?: string | null;
+    destinationAddressLine2?: string | null;
+    destinationPostalCode?: string | null;
+    job?: {
+      pickupAddress1?: string | null;
+      pickupAddress2?: string | null;
+      pickupPostal?: string | null;
+      deliveryAddress1?: string | null;
+      deliveryAddress2?: string | null;
+      deliveryPostal?: string | null;
+    } | null;
+  }): { originSummary: string | null; destinationSummary: string | null } {
+    return {
+      originSummary:
+        firstNonEmptyText(
+          trip.originLabel,
+          trip.originAddressLine1,
+          trip.originAddressLine2,
+          trip.originPostalCode,
+        ) ??
+        firstNonEmptyText(
+          trip.job?.pickupAddress1,
+          trip.job?.pickupAddress2,
+          trip.job?.pickupPostal,
+        ),
+      destinationSummary:
+        firstNonEmptyText(
+          trip.destinationLabel,
+          trip.destinationAddressLine1,
+          trip.destinationAddressLine2,
+          trip.destinationPostalCode,
+        ) ??
+        firstNonEmptyText(
+          trip.job?.deliveryAddress1,
+          trip.job?.deliveryAddress2,
+          trip.job?.deliveryPostal,
+        ),
+    };
+  }
+
+  private async resolveCurrentOrNextTrip(
+    tenantId: string,
+    driverUserId: string,
+  ): Promise<AdminDriverAssignedTripDto | null> {
+    const trips = await this.prisma.trip.findMany({
+      where: {
+        tenantId,
+        assignedDriverUserId: driverUserId,
+        status: { in: [TripStatus.ONGOING, TripStatus.PUBLISHED] },
+      },
+      orderBy: [
+        { plannedStartAt: "asc" },
+        { createdAt: "asc" },
+        { id: "asc" },
+      ],
+      select: {
+        id: true,
+        jobId: true,
+        title: true,
+        displayTitle: true,
+        status: true,
+        plannedStartAt: true,
+        startedAt: true,
+        createdAt: true,
+        originLabel: true,
+        originAddressLine1: true,
+        originAddressLine2: true,
+        originPostalCode: true,
+        destinationLabel: true,
+        destinationAddressLine1: true,
+        destinationAddressLine2: true,
+        destinationPostalCode: true,
+        job: {
+          select: {
+            internalRef: true,
+            pickupAddress1: true,
+            pickupAddress2: true,
+            pickupPostal: true,
+            deliveryAddress1: true,
+            deliveryAddress2: true,
+            deliveryPostal: true,
+          },
+        },
+      },
+    });
+
+    const current = trips.find((t) => t.status === TripStatus.ONGOING) ?? null;
+    const next =
+      current ??
+      trips.find((t) => t.status === TripStatus.PUBLISHED) ??
+      null;
+    if (!next) return null;
+
+    const route = this.tripRouteSummaries(next);
+    return {
+      tripId: next.id,
+      jobId: next.jobId ?? null,
+      jobInternalRef: next.job?.internalRef ?? null,
+      title: next.title ?? next.displayTitle ?? null,
+      status: next.status,
+      plannedStartAt: next.plannedStartAt,
+      startedAt: next.startedAt,
+      originSummary: route.originSummary,
+      destinationSummary: route.destinationSummary,
+      kind: current ? "current" : "next",
+    };
+  }
+
+  async getDriverSummary(
+    tenantId: string,
+    driverUserId: string,
+    month?: string | null,
+  ): Promise<AdminDriverSummaryDto> {
+    const membership = await this.requireDriverMembership(tenantId, driverUserId);
+    const [driver, currentOrNextTrip, earnings] = await Promise.all([
+      this.buildAdminDriverDto(tenantId, membership as any),
+      this.resolveCurrentOrNextTrip(tenantId, driverUserId),
+      this.tripEarnings.getEarningsTotals(tenantId, driverUserId, month),
+    ]);
+
+    return {
+      driver,
+      currentOrNextTrip,
+      month: earnings.month,
+      monthEarningsCents: earnings.monthCents,
+      lifetimeEarningsCents: earnings.lifetimeCents,
+      currency: earnings.currency,
+      completedTripCountLifetime: earnings.lifetimeCompletedTripCount,
+      completedTripCountMonth: earnings.monthCompletedTripCount,
+      timeZone: earnings.timeZone,
+    };
+  }
+
+  async listDriverTrips(
+    tenantId: string,
+    driverUserId: string,
+    query?: { page?: unknown; pageSize?: unknown },
+  ): Promise<{
+    data: AdminDriverTripHistoryItemDto[];
+    meta: { page: number; pageSize: number; total: number };
+  }> {
+    await this.requireDriverMembership(tenantId, driverUserId);
+    const { page, pageSize, skip, take } = parsePaginationFromQuery(query ?? {});
+
+    const where = {
+      tenantId,
+      assignedDriverUserId: driverUserId,
+      status: { in: [TripStatus.COMPLETED, TripStatus.DONE] },
+    };
+
+    const [total, trips] = await this.prisma.$transaction([
+      this.prisma.trip.count({ where }),
+      this.prisma.trip.findMany({
+        where,
+        orderBy: [
+          { closedAt: "desc" },
+          { updatedAt: "desc" },
+          { id: "desc" },
+        ],
+        skip,
+        take,
+        select: {
+          id: true,
+          jobId: true,
+          title: true,
+          displayTitle: true,
+          status: true,
+          closedAt: true,
+          startedAt: true,
+          plannedStartAt: true,
+          updatedAt: true,
+          driverEarningCents: true,
+          earningLabelSnapshot: true,
+          originLabel: true,
+          originAddressLine1: true,
+          originAddressLine2: true,
+          originPostalCode: true,
+          destinationLabel: true,
+          destinationAddressLine1: true,
+          destinationAddressLine2: true,
+          destinationPostalCode: true,
+          payoutLines: { select: { totalCents: true } },
+          job: {
+            select: {
+              internalRef: true,
+              pickupAddress1: true,
+              pickupAddress2: true,
+              pickupPostal: true,
+              deliveryAddress1: true,
+              deliveryAddress2: true,
+              deliveryPostal: true,
+            },
+          },
+        },
+      }),
+    ]);
+
+    const tripIds = trips.map((t) => t.id);
+    const stopGroups =
+      tripIds.length === 0
+        ? []
+        : await this.prisma.stop.groupBy({
+            by: ["tripId", "status"],
+            where: { tenantId, tripId: { in: tripIds } },
+            _count: { _all: true },
+          });
+
+    const stopCountByTrip = new Map<string, number>();
+    const completedStopCountByTrip = new Map<string, number>();
+    for (const row of stopGroups) {
+      if (!row.tripId) continue;
+      stopCountByTrip.set(
+        row.tripId,
+        (stopCountByTrip.get(row.tripId) ?? 0) + row._count._all,
+      );
+      if (row.status === StopStatus.Completed) {
+        completedStopCountByTrip.set(
+          row.tripId,
+          (completedStopCountByTrip.get(row.tripId) ?? 0) + row._count._all,
+        );
+      }
+    }
+
+    const data: AdminDriverTripHistoryItemDto[] = trips.map((trip) => {
+      const route = this.tripRouteSummaries(trip);
+      return {
+        tripId: trip.id,
+        jobId: trip.jobId ?? null,
+        jobInternalRef: trip.job?.internalRef ?? null,
+        title: trip.title ?? trip.displayTitle ?? null,
+        status: trip.status,
+        tripDate: trip.closedAt ?? trip.updatedAt ?? trip.plannedStartAt ?? null,
+        closedAt: trip.closedAt,
+        startedAt: trip.startedAt,
+        plannedStartAt: trip.plannedStartAt,
+        originSummary: route.originSummary,
+        destinationSummary: route.destinationSummary,
+        stopCount: stopCountByTrip.get(trip.id) ?? 0,
+        completedStopCount: completedStopCountByTrip.get(trip.id) ?? 0,
+        driverEarningCents: resolveDriverTripEarningCents(trip),
+        earningLabelSnapshot: trip.earningLabelSnapshot ?? null,
+      };
+    });
+
+    return {
+      data,
+      meta: buildPaginationMeta(page, pageSize, total),
+    };
+  }
+
+  async getDriverEarnings(
+    tenantId: string,
+    driverUserId: string,
+    month?: string | null,
+  ): Promise<AdminDriverEarningsDto> {
+    await this.requireDriverMembership(tenantId, driverUserId);
+    const earnings = await this.tripEarnings.getEarningsTotals(
+      tenantId,
+      driverUserId,
+      month,
+    );
+    return {
+      month: earnings.month,
+      monthCents: earnings.monthCents,
+      lifetimeCents: earnings.lifetimeCents,
+      currency: earnings.currency,
+      monthCompletedTripCount: earnings.monthCompletedTripCount,
+      lifetimeCompletedTripCount: earnings.lifetimeCompletedTripCount,
+      timeZone: earnings.timeZone,
+    };
+  }
+
+  async listDriverEarningsTransactions(
+    tenantId: string,
+    driverUserId: string,
+    query?: { month?: string; page?: unknown; pageSize?: unknown },
+  ): Promise<{
+    data: AdminDriverEarningsTransactionDto[];
+    meta: { page: number; pageSize: number; total: number };
+    month: string;
+    currency: string;
+  }> {
+    await this.requireDriverMembership(tenantId, driverUserId);
+    return this.tripEarnings.listEarningsTransactions(
+      tenantId,
+      driverUserId,
+      query,
+    );
   }
 }

@@ -88,23 +88,16 @@ import {
   type SignTripDocumentBody,
 } from "../documents/do-signature.helpers";
 import { DRIVER_ACTIVE_JOB_DOCUMENTS_INCLUDE } from "../documents/driver-mobile-document.select";
+import { DriverTripEarningsService } from "../drivers/driver-trip-earnings.service";
+import {
+  DEFAULT_DRIVER_EARNING_CURRENCY,
+  DEFAULT_TENANT_TIMEZONE,
+  getSafeTenantTimezone,
+  parseCalendarMonthToUtcRangeInTimeZone,
+  resolveDriverTripEarningCents,
+  zonedDateTimeToUtc,
+} from "../drivers/driver-trip-earnings.helpers";
 
-const DEFAULT_TENANT_TIMEZONE = "Asia/Singapore";
-const DEFAULT_DRIVER_EARNING_CURRENCY = "SGD";
-
-/** Driver payout total for mobile cards: persisted cents, else sum of payout lines. */
-function resolveDriverTripEarningCents(trip: {
-  driverEarningCents?: number | null;
-  payoutLines?: Array<{ totalCents?: number | null }> | null;
-}): number | null {
-  if (Number.isInteger(trip.driverEarningCents)) {
-    return trip.driverEarningCents as number;
-  }
-  const lines = trip.payoutLines ?? [];
-  if (!lines.length) return null;
-  const total = lines.reduce((sum, line) => sum + (line.totalCents ?? 0), 0);
-  return total > 0 ? total : null;
-}
 const TENANT_TIMEZONE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DRIVER_NON_DELETABLE_TRIP_DOC_TYPES = new Set<TripDocumentType>([
   TripDocumentType.TRAILER_START_PHOTO,
@@ -383,6 +376,7 @@ export class DriverJobsService {
     private readonly supabaseService: SupabaseService,
     @Optional() private readonly opsJobs?: TransportJobsService,
     @Optional() private readonly realtime?: RealtimeEventsService,
+    @Optional() private readonly tripEarnings?: DriverTripEarningsService,
   ) {}
 
   private publishedTripVisibilityWhere() {
@@ -775,22 +769,7 @@ export class DriverJobsService {
     monthStr: string,
     timeZone: string,
   ): { gte: Date; lt: Date } {
-    const m = monthStr.trim().match(/^(\d{4})-(\d{2})$/);
-    if (!m) throw new BadRequestException("month must be YYYY-MM");
-    const y = Number(m[1]);
-    const mo = Number(m[2]);
-    if (!mo || mo < 1 || mo > 12) {
-      throw new BadRequestException("month must be YYYY-MM");
-    }
-    const gte = this.zonedDateTimeToUtc(y, mo, 1, 0, 0, 0, timeZone);
-    let ny = y;
-    let nm = mo + 1;
-    if (nm === 13) {
-      nm = 1;
-      ny += 1;
-    }
-    const lt = this.zonedDateTimeToUtc(ny, nm, 1, 0, 0, 0, timeZone);
-    return { gte, lt };
+    return parseCalendarMonthToUtcRangeInTimeZone(monthStr, timeZone);
   }
 
   /** Inclusive-exclusive UTC range for a calendar year in a tenant IANA time zone. */
@@ -804,44 +783,12 @@ export class DriverJobsService {
   }
 
   private getSafeTenantTimezone(value?: string | null): string {
-    const fallback = DEFAULT_TENANT_TIMEZONE;
-    const timezone = value?.trim() || fallback;
-    try {
-      // Throws when timezone is invalid.
-      Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
-      return timezone;
-    } catch {
-      return fallback;
-    }
+    return getSafeTenantTimezone(value);
   }
 
   private isPrismaPoolTimeout(error: unknown): boolean {
     const maybe = error as { code?: string } | null;
     return String(maybe?.code ?? "") === "P2024";
-  }
-
-  private getTimeZoneOffsetMs(date: Date, timeZone: string): number {
-    const dtf = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-    const parts = dtf.formatToParts(date);
-    const map = new Map(parts.map((p) => [p.type, p.value] as const));
-    const asUtc = Date.UTC(
-      Number(map.get("year")),
-      Number(map.get("month")) - 1,
-      Number(map.get("day")),
-      Number(map.get("hour")),
-      Number(map.get("minute")),
-      Number(map.get("second")),
-    );
-    return asUtc - date.getTime();
   }
 
   private zonedDateTimeToUtc(
@@ -853,9 +800,7 @@ export class DriverJobsService {
     second: number,
     timeZone: string,
   ): Date {
-    const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second);
-    const offset = this.getTimeZoneOffsetMs(new Date(utcGuess), timeZone);
-    return new Date(utcGuess - offset);
+    return zonedDateTimeToUtc(year, month, day, hour, minute, second, timeZone);
   }
 
   private getTenantDayWindow(referenceDate: Date, timeZone: string): { gte: Date; lt: Date } {
@@ -1990,63 +1935,19 @@ export class DriverJobsService {
       status: TripStatus;
     }>;
   }> {
-    const monthKey = String(month ?? "").trim();
-    if (!monthKey) {
-      throw new BadRequestException("month must be YYYY-MM");
-    }
-    const tz = await this.getTenantTimeZone(tenantId);
-    const range = this.parseCalendarMonthToUtcRangeInTimeZone(monthKey, tz);
-    const trips = await this.prisma.trip.findMany({
-      where: {
-        tenantId,
-        assignedDriverUserId: driverUserId,
-        status: { in: [TripStatus.COMPLETED, TripStatus.DONE] },
-        OR: [
-          { closedAt: { gte: range.gte, lt: range.lt } },
-          { closedAt: null, updatedAt: { gte: range.gte, lt: range.lt } },
-        ],
-      },
-      orderBy: [{ closedAt: "desc" }, { updatedAt: "desc" }],
-      select: {
-        id: true,
-        jobId: true,
-        title: true,
-        status: true,
-        closedAt: true,
-        updatedAt: true,
-        driverEarningCents: true,
-        earningLabelSnapshot: true,
-        payoutLines: {
-          select: { totalCents: true },
-        },
-        job: {
-          select: {
-            internalRef: true,
-          },
-        },
-      },
-    });
-
-    const tripRows = trips.map((trip) => {
-      const earning = resolveDriverTripEarningCents(trip);
-      return {
-        tripId: trip.id,
-        jobId: trip.jobId ?? null,
-        jobInternalRef: trip.job?.internalRef ?? null,
-        title: trip.title ?? null,
-        completedAt: trip.closedAt ?? trip.updatedAt ?? null,
-        driverEarningCents: earning,
-        earningLabelSnapshot: trip.earningLabelSnapshot ?? null,
-        status: trip.status,
-      };
-    });
-    const totalCents = tripRows.reduce((sum, row) => sum + (row.driverEarningCents ?? 0), 0);
-
+    const earnings =
+      this.tripEarnings ?? new DriverTripEarningsService(this.prisma);
+    const summary = await earnings.getWalletSummaryByMonth(
+      tenantId,
+      driverUserId,
+      month,
+    );
     return {
-      month: monthKey,
-      totalCents,
-      completedTripCount: tripRows.length,
-      trips: tripRows,
+      ...summary,
+      trips: summary.trips.map((t) => ({
+        ...t,
+        status: t.status as TripStatus,
+      })),
     };
   }
 

@@ -16,6 +16,12 @@ import { AdminUpdateDriverDto } from "./dto/admin-update-driver.dto";
 import { AdminDriverDto } from "./dto/admin-driver.dto";
 import { ListDriversQueryDto } from "./dto/list-drivers-query.dto";
 import type { DriverWalletDto } from "./dto/driver-wallet.dto";
+import type {
+  AdminDriverEarningsDto,
+  AdminDriverEarningsTransactionDto,
+  AdminDriverSummaryDto,
+  AdminDriverTripHistoryItemDto,
+} from "./dto/admin-driver-detail.dto";
 
 @ApiTags("admin-drivers")
 @Controller("admin/drivers")
@@ -39,6 +45,74 @@ export class AdminDriversController {
   @ApiOperation({ summary: "Create driver (Admin/Ops only) — no invite" })
   async create(@Request() req: any, @Body() dto: AdminCreateDriverDto): Promise<AdminDriverDto> {
     return this.adminDriversService.createDriver(req.tenant.tenantId, dto);
+  }
+
+  @Get(":driverId/summary")
+  @ApiOperation({ summary: "Driver detail summary (Admin/Ops)" })
+  async summary(
+    @Request() req: any,
+    @Param("driverId") driverId: string,
+    @Query("month") month?: string,
+  ): Promise<AdminDriverSummaryDto> {
+    return this.adminDriversService.getDriverSummary(
+      req.tenant.tenantId,
+      driverId,
+      month,
+    );
+  }
+
+  @Get(":driverId/trips")
+  @ApiOperation({ summary: "Paginated driver trip history (Admin/Ops)" })
+  async trips(
+    @Request() req: any,
+    @Param("driverId") driverId: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+  ): Promise<{
+    data: AdminDriverTripHistoryItemDto[];
+    meta: { page: number; pageSize: number; total: number };
+  }> {
+    return this.adminDriversService.listDriverTrips(req.tenant.tenantId, driverId, {
+      page,
+      pageSize,
+    });
+  }
+
+  @Get(":driverId/earnings/transactions")
+  @ApiOperation({
+    summary: "Paginated driver trip-payout earnings transactions (Admin/Ops)",
+  })
+  async earningsTransactions(
+    @Request() req: any,
+    @Param("driverId") driverId: string,
+    @Query("month") month?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+  ): Promise<{
+    data: AdminDriverEarningsTransactionDto[];
+    meta: { page: number; pageSize: number; total: number };
+    month: string;
+    currency: string;
+  }> {
+    return this.adminDriversService.listDriverEarningsTransactions(
+      req.tenant.tenantId,
+      driverId,
+      { month, page, pageSize },
+    );
+  }
+
+  @Get(":driverId/earnings")
+  @ApiOperation({ summary: "Driver month + lifetime earnings (Admin/Ops)" })
+  async earnings(
+    @Request() req: any,
+    @Param("driverId") driverId: string,
+    @Query("month") month?: string,
+  ): Promise<AdminDriverEarningsDto> {
+    return this.adminDriversService.getDriverEarnings(
+      req.tenant.tenantId,
+      driverId,
+      month,
+    );
   }
 
   @Patch(":driverId")
