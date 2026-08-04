@@ -13,7 +13,8 @@
     "prisma:studio": "dotenv -e .env.local -- prisma studio",
     "prisma:seed": "dotenv -e .env.local -- ts-node --project tsconfig.seed.json prisma/seed.ts",
     "format": "prettier --write \"src/**/*.ts\" \"prisma/**/*.ts\"",
-    "lint": "eslint \"{src,prisma}/**/*.ts\" --fix",
+    "lint": "eslint \"{src,prisma}/**/*.ts\"",
+    "lint:fix": "eslint \"{src,prisma}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
@@ -21,6 +22,7 @@
     "jobs:backfill-invoice-readiness": "dotenv -e .env.local -- ts-node scripts/backfill-job-invoice-readiness.ts",
     "drivers:reset-passwords": "dotenv -e .env.local -- ts-node scripts/reset-driver-passwords.ts",
     "wipe:ops-data": "dotenv -e .env.local -- ts-node --project tsconfig.seed.json scripts/wipe-operational-data.ts",
+    "bench:phase5": "ts-node --transpile-only scripts/phase5-query-benchmark.ts",
     "start": "node dist/main",
     "gen:api": "openapi-typescript https://opsflow-erp-api.onrender.com/api/docs-json -o src/api/generated.ts"
   },
