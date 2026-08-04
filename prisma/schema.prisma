@@ -944,6 +944,8 @@ model Job {
   @@index([tenantId, assignedDriverId])
   @@index([tenantId, assignedFleetVehicleId])
   @@index([tenantId, createdByUserId])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, updatedAt])
   @@map("jobs")
 }
 
@@ -2207,6 +2209,8 @@ model Invoice {
 
   @@unique([tenantId, invoiceNo])
   @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@index([tenantId, sourceJobId])
   @@map("invoices")
 }
 
