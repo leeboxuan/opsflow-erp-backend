@@ -6,6 +6,11 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["prisma/seed.ts", "scripts/**/*.ts"],
-  "exclude": ["node_modules", "dist", "src"]
+  "include": [
+    "prisma/seed.ts",
+    "scripts/**/*.ts",
+    "src/scripts/wipe-operational-scope.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
 }
+

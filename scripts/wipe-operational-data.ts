@@ -36,7 +36,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   parseWipeScopeArgs,
   resolveWipeScope,
-} from "./wipe-operational-scope";
+} from "../src/scripts/wipe-operational-scope";
 
 /** Job/trip docs, invoice PDFs, generated company docs — see job-document-signed-url.ts */
 const JOB_DOCUMENTS_BUCKET = "job-documents";

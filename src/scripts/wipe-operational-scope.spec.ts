@@ -2,7 +2,7 @@ import {
   parseWipeScopeArgs,
   resolveWipeScope,
   type WipeScopeResult,
-} from "../../scripts/wipe-operational-scope";
+} from "./wipe-operational-scope";
 
 function expectWipeScopeError(
   result: WipeScopeResult,
