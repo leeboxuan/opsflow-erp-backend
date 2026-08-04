@@ -44,6 +44,14 @@ import {
   jobTripTemplateDisplayLabel,
 } from "../workflows/job-workflow.helpers";
 import {
+  buildTripCargoFromLinks,
+  isContainerBasedTransportJob,
+} from "../jobs/trip-job-item.helpers";
+import {
+  assertJobItemLinkedToTrip,
+  loadTripJobItemLinks,
+} from "../jobs/trip-job-item.mutations";
+import {
   resolveJobDescription,
   resolveJobPickupReference,
   normalizeOptionalTrimmedText,
@@ -2408,6 +2416,7 @@ export class DriverJobsService {
   private async buildContainerDocumentationForTrip(
     tenantId: string,
     jobId: string,
+    tripId: string,
     jobType: JobType,
     documents: Array<{
       type: TripDocumentType;
@@ -2417,12 +2426,16 @@ export class DriverJobsService {
   ): Promise<ContainerDocumentationRequirement[]> {
     if (!isContainerCargoJobType(jobType)) return [];
 
-    // JobItem has no soft-delete column; current rows are the active requirement set.
-    const items = await this.prisma.jobItem.findMany({
-      where: { tenantId, jobId },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      select: { id: true, itemCode: true, sealNo: true },
-    });
+    // Phase 1: requirements scoped to explicit TripJobItem links only.
+    // Empty links ⇒ empty requirements (complete fails when container-based with items but no links).
+    const links = await loadTripJobItemLinks(this.prisma as any, tenantId, tripId);
+    if (links.length === 0) return [];
+
+    const items = links.map((link) => ({
+      id: link.jobItem.id,
+      itemCode: link.jobItem.itemCode,
+      sealNo: link.jobItem.sealNo,
+    }));
     return buildContainerDocumentationRequirements(items, documents);
   }
 
@@ -2475,9 +2488,23 @@ export class DriverJobsService {
     const containerDocumentation = await this.buildContainerDocumentationForTrip(
       tenantId,
       jobId,
+      tripId,
       job.jobType as JobType,
       completionDocs,
     );
+    if (isContainerCargoJobType(job.jobType as JobType)) {
+      const jobItemCount = await this.prisma.jobItem.count({
+        where: { tenantId, jobId },
+      });
+      if (
+        isContainerBasedTransportJob(job.jobType as JobType, jobItemCount)
+        && containerDocumentation.length === 0
+      ) {
+        throw new BadRequestException(
+          "Trip has no linked cargo items (TripJobItem). Explicit linkage is required before completion.",
+        );
+      }
+    }
     const missingContainerDocumentation = containerDocumentation.filter(
       (requirement) => requirement.missing.length > 0,
     );
@@ -2711,6 +2738,7 @@ export class DriverJobsService {
     const containerDocumentation = await this.buildContainerDocumentationForTrip(
       tenantId,
       jobId,
+      tripId,
       job.jobType as JobType,
       completionDocs,
     );
@@ -2721,6 +2749,18 @@ export class DriverJobsService {
       ...buildTripCompletionDocumentGaps(completionDocs),
       ...getMissingContainerDocumentTypes(containerDocumentation),
     ];
+    // Surface missing linkage as a completion gap for container-based trips.
+    if (
+      isContainerCargoJobType(job.jobType as JobType)
+      && containerDocumentation.length === 0
+    ) {
+      const jobItemCount = await this.prisma.jobItem.count({
+        where: { tenantId, jobId },
+      });
+      if (isContainerBasedTransportJob(job.jobType as JobType, jobItemCount)) {
+        missingDocuments.push("LINKED_CARGO");
+      }
+    }
     const { requiresTrailerCheckout, missingTrailerCheckoutFields } = trailerCheckout;
     const parkingLocations = await this.listTrailerParkingLocations();
 
@@ -2871,6 +2911,30 @@ export class DriverJobsService {
       useItemFallback: isContainerMode,
     });
 
+    // Phase 1: cargo from TripJobItem only (no unlinked JobItem fallback for container jobs).
+    const tripJobItemLinks = await loadTripJobItemLinks(
+      this.prisma as any,
+      tenantId,
+      tripId,
+    );
+    const cargoBuilt = buildTripCargoFromLinks({
+      jobType: trip.job?.jobType,
+      links: tripJobItemLinks,
+      allJobItems: cargoItems,
+    });
+    const cargo =
+      cargoBuilt.mode === "CONTAINER"
+        ? { mode: "CONTAINER" as const, containers: cargoBuilt.containers ?? [] }
+        : {
+            mode: "ITEMS" as const,
+            items: (cargoBuilt.items ?? []).map((item) => ({
+              id: item.id,
+              itemCode: item.itemCode ?? null,
+              description: item.description ?? null,
+              qty: item.qty ?? null,
+            })),
+          };
+
     return {
       id: trip.id,
       jobId: trip.jobId,
@@ -2953,35 +3017,7 @@ export class DriverJobsService {
           && !DRIVER_NON_DELETABLE_TRIP_STATUSES.has(trip.status as TripStatus),
       })),
 
-      cargo: (() => {
-        if (isContainerMode) {
-          return {
-            mode: "CONTAINER",
-            containers: cargoItems.map((item: any) => {
-              const sealNo = item.sealNo ?? null;
-              return {
-                id: item.id,
-                containerNumber: item.itemCode,
-                containerSize: null,
-                sealNo,
-                sealNumber: sealNo,
-                pickupReference: null,
-                weight: null,
-                remarks: null,
-              };
-            }),
-          };
-        }
-        return {
-          mode: "ITEMS",
-          items: cargoItems.map((item: any) => ({
-            id: item.id,
-            itemCode: item.itemCode ?? null,
-            description: item.description ?? null,
-            qty: item.qty ?? null,
-          })),
-        };
-      })(),
+      cargo,
       route: {
         origin: {
           label: trip.originLabel ?? null,
@@ -3249,7 +3285,7 @@ export class DriverJobsService {
           "Container photo documentation is only valid for container-style jobs",
         );
       }
-      // JobItem has no soft deletion; this scoped lookup represents a current row.
+      // Phase 1: must belong to job AND be explicitly linked via TripJobItem.
       const item = await this.prisma.jobItem.findFirst({
         where: {
           id: normalizedJobItemId!,
@@ -3263,6 +3299,12 @@ export class DriverJobsService {
           "jobItemId does not belong to this trip's job and tenant",
         );
       }
+      await assertJobItemLinkedToTrip(
+        this.prisma as any,
+        tenantId,
+        tripId,
+        normalizedJobItemId!,
+      );
     }
 
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";

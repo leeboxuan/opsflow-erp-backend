@@ -101,6 +101,24 @@ describe("DriverJobsService per-container completion requirements", () => {
         },
         jobItem: {
           findMany: jest.fn().mockResolvedValue(currentItems),
+          count: jest.fn().mockResolvedValue(currentItems.length),
+        },
+        tripJobItem: {
+          findMany: jest.fn().mockResolvedValue(
+            currentItems.map((item) => ({
+              id: `link-${item.id}`,
+              jobItemId: item.id,
+              containerNumberSnapshot: item.itemCode,
+              jobItem: {
+                id: item.id,
+                itemCode: item.itemCode,
+                description: null,
+                sealNo: item.sealNo,
+                pickupReference: null,
+                qty: null,
+              },
+            })),
+          ),
         },
         trip: {
           findFirst: jest.fn().mockResolvedValue(ongoingTrip),

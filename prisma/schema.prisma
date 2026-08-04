@@ -74,6 +74,7 @@ model Tenant {
   warehouseJobDocuments        WarehouseJobDocument[]
   warehouseJobCargoLines       WarehouseJobCargoLine[]
   warehouseJobContainers       WarehouseJobContainer[]
+  tripJobItems                 TripJobItem[]
 
   @@map("tenants")
 }
@@ -122,6 +123,7 @@ model User {
   warehouseJobEventsActed WarehouseJobEvent[] @relation("WarehouseJobEventActor")
   warehouseJobDocumentsUploaded WarehouseJobDocument[] @relation("WarehouseJobDocumentUploadedBy")
   warehouseJobDocumentsReviewed WarehouseJobDocument[] @relation("WarehouseJobDocumentReviewedBy")
+  tripJobItemsLinked            TripJobItem[]          @relation("TripJobItemLinkedBy")
 
   @@index([customerCompanyId])
   @@index([customerContactId])
@@ -357,6 +359,8 @@ model Trip {
   documents            TripDocument[]
   payoutLines          TripPayoutLine[]
   documentRequirements TripDocumentRequirement[]
+  /// Canonical M:N cargo linkage. Trip.containerNumber is legacy/display cache only.
+  tripJobItems         TripJobItem[]
 
   @@index([tenantId, status])
   @@index([tenantId, plannedStartAt])
@@ -952,10 +956,36 @@ model JobItem {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
   tripDocuments TripDocument[]
+  tripJobItems  TripJobItem[]
 
   @@index([tenantId, jobId])
   @@index([tenantId, itemCode])
   @@map("job_items")
+}
+
+/// Canonical trip ↔ job-item (container) M:N link. Sole source of truth for cargo scope,
+/// documentation, completion, and publish validation. Every row is an explicit verified link.
+model TripJobItem {
+  id                       String   @id @default(cuid())
+  tenantId                 String
+  tripId                   String
+  jobItemId                String
+  containerNumberSnapshot  String?
+  linkedAt                 DateTime @default(now())
+  linkedByUserId           String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip     Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  jobItem  JobItem  @relation(fields: [jobItemId], references: [id], onDelete: Cascade)
+  linkedBy User?    @relation("TripJobItemLinkedBy", fields: [linkedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, tripId, jobItemId])
+  @@index([tenantId, tripId])
+  @@index([tenantId, jobItemId])
+  @@index([tripId])
+  @@map("trip_job_items")
 }
 
 model JobDocument {

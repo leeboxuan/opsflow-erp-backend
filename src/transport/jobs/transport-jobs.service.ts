@@ -134,6 +134,25 @@ import {
   resolveTripRouteAddressResponseFields,
   isContainerCargoJobType,
 } from "../workflows/job-workflow.helpers";
+import {
+  buildTripCargoFromLinks,
+  evaluateTripPublishLinkReadiness,
+  isContainerBasedTransportJob,
+  normalizeJobItemIdsInput,
+} from "./trip-job-item.helpers";
+import {
+  createTripJobItemLinksIfAbsent,
+  loadTripJobItemLinks,
+  replaceTripJobItemLinks,
+  applyJobItemsUpdateInTransaction,
+} from "./trip-job-item.mutations";
+import {
+  assertCreateJobInteractiveTxClient,
+  assertPrismaInteractiveTransactionAvailable,
+} from "./create-job-interactive-tx";
+import {
+  buildContainerDocumentationRequirements,
+} from "../driver-app/container-documentation.helpers";
 import type {
   ImportJobRowDto,
   ImportPreviewRowDto,
@@ -472,6 +491,12 @@ function toJobDto(j: any): JobDto {
           fleetVehicleId: t.fleetVehicleId ?? null,
           driverEarningCents: t.driverEarningCents ?? null,
           payoutLines: t.payoutLines ?? [],
+          jobType: j.jobType ?? null,
+          jobItemCount: Array.isArray(j.items) ? j.items.length : (j._count?.items ?? 0),
+          linkedJobItemCount:
+            Array.isArray(t.tripJobItems)
+              ? t.tripJobItems.length
+              : (t._count?.tripJobItems ?? 0),
         }).canPublish,
         canMarkDone: t.status === TripStatus.COMPLETED,
         plannedStartAt: t.plannedStartAt ?? null,
@@ -534,6 +559,10 @@ type TripPublishReadinessInput = {
   fleetVehicleId?: string | null;
   driverEarningCents?: number | null;
   payoutLines?: Array<any> | null;
+  /** When set, canPublish also mirrors publishTrip TripJobItem gate (no write/auto-heal). */
+  jobType?: JobType | null;
+  jobItemCount?: number;
+  linkedJobItemCount?: number;
 };
 
 type TripPublishReadinessResult = {
@@ -662,12 +691,15 @@ function evaluateTripPublishReadiness(input: TripPublishReadinessInput): TripPub
       };
     }
 
-    return {
-      canPublish: true,
-      errorMessage: null,
-      totalPayoutCents: total,
-      payoutLineCount: payoutLines.length,
-    };
+    return applyTripJobItemLinkPublishGate(
+      {
+        canPublish: true,
+        errorMessage: null,
+        totalPayoutCents: total,
+        payoutLineCount: payoutLines.length,
+      },
+      input,
+    );
   }
 
   if (!Number.isInteger(input.driverEarningCents) || (input.driverEarningCents ?? 0) <= 0) {
@@ -679,11 +711,42 @@ function evaluateTripPublishReadiness(input: TripPublishReadinessInput): TripPub
     };
   }
 
+  return applyTripJobItemLinkPublishGate(
+    {
+      canPublish: true,
+      errorMessage: null,
+      totalPayoutCents: input.driverEarningCents ?? 0,
+      payoutLineCount: 0,
+    },
+    input,
+  );
+}
+
+/**
+ * Mirror publishTrip TripJobItem gate for canPublish/UI without writing or auto-healing.
+ * Single-item auto-heal is treated as ready (publish will heal); multi unlinked is not.
+ */
+function applyTripJobItemLinkPublishGate(
+  base: TripPublishReadinessResult,
+  input: TripPublishReadinessInput,
+): TripPublishReadinessResult {
+  if (!base.canPublish) return base;
+  if (input.jobType === undefined && input.jobItemCount === undefined) {
+    return base;
+  }
+  const link = evaluateTripPublishLinkReadiness({
+    jobType: input.jobType,
+    jobItemCount: input.jobItemCount ?? 0,
+    linkedJobItemCount: input.linkedJobItemCount ?? 0,
+  });
+  if (!link.required) return base;
+  if (link.satisfied || link.shouldAutoHealSingleItem) return base;
   return {
-    canPublish: true,
-    errorMessage: null,
-    totalPayoutCents: input.driverEarningCents ?? 0,
-    payoutLineCount: 0,
+    ...base,
+    canPublish: false,
+    errorMessage:
+      link.errorMessage
+      ?? "Select at least one cargo item (jobItemIds) before publishing this container-based trip.",
   };
 }
 
@@ -2164,118 +2227,12 @@ export class TransportJobsService {
 
     const pickupDateParsed = dto.pickupDate ? new Date(dto.pickupDate) : null;
 
-    const job = await this.prisma.job.create({
-      data: {
-        tenantId,
-        customerCompanyId: dto.customerCompanyId,
-        internalRef,
-        externalRef: normalizeExternalRef(dto.externalRef),
-        jobType: dto.jobType,
-        collectionType,
-        status: JobStatus.ONGOING,
-        notes: dto.notes ?? null,
-        pickupReference: normalizeOptionalTrimmedText(dto.pickupReference),
-        description: normalizeOptionalTrimmedText(dto.description),
-        carrierName: normalizeOptionalTrimmedText(dto.carrierName),
-        voyage: normalizeOptionalTrimmedText(dto.voyage),
-        shipper: normalizeOptionalTrimmedText(dto.shipper),
-        createdByUserId: actorUserId,
-        pickupDate: pickupDateParsed,
-        pickupAddress1:
-          dto.jobType === JobType.EXPORT
-            ? exportPickup.address1
-            : (dto.pickupAddress1?.trim() || ""),
-        pickupAddress2:
-          dto.jobType === JobType.EXPORT
-            ? exportPickup.address2
-            : (dto.pickupAddress2 ?? null),
-        pickupPostal:
-          dto.jobType === JobType.EXPORT
-            ? exportPickup.postal
-            : (dto.pickupPostal ?? null),
-        pickupContactName: dto.pickupContactName ?? null,
-        pickupContactPhone: dto.pickupContactPhone ?? null,
-        deliveryAddress1:
-          dto.jobType === JobType.EXPORT
-            ? (stuffingAddress1 ?? dto.deliveryAddress1)
-            : dto.deliveryAddress1,
-        deliveryAddress2:
-          dto.jobType === JobType.EXPORT
-            ? (stuffingAddress2 ?? null)
-            : (dto.deliveryAddress2 ?? null),
-        deliveryPostal:
-          dto.jobType === JobType.EXPORT
-            ? (stuffingPostal ?? null)
-            : (dto.deliveryPostal ?? null),
-        receiverName:
-          dto.jobType === JobType.EXPORT
-            ? (stuffingContactName ?? dto.receiverName ?? "")
-            : (dto.receiverName ?? ""),
-        receiverPhone:
-          dto.jobType === JobType.EXPORT
-            ? (stuffingContactPhone ?? dto.receiverPhone ?? "")
-            : (dto.receiverPhone ?? ""),
-        pickupPortCode: pickupPortCode || null,
-        portTerminalCode: portTerminalCode || null,
-        portName: portName || null,
-        psaStorageRentLastDay: psaStorageRentLastDay
-          ? new Date(psaStorageRentLastDay)
-          : null,
-        vesselName: vesselName || null,
-        vesselEta: vesselEta ? new Date(vesselEta) : null,
-        portnetReady,
-        permitReady,
-        returningDepotCode: returningDepotCode || null,
-        returnLastDay: returnLastDay ? new Date(returnLastDay) : null,
-        exportOriginDepotCode: exportOriginDepotCode || null,
-        exportPortCode: exportPortCode || null,
-        ...(validItems.length > 0
-          ? {
-              items: {
-                create: validItems.map((item) => ({
-                  tenantId,
-                  itemCode: item.itemCode,
-                  description: item.description,
-                  sealNo: item.sealNo,
-                  pickupReference: item.pickupReference,
-                  qty: item.qty,
-                })),
-              },
-            }
-          : {}),
-      },
-      include: {
-        customerCompany: {
-          select: { id: true, name: true },
-        },
-        assignedDriver: {
-          select: { id: true, name: true, email: true },
-        },
-        items: {
-          orderBy: { createdAt: "asc" },
-        },
-      },
-    });
-
-    await this.audit.log(
-      tenantId,
-      "CREATE",
-      "JOB",
-      job.id,
-      {
-        internalRef: job.internalRef,
-        externalRef: job.externalRef,
-        createdByUserId: actorUserId,
-      },
-      actorUserId,
-    );
-
     // Cargo/shipping defaults are applied inside tripCreateManyForJob only for IMPORT/EXPORT; LCL legs are skipped.
     const seededContainerNumber = String(dto.containerNumber ?? "").trim() || null;
     const seededShippingRefs = {
-      carrier: null,
-      shipper: null,
-      vessel: String((job as any)?.vesselName ?? "").trim() || null,
+      carrier: null as string | null,
+      shipper: null as string | null,
+      vessel: String(vesselName ?? "").trim() || null,
     };
     const pickupDeliveryRouteInput = {
       pickupAddress1:
@@ -2329,29 +2286,176 @@ export class TransportJobsService {
           }
         : undefined;
 
-    await this.prisma.trip.createMany({
-      data: tripCreateManyForJob(
-        tenantId,
-        job.id,
-        dto.jobType,
-        pickupDateParsed,
-        seededContainerNumber,
-        seededShippingRefs,
-        lclRouteSnapshots,
-        {
+    // Atomic: job + JobItems + auto trips + TripJobItem links (or full rollback).
+    // Fail closed: never fall back to non-transactional or root-client writes.
+    assertPrismaInteractiveTransactionAvailable(this.prisma as any);
+
+    const createJobWithTripsAndLinks = async (tx: any) => {
+      assertCreateJobInteractiveTxClient(tx);
+
+      const createdJob = await tx.job.create({
+        data: {
+          tenantId,
+          customerCompanyId: dto.customerCompanyId,
+          internalRef,
+          externalRef: normalizeExternalRef(dto.externalRef),
+          jobType: dto.jobType,
+          collectionType,
+          status: JobStatus.ONGOING,
+          notes: dto.notes ?? null,
+          pickupReference: normalizeOptionalTrimmedText(dto.pickupReference),
+          description: normalizeOptionalTrimmedText(dto.description),
+          carrierName: normalizeOptionalTrimmedText(dto.carrierName),
+          voyage: normalizeOptionalTrimmedText(dto.voyage),
+          shipper: normalizeOptionalTrimmedText(dto.shipper),
           createdByUserId: actorUserId,
-          tripSeedOptions:
-            dto.jobType === JobType.IMPORT
-              ? { importHasReturnLocation: !!returningDepotCode }
-              : undefined,
+          pickupDate: pickupDateParsed,
+          pickupAddress1:
+            dto.jobType === JobType.EXPORT
+              ? exportPickup.address1
+              : (dto.pickupAddress1?.trim() || ""),
+          pickupAddress2:
+            dto.jobType === JobType.EXPORT
+              ? exportPickup.address2
+              : (dto.pickupAddress2 ?? null),
+          pickupPostal:
+            dto.jobType === JobType.EXPORT
+              ? exportPickup.postal
+              : (dto.pickupPostal ?? null),
+          pickupContactName: dto.pickupContactName ?? null,
+          pickupContactPhone: dto.pickupContactPhone ?? null,
+          deliveryAddress1:
+            dto.jobType === JobType.EXPORT
+              ? (stuffingAddress1 ?? dto.deliveryAddress1)
+              : dto.deliveryAddress1,
+          deliveryAddress2:
+            dto.jobType === JobType.EXPORT
+              ? (stuffingAddress2 ?? null)
+              : (dto.deliveryAddress2 ?? null),
+          deliveryPostal:
+            dto.jobType === JobType.EXPORT
+              ? (stuffingPostal ?? null)
+              : (dto.deliveryPostal ?? null),
+          receiverName:
+            dto.jobType === JobType.EXPORT
+              ? (stuffingContactName ?? dto.receiverName ?? "")
+              : (dto.receiverName ?? ""),
+          receiverPhone:
+            dto.jobType === JobType.EXPORT
+              ? (stuffingContactPhone ?? dto.receiverPhone ?? "")
+              : (dto.receiverPhone ?? ""),
+          pickupPortCode: pickupPortCode || null,
+          portTerminalCode: portTerminalCode || null,
+          portName: portName || null,
+          psaStorageRentLastDay: psaStorageRentLastDay
+            ? new Date(psaStorageRentLastDay)
+            : null,
+          vesselName: vesselName || null,
+          vesselEta: vesselEta ? new Date(vesselEta) : null,
+          portnetReady,
+          permitReady,
+          returningDepotCode: returningDepotCode || null,
+          returnLastDay: returnLastDay ? new Date(returnLastDay) : null,
+          exportOriginDepotCode: exportOriginDepotCode || null,
+          exportPortCode: exportPortCode || null,
+          ...(validItems.length > 0
+            ? {
+                items: {
+                  create: validItems.map((item) => ({
+                    tenantId,
+                    itemCode: item.itemCode,
+                    description: item.description,
+                    sealNo: item.sealNo,
+                    pickupReference: item.pickupReference,
+                    qty: item.qty,
+                  })),
+                },
+              }
+            : {}),
         },
-      ),
-    });
+        include: {
+          customerCompany: {
+            select: { id: true, name: true },
+          },
+          assignedDriver: {
+            select: { id: true, name: true, email: true },
+          },
+          items: {
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      });
+
+      await tx.trip.createMany({
+        data: tripCreateManyForJob(
+          tenantId,
+          createdJob.id,
+          dto.jobType,
+          pickupDateParsed,
+          seededContainerNumber,
+          seededShippingRefs,
+          lclRouteSnapshots,
+          {
+            createdByUserId: actorUserId,
+            tripSeedOptions:
+              dto.jobType === JobType.IMPORT
+                ? { importHasReturnLocation: !!returningDepotCode }
+                : undefined,
+          },
+        ),
+      });
+
+      const createdTripsInTx = await tx.trip.findMany({
+        where: { tenantId, jobId: createdJob.id },
+        orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
+        select: { id: true, status: true, containerNumber: true },
+      });
+
+      const createdJobItems = Array.isArray(createdJob.items)
+        ? createdJob.items
+        : [];
+      if (
+        isContainerBasedTransportJob(dto.jobType, createdJobItems.length)
+        && createdJobItems.length > 0
+      ) {
+        const linkIds = createdJobItems.map((i: { id: string }) => i.id);
+        for (const trip of createdTripsInTx) {
+          await createTripJobItemLinksIfAbsent(tx, {
+            tenantId,
+            tripId: trip.id,
+            jobId: createdJob.id,
+            tripStatus: trip.status,
+            previousContainerNumber: trip.containerNumber,
+            jobItemIds: linkIds,
+            linkedByUserId: actorUserId,
+          });
+        }
+      }
+
+      return createdJob;
+    };
+
+    const job = await this.prisma.$transaction(createJobWithTripsAndLinks);
+
     const createdTrips = await this.prisma.trip.findMany({
       where: { tenantId, jobId: job.id },
       orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
-      select: { id: true },
+      select: { id: true, status: true, containerNumber: true },
     });
+
+    await this.audit.log(
+      tenantId,
+      "CREATE",
+      "JOB",
+      job.id,
+      {
+        internalRef: job.internalRef,
+        externalRef: job.externalRef,
+        createdByUserId: actorUserId,
+      },
+      actorUserId,
+    );
+
     if ((this.prisma as any).masterLogisticsLocation) {
       await this.syncTripRouteSnapshotForJob(tenantId, job.id, {
         pickupLat: dto.pickupLat ?? null,
@@ -2405,6 +2509,7 @@ export class TransportJobsService {
             payoutLines: {
               orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
             },
+            _count: { select: { tripJobItems: true } },
           },
         },
         charges: {
@@ -2457,6 +2562,9 @@ export class TransportJobsService {
         },
         trips: {
           orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
+          include: {
+            _count: { select: { tripJobItems: true } },
+          },
         },
         charges: {
           orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -2696,59 +2804,13 @@ export class TransportJobsService {
           inputItems,
           validItems,
         );
-
-        const retainedIds = validItems
-          .map((item) => item.id)
-          .filter((id): id is string => !!id);
-        if (!retainedIds.length) {
-          // Backward-compatible replace-all behavior for legacy clients without ids.
-          await tx.jobItem.deleteMany({ where: { tenantId, jobId } });
-          if (validItems.length > 0) {
-            await tx.jobItem.createMany({
-              data: validItems.map((item) => ({
-                tenantId,
-                jobId,
-                itemCode: item.itemCode,
-                description: item.description,
-                sealNo: item.sealNo,
-                pickupReference: item.pickupReference,
-                qty: item.qty,
-              })),
-            });
-          }
-        } else {
-          const existing = await tx.jobItem.findMany({
-            where: { tenantId, jobId, id: { in: retainedIds } },
-            select: { id: true },
-          });
-          if (existing.length !== retainedIds.length) {
-            throw new BadRequestException(
-              "One or more item ids do not belong to this job",
-            );
-          }
-          await tx.jobItem.deleteMany({
-            where: { tenantId, jobId, id: { notIn: retainedIds } },
-          });
-          for (const item of validItems) {
-            const itemData = {
-              itemCode: item.itemCode,
-              description: item.description,
-              sealNo: item.sealNo,
-              pickupReference: item.pickupReference,
-              qty: item.qty,
-            };
-            if (item.id) {
-              await tx.jobItem.update({
-                where: { id: item.id },
-                data: itemData,
-              });
-            } else {
-              await tx.jobItem.create({
-                data: { tenantId, jobId, ...itemData },
-              });
-            }
-          }
-        }
+        await applyJobItemsUpdateInTransaction(tx as any, {
+          tenantId,
+          jobId,
+          validItems,
+          // Job-level PATCH items replaces the cargo set when sent.
+          replaceItems: true,
+        });
       }
 
       return tx.job.findFirst({
@@ -3778,6 +3840,31 @@ export class TransportJobsService {
       },
     });
 
+    // Phase 1 TripJobItem linkage on append.
+    const jobItems = await this.prisma.jobItem.findMany({
+      where: { tenantId, jobId },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { id: true, itemCode: true },
+    });
+    const requestedLinkIds = normalizeJobItemIdsInput(dto.jobItemIds);
+    if (isContainerBasedTransportJob(job.jobType as JobType, jobItems.length)) {
+      let linkIds = requestedLinkIds;
+      if (linkIds.length === 0 && jobItems.length === 1) {
+        linkIds = [jobItems[0].id];
+      }
+      if (linkIds.length > 0) {
+        await createTripJobItemLinksIfAbsent(this.prisma as any, {
+          tenantId,
+          tripId: trip.id,
+          jobId,
+          tripStatus: TripStatus.DRAFT,
+          previousContainerNumber: trip.containerNumber,
+          jobItemIds: linkIds,
+          linkedByUserId: actorUserId,
+        });
+      }
+    }
+
     if (hasInlinePayoutLines) {
       try {
         await this.saveTripPayoutDraft(
@@ -4021,6 +4108,13 @@ export class TransportJobsService {
       driverId: string | null;
       vehicleId: string | null;
       fleetVehicleId: string | null;
+      jobId?: string | null;
+    },
+    opts?: {
+      jobId?: string | null;
+      jobType?: JobType | null;
+      jobItemCount?: number;
+      linkedJobItemCount?: number;
     },
   ): Promise<{ readiness: TripPublishReadinessResult; payoutLines: any[] }> {
     const payoutLines =
@@ -4030,6 +4124,40 @@ export class TransportJobsService {
             orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
           })
         : [];
+
+    let jobType = opts?.jobType;
+    let jobItemCount = opts?.jobItemCount;
+    let linkedJobItemCount = opts?.linkedJobItemCount;
+    const jobId = opts?.jobId ?? trip.jobId ?? null;
+
+    if (
+      (jobType === undefined || jobItemCount === undefined || linkedJobItemCount === undefined)
+      && jobId
+      && typeof this.prisma?.job?.findFirst === "function"
+    ) {
+      const job = await this.prisma.job.findFirst({
+        where: { id: jobId, tenantId },
+        select: {
+          jobType: true,
+          _count: { select: { items: true } },
+        },
+      });
+      if (job) {
+        jobType = jobType ?? job.jobType;
+        jobItemCount = jobItemCount ?? job._count?.items ?? 0;
+      }
+      if (linkedJobItemCount === undefined && typeof (this.prisma as any).tripJobItem?.count === "function") {
+        linkedJobItemCount = await this.prisma.tripJobItem.count({
+          where: { tenantId, tripId: trip.id },
+        });
+      } else if (linkedJobItemCount === undefined) {
+        linkedJobItemCount = 0;
+      }
+    } else if (linkedJobItemCount === undefined) {
+      linkedJobItemCount = 0;
+    }
+    if (jobItemCount === undefined) jobItemCount = 0;
+
     const readiness = evaluateTripPublishReadiness({
       status: trip.status,
       assignedDriverUserId: trip.assignedDriverUserId ?? null,
@@ -4038,8 +4166,79 @@ export class TransportJobsService {
       fleetVehicleId: trip.fleetVehicleId ?? null,
       driverEarningCents: trip.driverEarningCents ?? null,
       payoutLines,
+      jobType: jobType ?? null,
+      jobItemCount: jobItemCount ?? 0,
+      linkedJobItemCount: linkedJobItemCount ?? 0,
     });
     return { readiness, payoutLines };
+  }
+
+  /**
+   * Ensures TripJobItem links satisfy publish for container-based trips.
+   * Auto-heals single-item jobs.
+   */
+  private async ensureTripJobItemsReadyForPublish(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    tripStatus: TripStatus,
+    actorUserId: string | null,
+  ): Promise<{ ok: boolean; errorMessage: string | null }> {
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+      select: {
+        jobType: true,
+        items: {
+          select: { id: true, itemCode: true },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        },
+      },
+    });
+    if (!job) return { ok: false, errorMessage: "Job not found" };
+
+    const jobItems = Array.isArray(job.items) ? job.items : [];
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+      select: { containerNumber: true },
+    });
+    const existingLinks =
+      (this.prisma as any).tripJobItem?.findMany
+        ? await this.prisma.tripJobItem.findMany({
+            where: { tenantId, tripId },
+            select: { id: true },
+          })
+        : [];
+    const linkReadiness = evaluateTripPublishLinkReadiness({
+      jobType: job.jobType,
+      jobItemCount: jobItems.length,
+      linkedJobItemCount: existingLinks.length,
+      jobItemIds: jobItems.map((i) => i.id),
+    });
+    if (linkReadiness.shouldAutoHealSingleItem && linkReadiness.singleJobItemId) {
+      if (!(this.prisma as any).tripJobItem?.createMany && !(this.prisma as any).tripJobItem?.findMany) {
+        // Test/compat mocks without TripJobItem model: skip auto-heal persistence.
+        return { ok: true, errorMessage: null };
+      }
+      await createTripJobItemLinksIfAbsent(this.prisma as any, {
+        tenantId,
+        tripId,
+        jobId,
+        tripStatus,
+        previousContainerNumber: trip?.containerNumber ?? null,
+        jobItemIds: [linkReadiness.singleJobItemId],
+        linkedByUserId: actorUserId,
+      });
+      return { ok: true, errorMessage: null };
+    }
+    if (linkReadiness.required && !linkReadiness.satisfied) {
+      return {
+        ok: false,
+        errorMessage:
+          linkReadiness.errorMessage
+          ?? "Container-based trip requires linked cargo before publish.",
+      };
+    }
+    return { ok: true, errorMessage: null };
   }
 
   async suggestTripOrder(
@@ -4278,7 +4477,9 @@ export class TransportJobsService {
     const payoutLineCountByTrip = new Map<string, number>();
     const payoutTotalByTrip = new Map<string, number>();
     for (const trip of publishCandidates) {
-      const { readiness, payoutLines } = await this.getTripPublishState(tenantId, trip);
+      const { readiness, payoutLines } = await this.getTripPublishState(tenantId, trip, {
+        jobId,
+      });
       if (!readiness.canPublish) {
         blockedTrips.push({
           tripId: trip.id,
@@ -4290,11 +4491,34 @@ export class TransportJobsService {
           }),
           reason: readiness.errorMessage ?? "Trip is not ready to publish",
         });
-      } else {
-        readyTripIds.push(trip.id);
-        payoutLineCountByTrip.set(trip.id, payoutLines.length);
-        payoutTotalByTrip.set(trip.id, readiness.totalPayoutCents);
+        continue;
       }
+
+      // Phase 1 link gate (same rules as publishTrip).
+      const linkGate = await this.ensureTripJobItemsReadyForPublish(
+        tenantId,
+        jobId,
+        trip.id,
+        trip.status,
+        actorUserId,
+      );
+      if (!linkGate.ok) {
+        blockedTrips.push({
+          tripId: trip.id,
+          tripDisplayRef: buildTripDisplayRef({
+            jobInternalRef: job.internalRef,
+            tripSequence: trip.tripSequence,
+            jobSequence: trip.jobSequence,
+            tripId: trip.id,
+          }),
+          reason: linkGate.errorMessage ?? "Linked cargo required before publish",
+        });
+        continue;
+      }
+
+      readyTripIds.push(trip.id);
+      payoutLineCountByTrip.set(trip.id, payoutLines.length);
+      payoutTotalByTrip.set(trip.id, readiness.totalPayoutCents);
     }
 
     if (blockedTrips.length > 0) {
@@ -4573,11 +4797,54 @@ export class TransportJobsService {
     }
 
     data.updatedByUserId = actorUserId;
-    await this.prisma.trip.update({
-      where: { id: tripId },
-      data,
-    });
+
+    const previousContainerNumber =
+      dto.containerNumber !== undefined
+        ? (dto.containerNumber?.trim() || null)
+        : trip.containerNumber;
+
+    // When jobItemIds is included, keep trip field patch + link replace atomic.
+    if (dto.jobItemIds !== undefined) {
+      if (typeof (this.prisma as any).$transaction === "function") {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.trip.update({
+            where: { id: tripId },
+            data,
+          });
+          await replaceTripJobItemLinks(tx as any, {
+            tenantId,
+            tripId,
+            jobId,
+            tripStatus: trip.status,
+            previousContainerNumber,
+            jobItemIds: normalizeJobItemIdsInput(dto.jobItemIds),
+            linkedByUserId: actorUserId,
+          });
+        });
+      } else {
+        await this.prisma.trip.update({
+          where: { id: tripId },
+          data,
+        });
+        await replaceTripJobItemLinks(this.prisma as any, {
+          tenantId,
+          tripId,
+          jobId,
+          tripStatus: trip.status,
+          previousContainerNumber,
+          jobItemIds: normalizeJobItemIdsInput(dto.jobItemIds),
+          linkedByUserId: actorUserId,
+        });
+      }
+    } else {
+      await this.prisma.trip.update({
+        where: { id: tripId },
+        data,
+      });
+    }
+
     const changedFields = Object.keys(data).filter((k) => k !== "updatedByUserId");
+    if (dto.jobItemIds !== undefined) changedFields.push("jobItemIds");
 
     await this.audit.log(
       tenantId,
@@ -4720,57 +4987,14 @@ export class TransportJobsService {
           inputItems,
           validItems,
         );
-        const retainedIds = validItems
-          .map((item) => item.id)
-          .filter((id): id is string => !!id);
-        if (!retainedIds.length) {
-          await tx.jobItem.deleteMany({ where: { tenantId, jobId } });
-          if (validItems.length > 0) {
-            await tx.jobItem.createMany({
-              data: validItems.map((item) => ({
-                tenantId,
-                jobId,
-                itemCode: item.itemCode,
-                description: item.description,
-                sealNo: item.sealNo,
-                pickupReference: item.pickupReference,
-                qty: item.qty,
-              })),
-            });
-          }
-        } else {
-          const existing = await tx.jobItem.findMany({
-            where: { tenantId, jobId, id: { in: retainedIds } },
-            select: { id: true },
-          });
-          if (existing.length !== retainedIds.length) {
-            throw new BadRequestException(
-              "One or more item ids do not belong to this job",
-            );
-          }
-          await tx.jobItem.deleteMany({
-            where: { tenantId, jobId, id: { notIn: retainedIds } },
-          });
-          for (const item of validItems) {
-            const itemData = {
-              itemCode: item.itemCode,
-              description: item.description,
-              sealNo: item.sealNo,
-              pickupReference: item.pickupReference,
-              qty: item.qty,
-            };
-            if (item.id) {
-              await tx.jobItem.update({
-                where: { id: item.id },
-                data: itemData,
-              });
-            } else {
-              await tx.jobItem.create({
-                data: { tenantId, jobId, ...itemData },
-              });
-            }
-          }
-        }
+        await applyJobItemsUpdateInTransaction(tx as any, {
+          tenantId,
+          jobId,
+          validItems,
+          // Operational single-row edits default to patch (preserve siblings).
+          // Full LCL/cargo replace must send replaceItems: true.
+          replaceItems: (dto as { replaceItems?: boolean }).replaceItems === true,
+        });
       }
     });
 
@@ -4947,14 +5171,33 @@ export class TransportJobsService {
         driverId: true,
         vehicleId: true,
         fleetVehicleId: true,
+        containerNumber: true,
+        jobId: true,
       },
     });
     if (!trip) throw new NotFoundException("Trip not found");
 
-    const { readiness, payoutLines } = await this.getTripPublishState(tenantId, trip);
+    const { readiness, payoutLines } = await this.getTripPublishState(tenantId, trip, {
+      jobId,
+    });
     if (!readiness.canPublish) {
       throw new BadRequestException(readiness.errorMessage ?? "Trip is not ready to publish");
     }
+
+    // Phase 1: container-based trips require ≥1 TripJobItem. Single-item may auto-heal.
+    const linkGate = await this.ensureTripJobItemsReadyForPublish(
+      tenantId,
+      jobId,
+      tripId,
+      trip.status,
+      actorUserId,
+    );
+    if (!linkGate.ok) {
+      throw new BadRequestException(
+        linkGate.errorMessage ?? "Container-based trip requires linked cargo before publish.",
+      );
+    }
+
     if (payoutLines.length > 0) {
       await this.prisma.trip.update({
         where: { id: tripId },
@@ -5328,6 +5571,7 @@ export class TransportJobsService {
       where: { id: jobId, tenantId },
       select: {
         id: true,
+        jobType: true,
         customerCompanyId: true,
         receiverName: true,
         receiverPhone: true,
@@ -5346,6 +5590,7 @@ export class TransportJobsService {
         exportPortCode: true,
         exportOriginDepotCode: true,
         returningDepotCode: true,
+        _count: { select: { items: true } },
       },
     });
     if (!job) throw new NotFoundException("Job not found");
@@ -5366,6 +5611,7 @@ export class TransportJobsService {
           include: documentUploadedByInclude,
         },
         payoutLines: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        _count: { select: { tripJobItems: true } },
       },
     });
 
@@ -5424,6 +5670,9 @@ export class TransportJobsService {
         fleetVehicleId: t.fleetVehicleId ?? null,
         driverEarningCents: t.driverEarningCents ?? null,
         payoutLines: t.payoutLines ?? [],
+        jobType: job.jobType ?? null,
+        jobItemCount: job._count?.items ?? 0,
+        linkedJobItemCount: t._count?.tripJobItems ?? 0,
       });
       const driverEarningCentsTotal = payoutLines.length
         ? payoutLines
@@ -6093,15 +6342,6 @@ export class TransportJobsService {
       notes: line.notes ?? null,
       isManual: line.isManual ?? false,
     }));
-    const publishReadiness = evaluateTripPublishReadiness({
-      status: trip.status,
-      assignedDriverUserId: trip.assignedDriverUserId ?? null,
-      driverId: trip.driverId ?? null,
-      vehicleId: trip.vehicleId ?? null,
-      fleetVehicleId: trip.fleetVehicleId ?? null,
-      driverEarningCents: trip.driverEarningCents ?? null,
-      payoutLines: trip.payoutLines ?? [],
-    });
     const routeOriginLabel =
       firstNonEmptyText(
         trip.originLabel,
@@ -6129,37 +6369,49 @@ export class TransportJobsService {
     const jobDescription = resolveJobDescription(trip.job, cargoItems, {
       useItemFallback: isContainerMode,
     });
-    const cargo = isContainerMode
-      ? {
-          mode: "CONTAINER",
-          containers: cargoItems.map((item: any) => {
-            const sealNo = item.sealNo ?? null;
-            return {
-              id: item.id,
-              containerNumber: item.itemCode,
-              containerSize: null,
-              sealNo,
-              sealNumber: sealNo,
-              // Job-level field; do not duplicate on every container row.
-              pickupReference: null,
-              weight: null,
-              remarks: null,
-            };
-          }),
-        }
-      : {
-          mode: "ITEMS",
-          items: cargoItems.map((item: any) => ({
-            id: item.id,
-            itemCode: item.itemCode,
-            description: item.description ?? null,
-            quantity: item.qty ?? null,
-            uom: null,
-            weight: null,
-            volume: null,
-            remarks: null,
-          })),
-        };
+    // Phase 1: cargo from TripJobItem only (no unlinked JobItem fallback for container jobs).
+    const tripJobItemLinks = await loadTripJobItemLinks(
+      this.prisma as any,
+      tenantId,
+      tripId,
+    );
+    const publishReadiness = evaluateTripPublishReadiness({
+      status: trip.status,
+      assignedDriverUserId: trip.assignedDriverUserId ?? null,
+      driverId: trip.driverId ?? null,
+      vehicleId: trip.vehicleId ?? null,
+      fleetVehicleId: trip.fleetVehicleId ?? null,
+      driverEarningCents: trip.driverEarningCents ?? null,
+      payoutLines: trip.payoutLines ?? [],
+      jobType: trip.job?.jobType ?? null,
+      jobItemCount: cargoItems.length,
+      linkedJobItemCount: tripJobItemLinks.length,
+    });
+    const cargoBuilt = buildTripCargoFromLinks({
+      jobType: trip.job?.jobType,
+      links: tripJobItemLinks,
+      allJobItems: cargoItems,
+    });
+    const cargo =
+      cargoBuilt.mode === "CONTAINER"
+        ? { mode: "CONTAINER" as const, containers: cargoBuilt.containers ?? [] }
+        : { mode: "ITEMS" as const, items: cargoBuilt.items ?? [] };
+    // Canonical linked-cargo collection also drives required document state.
+    const linkedItemsForDocs =
+      cargoBuilt.cargoSource === "TRIP_JOB_ITEM"
+        ? tripJobItemLinks.map((l) => l.jobItem)
+        : [];
+    const containerDocumentationRequirements =
+      isContainerMode && linkedItemsForDocs.length > 0
+        ? buildContainerDocumentationRequirements(
+            linkedItemsForDocs,
+            (trip.documents ?? []).map((d: any) => ({
+              type: d.type,
+              jobItemId: d.jobItemId ?? null,
+              isActive: d.isActive ?? true,
+            })),
+          )
+        : [];
     return {
       id: trip.id,
       jobId: trip.jobId ?? null,
@@ -6248,6 +6500,8 @@ export class TransportJobsService {
           }
         : null,
       cargo,
+      /** Canonical linked-cargo document requirements (same item set as cargo.containers). */
+      containerDocumentationRequirements,
       route: {
         origin: toTripLocationDto("origin", trip),
         destination: toTripLocationDto("destination", trip),

@@ -42,6 +42,13 @@ describe("DriverJobsService container-linked trip document upload", () => {
           options && "item" in options ? options.item : { id: jobItemId },
         ),
       },
+      tripJobItem: {
+        findMany: jest.fn().mockResolvedValue(
+          options && "item" in options && options.item === null
+            ? []
+            : [{ id: "link-1", jobItemId }],
+        ),
+      },
       user: {
         findUnique: jest.fn().mockResolvedValue({
           id: driverUserId,
@@ -172,6 +179,26 @@ describe("DriverJobsService container-linked trip document upload", () => {
       where: { id: "foreign-job-item", tenantId, jobId },
       select: { id: true },
     });
+    expect(storageUpload).not.toHaveBeenCalled();
+  });
+
+  it("rejects upload when jobItemId is not linked via TripJobItem", async () => {
+    const { service, prisma, storageUpload } = makeContext();
+    (prisma.tripJobItem.findMany as jest.Mock).mockResolvedValue([]);
+
+    await expect(
+      service.uploadTripDocumentForDriver(
+        tenantId,
+        jobId,
+        tripId,
+        driverUserId,
+        TripDocumentType.CONTAINER_PHOTO,
+        imageFile,
+        false,
+        undefined,
+        jobItemId,
+      ),
+    ).rejects.toThrow(/not linked to this trip via TripJobItem/i);
     expect(storageUpload).not.toHaveBeenCalled();
   });
 

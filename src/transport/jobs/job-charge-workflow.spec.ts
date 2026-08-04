@@ -1,6 +1,7 @@
 import { JobTripTemplate, JobStatus, JobType, Role } from "@prisma/client";
 import { TransportJobsService } from "./transport-jobs.service";
 import { InvoicesService } from "../finance/invoices.service";
+import { withInteractiveTransaction } from "../test-utils/prisma-interactive-transaction.mock";
 
 /** Minimal job row for syncJobInvoiceReadinessForJob after create/publish/unpublish. */
 const jobInvoiceSyncRow = {
@@ -8,6 +9,42 @@ const jobInvoiceSyncRow = {
   status: JobStatus.ONGOING,
   invoiceReadyAt: null,
 };
+
+/**
+ * Ensure create() tests provide a complete interactive `$transaction` client
+ * (job + trip + jobItem + tripJobItem). Root mocks remain the write targets.
+ */
+function withCreateJobTransaction(prisma: any): any {
+  const enriched = {
+    ...prisma,
+    trip: {
+      createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      findMany: jest.fn().mockResolvedValue([]),
+      update: jest.fn().mockResolvedValue({}),
+      ...(prisma.trip ?? {}),
+    },
+    jobItem: {
+      findMany: jest.fn().mockImplementation(async ({ where }: any) => {
+        const ids: string[] = where?.id?.in ?? [];
+        return ids.map((id) => ({
+          id,
+          itemCode: "BOX",
+          description: null,
+          sealNo: null,
+          pickupReference: null,
+          qty: 1,
+        }));
+      }),
+      ...(prisma.jobItem ?? {}),
+    },
+    tripJobItem: {
+      findMany: jest.fn().mockResolvedValue([]),
+      createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      ...(prisma.tripJobItem ?? {}),
+    },
+  };
+  return withInteractiveTransaction(enriched);
+}
 
 function withJobInvoiceSyncMocks(prisma: any): any {
   const trip = { ...(prisma.trip ?? {}) };
@@ -29,7 +66,7 @@ describe("job charge workflow hardening", () => {
   it("create job ignores chargeSnapshot-like payload and does not persist charges", async () => {
     const jobChargeDeleteMany = jest.fn().mockResolvedValue({});
     const jobChargeCreateMany = jest.fn().mockResolvedValue({ count: 1 });
-    const prisma: any = {
+    const prisma: any = withCreateJobTransaction({
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
       },
@@ -127,19 +164,15 @@ describe("job charge workflow hardening", () => {
             documents: [],
           }),
       },
+      jobCharge: {
+        deleteMany: jobChargeDeleteMany,
+        createMany: jobChargeCreateMany,
+      },
       trip: {
         createMany: jest.fn().mockResolvedValue({ count: 2 }),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      $transaction: jest.fn(async (input: any) => {
-        if (typeof input === "function") {
-          return input({
-            jobCharge: { deleteMany: jobChargeDeleteMany, createMany: jobChargeCreateMany },
-          });
-        }
-        return Promise.all(input);
-      }),
-    };
+    });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
 
@@ -246,7 +279,7 @@ describe("job charge workflow hardening", () => {
       charges: [],
       documents: [],
     };
-    const prisma: any = {
+    const prisma: any = withCreateJobTransaction({
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
       },
@@ -279,7 +312,7 @@ describe("job charge workflow hardening", () => {
         update: tripUpdate,
       },
       masterLogisticsLocation: { findFirst: jest.fn().mockResolvedValue(null) },
-    };
+    });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const svc = new TransportJobsService(prisma, audit, {} as any);
     jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
@@ -514,7 +547,7 @@ describe("job charge workflow hardening", () => {
   });
 
   it("IMPORT create with return location maps importDetails and generates two trips", async () => {
-    const prisma: any = {
+    const prisma: any = withCreateJobTransaction({
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
       },
@@ -629,7 +662,7 @@ describe("job charge workflow hardening", () => {
         createMany: jest.fn().mockResolvedValue({ count: 2 }),
         findMany: jest.fn().mockResolvedValue([]),
       },
-    };
+    });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new TransportJobsService(prisma, audit, supabaseService);
@@ -663,7 +696,7 @@ describe("job charge workflow hardening", () => {
   });
 
   it("IMPORT create without return location stores null returningDepotCode and generates one trip", async () => {
-    const prisma: any = {
+    const prisma: any = withCreateJobTransaction({
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
       },
@@ -700,7 +733,7 @@ describe("job charge workflow hardening", () => {
         createMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn().mockResolvedValue([]),
       },
-    };
+    });
     const svc = new TransportJobsService(
       prisma,
       { log: jest.fn() } as any,
@@ -730,7 +763,7 @@ describe("job charge workflow hardening", () => {
   });
 
   it("create job accepts nested exportDetails and maps export routing fields", async () => {
-    const prisma: any = {
+    const prisma: any = withCreateJobTransaction({
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
       },
@@ -836,7 +869,7 @@ describe("job charge workflow hardening", () => {
         createMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn().mockResolvedValue([]),
       },
-    };
+    });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new TransportJobsService(prisma, audit, supabaseService);
@@ -1272,10 +1305,21 @@ describe("job charge workflow hardening", () => {
           driverId: "d1",
           vehicleId: "v1",
           fleetVehicleId: null,
+          containerNumber: null,
         }),
         update: jest.fn().mockResolvedValue({ id: "trip1" }),
       },
       tripPayoutLine: { findMany: jest.fn().mockResolvedValue([]) },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          jobType: "LCL",
+          items: [],
+        }),
+      },
+      tripJobItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     });
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
@@ -2197,6 +2241,23 @@ describe("job charge workflow hardening", () => {
       },
       tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
       driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+      tripJobItem: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "link1",
+            jobItemId: "it1",
+            containerNumberSnapshot: "CONT-001",
+            jobItem: {
+              id: "it1",
+              itemCode: "CONT-001",
+              description: "20FT",
+              sealNo: "SEAL-A",
+              pickupReference: null,
+              qty: 1,
+            },
+          },
+        ]),
+      },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
@@ -2242,6 +2303,23 @@ describe("job charge workflow hardening", () => {
       },
       tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
       driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+      tripJobItem: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "link1",
+            jobItemId: "it1",
+            containerNumberSnapshot: "CONT-EXP-01",
+            jobItem: {
+              id: "it1",
+              itemCode: "CONT-EXP-01",
+              description: null,
+              sealNo: null,
+              pickupReference: null,
+              qty: 1,
+            },
+          },
+        ]),
+      },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
@@ -2419,6 +2497,119 @@ describe("job charge workflow hardening", () => {
 
     const result = await svc.getTripDetail("t1", "trip1", { role: Role.TRANSPORT_STAFF });
     expect(result.canPublish).toBe(true);
+  });
+
+  it("getTripDetail canPublish is false when multi-container IMPORT has no TripJobItem links", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          status: "DRAFT",
+          pendingState: "NONE",
+          createdAt: new Date(),
+          assignedDriverUserId: "u1",
+          vehicleId: "v1",
+          fleetVehicleId: null,
+          documents: [],
+          payoutLines: [
+            {
+              id: "pl1",
+              label: "Trip payout",
+              isManual: true,
+              quantity: 1,
+              amountCents: 6700,
+              totalCents: 6700,
+            },
+          ],
+          documentRequirements: [],
+          job: {
+            id: "job1",
+            customerCompanyId: "c1",
+            internalRef: "WF-006",
+            externalRef: null,
+            jobType: "IMPORT",
+            status: "ONGOING",
+            receiverName: "Receiver",
+            receiverPhone: "123",
+            createdAt: new Date(),
+            createdByUserId: "u1",
+            createdBy: { id: "u1", name: "Ops", email: "ops@example.com" },
+            customerCompany: { name: "Customer F" },
+            items: [
+              { id: "it1", itemCode: "CONT1", sealNo: null },
+              { id: "it2", itemCode: "CONT2", sealNo: null },
+            ],
+          },
+        }),
+      },
+      tripJobItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
+      driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
+
+    const result = await svc.getTripDetail("t1", "trip1", { role: Role.TRANSPORT_STAFF });
+    expect(result.canPublish).toBe(false);
+  });
+
+  it("publishTrip blocks multi-container IMPORT without TripJobItem links", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          status: "DRAFT",
+          assignedDriverUserId: "u1",
+          driverId: null,
+          vehicleId: "v1",
+          fleetVehicleId: null,
+          driverEarningCents: 5000,
+          containerNumber: null,
+        }),
+        update: jest.fn(),
+      },
+      tripPayoutLine: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "pl1",
+            label: "Trip payout",
+            isManual: true,
+            quantity: 1,
+            amountCents: 5000,
+            totalCents: 5000,
+          },
+        ]),
+      },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          jobType: "IMPORT",
+          items: [
+            { id: "it1", itemCode: "CONT1" },
+            { id: "it2", itemCode: "CONT2" },
+          ],
+        }),
+      },
+      tripJobItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        createMany: jest.fn(),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
+
+    await expect(
+      svc.publishTrip("t1", "job1", "trip1", { userId: "u1", role: Role.TRANSPORT_STAFF }),
+    ).rejects.toThrow(/jobItemIds|linked cargo|cargo item/i);
+    expect(prisma.trip.update).not.toHaveBeenCalled();
   });
 
   it("saveTripPayoutDraft saves one selected master payout line", async () => {

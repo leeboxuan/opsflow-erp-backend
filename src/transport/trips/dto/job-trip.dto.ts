@@ -203,11 +203,21 @@ export class AppendJobTripDto {
 
   @ApiPropertyOptional({
     description:
-      "Optional. Primary for IMPORT/EXPORT; LCL is item-based—UI may omit. Never required.",
+      "Optional. Primary for IMPORT/EXPORT; LCL is item-based—UI may omit. Never required. Legacy/display cache only — TripJobItem is SoT.",
   })
   @IsOptional()
   @IsString()
   containerNumber?: string | null;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      "Explicit JobItem ids to link via TripJobItem on append. Optional; single-item jobs auto-link. Multi-item jobs require links before publish.",
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  jobItemIds?: string[];
 
   @ApiPropertyOptional({
     description: "Optional shipping ref; primary for IMPORT/EXPORT. Not required for LCL.",
@@ -481,6 +491,15 @@ export class PatchTripDetailsDto {
   @ValidateNested({ each: true })
   @Type(() => UpdateJobItemDto)
   cargoItems?: UpdateJobItemDto[];
+
+  @ApiPropertyOptional({
+    description:
+      "When true with items[], omitted existing JobItems are deleted (freeze-guarded). " +
+      "When false/omitted, items with stable ids are patched in place and siblings are preserved.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  replaceItems?: boolean;
 }
 
 export class PatchJobTripDto {
@@ -576,11 +595,21 @@ export class PatchJobTripDto {
 
   @ApiPropertyOptional({
     description:
-      "Optional. Primary for IMPORT/EXPORT; LCL is item-based—UI may omit. Never required.",
+      "Optional. Primary for IMPORT/EXPORT; LCL is item-based—UI may omit. Never required. Legacy/display cache only — TripJobItem is SoT.",
   })
   @IsOptional()
   @IsString()
   containerNumber?: string | null;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      "When provided, replaces TripJobItem links for this trip (hard-delete + recreate). Frozen on COMPLETED/DONE.",
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  jobItemIds?: string[];
 
   @ApiPropertyOptional({
     description: "Optional shipping ref; primary for IMPORT/EXPORT. Not required for LCL.",
