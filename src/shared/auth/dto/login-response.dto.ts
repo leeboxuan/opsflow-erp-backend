@@ -33,4 +33,11 @@ export class LoginResponseDto {
       name: string;
     };
   }>;
+
+  @ApiProperty({
+    nullable: true,
+    required: false,
+    description: 'Present when user has an ACTIVE PlatformAdmin row',
+  })
+  platformAdmin?: { id: string; status: string } | null;
 }

@@ -28,6 +28,7 @@ describe('AuthController.login', () => {
   let prisma: {
     user: { findMany: jest.Mock; findUnique: jest.Mock };
     tenantMembership: { findMany: jest.Mock };
+    platformAdmin: { findUnique: jest.Mock };
   };
   let authService: { verifyToken: jest.Mock };
   let config: { get: jest.Mock };
@@ -44,6 +45,9 @@ describe('AuthController.login', () => {
       },
       tenantMembership: {
         findMany: jest.fn(),
+      },
+      platformAdmin: {
+        findUnique: jest.fn().mockResolvedValue(null),
       },
     };
 
@@ -84,13 +88,15 @@ describe('AuthController.login', () => {
     authService.verifyToken.mockResolvedValue({
       userId,
       email,
+      role: 'USER',
+      isSuperadmin: false,
     });
     prisma.tenantMembership.findMany.mockResolvedValue([
       {
         tenantId: tenantA.id,
         role: Role.WAREHOUSE,
         status: MembershipStatus.Active,
-        tenant: { id: tenantA.id, name: tenantA.name },
+        tenant: { id: tenantA.id, name: tenantA.name, status: 'ACTIVE' },
       },
     ]);
     prisma.user.findUnique.mockResolvedValue({
@@ -249,5 +255,74 @@ describe('AuthController.login', () => {
     });
     expect(result.user.email).toBe('ops@example.com');
     expect(prisma.user.findMany).not.toHaveBeenCalled();
+  });
+
+  it('allows platform-only admin email login with zero memberships', async () => {
+    mockSignIn.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'access',
+          refresh_token: 'refresh',
+          expires_at: 123,
+        },
+      },
+      error: null,
+    });
+    authService.verifyToken.mockResolvedValue({
+      userId: 'pa-user',
+      email: 'pa@opsflow.io',
+      role: 'SUPERADMIN',
+      isSuperadmin: true,
+    });
+    prisma.platformAdmin.findUnique.mockResolvedValue({
+      id: 'pa-1',
+      status: 'ACTIVE',
+    });
+    prisma.tenantMembership.findMany.mockResolvedValue([]);
+    prisma.user.findUnique.mockResolvedValue({
+      email: 'pa@opsflow.io',
+      username: null,
+    });
+
+    const result = await controller.login({
+      email: 'pa@opsflow.io',
+      password: 'secret123',
+    });
+
+    expect(result.platformAdmin).toEqual({ id: 'pa-1', status: 'ACTIVE' });
+    expect(result.tenantMemberships).toEqual([]);
+    expect(result.activeTenantId).toBeNull();
+  });
+
+  it('rejects platform-only admin on mobile clientApp', async () => {
+    mockSignIn.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'access',
+          refresh_token: 'refresh',
+          expires_at: 123,
+        },
+      },
+      error: null,
+    });
+    authService.verifyToken.mockResolvedValue({
+      userId: 'pa-user',
+      email: 'pa@opsflow.io',
+      role: 'SUPERADMIN',
+      isSuperadmin: true,
+    });
+    prisma.platformAdmin.findUnique.mockResolvedValue({
+      id: 'pa-1',
+      status: 'ACTIVE',
+    });
+    prisma.tenantMembership.findMany.mockResolvedValue([]);
+
+    await expect(
+      controller.login({
+        email: 'pa@opsflow.io',
+        password: 'secret123',
+        clientApp: 'mobile',
+      }),
+    ).rejects.toThrow(/mobile/i);
   });
 });

@@ -13,6 +13,8 @@ model Tenant {
   name                         String
   slug                         String                            @unique
   timezone                     String?
+  /// Lifecycle: SETUP (config), ACTIVE, SUSPENDED (ordinary users blocked), ARCHIVED
+  status                       TenantStatus                      @default(ACTIVE)
   createdAt                    DateTime                          @default(now())
   updatedAt                    DateTime                          @updatedAt
   driver_wallet_entries        driver_wallet_entries[]
@@ -75,6 +77,8 @@ model Tenant {
   warehouseJobCargoLines       WarehouseJobCargoLine[]
   warehouseJobContainers       WarehouseJobContainer[]
   tripJobItems                 TripJobItem[]
+  moduleEntitlements           TenantModuleEntitlement[]
+  platformAuditLogsAsTarget    PlatformAuditLog[]                @relation("PlatformAuditTargetTenant")
 
   @@map("tenants")
 }
@@ -95,11 +99,15 @@ model User {
 
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
-  /// Application-level role for this user (e.g. 'USER', 'SUPERADMIN')
+  /// Application-level role for this user (e.g. 'USER', 'SUPERADMIN').
+  /// SUPERADMIN is NOT a tenant Role — platform authority is PlatformAdmin.
   role        UserRole           @default(USER)
   drivers     drivers[]
   profiles    profiles?
   memberships TenantMembership[]
+  platformAdmin PlatformAdmin?
+  platformAdminsCreated PlatformAdmin[] @relation("PlatformAdminCreatedBy")
+  platformAuditLogsAsActor PlatformAuditLog[] @relation("PlatformAuditActorUser")
 
   customerCompanyId String?
   customerContactId String?
@@ -1502,6 +1510,85 @@ enum DoStatus {
 enum UserRole {
   SUPERADMIN
   USER
+}
+
+/// Tenant lifecycle for platform management (additive; existing rows default ACTIVE).
+enum TenantStatus {
+  SETUP
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+/// Product modules a tenant may be entitled to.
+enum TenantModule {
+  TRANSPORT
+  WAREHOUSING
+  FINANCE
+}
+
+enum PlatformAdminStatus {
+  ACTIVE
+  DISABLED
+}
+
+/// Platform Super Admin identity — NOT a TenantMembership / tenant Role.
+model PlatformAdmin {
+  id              String               @id @default(cuid())
+  userId          String               @unique
+  status          PlatformAdminStatus  @default(ACTIVE)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  createdByUserId String?
+  notes           String?
+
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User?              @relation("PlatformAdminCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  auditLogs PlatformAuditLog[]
+
+  @@index([status])
+  @@map("platform_admins")
+}
+
+model TenantModuleEntitlement {
+  id        String       @id @default(cuid())
+  tenantId  String
+  module    TenantModule
+  enabled   Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, module])
+  @@index([tenantId])
+  @@map("tenant_module_entitlements")
+}
+
+/// Append-only platform action log. Do not update/delete rows in application code.
+model PlatformAuditLog {
+  id                   String   @id @default(cuid())
+  actorPlatformAdminId String
+  actorUserId          String
+  targetTenantId       String?
+  action               String
+  entityType           String?
+  entityId             String?
+  correlationId        String?
+  reason               String?
+  /// Redacted metadata only — never store secrets/passwords.
+  metadata             Json?
+  createdAt            DateTime @default(now())
+
+  actorPlatformAdmin PlatformAdmin @relation(fields: [actorPlatformAdminId], references: [id], onDelete: Restrict)
+  actorUser          User          @relation("PlatformAuditActorUser", fields: [actorUserId], references: [id], onDelete: Restrict)
+  targetTenant       Tenant?       @relation("PlatformAuditTargetTenant", fields: [targetTenantId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([actorPlatformAdminId, createdAt])
+  @@index([targetTenantId, createdAt])
+  @@index([action, createdAt])
+  @@map("platform_audit_logs")
 }
 
 enum JobType {

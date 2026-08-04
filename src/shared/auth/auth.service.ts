@@ -22,15 +22,18 @@ export interface AuthUser {
   email: string;
   /**
    * Global app role from public.users.role (e.g. 'USER', 'SUPERADMIN').
-   * SUPERADMIN is NOT a tenant Role — platform authority moves to PlatformAdmin (Phase 1).
+   * SUPERADMIN is NOT a tenant Role — platform authority is PlatformAdmin.
    */
   role: string;
   /**
-   * True when role === 'SUPERADMIN' (legacy platform-level access).
-   * Phase 1: prefer PlatformAdmin ACTIVE; keep this for transition/backfill.
+   * True when PlatformAdmin ACTIVE exists, or legacy role === SUPERADMIN.
    * Never accept this flag from the client — AuthService sets it from DB only.
    */
   isSuperadmin: boolean;
+  /** PlatformAdmin row id when ACTIVE; null otherwise. */
+  platformAdminId?: string | null;
+  platformAdminStatus?: string | null;
+  isPlatformAdmin?: boolean;
 }
 
 @Injectable()
@@ -150,7 +153,9 @@ export class AuthService {
       }
 
       const role = user.role ?? 'USER';
-      const isSuperadmin = role === 'SUPERADMIN';
+      const platformAdmin = await this.loadPlatformAdmin(user.id);
+      const isPlatformAdmin = platformAdmin?.status === 'ACTIVE';
+      const isSuperadmin = isPlatformAdmin || role === 'SUPERADMIN';
 
       return {
         userId: user.id,
@@ -158,9 +163,29 @@ export class AuthService {
         email: user.email,
         role,
         isSuperadmin,
+        platformAdminId: isPlatformAdmin ? platformAdmin!.id : null,
+        platformAdminStatus: platformAdmin?.status ?? null,
+        isPlatformAdmin,
       };
     } catch (err) {
       this.logger.warn('User mapping failed: token verification or DB lookup/create failed', (err as Error)?.message ?? err);
+      return null;
+    }
+  }
+
+  /**
+   * Load PlatformAdmin row if the table exists. Returns null when missing / pre-migration.
+   */
+  private async loadPlatformAdmin(
+    userId: string,
+  ): Promise<{ id: string; status: string } | null> {
+    try {
+      const row = await this.prisma.platformAdmin.findUnique({
+        where: { userId },
+        select: { id: true, status: true },
+      });
+      return row;
+    } catch {
       return null;
     }
   }
@@ -228,7 +253,9 @@ export class AuthService {
       }
 
       const role = user.role ?? 'USER';
-      const isSuperadmin = role === 'SUPERADMIN';
+      const platformAdmin = await this.loadPlatformAdmin(user.id);
+      const isPlatformAdmin = platformAdmin?.status === 'ACTIVE';
+      const isSuperadmin = isPlatformAdmin || role === 'SUPERADMIN';
 
       return {
         userId: user.id,
@@ -236,6 +263,9 @@ export class AuthService {
         email: user.email,
         role,
         isSuperadmin,
+        platformAdminId: isPlatformAdmin ? platformAdmin!.id : null,
+        platformAdminStatus: platformAdmin?.status ?? null,
+        isPlatformAdmin,
       };
     } catch (error) {
       this.logger.warn('User mapping failed (legacy HS256): verification or DB failed', (error as Error)?.message ?? error);

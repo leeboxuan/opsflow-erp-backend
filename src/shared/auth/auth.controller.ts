@@ -120,17 +120,51 @@ export class AuthController {
           select: {
             id: true,
             name: true,
+            status: true,
           },
         },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    if (isUsernameLogin && memberships.length === 0) {
+    // Filter out suspended/archived tenants for ordinary session selection.
+    // Platform admins still receive memberships for suspended tenants (management).
+    const platformAdminPayload = await this.resolvePlatformAdminPayload(
+      authUser.userId,
+    );
+    const isPlatformAdmin =
+      platformAdminPayload?.status === 'ACTIVE' ||
+      authUser.isSuperadmin === true ||
+      authUser.role === 'SUPERADMIN';
+
+    const visibleMemberships = isPlatformAdmin
+      ? memberships
+      : memberships.filter(
+          (m) =>
+            !m.tenant?.status ||
+            m.tenant.status === 'ACTIVE' ||
+            m.tenant.status === 'SETUP',
+        );
+
+    if (isUsernameLogin && visibleMemberships.length === 0) {
       throw new UnauthorizedException(USERNAME_LOGIN_ERROR);
     }
 
-    const activeMembership = memberships[0];
+    // Platform-only (zero memberships): allowed for web; rejected for mobile clients.
+    const clientApp = (dto.clientApp ?? '').trim().toLowerCase();
+    if (
+      isPlatformAdmin &&
+      visibleMemberships.length === 0 &&
+      (clientApp === 'mobile' ||
+        clientApp === 'driver_mobile' ||
+        clientApp === 'warehouse_mobile')
+    ) {
+      throw new UnauthorizedException(
+        'Platform admin accounts are not available on mobile apps',
+      );
+    }
+
+    const activeMembership = visibleMemberships[0];
 
     const dbUser = await this.prisma.user.findUnique({
       where: { id: authUser.userId },
@@ -151,7 +185,7 @@ export class AuthController {
       expiresAt,
       user,
       activeTenantId: activeMembership?.tenantId ?? null,
-      tenantMemberships: memberships.map((membership) => ({
+      tenantMemberships: visibleMemberships.map((membership) => ({
         tenantId: membership.tenantId,
         role: membership.role,
         status: membership.status,
@@ -160,7 +194,23 @@ export class AuthController {
           name: membership.tenant.name,
         },
       })),
+      platformAdmin: platformAdminPayload,
     };
+  }
+
+  private async resolvePlatformAdminPayload(
+    userId: string,
+  ): Promise<{ id: string; status: string } | null> {
+    try {
+      const row = await this.prisma.platformAdmin.findUnique({
+        where: { userId },
+        select: { id: true, status: true },
+      });
+      if (!row || row.status !== 'ACTIVE') return null;
+      return { id: row.id, status: row.status };
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -309,6 +359,7 @@ export class AuthController {
           select: {
             id: true,
             name: true,
+            status: true,
           },
         },
       },
@@ -323,6 +374,7 @@ export class AuthController {
       tenant: {
         id: membership.tenant.id,
         name: membership.tenant.name,
+        status: (membership.tenant as any).status ?? undefined,
       },
     }));
 
@@ -330,6 +382,8 @@ export class AuthController {
       supabaseService: this.supabaseService,
       avatarKey: (user as any).avatarKey ?? null,
     });
+
+    const platformAdmin = await this.resolvePlatformAdminPayload(user.id);
 
     return {
       id: user.id,
@@ -349,6 +403,7 @@ export class AuthController {
       avatarKey: (user as any).avatarKey ?? null,
       avatarUpdatedAt: (user as any).avatarUpdatedAt ?? null,
       tenantMemberships,
+      platformAdmin,
     };
   }
 }

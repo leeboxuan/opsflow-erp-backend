@@ -7,6 +7,9 @@ export type CachedTenantContext = {
   tenantId: string;
   role: Role;
   isSuperadmin: boolean;
+  isPlatformAdmin?: boolean;
+  /** True when Platform Admin entered a SUSPENDED tenant (ordinary users blocked). */
+  tenantSuspended?: boolean;
   customerCompanyId?: string | null;
   customerContactId?: string | null;
 };

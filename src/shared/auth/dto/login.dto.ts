@@ -34,6 +34,15 @@ export class LoginDto {
   @IsString()
   tenantSlug?: string;
 
+  @ApiPropertyOptional({
+    example: 'web',
+    description:
+      "Optional client hint: 'web' | 'mobile'. Mobile rejects platform-only accounts.",
+  })
+  @IsOptional()
+  @IsString()
+  clientApp?: string;
+
   @ApiProperty({ example: 'password123' })
   @IsString()
   @MinLength(1)
