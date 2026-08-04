@@ -8,18 +8,23 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
-import { Role } from "@prisma/client";
+import { Role, TenantModule } from "@prisma/client";
 import type { Response } from "express";
 
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
 import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../../shared/auth/guards/module-entitlement.guard";
 import { InvoicesService } from "./invoices.service";
 import { PortalInvoiceDto } from "./dto/portal-invoice.dto";
 
 @ApiTags("Portal - Invoices")
 @Controller("portal/invoices")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.FINANCE)
 @Roles(Role.CUSTOMER, Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
 @ApiBearerAuth("JWT-auth")
 export class PortalInvoicesController {

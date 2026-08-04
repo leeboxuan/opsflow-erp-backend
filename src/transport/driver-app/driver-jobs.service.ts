@@ -985,6 +985,7 @@ export class DriverJobsService {
     const signed = await buildDocumentSignedUrlResponse(
       this.supabaseService.getClient(),
       doc.storageKey,
+      doc.tenantId,
     );
     return {
       ...base,
@@ -1035,6 +1036,7 @@ export class DriverJobsService {
         return buildDocumentSignedUrlResponse(
           this.supabaseService.getClient(),
           refreshed.storageKey,
+          tenantId,
         );
       }
     }
@@ -1042,6 +1044,7 @@ export class DriverJobsService {
     return buildDocumentSignedUrlResponse(
       this.supabaseService.getClient(),
       doc.storageKey,
+      tenantId,
     );
   }
 

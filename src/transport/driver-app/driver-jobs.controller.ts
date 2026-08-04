@@ -31,6 +31,11 @@ import {
 import { TripDocumentType } from "@prisma/client";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../../shared/auth/guards/module-entitlement.guard";
+import { TenantModule } from "@prisma/client";
 import { RoleGuard } from "../../shared/auth/guards/role.guard";
 import { Roles } from "../../shared/auth/guards/role.guard";
 import { Role } from "@prisma/client";
@@ -50,7 +55,8 @@ import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
 
 @ApiTags("driver-jobs")
 @Controller("drivers/jobs")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @Roles(Role.DRIVER)
 @ApiBearerAuth("JWT-auth")
 @ApiExtraModels(JobDocumentDto, ContainerDocumentationRequirementDto)

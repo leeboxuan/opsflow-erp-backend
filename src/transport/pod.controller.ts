@@ -22,6 +22,11 @@ import { FileInterceptor } from "@nestjs/platform-express";
 
 import { AuthGuard } from "../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../shared/auth/guards/tenant.guard";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../shared/auth/guards/module-entitlement.guard";
+import { TenantModule } from "@prisma/client";
 
 import { PodService } from "./pod.service";
 import { StopService } from "./stop.service";
@@ -31,7 +36,8 @@ import { PodDto, StopDto } from "./dto/trip.dto";
 
 @ApiTags("transport")
 @Controller("transport/stops")
-@UseGuards(AuthGuard, TenantGuard)
+@UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @ApiBearerAuth("JWT-auth")
 export class PodController {
   constructor(

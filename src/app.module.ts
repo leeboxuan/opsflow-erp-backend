@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AuthModule } from './shared/auth/auth.module';
@@ -27,6 +28,8 @@ import { PushModule } from "./shared/push/push.module";
 import { DeviceGatewayModule } from "./transport/fleet/device-gateway/device-gateway.module";
 import { FleetTrackingModule } from "./transport/fleet/tracking/fleet-tracking.module";
 import { PlatformModule } from "./platform/platform.module";
+import { PlatformTenantMutationAuditInterceptor } from "./shared/audit/platform-tenant-mutation-audit.interceptor";
+import { RejectUntrustedTenantIdInterceptor } from "./shared/auth/reject-untrusted-tenant-id.interceptor";
 
 @Module({
   imports: [
@@ -62,5 +65,15 @@ import { PlatformModule } from "./platform/platform.module";
     PlatformModule,
   ],
   controllers: [AppController],
+  providers: [
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: RejectUntrustedTenantIdInterceptor,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: PlatformTenantMutationAuditInterceptor,
+    },
+  ],
 })
 export class AppModule { }

@@ -1,3 +1,5 @@
+import { assertStorageKeyBelongsToTenant } from "../../shared/storage/tenant-storage-key";
+
 /** Supabase signed URL TTL (seconds). */
 export const JOB_DOCUMENT_SIGNED_URL_TTL_SEC = 60 * 60;
 
@@ -20,9 +22,15 @@ export function clearSignedUrlCacheForTests(): void {
 export async function createCachedJobDocumentSignedUrl(
   supabase: any,
   storageKey: string,
+  tenantId?: string,
 ): Promise<string | null> {
   const key = String(storageKey ?? "").trim();
   if (!key) return null;
+
+  if (tenantId) {
+    // Never sign arbitrary / cross-tenant paths.
+    assertStorageKeyBelongsToTenant(key, tenantId);
+  }
 
   const now = Date.now();
   const cached = signedUrlCache.get(key);
@@ -55,8 +63,13 @@ export type DocumentSignedUrlResponse = {
 export async function buildDocumentSignedUrlResponse(
   supabase: any,
   storageKey: string,
+  tenantId?: string,
 ): Promise<DocumentSignedUrlResponse> {
-  const signedUrl = await createCachedJobDocumentSignedUrl(supabase, storageKey);
+  const signedUrl = await createCachedJobDocumentSignedUrl(
+    supabase,
+    storageKey,
+    tenantId,
+  );
   return {
     previewUrl: signedUrl,
     downloadUrl: signedUrl,

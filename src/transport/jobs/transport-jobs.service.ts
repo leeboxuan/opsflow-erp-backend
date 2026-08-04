@@ -1431,6 +1431,7 @@ export class TransportJobsService {
     const signedUrl = await buildDocumentSignedUrlResponse(
       this.supabaseService.getClient(),
       doc.storageKey,
+      doc.tenantId,
     );
     return {
       ...base,
@@ -1458,6 +1459,7 @@ export class TransportJobsService {
     return buildDocumentSignedUrlResponse(
       this.supabaseService.getClient(),
       doc.storageKey,
+      tenantId,
     );
   }
 
@@ -1491,6 +1493,7 @@ export class TransportJobsService {
         return buildDocumentSignedUrlResponse(
           this.supabaseService.getClient(),
           refreshed.storageKey,
+          tenantId,
         );
       }
     }
@@ -1498,6 +1501,7 @@ export class TransportJobsService {
     return buildDocumentSignedUrlResponse(
       this.supabaseService.getClient(),
       doc.storageKey,
+      tenantId,
     );
   }
 

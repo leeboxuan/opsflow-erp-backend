@@ -20,6 +20,8 @@ import {
   ModuleEntitlementGuard,
   RequiresTenantModule,
 } from "../../shared/auth/guards/module-entitlement.guard";
+import { DestructiveActionGuard } from "../../shared/auth/guards/destructive-action.guard";
+import { DestructiveAction } from "../../shared/auth/guards/destructive-action.decorator";
 import { Role, TenantModule } from "@prisma/client";
 import { InvoicesService } from "./invoices.service";
 import {
@@ -33,7 +35,7 @@ import { FileInterceptor } from "@nestjs/platform-express";
 
 @ApiTags("Finance")
 @Controller("finance/invoices")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard, DestructiveActionGuard)
 @RequiresTenantModule(TenantModule.FINANCE)
 @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER) // add Role.FINANCE later if you have it
 @ApiBearerAuth("JWT-auth")
@@ -177,6 +179,11 @@ export class InvoicesController {
   }
 
   @Post(":id/issue")
+  @DestructiveAction({
+    resource: "INVOICE",
+    action: "ISSUE",
+    requireReasonForPlatformAdmin: false,
+  })
   async issue(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -188,7 +195,12 @@ export class InvoicesController {
   }
 
   @Post(":id/revert")
-  async revertToDraft(@Request() req: any, @Param("id") id: string) {
+  @DestructiveAction({ resource: "INVOICE", action: "REVERT" })
+  async revertToDraft(
+    @Request() req: any,
+    @Param("id") id: string,
+    @Body() body?: { reason?: string },
+  ) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
       ...req.user,

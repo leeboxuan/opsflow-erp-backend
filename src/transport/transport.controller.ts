@@ -20,6 +20,11 @@ import { validate } from "class-validator";
 import { AuthGuard } from "../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../shared/auth/guards/tenant.guard";
 import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../shared/auth/guards/module-entitlement.guard";
+import { Role, TenantModule } from "@prisma/client";
+import {
   TransportService,
   CreateOrdersBatchResult,
 } from "./transport.service";
@@ -29,7 +34,6 @@ import { ListOrdersQueryDto } from "./dto/list-orders-query.dto";
 import { OrderDto } from "./dto/order.dto";
 import { TripDto } from "./dto/trip.dto";
 import { RoleGuard, Roles } from "@/shared/auth/guards/role.guard";
-import { Role } from "@prisma/client";
 import { UpdateOrderDto } from "./dto/update-order.dto";
 
 import { ReplaceOrderItemsDto } from "./dto/replace-order-items.dto";
@@ -37,7 +41,8 @@ import { UpdateDoDto } from "./dto/update-do.dto";
 
 @ApiTags("transport")
 @Controller("transport/orders")
-@UseGuards(AuthGuard, TenantGuard)
+@UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @ApiBearerAuth("JWT-auth")
 export class TransportController {
   constructor(private readonly transportService: TransportService) {}

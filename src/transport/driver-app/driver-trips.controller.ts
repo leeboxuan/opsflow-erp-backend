@@ -4,11 +4,17 @@ import { Role } from "@prisma/client";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../../shared/auth/guards/module-entitlement.guard";
+import { TenantModule } from "@prisma/client";
 import { DriverJobsService } from "./driver-jobs.service";
 
 @ApiTags("driver-trips")
 @Controller("drivers/trips")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @Roles(Role.DRIVER)
 @ApiBearerAuth("JWT-auth")
 export class DriverTripsController {

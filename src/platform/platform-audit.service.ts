@@ -61,6 +61,24 @@ export class PlatformAuditService {
     });
   }
 
+  /**
+   * Same as append but rethrows — use for sensitive mutations that must
+   * fail closed when the audit row cannot be written.
+   */
+  async appendOrThrow(params: {
+    actorPlatformAdminId: string;
+    actorUserId: string;
+    action: PlatformAuditAction;
+    targetTenantId?: string | null;
+    entityType?: string | null;
+    entityId?: string | null;
+    correlationId?: string | null;
+    reason?: string | null;
+    metadata?: Record<string, unknown> | null;
+  }): Promise<void> {
+    await this.append(params);
+  }
+
   /** Strip obvious secret keys from metadata before persist. */
   redactMetadata(
     metadata: Record<string, unknown>,
@@ -74,7 +92,8 @@ export class PlatformAuditService {
     }
     if (value && typeof value === "object") {
       const out: Record<string, unknown> = {};
-      const forbidden = /password|secret|token|authorization|api[_-]?key/i;
+      const forbidden =
+        /password|secret|token|authorization|api[_-]?key|signed[_-]?url|refresh[_-]?token|access[_-]?token|supabase|bearer/i;
       for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
         if (forbidden.test(k)) {
           out[k] = "[REDACTED]";
@@ -84,8 +103,18 @@ export class PlatformAuditService {
       }
       return out;
     }
-    if (typeof value === "string" && value.toLowerCase().includes("@auth.opsflow.app")) {
-      return "[REDACTED_INTERNAL_EMAIL]";
+    if (typeof value === "string") {
+      if (value.toLowerCase().includes("@auth.opsflow.app")) {
+        return "[REDACTED_INTERNAL_EMAIL]";
+      }
+      // Likely signed URL / JWT-shaped values
+      if (
+        /^https?:\/\/\S+token=/i.test(value) ||
+        /^https?:\/\/\S+X-Amz-/i.test(value) ||
+        /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/.test(value)
+      ) {
+        return "[REDACTED_URL_OR_TOKEN]";
+      }
     }
     return value;
   }

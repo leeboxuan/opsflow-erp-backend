@@ -29,6 +29,8 @@ import {
   ModuleEntitlementGuard,
   RequiresTenantModule,
 } from '../../shared/auth/guards/module-entitlement.guard';
+import { DestructiveActionGuard } from '../../shared/auth/guards/destructive-action.guard';
+import { DestructiveAction } from '../../shared/auth/guards/destructive-action.decorator';
 import { WarehouseJobsService } from './warehouse-jobs.service';
 import { WarehouseJobLinesService } from './warehouse-job-lines.service';
 import { WarehouseJobUnitsService } from './warehouse-job-units.service';
@@ -60,9 +62,9 @@ const FLOOR_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF, Role.WAREHOUSE];
 
 @ApiTags('warehouse-jobs')
 @Controller('warehouse-jobs')
-@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
-@Roles(...READ_ROLES)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard, DestructiveActionGuard)
 @RequiresTenantModule(TenantModule.WAREHOUSING)
+@Roles(...READ_ROLES)
 @ApiBearerAuth('JWT-auth')
 export class WarehouseJobsController {
   constructor(
@@ -603,6 +605,7 @@ export class WarehouseJobsController {
 
   @Post(':id/cancel')
   @Roles(...MUTATE_ROLES)
+  @DestructiveAction({ resource: "WAREHOUSE_JOB", action: "CANCEL" })
   @ApiOperation({ summary: 'Cancel warehouse job' })
   async cancel(
     @Request() req: any,

@@ -7,6 +7,7 @@ import { TenantGuard } from './guards/tenant.guard';
 import { RoleGuard } from './guards/role.guard';
 import { PlatformAdminGuard } from './guards/platform-admin.guard';
 import { ModuleEntitlementGuard } from './guards/module-entitlement.guard';
+import { DestructiveActionGuard } from './guards/destructive-action.guard';
 import { PrismaModule } from '../prisma/prisma.module';
 
 /**
@@ -20,6 +21,7 @@ import { PrismaModule } from '../prisma/prisma.module';
  *   - SUPERADMIN is a global User.role bridge only — never a tenant Role.
  *   - PlatformAdminGuard gates /platform/* routes. Never trust client isPlatformAdmin flags.
  *   - ModuleEntitlementGuard enforces TenantModule entitlements on opted-in ops controllers.
+ *   - DestructiveActionGuard requires reason for Platform Admin on marked routes.
  */
 @Module({
   imports: [PrismaModule],
@@ -32,6 +34,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     RoleGuard,
     PlatformAdminGuard,
     ModuleEntitlementGuard,
+    DestructiveActionGuard,
   ],
   exports: [
     AuthService,
@@ -41,6 +44,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     RoleGuard,
     PlatformAdminGuard,
     ModuleEntitlementGuard,
+    DestructiveActionGuard,
   ],
 })
 export class AuthModule {}

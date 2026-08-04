@@ -13,6 +13,11 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../../shared/auth/guards/module-entitlement.guard";
+import { TenantModule } from "@prisma/client";
 import { RoleGuard } from "../../shared/auth/guards/role.guard";
 import { Roles } from "../../shared/auth/guards/role.guard";
 import { TripService } from "../trip.service";
@@ -36,7 +41,8 @@ import { ScanReturnGoodsDto } from "./dto/scan-return-goods.dto";
 
 @ApiTags("driver")
 @Controller("driver")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @Roles(Role.DRIVER)
 @ApiBearerAuth("JWT-auth")
 export class DriverController {

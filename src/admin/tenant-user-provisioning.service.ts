@@ -14,6 +14,7 @@ import {
   buildInternalAuthEmail,
   normalizeUsername,
 } from "../shared/auth/auth-internal-email";
+import { assertRoleAllowedByModuleEntitlement } from "../shared/auth/module-role-entitlement";
 import {
   isUsernamePasswordOperationalUser,
   mapTenantMembershipToPublicUserDto,
@@ -117,6 +118,8 @@ export class TenantUserProvisioningService {
         `Unsupported role for user creation: ${dto.role}`,
       );
     }
+
+    await assertRoleAllowedByModuleEntitlement(this.prisma, tenantId, dto.role);
 
     const persistedRole = toPersistedMembershipRole(dto.role);
     const usernameRaw = dto.username?.trim();
@@ -348,6 +351,12 @@ export class TenantUserProvisioningService {
         // TRANSPORT_STAFF is in TENANT_USER_CREATE_ROLES; legacy OPS display only.
         throw new BadRequestException(`Unsupported role: ${dto.role}`);
       }
+
+      await assertRoleAllowedByModuleEntitlement(
+        this.prisma,
+        tenantId,
+        persistedRole,
+      );
 
       const currentIsOperational = isUsernamePasswordOperationalUser({
         role: membership.role,

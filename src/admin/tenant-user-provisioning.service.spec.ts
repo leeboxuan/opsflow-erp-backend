@@ -16,6 +16,9 @@ describe("TenantUserProvisioningService", () => {
       tenant: {
         findUnique: jest.fn().mockResolvedValue({ slug: "acme" }),
       },
+      tenantModuleEntitlement: {
+        findUnique: jest.fn().mockResolvedValue({ enabled: true }),
+      },
       user: {
         findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn(),

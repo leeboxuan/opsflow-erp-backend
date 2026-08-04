@@ -56,6 +56,9 @@ describe('AdminController users', () => {
       tenant: {
         findUnique: jest.fn().mockResolvedValue({ slug: 'tenant-a' }),
       },
+      tenantModuleEntitlement: {
+        findUnique: jest.fn().mockResolvedValue({ enabled: true }),
+      },
       customer_companies: { upsert: jest.fn() },
       customer_contacts: { upsert: jest.fn() },
     };

@@ -33,6 +33,8 @@ import {
   ModuleEntitlementGuard,
   RequiresTenantModule,
 } from "../../shared/auth/guards/module-entitlement.guard";
+import { DestructiveActionGuard } from "../../shared/auth/guards/destructive-action.guard";
+import { DestructiveAction } from "../../shared/auth/guards/destructive-action.decorator";
 import { Role, JobType, TripPendingState, TenantModule } from "@prisma/client";
 import { TransportJobsService } from "./transport-jobs.service";
 import { InvoicesService } from "../finance/invoices.service";
@@ -61,7 +63,13 @@ import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
 
 @ApiTags("transport-jobs")
 @Controller("jobs")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@UseGuards(
+  AuthGuard,
+  TenantGuard,
+  RoleGuard,
+  ModuleEntitlementGuard,
+  DestructiveActionGuard,
+)
 @RequiresTenantModule(TenantModule.TRANSPORT)
 @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
 @ApiBearerAuth("JWT-auth")
@@ -407,6 +415,7 @@ export class TransportJobsController {
   }
 
   @Post(":jobId/cancel")
+  @DestructiveAction({ resource: "JOB", action: "CANCEL" })
   @ApiOperation({
     summary: "Cancel job with reason (blocked when job has any trips)",
   })
@@ -425,6 +434,7 @@ export class TransportJobsController {
   }
 
   @Delete(":jobId")
+  @DestructiveAction({ resource: "JOB", action: "DELETE" })
   @ApiOperation({
     summary: "Hard-delete job with no trips (ONGOING, unassigned)",
   })

@@ -7,12 +7,19 @@ import {
     UseGuards,
   } from '@nestjs/common';
   import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+  import { TenantModule } from '@prisma/client';
   import { FinanceService } from './finance.service';
   import { AuthGuard } from '../../shared/auth/guards/auth.guard';
+  import { TenantGuard } from '../../shared/auth/guards/tenant.guard';
+  import {
+    ModuleEntitlementGuard,
+    RequiresTenantModule,
+  } from '../../shared/auth/guards/module-entitlement.guard';
   
   @ApiTags('Finance')
   @ApiBearerAuth()
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+  @RequiresTenantModule(TenantModule.FINANCE)
   @Controller('finance')
   export class FinanceController {
     constructor(private readonly financeService: FinanceService) {}
@@ -45,4 +52,3 @@ import {
       );
     }
   }
-  

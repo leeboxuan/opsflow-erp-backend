@@ -11,6 +11,11 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '../../shared/auth/guards/auth.guard';
 import { TenantGuard } from '../../shared/auth/guards/tenant.guard';
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from '../../shared/auth/guards/module-entitlement.guard';
+import { TenantModule } from '@prisma/client';
 import { RoleGuard } from '../../shared/auth/guards/role.guard';
 import { Roles } from '../../shared/auth/guards/role.guard';
 import { PrismaService } from '../../shared/prisma/prisma.service';
@@ -37,7 +42,8 @@ export interface DriverDto {
 
 @ApiTags('drivers')
 @Controller('drivers')
-@UseGuards(AuthGuard, TenantGuard)
+@UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @ApiBearerAuth('JWT-auth')
 export class DriversController {
   constructor(

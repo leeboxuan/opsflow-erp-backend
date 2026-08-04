@@ -5,6 +5,7 @@ import { PodDto } from "./dto/trip.dto";
 import { EventLogService } from "./event-log.service";
 import { SupabaseService } from "../shared/auth/supabase.service";
 import { randomUUID } from "crypto";
+import { assertStorageKeyBelongsToTenant } from "../shared/storage/tenant-storage-key";
 
 const POD_BUCKET = "pods-photos";
 
@@ -197,6 +198,11 @@ export class PodService {
 
     const items: { key: string; signedUrl: string }[] = [];
     for (const key of keys) {
+      try {
+        assertStorageKeyBelongsToTenant(key, tenantId);
+      } catch {
+        continue;
+      }
       const { data, error } = await supabase.storage
         .from(POD_BUCKET)
         .createSignedUrl(key, SIGNED_VIEW_URL_TTL_SECONDS);

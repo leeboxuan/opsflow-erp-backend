@@ -23,6 +23,11 @@ import {
 import { FileInterceptor } from "@nestjs/platform-express";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../../shared/auth/guards/module-entitlement.guard";
+import { TenantModule } from "@prisma/client";
 import { MasterDataService } from "./master.service";
 import {
   LogisticsLocationType,
@@ -44,7 +49,8 @@ import { SingaporeLocationDto } from "./dto/singapore-location.dto";
 
 @ApiTags("master-data")
 @Controller("master")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @ApiBearerAuth("JWT-auth")
 export class MasterDataController {
   constructor(private readonly master: MasterDataService) {}

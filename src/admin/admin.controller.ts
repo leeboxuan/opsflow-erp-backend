@@ -35,10 +35,12 @@ import { AdminListQueryDto } from "./dto/list-query.dto";
 import { listTenantUsers } from "./admin-users.list";
 import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
 import { TenantUserProvisioningService } from "./tenant-user-provisioning.service";
+import { DestructiveActionGuard } from "../shared/auth/guards/destructive-action.guard";
+import { DestructiveAction } from "../shared/auth/guards/destructive-action.decorator";
 
 @ApiTags("admin")
 @Controller("admin")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, DestructiveActionGuard)
 @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
 @ApiBearerAuth("JWT-auth")
 export class AdminController {
@@ -103,6 +105,7 @@ export class AdminController {
   }
 
   @Post("users/:userId/reset-password")
+  @DestructiveAction({ resource: "USER", action: "PASSWORD_RESET" })
   @ApiOperation({ summary: "Admin-controlled password reset for a tenant user" })
   async resetUserPassword(
     @Request() req: any,
@@ -118,6 +121,11 @@ export class AdminController {
   }
 
   @Delete("users/:userId")
+  @DestructiveAction({
+    resource: "USER",
+    action: "REMOVE",
+    requireReasonForPlatformAdmin: false,
+  })
   @ApiOperation({ summary: "Remove user from tenant (Admin/Ops only)" })
   async deleteUser(@Request() req: any, @Param("userId") userId: string) {
     const tenantId = req.tenant.tenantId;

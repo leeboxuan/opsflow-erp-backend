@@ -3,13 +3,19 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { Role } from "@prisma/client";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../../shared/auth/guards/module-entitlement.guard";
+import { TenantModule } from "@prisma/client";
 import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
 import { DriverJobsService } from "./driver-jobs.service";
 import { DriverHomeQueryDto } from "./dto/driver-home-query.dto";
 
 @ApiTags("driver-home")
 @Controller("drivers")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @Roles(Role.DRIVER)
 @ApiBearerAuth("JWT-auth")
 export class DriverHomeController {
