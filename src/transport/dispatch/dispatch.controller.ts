@@ -11,10 +11,14 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from "@nestjs/swagger";
-import { Role } from "@prisma/client";
+import { Role, TenantModule } from "@prisma/client";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../../shared/auth/guards/module-entitlement.guard";
 import { DispatchService } from "./dispatch.service";
 import {
   DispatchBoardResponseDto,
@@ -26,7 +30,8 @@ import {
 
 @ApiTags("dispatch")
 @Controller("dispatch")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
 @ApiBearerAuth("JWT-auth")
 export class DispatchController {

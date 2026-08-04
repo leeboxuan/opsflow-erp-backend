@@ -108,6 +108,140 @@ export class PlatformService {
     return this.mapTenant(t);
   }
 
+  /**
+   * Phase 3: validate selected tenant for operational access and audit entry.
+   * Does not create TenantMembership. Client then uses X-Tenant-Id on ops routes.
+   */
+  async enterTenant(
+    tenantId: string,
+    actor: { platformAdminId: string; userId: string },
+    correlationId?: string | null,
+  ) {
+    try {
+      const t = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        include: {
+          moduleEntitlements: true,
+          _count: { select: { memberships: true } },
+        },
+      });
+      if (!t) {
+        await this.audit.append({
+          actorPlatformAdminId: actor.platformAdminId,
+          actorUserId: actor.userId,
+          action: "PLATFORM_TENANT_ENTER_FAILED",
+          targetTenantId: tenantId,
+          entityType: "Tenant",
+          entityId: tenantId,
+          correlationId: correlationId ?? null,
+          reason: "TENANT_NOT_FOUND",
+          metadata: { outcome: "rejected" },
+        });
+        throw new NotFoundException("Tenant not found");
+      }
+
+      if (t.status === TenantStatus.ARCHIVED) {
+        await this.audit.append({
+          actorPlatformAdminId: actor.platformAdminId,
+          actorUserId: actor.userId,
+          action: "PLATFORM_TENANT_ENTER_FAILED",
+          targetTenantId: tenantId,
+          entityType: "Tenant",
+          entityId: tenantId,
+          correlationId: correlationId ?? null,
+          reason: "TENANT_ARCHIVED",
+          metadata: { status: t.status, outcome: "rejected" },
+        });
+        throw new ForbiddenException(
+          "Tenant is archived — use /platform APIs for management",
+        );
+      }
+
+      if (
+        t.status !== TenantStatus.ACTIVE &&
+        t.status !== TenantStatus.SETUP &&
+        t.status !== TenantStatus.SUSPENDED
+      ) {
+        await this.audit.append({
+          actorPlatformAdminId: actor.platformAdminId,
+          actorUserId: actor.userId,
+          action: "PLATFORM_TENANT_ENTER_FAILED",
+          targetTenantId: tenantId,
+          entityType: "Tenant",
+          entityId: tenantId,
+          correlationId: correlationId ?? null,
+          reason: "TENANT_STATUS_NOT_ALLOWED",
+          metadata: { status: t.status, outcome: "rejected" },
+        });
+        throw new ForbiddenException(`Tenant status ${t.status} is not operable`);
+      }
+
+      const mapped = this.mapTenant(t);
+      await this.audit.append({
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "PLATFORM_TENANT_ENTERED",
+        targetTenantId: tenantId,
+        entityType: "Tenant",
+        entityId: tenantId,
+        correlationId: correlationId ?? null,
+        metadata: {
+          tenantStatus: mapped.status,
+          tenantSuspended: mapped.status === TenantStatus.SUSPENDED,
+          modules: mapped.modules,
+        },
+      });
+
+      return {
+        ...mapped,
+        tenantSuspended: mapped.status === TenantStatus.SUSPENDED,
+        operable: true,
+      };
+    } catch (err) {
+      if (
+        err instanceof NotFoundException ||
+        err instanceof ForbiddenException ||
+        err instanceof BadRequestException
+      ) {
+        throw err;
+      }
+      await this.audit.append({
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "PLATFORM_TENANT_ENTER_FAILED",
+        targetTenantId: tenantId,
+        entityType: "Tenant",
+        entityId: tenantId,
+        correlationId: correlationId ?? null,
+        reason: "UNEXPECTED",
+        metadata: { outcome: "rejected" },
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * Phase 3: audit operational exit when the client reports it.
+   * Exit itself is client-local (clears selected tenant); this records the event.
+   */
+  async exitTenant(
+    tenantId: string,
+    actor: { platformAdminId: string; userId: string },
+    correlationId?: string | null,
+  ) {
+    await this.audit.append({
+      actorPlatformAdminId: actor.platformAdminId,
+      actorUserId: actor.userId,
+      action: "PLATFORM_TENANT_EXITED",
+      targetTenantId: tenantId,
+      entityType: "Tenant",
+      entityId: tenantId,
+      correlationId: correlationId ?? null,
+      metadata: { source: "client_reported" },
+    });
+    return { ok: true, tenantId };
+  }
+
   async createTenant(
     dto: CreatePlatformTenantDto,
     actor: { platformAdminId: string; userId: string },

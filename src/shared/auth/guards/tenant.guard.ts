@@ -16,20 +16,26 @@ import {
   type CachedTenantContext,
 } from "../tenant-context.cache";
 import {
+  AUTH_MODE,
   attachRequestContext,
   buildRequestContext,
+  readCorrelationId,
 } from "../request-context";
 
 /**
  * Resolves X-Tenant-Id into request.tenant for ordinary tenant APIs.
  *
- * Security notes (Platform Super Admin):
+ * Security notes (Platform Super Admin / Phase 3):
  * - Platform authority is PlatformAdmin ACTIVE (DB), with legacy SUPERADMIN bridge.
  * - SUPERADMIN is not a tenant Role.
  * - Never trust client-supplied role / isSuperadmin / isPlatformAdmin flags.
+ * - Never create a fake TenantMembership for Platform Admin.
+ * - Platform Admin on tenant-scoped routes MUST send X-Tenant-Id (no arbitrary tenant).
  * - SUSPENDED tenants: ordinary users blocked; Platform Admin allowed with
- *   tenantSuspended: true on request context.
- * - SETUP: Platform Admin may access for configuration; ordinary Active members allowed.
+ *   tenantSuspended: true + tenantStatus on request context.
+ * - SETUP / ACTIVE: Platform Admin may operate; ordinary Active members allowed.
+ * - ARCHIVED / unknown: rejected for operational routes.
+ * - Effective role for Platform Admin ops is always ADMIN (RoleGuard centralizes).
  */
 @Injectable()
 export class TenantGuard implements CanActivate {
@@ -50,6 +56,7 @@ export class TenantGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const tenantIdHeader = request.headers["x-tenant-id"];
     const user = request.user;
+    const correlationId = readCorrelationId(request.headers);
 
     if (!user || !user.userId) {
       throw new ForbiddenException("User must be authenticated first");
@@ -58,28 +65,17 @@ export class TenantGuard implements CanActivate {
     const isPlatformAdmin = await this.resolveIsPlatformAdmin(user);
 
     if (isPlatformAdmin) {
-      if (!tenantIdHeader) {
-        request.tenant = {
-          tenantId: null,
-          role: Role.ADMIN,
-          isSuperadmin: true,
-          isPlatformAdmin: true,
-          tenantSuspended: false,
-        };
-        this.attachCtx(request, user, null, false);
-        return true;
+      if (!tenantIdHeader || typeof tenantIdHeader !== "string") {
+        throw new BadRequestException(
+          "X-Tenant-Id header is required for tenant-scoped operations",
+        );
       }
 
       const cacheKey = tenantContextCacheKey(user.userId, tenantIdHeader);
       const cached = readTenantContextCache(cacheKey);
       if (cached) {
         request.tenant = cached;
-        this.attachCtx(
-          request,
-          user,
-          cached.tenantId,
-          cached.tenantSuspended === true,
-        );
+        this.attachCtx(request, user, cached, correlationId);
         return true;
       }
 
@@ -90,6 +86,20 @@ export class TenantGuard implements CanActivate {
         throw new BadRequestException("Tenant not found");
       }
 
+      const tenantStatus = (tenant as { status?: TenantStatus | string }).status;
+
+      // ARCHIVED: platform admin may still read/manage via /platform; ops routes blocked.
+      if (
+        tenantStatus === TenantStatus.ARCHIVED ||
+        tenantStatus === "ARCHIVED"
+      ) {
+        throw new ForbiddenException(
+          "Tenant is archived — use /platform APIs for management",
+        );
+      }
+
+      // Optional: if a membership exists and is Suspended, still allow platform
+      // ops (identity is PlatformAdmin, not membership). Do not invent membership.
       const membership = await this.prisma.tenantMembership.findFirst({
         where: {
           tenantId: tenantIdHeader,
@@ -97,32 +107,25 @@ export class TenantGuard implements CanActivate {
         },
         select: { role: true, status: true },
       });
-
-      if (membership?.status === MembershipStatus.Suspended) {
-        throw new ForbiddenException("Account suspended");
-      }
+      void membership; // intentionally unused — never synthetic membership
 
       const tenantSuspended =
-        (tenant as any).status === TenantStatus.SUSPENDED ||
-        (tenant as any).status === "SUSPENDED";
-
-      // ARCHIVED: platform admin may still read/manage via /platform; ops routes blocked.
-      if ((tenant as any).status === TenantStatus.ARCHIVED || (tenant as any).status === "ARCHIVED") {
-        throw new ForbiddenException(
-          "Tenant is archived — use /platform APIs for management",
-        );
-      }
+        tenantStatus === TenantStatus.SUSPENDED ||
+        tenantStatus === "SUSPENDED";
 
       const tenantContext: CachedTenantContext = {
         tenantId: tenantIdHeader,
-        role: membership?.role ?? Role.ADMIN,
+        // ADMIN-class for RoleGuard; not a persisted membership.
+        role: Role.ADMIN,
         isSuperadmin: true,
         isPlatformAdmin: true,
         tenantSuspended,
+        tenantStatus: tenantStatus ?? null,
+        authMode: AUTH_MODE.PLATFORM_TENANT_OPERATION,
       };
       writeTenantContextCache(cacheKey, tenantContext);
       request.tenant = tenantContext;
-      this.attachCtx(request, user, tenantIdHeader, tenantSuspended);
+      this.attachCtx(request, user, tenantContext, correlationId);
       return true;
     }
 
@@ -130,6 +133,8 @@ export class TenantGuard implements CanActivate {
       throw new BadRequestException("X-Tenant-Id header is required");
     }
 
+    // Ordinary users cannot override membership tenant via arbitrary header:
+    // membership lookup below enforces (tenantId, userId) pair.
     const cacheKey = tenantContextCacheKey(user.userId, tenantIdHeader);
     const cached = readTenantContextCache(cacheKey);
     if (cached) {
@@ -137,7 +142,7 @@ export class TenantGuard implements CanActivate {
         throw new ForbiddenException("Tenant is suspended");
       }
       request.tenant = cached;
-      this.attachCtx(request, user, cached.tenantId, false);
+      this.attachCtx(request, user, cached, correlationId);
       return true;
     }
 
@@ -161,10 +166,8 @@ export class TenantGuard implements CanActivate {
       );
     }
 
-    const tenantStatus = (membership.tenant as any)?.status as
-      | TenantStatus
-      | string
-      | undefined;
+    const tenantStatus = (membership.tenant as { status?: TenantStatus | string })
+      ?.status as TenantStatus | string | undefined;
 
     if (
       tenantStatus === TenantStatus.SUSPENDED ||
@@ -186,6 +189,8 @@ export class TenantGuard implements CanActivate {
       isSuperadmin: false,
       isPlatformAdmin: false,
       tenantSuspended: false,
+      tenantStatus: tenantStatus ?? null,
+      authMode: AUTH_MODE.MEMBERSHIP,
     };
 
     if (membership.role === Role.CUSTOMER) {
@@ -215,7 +220,7 @@ export class TenantGuard implements CanActivate {
 
     writeTenantContextCache(cacheKey, tenantContext);
     request.tenant = tenantContext;
-    this.attachCtx(request, user, tenantIdHeader, false);
+    this.attachCtx(request, user, tenantContext, correlationId);
     return true;
   }
 
@@ -256,9 +261,10 @@ export class TenantGuard implements CanActivate {
   private attachCtx(
     request: any,
     user: any,
-    tenantId: string | null,
-    tenantSuspended: boolean,
+    tenant: CachedTenantContext,
+    correlationId: string | null,
   ) {
+    const isPa = tenant.isPlatformAdmin === true;
     const ctx = buildRequestContext({
       userId: user.userId,
       authUserId: user.authUserId ?? "",
@@ -266,8 +272,12 @@ export class TenantGuard implements CanActivate {
       role: user.role ?? "USER",
       platformAdminId: user.platformAdminId ?? null,
       legacySuperadminAsPlatformAdmin: user.isSuperadmin === true,
-      tenantId,
-      tenantSuspended,
+      tenantId: tenant.tenantId,
+      tenantStatus: tenant.tenantStatus ?? null,
+      tenantSuspended: tenant.tenantSuspended === true,
+      correlationId,
+      platformTenantOperation: isPa && !!tenant.tenantId,
+      membershipRole: isPa ? null : tenant.role,
     });
     attachRequestContext(request, ctx);
   }

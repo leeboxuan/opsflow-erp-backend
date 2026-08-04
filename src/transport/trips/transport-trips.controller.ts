@@ -1,14 +1,19 @@
 import { Controller, Get, Param, Req, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
-import { Role } from "@prisma/client";
+import { Role, TenantModule } from "@prisma/client";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../../shared/auth/guards/module-entitlement.guard";
 import { TransportJobsService } from "../jobs/transport-jobs.service";
 
 @ApiTags("ops-trips")
 @Controller("trips")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
 @ApiBearerAuth("JWT-auth")
 export class TransportTripsController {

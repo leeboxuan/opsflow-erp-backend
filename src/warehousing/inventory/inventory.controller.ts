@@ -28,8 +28,12 @@ import { SearchUnitsQueryDto } from './dto/search-units-query.dto';
 import { ListItemsQueryDto, ListBatchesQueryDto, ListUnitsQueryDto } from './dto/list-query.dto';
 import { Patch } from '@nestjs/common';
 import { RoleGuard, Roles } from '../../shared/auth/guards/role.guard';
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from '../../shared/auth/guards/module-entitlement.guard';
 import { UpdateUnitStatusDto } from './dto/update-unit-status.dto';
-import { Role } from '@prisma/client';
+import { Role, TenantModule } from '@prisma/client';
 
 /** Allowed batch status filter (matches Prisma InventoryBatchStatus) */
 const BATCH_STATUS_VALUES = ['Draft', 'Open', 'Completed', 'Cancelled'] as const;
@@ -37,7 +41,8 @@ type BatchStatusQuery = (typeof BATCH_STATUS_VALUES)[number];
 
 @ApiTags('inventory')
 @Controller('inventory')
-@UseGuards(AuthGuard, TenantGuard)
+@UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.WAREHOUSING)
 @ApiBearerAuth('JWT-auth')
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) { }

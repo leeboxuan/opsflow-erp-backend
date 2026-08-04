@@ -73,6 +73,12 @@ export class PlatformAdminGuard implements CanActivate {
     // Keep TenantGuard compatibility during transition.
     user.isSuperadmin = true;
 
+    const headerTenant = request.headers?.["x-tenant-id"];
+    const tenantId =
+      typeof headerTenant === "string" && headerTenant.trim()
+        ? headerTenant.trim()
+        : null;
+
     const ctx = buildRequestContext({
       userId: user.userId,
       authUserId: user.authUserId ?? "",
@@ -80,7 +86,10 @@ export class PlatformAdminGuard implements CanActivate {
       role: user.role ?? "USER",
       platformAdminId,
       legacySuperadminAsPlatformAdmin: legacySuperadmin,
-      tenantId: request.headers?.["x-tenant-id"] ?? null,
+      // /platform/* stays PLATFORM_CONTROL even if a header is present;
+      // operational selection is established by TenantGuard on ops routes.
+      tenantId,
+      platformTenantOperation: false,
     });
 
     attachRequestContext(request, ctx);

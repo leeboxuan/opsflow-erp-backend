@@ -13,6 +13,11 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { AuthGuard } from "../../../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../../../shared/auth/guards/tenant.guard";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../../../shared/auth/guards/module-entitlement.guard";
+import { TenantModule } from "@prisma/client";
 import { AssignGpsDeviceChassisDto } from "./dto/assign-gps-device-chassis.dto";
 import { ChassisHistoryQueryDto } from "./dto/chassis-history-query.dto";
 import { CreateChassisDto } from "./dto/create-chassis.dto";
@@ -25,7 +30,8 @@ import { FleetTrackingService } from "./fleet-tracking.service";
 
 @ApiTags("fleet-tracking")
 @Controller("fleet-tracking")
-@UseGuards(AuthGuard, TenantGuard)
+@UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @ApiBearerAuth("JWT-auth")
 export class FleetTrackingController {
   constructor(private readonly fleetTracking: FleetTrackingService) {}

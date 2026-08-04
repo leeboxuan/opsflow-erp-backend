@@ -80,6 +80,40 @@ export class PlatformController {
     return this.platform.getTenant(tenantId);
   }
 
+  @Post("tenants/:tenantId/enter")
+  @ApiOperation({
+    summary:
+      "Validate and audit Platform Admin entry into a tenant for operational access (Phase 3)",
+  })
+  enterTenant(
+    @Param("tenantId") tenantId: string,
+    @Request() req: any,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.platform.enterTenant(
+      tenantId,
+      this.actor(req),
+      this.correlationId(headers),
+    );
+  }
+
+  @Post("tenants/:tenantId/exit")
+  @ApiOperation({
+    summary:
+      "Audit Platform Admin exit from tenant operation mode (client-local clear + server audit)",
+  })
+  exitTenant(
+    @Param("tenantId") tenantId: string,
+    @Request() req: any,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.platform.exitTenant(
+      tenantId,
+      this.actor(req),
+      this.correlationId(headers),
+    );
+  }
+
   @Patch("tenants/:tenantId")
   @ApiOperation({ summary: "Update tenant (slug immutable once users exist)" })
   updateTenant(

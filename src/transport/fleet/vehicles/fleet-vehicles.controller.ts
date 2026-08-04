@@ -13,6 +13,11 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { AuthGuard } from "../../../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../../../shared/auth/guards/tenant.guard";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../../../shared/auth/guards/module-entitlement.guard";
+import { TenantModule } from "@prisma/client";
 import { AssignFleetVehicleDriverDto } from "./dto/assign-fleet-vehicle-driver.dto";
 import { CreateFleetVehicleDto } from "./dto/create-fleet-vehicle.dto";
 import { ListFleetVehiclesQueryDto } from "./dto/list-fleet-vehicles.query.dto";
@@ -21,7 +26,8 @@ import { FleetVehiclesService } from "./fleet-vehicles.service";
 
 @ApiTags("fleet-vehicles")
 @Controller("fleet-vehicles")
-@UseGuards(AuthGuard, TenantGuard)
+@UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @ApiBearerAuth("JWT-auth")
 export class FleetVehiclesController {
   constructor(private readonly fleetVehiclesService: FleetVehiclesService) {}

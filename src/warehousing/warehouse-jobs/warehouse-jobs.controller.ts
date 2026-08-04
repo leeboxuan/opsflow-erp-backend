@@ -21,10 +21,14 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { Role, WarehouseJobDocumentType } from '@prisma/client';
+import { Role, WarehouseJobDocumentType, TenantModule } from '@prisma/client';
 import { AuthGuard } from '../../shared/auth/guards/auth.guard';
 import { TenantGuard } from '../../shared/auth/guards/tenant.guard';
 import { RoleGuard, Roles } from '../../shared/auth/guards/role.guard';
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from '../../shared/auth/guards/module-entitlement.guard';
 import { WarehouseJobsService } from './warehouse-jobs.service';
 import { WarehouseJobLinesService } from './warehouse-job-lines.service';
 import { WarehouseJobUnitsService } from './warehouse-job-units.service';
@@ -56,8 +60,9 @@ const FLOOR_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF, Role.WAREHOUSE];
 
 @ApiTags('warehouse-jobs')
 @Controller('warehouse-jobs')
-@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @Roles(...READ_ROLES)
+@RequiresTenantModule(TenantModule.WAREHOUSING)
 @ApiBearerAuth('JWT-auth')
 export class WarehouseJobsController {
   constructor(

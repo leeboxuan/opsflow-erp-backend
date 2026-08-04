@@ -1,4 +1,4 @@
-import { MembershipStatus, Role } from "@prisma/client";
+import { MembershipStatus, Role, TenantStatus } from "@prisma/client";
 
 /** Short TTL so suspension / company deactivation propagates quickly. */
 export const TENANT_CONTEXT_CACHE_TTL_MS = 45_000;
@@ -10,6 +10,13 @@ export type CachedTenantContext = {
   isPlatformAdmin?: boolean;
   /** True when Platform Admin entered a SUSPENDED tenant (ordinary users blocked). */
   tenantSuspended?: boolean;
+  /** Server-resolved tenant lifecycle status. */
+  tenantStatus?: TenantStatus | string | null;
+  /**
+   * Phase 3: PLATFORM_TENANT_OPERATION when Platform Admin has validated selection.
+   * Ordinary users always MEMBERSHIP.
+   */
+  authMode?: "MEMBERSHIP" | "PLATFORM_TENANT_OPERATION" | "PLATFORM_CONTROL";
   customerCompanyId?: string | null;
   customerContactId?: string | null;
 };

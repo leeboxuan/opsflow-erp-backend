@@ -16,7 +16,11 @@ import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from "@nestjs/swagger";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
 import { RoleGuard, Roles } from "@/shared/auth/guards/role.guard";
-import { Role } from "@prisma/client";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../../shared/auth/guards/module-entitlement.guard";
+import { Role, TenantModule } from "@prisma/client";
 import { InvoicesService } from "./invoices.service";
 import {
   CreateInvoiceDto,
@@ -29,7 +33,8 @@ import { FileInterceptor } from "@nestjs/platform-express";
 
 @ApiTags("Finance")
 @Controller("finance/invoices")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.FINANCE)
 @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER) // add Role.FINANCE later if you have it
 @ApiBearerAuth("JWT-auth")
 export class InvoicesController {

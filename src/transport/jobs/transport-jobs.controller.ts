@@ -29,7 +29,11 @@ import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
 import { RoleGuard } from "../../shared/auth/guards/role.guard";
 import { Roles } from "../../shared/auth/guards/role.guard";
-import { Role, JobType, TripPendingState } from "@prisma/client";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../../shared/auth/guards/module-entitlement.guard";
+import { Role, JobType, TripPendingState, TenantModule } from "@prisma/client";
 import { TransportJobsService } from "./transport-jobs.service";
 import { InvoicesService } from "../finance/invoices.service";
 import { CreateJobDto } from "./dto/create-job.dto";
@@ -57,7 +61,8 @@ import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
 
 @ApiTags("transport-jobs")
 @Controller("jobs")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@RequiresTenantModule(TenantModule.TRANSPORT)
 @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
 @ApiBearerAuth("JWT-auth")
 @ApiExtraModels(JobDocumentDto)
