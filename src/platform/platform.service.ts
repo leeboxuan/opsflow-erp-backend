@@ -6,7 +6,9 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import {
+  MembershipStatus,
   PlatformAdminStatus,
+  Role,
   TenantModule,
   TenantStatus,
   UserRole,
@@ -16,11 +18,16 @@ import { PlatformAuditService } from "./platform-audit.service";
 import {
   CreatePlatformAdminDto,
   CreatePlatformTenantDto,
+  CreatePlatformTenantUserDto,
   SetTenantModulesDto,
   UpdatePlatformAdminDto,
   UpdatePlatformTenantDto,
+  UpdatePlatformTenantUserDto,
 } from "./dto/platform.dto";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../shared/common/pagination";
+import { listTenantUsers } from "../admin/admin-users.list";
+import { TenantUserProvisioningService } from "../admin/tenant-user-provisioning.service";
+import type { PublicAdminUserDto } from "../admin/admin-users.mapper";
 
 const ALL_MODULES: TenantModule[] = [
   TenantModule.TRANSPORT,
@@ -28,11 +35,18 @@ const ALL_MODULES: TenantModule[] = [
   TenantModule.FINANCE,
 ];
 
+const MANAGEABLE_TENANT_STATUSES: TenantStatus[] = [
+  TenantStatus.ACTIVE,
+  TenantStatus.SETUP,
+  TenantStatus.SUSPENDED,
+];
+
 @Injectable()
 export class PlatformService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: PlatformAuditService,
+    private readonly tenantUsers: TenantUserProvisioningService,
   ) {}
 
   async getMe(platformAdminId: string, userId: string) {
@@ -161,13 +175,6 @@ export class PlatformService {
         where: { slug, NOT: { id: tenantId } },
       });
       if (clash) throw new ConflictException(`Tenant slug already exists: ${slug}`);
-    }
-
-    if (
-      dto.status === TenantStatus.SUSPENDED ||
-      dto.status === TenantStatus.ARCHIVED
-    ) {
-      // Prefer dedicated suspend/reactivate endpoints for audited lifecycle, but allow PATCH.
     }
 
     const updated = await this.prisma.tenant.update({
@@ -383,7 +390,6 @@ export class PlatformService {
       },
     });
 
-    // Keep legacy SUPERADMIN bridge for AuthService transition.
     if (user.role !== UserRole.SUPERADMIN) {
       await this.prisma.user.update({
         where: { id: user.id },
@@ -508,9 +514,265 @@ export class PlatformService {
     };
   }
 
+  // ─── Phase 2: tenant users ───────────────────────────────────────────
+
+  async listTenantUsers(
+    tenantId: string,
+    query: {
+      q?: string;
+      page?: string | number;
+      pageSize?: string | number;
+      filter?: string;
+      role?: Role;
+      roles?: string;
+      sortBy?: string;
+      sortDir?: "asc" | "desc";
+    },
+  ) {
+    await this.requireManageableTenant(tenantId);
+    return listTenantUsers(
+      this.prisma,
+      tenantId,
+      {
+        page: query.page !== undefined ? Number(query.page) : undefined,
+        pageSize:
+          query.pageSize !== undefined ? Number(query.pageSize) : undefined,
+        q: query.q,
+        filter: query.filter,
+        role: query.role,
+        roles: query.roles,
+        sortBy: query.sortBy,
+        sortDir: query.sortDir,
+      },
+      { excludeDriver: true },
+    );
+  }
+
+  async createTenantUser(
+    tenantId: string,
+    dto: CreatePlatformTenantUserDto,
+    actor: { platformAdminId: string; userId: string },
+    correlationId?: string | null,
+  ): Promise<PublicAdminUserDto> {
+    await this.requireManageableTenant(tenantId);
+
+    const safeMetaBase = {
+      role: dto.role,
+      hasUsername: Boolean(dto.username?.trim()),
+      hasEmail: Boolean(dto.email?.trim()),
+      name: dto.name,
+    };
+
+    try {
+      const created = await this.tenantUsers.createTenantUser(
+        tenantId,
+        {
+          email: dto.email,
+          username: dto.username,
+          name: dto.name,
+          phone: dto.phone,
+          role: dto.role,
+          password: dto.password,
+          sendInvite: false,
+          customerCompanyName: dto.customerCompanyName,
+          customerContactName: dto.customerContactName,
+          customerContactEmail: dto.customerContactEmail,
+        },
+        { mode: "platform-admin" },
+      );
+
+      await this.audit.append({
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "PLATFORM_TENANT_USER_CREATED",
+        targetTenantId: tenantId,
+        entityType: "TenantMembership",
+        entityId: created.membershipId,
+        correlationId: correlationId ?? null,
+        metadata: {
+          ...safeMetaBase,
+          userId: created.id,
+          membershipId: created.membershipId,
+          role: created.role,
+          status: created.status,
+        },
+      });
+
+      return created;
+    } catch (err) {
+      await this.audit.append({
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "PLATFORM_TENANT_USER_CREATE_FAILED",
+        targetTenantId: tenantId,
+        entityType: "TenantMembership",
+        entityId: null,
+        correlationId: correlationId ?? null,
+        reason: err instanceof Error ? err.message : "create failed",
+        metadata: safeMetaBase,
+      });
+      throw err;
+    }
+  }
+
+  async updateTenantUser(
+    tenantId: string,
+    userId: string,
+    dto: UpdatePlatformTenantUserDto,
+    actor: { platformAdminId: string; userId: string },
+    correlationId?: string | null,
+  ): Promise<PublicAdminUserDto> {
+    await this.requireManageableTenant(tenantId);
+
+    const before = await this.prisma.tenantMembership.findUnique({
+      where: { tenantId_userId: { tenantId, userId } },
+      select: { id: true, role: true, status: true },
+    });
+    if (!before) throw new NotFoundException("User not found in this tenant");
+
+    const updated = await this.tenantUsers.updateTenantUser(
+      tenantId,
+      userId,
+      {
+        name: dto.name,
+        phone: dto.phone,
+        role: dto.role,
+        status: dto.status,
+      },
+      { allowUsernameEdit: false },
+    );
+
+    const roleChanged =
+      dto.role !== undefined && before.role !== updated.role;
+    const deactivated =
+      dto.status === MembershipStatus.Suspended &&
+      before.status !== MembershipStatus.Suspended;
+    const reactivated =
+      dto.status === MembershipStatus.Active &&
+      before.status !== MembershipStatus.Active;
+
+    if (roleChanged) {
+      await this.audit.append({
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "PLATFORM_TENANT_USER_ROLE_CHANGED",
+        targetTenantId: tenantId,
+        entityType: "TenantMembership",
+        entityId: updated.membershipId,
+        correlationId: correlationId ?? null,
+        metadata: {
+          userId,
+          fromRole: before.role,
+          toRole: updated.role,
+        },
+      });
+    }
+
+    if (deactivated) {
+      await this.audit.append({
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "PLATFORM_TENANT_USER_DEACTIVATED",
+        targetTenantId: tenantId,
+        entityType: "TenantMembership",
+        entityId: updated.membershipId,
+        correlationId: correlationId ?? null,
+        metadata: { userId, status: updated.status },
+      });
+    } else if (reactivated) {
+      await this.audit.append({
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "PLATFORM_TENANT_USER_REACTIVATED",
+        targetTenantId: tenantId,
+        entityType: "TenantMembership",
+        entityId: updated.membershipId,
+        correlationId: correlationId ?? null,
+        metadata: { userId, status: updated.status },
+      });
+    }
+
+    await this.audit.append({
+      actorPlatformAdminId: actor.platformAdminId,
+      actorUserId: actor.userId,
+      action: "PLATFORM_TENANT_USER_UPDATED",
+      targetTenantId: tenantId,
+      entityType: "TenantMembership",
+      entityId: updated.membershipId,
+      correlationId: correlationId ?? null,
+      metadata: {
+        userId,
+        patch: {
+          name: dto.name !== undefined,
+          phone: dto.phone !== undefined,
+          role: dto.role,
+          status: dto.status,
+        },
+      },
+    });
+
+    return updated;
+  }
+
+  async resetTenantUserPassword(
+    tenantId: string,
+    userId: string,
+    password: string,
+    actor: { platformAdminId: string; userId: string },
+    correlationId?: string | null,
+  ): Promise<{ ok: true }> {
+    await this.requireManageableTenant(tenantId);
+
+    try {
+      const result = await this.tenantUsers.resetTenantUserPassword(
+        tenantId,
+        userId,
+        password,
+        { allowOfficeReset: true },
+      );
+
+      await this.audit.append({
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "PLATFORM_TENANT_USER_PASSWORD_RESET",
+        targetTenantId: tenantId,
+        entityType: "User",
+        entityId: userId,
+        correlationId: correlationId ?? null,
+        metadata: { userId, passwordReset: true },
+      });
+
+      return result;
+    } catch (err) {
+      await this.audit.append({
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "PLATFORM_TENANT_USER_PASSWORD_RESET_FAILED",
+        targetTenantId: tenantId,
+        entityType: "User",
+        entityId: userId,
+        correlationId: correlationId ?? null,
+        reason: err instanceof Error ? err.message : "reset failed",
+        metadata: { userId },
+      });
+      throw err;
+    }
+  }
+
   private async requireTenant(tenantId: string) {
     const t = await this.prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!t) throw new NotFoundException("Tenant not found");
+    return t;
+  }
+
+  /** Platform Admin may manage users in ACTIVE, SETUP, or SUSPENDED tenants. */
+  private async requireManageableTenant(tenantId: string) {
+    const t = await this.requireTenant(tenantId);
+    if (!MANAGEABLE_TENANT_STATUSES.includes(t.status)) {
+      throw new BadRequestException(
+        `Cannot manage users for tenant status ${t.status}`,
+      );
+    }
     return t;
   }
 

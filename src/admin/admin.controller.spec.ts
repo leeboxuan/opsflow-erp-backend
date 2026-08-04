@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { MembershipStatus, Role } from '@prisma/client';
 import { AdminController } from './admin.controller';
+import { TenantUserProvisioningService } from './tenant-user-provisioning.service';
 
 describe('AdminController users', () => {
   function makeController() {
@@ -48,6 +49,7 @@ describe('AdminController users', () => {
         delete: jest.fn(),
       },
       user: {
+        findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn(),
         update: jest.fn(),
       },
@@ -68,15 +70,22 @@ describe('AdminController users', () => {
               error: null,
             }),
             updateUserById: jest.fn().mockResolvedValue({ error: null }),
+            deleteUser: jest.fn().mockResolvedValue({ error: null }),
           },
         },
       }),
     };
 
+    const tenantUsers = new TenantUserProvisioningService(
+      prisma,
+      supabaseService,
+    );
+
     const controller = new AdminController(
       prisma,
       {} as any,
       supabaseService,
+      tenantUsers,
     );
 
     return { controller, prisma, supabaseService };

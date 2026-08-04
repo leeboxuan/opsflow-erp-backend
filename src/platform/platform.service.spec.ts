@@ -56,9 +56,16 @@ describe("PlatformService", () => {
       redactMetadata: jest.fn((m) => m),
     };
 
+    const tenantUsers = {
+      createTenantUser: jest.fn(),
+      updateTenantUser: jest.fn(),
+      resetTenantUserPassword: jest.fn(),
+    };
+
     service = new PlatformService(
       prisma,
       audit as unknown as PlatformAuditService,
+      tenantUsers as any,
     );
   });
 

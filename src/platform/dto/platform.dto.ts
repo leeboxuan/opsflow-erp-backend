@@ -7,9 +7,15 @@ import {
   Matches,
   MaxLength,
   MinLength,
+  ValidateIf,
 } from "class-validator";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { TenantModule, TenantStatus } from "@prisma/client";
+import {
+  MembershipStatus,
+  Role,
+  TenantModule,
+  TenantStatus,
+} from "@prisma/client";
 
 export class CreatePlatformTenantDto {
   @ApiProperty()
@@ -161,4 +167,110 @@ export class TenantModuleEntryDto {
 
   @IsBoolean()
   enabled!: boolean;
+}
+
+/** Platform Admin creates tenant colleagues with an initial password (no invite). */
+export class CreatePlatformTenantUserDto {
+  @ValidateIf((o: CreatePlatformTenantUserDto) => !o.username)
+  @IsString()
+  @MinLength(3)
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  username?: string;
+
+  @IsString()
+  @MinLength(1, { message: "name is required" })
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
+  @IsEnum(Role, {
+    message:
+      "role must be ADMIN, TRANSPORT_STAFF, FINANCE, WAREHOUSE, or CUSTOMER",
+  })
+  role!: Role;
+
+  /** Required. Never logged, audited, or returned. */
+  @IsString()
+  @MinLength(8, { message: "Password must be at least 8 characters" })
+  password!: string;
+
+  @IsOptional()
+  @IsString()
+  customerCompanyName?: string;
+
+  @IsOptional()
+  @IsString()
+  customerContactName?: string;
+
+  @IsOptional()
+  @IsString()
+  customerContactEmail?: string;
+}
+
+export class UpdatePlatformTenantUserDto {
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  phone?: string | null;
+
+  @IsOptional()
+  @IsEnum(Role, {
+    message:
+      "role must be ADMIN, TRANSPORT_STAFF, FINANCE, WAREHOUSE, or CUSTOMER",
+  })
+  role?: Role;
+
+  @IsOptional()
+  @IsEnum(MembershipStatus)
+  status?: MembershipStatus;
+}
+
+export class ResetPlatformTenantUserPasswordDto {
+  @ApiProperty({ minLength: 8 })
+  @IsString()
+  @MinLength(8, { message: "Password must be at least 8 characters" })
+  password!: string;
+}
+
+export class PlatformTenantUsersQueryDto {
+  @IsOptional()
+  @IsString()
+  page?: string;
+
+  @IsOptional()
+  @IsString()
+  pageSize?: string;
+
+  @IsOptional()
+  @IsString()
+  q?: string;
+
+  @IsOptional()
+  @IsString()
+  filter?: string;
+
+  @IsOptional()
+  @IsEnum(Role)
+  role?: Role;
+
+  @IsOptional()
+  @IsString()
+  roles?: string;
+
+  @IsOptional()
+  @IsString()
+  sortBy?: string;
+
+  @IsOptional()
+  @IsString()
+  sortDir?: "asc" | "desc";
 }

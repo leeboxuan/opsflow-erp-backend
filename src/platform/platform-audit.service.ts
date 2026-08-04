@@ -10,6 +10,14 @@ export type PlatformAuditAction =
   | "PLATFORM_ADMIN_CREATE"
   | "PLATFORM_ADMIN_DISABLE"
   | "PLATFORM_ADMIN_ENABLE"
+  | "PLATFORM_TENANT_USER_CREATED"
+  | "PLATFORM_TENANT_USER_UPDATED"
+  | "PLATFORM_TENANT_USER_DEACTIVATED"
+  | "PLATFORM_TENANT_USER_REACTIVATED"
+  | "PLATFORM_TENANT_USER_ROLE_CHANGED"
+  | "PLATFORM_TENANT_USER_PASSWORD_RESET"
+  | "PLATFORM_TENANT_USER_CREATE_FAILED"
+  | "PLATFORM_TENANT_USER_PASSWORD_RESET_FAILED"
   | string;
 
 /**
@@ -54,15 +62,28 @@ export class PlatformAuditService {
   redactMetadata(
     metadata: Record<string, unknown>,
   ): Record<string, unknown> {
-    const out: Record<string, unknown> = {};
-    const forbidden = /password|secret|token|authorization|api[_-]?key/i;
-    for (const [k, v] of Object.entries(metadata)) {
-      if (forbidden.test(k)) {
-        out[k] = "[REDACTED]";
-      } else {
-        out[k] = v;
-      }
+    return this.redactValue(metadata) as Record<string, unknown>;
+  }
+
+  private redactValue(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((v) => this.redactValue(v));
     }
-    return out;
+    if (value && typeof value === "object") {
+      const out: Record<string, unknown> = {};
+      const forbidden = /password|secret|token|authorization|api[_-]?key/i;
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        if (forbidden.test(k)) {
+          out[k] = "[REDACTED]";
+        } else {
+          out[k] = this.redactValue(v);
+        }
+      }
+      return out;
+    }
+    if (typeof value === "string" && value.toLowerCase().includes("@auth.opsflow.app")) {
+      return "[REDACTED_INTERNAL_EMAIL]";
+    }
+    return value;
   }
 }

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
@@ -17,11 +18,15 @@ import { PlatformService } from "./platform.service";
 import {
   CreatePlatformAdminDto,
   CreatePlatformTenantDto,
+  CreatePlatformTenantUserDto,
   PlatformAuditQueryDto,
+  PlatformTenantUsersQueryDto,
+  ResetPlatformTenantUserPasswordDto,
   SetTenantModulesDto,
   SuspendTenantDto,
   UpdatePlatformAdminDto,
   UpdatePlatformTenantDto,
+  UpdatePlatformTenantUserDto,
 } from "./dto/platform.dto";
 
 @ApiTags("platform")
@@ -36,6 +41,17 @@ export class PlatformController {
       platformAdminId: req.user.platformAdminId,
       userId: req.user.userId,
     };
+  }
+
+  private correlationId(
+    headers: Record<string, string | string[] | undefined>,
+  ): string | null {
+    const raw =
+      headers["x-request-id"] ??
+      headers["x-correlation-id"] ??
+      headers["x-idempotency-key"];
+    if (Array.isArray(raw)) return raw[0] ?? null;
+    return typeof raw === "string" && raw.trim() ? raw.trim() : null;
   }
 
   @Get("me")
@@ -115,6 +131,76 @@ export class PlatformController {
     @Request() req: any,
   ) {
     return this.platform.setModules(tenantId, dto, this.actor(req));
+  }
+
+  @Get("tenants/:tenantId/users")
+  @ApiOperation({ summary: "List tenant users (platform; excludes DRIVER)" })
+  listTenantUsers(
+    @Param("tenantId") tenantId: string,
+    @Query() query: PlatformTenantUsersQueryDto,
+  ) {
+    return this.platform.listTenantUsers(tenantId, query);
+  }
+
+  @Post("tenants/:tenantId/users")
+  @ApiOperation({
+    summary:
+      "Create tenant user with initial password (platform; no invite path)",
+  })
+  createTenantUser(
+    @Param("tenantId") tenantId: string,
+    @Body() dto: CreatePlatformTenantUserDto,
+    @Request() req: any,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.platform.createTenantUser(
+      tenantId,
+      dto,
+      this.actor(req),
+      this.correlationId(headers),
+    );
+  }
+
+  @Patch("tenants/:tenantId/users/:userId")
+  @ApiOperation({
+    summary:
+      "Update tenant user (name/phone/role/status; no username; no hard delete)",
+  })
+  updateTenantUser(
+    @Param("tenantId") tenantId: string,
+    @Param("userId") userId: string,
+    @Body() dto: UpdatePlatformTenantUserDto,
+    @Request() req: any,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.platform.updateTenantUser(
+      tenantId,
+      userId,
+      dto,
+      this.actor(req),
+      this.correlationId(headers),
+    );
+  }
+
+  @Post("tenants/:tenantId/users/:userId/reset-password")
+  @ApiOperation({
+    summary:
+      "Reset tenant user password via Supabase (platform; warehouse + office)",
+  })
+  resetTenantUserPassword(
+    @Param("tenantId") tenantId: string,
+    @Param("userId") userId: string,
+    @Body() dto: ResetPlatformTenantUserPasswordDto,
+    @Request() req: any,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    return this.platform.resetTenantUserPassword(
+      tenantId,
+      userId,
+      dto.password,
+      this.actor(req),
+      this.correlationId(headers),
+    );
   }
 
   @Get("admins")
