@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { JobStatus, InventoryUnitStatus, OrderStatus, TripStatus } from "@prisma/client";
+import { JobStatus, InventoryUnitStatus, OrderStatus, Prisma, TripStatus } from "@prisma/client";
 import { PrismaService } from "../shared/prisma/prisma.service";
 import {
   INVOICED_INVOICE_STATUSES,
@@ -32,9 +32,8 @@ export class DashboardService {
     const [
       jobTotal,
       jobByStatusRaw,
-      readyJobs,
       readyForInvoiceBroadCount,
-      invoicedForJobs,
+      readyForInvoiceNotInvoiced,
       orderTotal,
       orderByStatusRaw,
       tripTotal,
@@ -52,10 +51,6 @@ export class DashboardService {
         where: { tenantId },
         _count: { _all: true },
       }),
-      this.prisma.job.findMany({
-        where: { tenantId, status: JobStatus.READY_FOR_INVOICE },
-        select: { id: true },
-      }),
       this.prisma.job.count({
         where: {
           tenantId,
@@ -66,14 +61,24 @@ export class DashboardService {
           ],
         },
       }),
-      this.prisma.invoice.findMany({
-        where: {
-          tenantId,
-          sourceJobId: { not: null },
-          status: { in: [...INVOICED_INVOICE_STATUSES] },
-        },
-        select: { sourceJobId: true },
-      }),
+      // Count READY_FOR_INVOICE jobs with no Sent/Issued/Paid invoice (same math as ID-set subtract)
+      this.prisma
+        .$queryRaw(
+          Prisma.sql`
+        SELECT COUNT(*)::bigint AS count
+        FROM "jobs" j
+        WHERE j."tenantId" = ${tenantId}
+          AND j."status"::text = ${JobStatus.READY_FOR_INVOICE}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "invoices" i
+            WHERE i."tenantId" = ${tenantId}
+              AND i."sourceJobId" = j."id"
+              AND i."status" IN (${Prisma.join([...INVOICED_INVOICE_STATUSES])})
+          )
+      `,
+        )
+        .then((rows: Array<{ count: bigint }>) => Number(rows[0]?.count ?? 0n)),
       this.prisma.transportOrder.count({ where: { tenantId } }),
       this.prisma.transportOrder.groupBy({
         by: ["status"],
@@ -133,8 +138,7 @@ export class DashboardService {
     const jobs = buildDashboardJobMetrics({
       total: jobTotal,
       byStatus: jobByStatus,
-      readyJobIds: readyJobs.map((j) => j.id),
-      invoicedSourceJobIds: invoicedForJobs.map((i) => i.sourceJobId),
+      readyForInvoiceNotInvoiced,
       readyForInvoiceBroadCount,
     });
 

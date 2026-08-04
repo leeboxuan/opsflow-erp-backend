@@ -306,6 +306,24 @@ export class InvoicesService {
       orderBy: [{ updatedAt: "desc" }],
     });
 
+    const jobIds = jobs.map((j) => j.id);
+    const latestInvoiceByJobId = new Map<
+      string,
+      { id: string; status: string; sourceJobId: string | null }
+    >();
+    if (jobIds.length) {
+      const invoices = await this.prisma.invoice.findMany({
+        where: { tenantId, sourceJobId: { in: jobIds } },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, status: true, sourceJobId: true },
+      });
+      for (const inv of invoices) {
+        const sourceJobId = inv.sourceJobId;
+        if (!sourceJobId || latestInvoiceByJobId.has(sourceJobId)) continue;
+        latestInvoiceByJobId.set(sourceJobId, inv);
+      }
+    }
+
     const items: any[] = [];
     for (const job of jobs) {
       const readiness = evaluateJobInvoiceReadiness(
@@ -313,11 +331,7 @@ export class InvoicesService {
       );
       if (!readiness.readyForInvoice) continue;
 
-      const existingInvoice = await this.prisma.invoice.findFirst({
-        where: { tenantId, sourceJobId: job.id },
-        orderBy: { createdAt: "desc" },
-        select: { id: true, status: true },
-      });
+      const existingInvoice = latestInvoiceByJobId.get(job.id) ?? null;
       if (existingInvoice && !["Draft"].includes(existingInvoice.status)) {
         continue;
       }
@@ -677,14 +691,16 @@ export class InvoicesService {
         }),
       ]);
 
-      const data = await Promise.all(
-        invoices.map((inv) => this.toDtoWithNames(inv)),
-      );
+      // Keep lineItems in list DTOs (required by InvoiceDto / edit flows).
+      // Batch confirmer/issuer user lookups for the page instead of N queries.
+      const data = await this.toDtosWithNames(invoices);
       return { data, meta: buildPaginationMeta(page, pageSize, total) };
     }
 
     // CUSTOMER visibility is company-scoped and derived from invoice orders
     // and/or draft snapshot.orderIds (for unlinked draft scenarios).
+    // Name-fallback membership means we cannot safely tighten SQL by
+    // customerCompanyId alone without changing visibility.
     const customerCandidates = await this.prisma.invoice.findMany({
       where,
       orderBy,
@@ -694,19 +710,15 @@ export class InvoicesService {
       },
     });
 
-    const visible: any[] = [];
-    for (const inv of customerCandidates) {
-      const allowed = await this.invoiceBelongsToCustomerCompany(
-        tenantId,
-        inv,
-        customerCompanyId as string,
-      );
-      if (allowed) visible.push(inv);
-    }
+    const visible = await this.filterInvoicesBelongingToCustomerCompany(
+      tenantId,
+      customerCandidates,
+      customerCompanyId as string,
+    );
 
     const total = visible.length;
     const pageItems = visible.slice(skip, skip + take);
-    const data = await Promise.all(pageItems.map((inv) => this.toDtoWithNames(inv)));
+    const data = await this.toDtosWithNames(pageItems);
     return { data, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
@@ -877,22 +889,22 @@ export class InvoicesService {
     return `${prefix}${seqStr}`;
   }
 
-  private async toDtoWithNames(
-    inv: any,
-    fallbackOrderIds?: string[],
-  ): Promise<InvoiceDto> {
-    const snap = inv.snapshot as any;
-    const meta = extractDraftMeta(snap);
+  private async toDtosWithNames(
+    invoices: any[],
+    fallbackOrderIdsByInvoiceId?: Map<string, string[]>,
+  ): Promise<InvoiceDto[]> {
+    if (!invoices.length) return [];
 
-    const confirmedByUserId = meta.confirmedByUserId;
-    const markedAsSentByUserId = inv.issuedByUserId ?? null;
+    const userIds = new Set<string>();
+    for (const inv of invoices) {
+      const meta = extractDraftMeta(inv.snapshot);
+      if (meta.confirmedByUserId) userIds.add(meta.confirmedByUserId);
+      if (inv.issuedByUserId) userIds.add(inv.issuedByUserId);
+    }
 
-    const userIds = [confirmedByUserId, markedAsSentByUserId].filter(
-      Boolean,
-    ) as string[];
-    const users = userIds.length
+    const users = userIds.size
       ? await this.prisma.user.findMany({
-          where: { id: { in: userIds } },
+          where: { id: { in: [...userIds] } },
           select: { id: true, name: true, email: true },
         })
       : [];
@@ -900,6 +912,39 @@ export class InvoicesService {
     const nameById = new Map<string, string>(
       users.map((u) => [u.id, u.name ?? u.email ?? u.id]),
     );
+
+    return invoices.map((inv) =>
+      this.toDtoWithNamesSync(
+        inv,
+        nameById,
+        fallbackOrderIdsByInvoiceId?.get(inv.id),
+      ),
+    );
+  }
+
+  private async toDtoWithNames(
+    inv: any,
+    fallbackOrderIds?: string[],
+  ): Promise<InvoiceDto> {
+    const [dto] = await this.toDtosWithNames(
+      [inv],
+      fallbackOrderIds
+        ? new Map([[inv.id, fallbackOrderIds]])
+        : undefined,
+    );
+    return dto;
+  }
+
+  private toDtoWithNamesSync(
+    inv: any,
+    nameById: Map<string, string>,
+    fallbackOrderIds?: string[],
+  ): InvoiceDto {
+    const snap = inv.snapshot as any;
+    const meta = extractDraftMeta(snap);
+
+    const confirmedByUserId = meta.confirmedByUserId;
+    const markedAsSentByUserId = inv.issuedByUserId ?? null;
 
     const orderIds = inv.orders?.length
       ? inv.orders.map((o: any) => o.id)
@@ -922,7 +967,7 @@ export class InvoicesService {
       subtotalCents: inv.subtotalCents,
       taxCents: inv.taxCents,
       totalCents: inv.totalCents,
-      lineItems: inv.lineItems.map((l: any) => ({
+      lineItems: (inv.lineItems ?? []).map((l: any) => ({
         id: l.id,
         description: l.description,
         qty: l.qty,
@@ -2124,46 +2169,96 @@ export class InvoicesService {
     inv: any,
     customerCompanyId: string,
   ): Promise<boolean> {
-    const linkedMatches =
-      inv?.orders?.some(
-        (o: any) => o?.customerCompanyId === customerCompanyId,
-      ) ?? false;
-    if (linkedMatches) return true;
+    const [allowed] = await this.filterInvoicesBelongingToCustomerCompany(
+      tenantId,
+      [inv],
+      customerCompanyId,
+    );
+    return !!allowed;
+  }
 
-    const snap = inv?.snapshot as any;
-    const snapshotOrderIds = Array.isArray(snap?.orderIds)
-      ? (snap.orderIds as string[])
-      : [];
+  /**
+   * Batch membership checks for company-scoped invoice visibility.
+   * Preserves the same rules as the prior per-invoice path:
+   * linked orders → snapshot.orderIds → customerName normalized match.
+   */
+  private async filterInvoicesBelongingToCustomerCompany(
+    tenantId: string,
+    invoices: any[],
+    customerCompanyId: string,
+  ): Promise<any[]> {
+    if (!invoices.length) return [];
 
-    if (snapshotOrderIds.length) {
-      const order = await this.prisma.transportOrder.findFirst({
+    const linkedOk: any[] = [];
+    const needFurtherCheck: any[] = [];
+
+    for (const inv of invoices) {
+      const linkedMatches =
+        inv?.orders?.some(
+          (o: any) => o?.customerCompanyId === customerCompanyId,
+        ) ?? false;
+      if (linkedMatches) {
+        linkedOk.push(inv);
+      } else {
+        needFurtherCheck.push(inv);
+      }
+    }
+
+    if (!needFurtherCheck.length) return linkedOk;
+
+    const allSnapshotOrderIds = new Set<string>();
+    for (const inv of needFurtherCheck) {
+      const snap = inv?.snapshot as any;
+      const snapshotOrderIds = Array.isArray(snap?.orderIds)
+        ? (snap.orderIds as string[])
+        : [];
+      for (const id of snapshotOrderIds) {
+        const trimmed = String(id ?? "").trim();
+        if (trimmed) allSnapshotOrderIds.add(trimmed);
+      }
+    }
+
+    const matchingOrderIds = new Set<string>();
+    if (allSnapshotOrderIds.size) {
+      const orders = await this.prisma.transportOrder.findMany({
         where: {
           tenantId,
-          id: { in: snapshotOrderIds },
+          id: { in: [...allSnapshotOrderIds] },
           customerCompanyId,
         },
         select: { id: true },
       });
-      if (order) return true;
+      for (const order of orders) matchingOrderIds.add(order.id);
     }
 
-    // Fallback: match by invoice.customerName against the tenant-scoped
-    // customer company. This is important for invoices that have PDFs but
-    // may be missing linked orders/snapshot.orderIds.
-    const normalizedInvoiceCustomerName = normalizeCustomerCompanyName(
-      inv?.customerName,
-    );
-    if (!normalizedInvoiceCustomerName) return false;
-
     const company = await this.prisma.customer_companies.findFirst({
-      where: {
-        tenantId,
-        normalizedName: normalizedInvoiceCustomerName,
-      },
-      select: { id: true },
+      where: { id: customerCompanyId, tenantId },
+      select: { id: true, normalizedName: true },
     });
 
-    return company?.id === customerCompanyId;
+    const visible = [...linkedOk];
+    for (const inv of needFurtherCheck) {
+      const snap = inv?.snapshot as any;
+      const snapshotOrderIds = Array.isArray(snap?.orderIds)
+        ? (snap.orderIds as string[])
+        : [];
+      if (snapshotOrderIds.some((id) => matchingOrderIds.has(String(id)))) {
+        visible.push(inv);
+        continue;
+      }
+
+      const normalizedInvoiceCustomerName = normalizeCustomerCompanyName(
+        inv?.customerName,
+      );
+      if (
+        normalizedInvoiceCustomerName &&
+        company?.normalizedName === normalizedInvoiceCustomerName
+      ) {
+        visible.push(inv);
+      }
+    }
+
+    return visible;
   }
 
   private async invoicePdfExists(pdfKey: string): Promise<boolean> {
@@ -2202,7 +2297,7 @@ export class InvoicesService {
       where: this.buildPortalInvoiceWhere({
         tenantId,
         customerCompanyId,
-        // "PDF exists" is enforced by invoicePdfExists() below.
+        // Prefer pdfKey presence for list hasPdf; download still verifies storage.
         // Do not rely on pdfGeneratedAt (older data might have null metadata).
         requireGeneratedAt: false,
       }),
@@ -2221,18 +2316,19 @@ export class InvoicesService {
       },
     });
 
-    const results: PortalInvoiceDto[] = [];
-    for (const inv of invoices as any[]) {
-      if (customerCompanyId) {
-        const allowed = await this.invoiceBelongsToCustomerCompany(
+    const candidates = customerCompanyId
+      ? await this.filterInvoicesBelongingToCustomerCompany(
           tenantId,
-          inv,
+          invoices as any[],
           customerCompanyId,
-        );
-        if (!allowed) continue;
-      }
+        )
+      : (invoices as any[]);
 
-      const hasPdf = await this.invoicePdfExists(inv.pdfKey);
+    const results: PortalInvoiceDto[] = [];
+    for (const inv of candidates) {
+      // List path: treat stored pdfKey as hasPdf without sequential signed-URL probes.
+      // Download endpoint still verifies the object exists in storage.
+      const hasPdf = Boolean(inv.pdfKey);
       if (!hasPdf) continue;
 
       const resolvedCustomerCompanyName =

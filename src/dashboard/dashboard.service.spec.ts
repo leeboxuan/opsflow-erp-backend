@@ -15,14 +15,8 @@ describe("DashboardService.getSummary", () => {
           { status: JobStatus.COMPLETED, _count: { _all: 2 } },
           { status: JobStatus.CANCELLED, _count: { _all: 1 } },
         ]),
-        findMany: jest.fn().mockResolvedValue([
-          { id: "job-ready-1" },
-          { id: "job-ready-2" },
-        ]),
       },
-      invoice: {
-        findMany: jest.fn().mockResolvedValue([{ sourceJobId: "job-ready-1" }]),
-      },
+      $queryRaw: jest.fn().mockResolvedValue([{ count: 1n }]),
       transportOrder: {
         count: jest.fn().mockResolvedValue(0),
         groupBy: jest.fn().mockResolvedValue([]),
@@ -58,14 +52,7 @@ describe("DashboardService.getSummary", () => {
       },
     });
     expect(summary.orders.awaitingInvoice).toBe(1);
-    expect(prisma.invoice.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          tenantId: "tenant-1",
-          sourceJobId: { not: null },
-          status: { in: ["Sent", "Issued", "Paid"] },
-        }),
-      }),
-    );
+    expect(prisma.job.findMany).toBeUndefined();
+    expect(prisma.$queryRaw).toHaveBeenCalled();
   });
 });

@@ -184,7 +184,7 @@ describe("InvoicesService Wisdom Force flow", () => {
   });
 
   it("lists invoiceable jobs for company and excludes cancelled/not-ready/generated", async () => {
-    const { svc } = makeService({
+    const { svc, prisma } = makeService({
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "c1" }),
       },
@@ -220,10 +220,9 @@ describe("InvoicesService Wisdom Force flow", () => {
         ]),
       },
       invoice: {
-        findFirst: jest
-          .fn()
-          .mockResolvedValueOnce({ id: "inv-issued", status: "Issued" }) // for job-ready -> excluded
-          .mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([
+          { id: "inv-issued", status: "Issued", sourceJobId: "job-ready" },
+        ]),
       },
     });
     const res = await svc.listInvoiceableJobsByCompany("t1", "c1", {
@@ -231,6 +230,127 @@ describe("InvoicesService Wisdom Force flow", () => {
       role: "OPS",
     });
     expect(res.items).toEqual([]);
+    expect(prisma.invoice.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          tenantId: "t1",
+          sourceJobId: { in: ["job-ready", "job-cancelled", "job-not-ready"] },
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, status: true, sourceJobId: true },
+      }),
+    );
+    expect(prisma.invoice.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("excludes invoiceable jobs that already have a non-draft invoice", async () => {
+    const { svc } = makeService({
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1" }),
+      },
+      job: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "job-sent",
+            internalRef: "WFL-SENT",
+            externalRef: "REF-S",
+            jobType: "LCL",
+            status: "READY_FOR_INVOICE",
+            invoiceReadyAt: new Date("2026-05-01T00:00:00.000Z"),
+            trips: [{ id: "t1", status: "DONE" }],
+          },
+        ]),
+      },
+      invoice: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "inv-sent", status: "Sent", sourceJobId: "job-sent" },
+        ]),
+      },
+    });
+    const res = await svc.listInvoiceableJobsByCompany("t1", "c1", {
+      userId: "u1",
+      role: "OPS",
+    });
+    expect(res.items).toEqual([]);
+  });
+
+  it("includes invoiceable jobs that only have a draft existing invoice", async () => {
+    const { svc } = makeService({
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1" }),
+      },
+      job: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "job-draft",
+            internalRef: "WFL-DRAFT",
+            externalRef: "REF-D",
+            jobType: "LCL",
+            status: "READY_FOR_INVOICE",
+            invoiceReadyAt: new Date("2026-05-01T00:00:00.000Z"),
+            trips: [{ id: "t1", status: "DONE" }],
+          },
+        ]),
+      },
+      invoice: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "inv-draft", status: "Draft", sourceJobId: "job-draft" },
+        ]),
+      },
+    });
+    const res = await svc.listInvoiceableJobsByCompany("t1", "c1", {
+      userId: "u1",
+      role: "OPS",
+    });
+    expect(res.items).toEqual([
+      expect.objectContaining({
+        id: "job-draft",
+        internalJobReference: "WFL-DRAFT",
+        customerReference: "REF-D",
+        jobType: "LCL",
+        status: "READY_FOR_INVOICE",
+        tripCount: 1,
+        completedTripCount: 1,
+        billableTripCount: 1,
+        existingInvoiceId: "inv-draft",
+        existingInvoiceStatus: "Draft",
+        label: "WFL-DRAFT · REF-D · LCL",
+      }),
+    ]);
+  });
+
+  it("returns empty invoiceable jobs when company has no jobs", async () => {
+    const { svc, prisma } = makeService({
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1" }),
+      },
+      job: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      invoice: {
+        findMany: jest.fn(),
+      },
+    });
+    const res = await svc.listInvoiceableJobsByCompany("t1", "c1", {
+      userId: "u1",
+      role: "OPS",
+    });
+    expect(res.items).toEqual([]);
+    expect(prisma.invoice.findMany).not.toHaveBeenCalled();
+  });
+
+  it("rejects invoiceable jobs when tenant company is not found", async () => {
+    const { svc } = makeService({
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    });
+    await expect(
+      svc.listInvoiceableJobsByCompany("t1", "missing-company", {
+        userId: "u1",
+        role: "OPS",
+      }),
+    ).rejects.toThrow("Customer company not found");
   });
 
   it("invoiceable jobs returns billableTripCount", async () => {
@@ -256,7 +376,7 @@ describe("InvoicesService Wisdom Force flow", () => {
         ]),
       },
       invoice: {
-        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
       },
     });
     const res = await svc.listInvoiceableJobsByCompany("t1", "c1", {

@@ -351,6 +351,9 @@ describe("DispatchService", () => {
   });
 
   it("board trip exposes trailer photo urls plus filename metadata without storage keys", async () => {
+    const createSignedUrl = jest
+      .fn()
+      .mockResolvedValue({ data: { signedUrl: "https://signed/start" } });
     const prisma: any = {
       tenantMembership: {
         findMany: jest.fn().mockResolvedValue([
@@ -417,17 +420,18 @@ describe("DispatchService", () => {
     const supabaseService = {
       getClient: jest.fn().mockReturnValue({
         storage: {
-          from: jest.fn().mockReturnValue({
-            createSignedUrl: jest
-              .fn()
-              .mockResolvedValue({ data: { signedUrl: "https://signed/start" } }),
-          }),
+          from: jest.fn().mockReturnValue({ createSignedUrl }),
         },
       }),
     } as any;
     const svc = new DispatchService(prisma, supabaseService);
     const res = await svc.getBoard("tenant-1", "2026-04-30");
     const trip = res.drivers[0].activeTrip;
+    expect(createSignedUrl).toHaveBeenCalledTimes(1);
+    expect(createSignedUrl).toHaveBeenCalledWith(
+      "t1/jobs/j1/trips/t1/trailer_start_photo/99-start.jpg",
+      60 * 60,
+    );
     expect(trip.trailerStartPhotoUrl).toBe("https://signed/start");
     expect(trip.trailerStartPhoto?.fileUrl).toBe("https://signed/start");
     expect(trip.trailerStartPhoto?.fileName).toBe("start.jpg");
@@ -435,6 +439,8 @@ describe("DispatchService", () => {
     expect(trip.trailerStartPhoto?.mimeType).toBe("image/jpeg");
     expect(trip.trailerStartPhoto?.fileSizeBytes).toBe(42);
     expect(JSON.stringify(trip)).not.toMatch(/storageKey/);
+    expect(res.drivers[0].todayTrips[0].trailerStartPhotoUrl).toBe("https://signed/start");
+    expect(res.drivers[0].trips[0].trailerStartPhotoUrl).toBe("https://signed/start");
   });
 
   it("scopes board trips to selected date using plannedStartAt fallback createdAt", async () => {
@@ -504,7 +510,26 @@ describe("DispatchService", () => {
     };
     const svc = new DispatchService(prisma, { getClient: jest.fn() } as any);
     const res = await svc.getBoard("tenant-1", "2026-05-05");
+    const dayStart = new Date(2026, 4, 5, 0, 0, 0, 0);
+    const dayEnd = new Date(2026, 4, 6, 0, 0, 0, 0);
+    expect(prisma.trip.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: "tenant-1",
+          status: { notIn: ["DRAFT"] },
+          OR: [
+            { plannedStartAt: { not: null, gte: dayStart, lt: dayEnd } },
+            { plannedStartAt: null, createdAt: { gte: dayStart, lt: dayEnd } },
+          ],
+        }),
+      }),
+    );
+    expect(prisma.driverLocationLatest.findMany).toHaveBeenCalledWith({
+      where: { tenantId: "tenant-1", driverUserId: { in: ["driver-user-1"] } },
+    });
     expect(res.drivers[0].todayTrips.map((t: any) => t.id)).toEqual(["trip-in-date"]);
+    expect(res.drivers[0].trips.map((t: any) => t.id)).toEqual(["trip-in-date"]);
+    expect(res.drivers[0].todayTrips).toBe(res.drivers[0].trips);
     expect(res.unassignedTrips.map((t: any) => t.id)).toEqual(["trip-created-fallback"]);
     expect(res.ongoingTrips.map((t: any) => t.id)).toEqual(["trip-created-fallback"]);
   });

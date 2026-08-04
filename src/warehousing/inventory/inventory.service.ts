@@ -1163,11 +1163,19 @@ export class InventoryService {
       }),
     ]);
 
-    const data = await Promise.all(
-      batches.map(async (batch) => {
-        const counts = await this.getBatchCounts(tenantId, batch.id);
-        return this.toBatchDto(batch, counts);
-      }),
+    const ids = batches.map((b) => b.id);
+    const countsByBatchId = await this.getBatchCountsForIds(tenantId, ids);
+    const data = batches.map((batch) =>
+      this.toBatchDto(
+        batch,
+        countsByBatchId.get(batch.id) ?? {
+          totalUnits: 0,
+          availableUnits: 0,
+          reservedUnits: 0,
+          inTransitUnits: 0,
+          deliveredUnits: 0,
+        },
+      ),
     );
 
     return { data, meta: buildPaginationMeta(page, pageSize, total) };
@@ -1825,7 +1833,66 @@ export class InventoryService {
   }
 
   /**
-   * Helper: Get batch unit counts
+   * Helper: Get unit counts for many batches in one groupBy.
+   * totalUnits = sum of all statuses; named status fields default to 0 when missing.
+   */
+  private async getBatchCountsForIds(
+    tenantId: string,
+    batchIds: string[],
+  ): Promise<
+    Map<
+      string,
+      {
+        totalUnits: number;
+        availableUnits: number;
+        reservedUnits: number;
+        inTransitUnits: number;
+        deliveredUnits: number;
+      }
+    >
+  > {
+    const empty = () => ({
+      totalUnits: 0,
+      availableUnits: 0,
+      reservedUnits: 0,
+      inTransitUnits: 0,
+      deliveredUnits: 0,
+    });
+    const map = new Map<string, ReturnType<typeof empty>>();
+    for (const id of batchIds) map.set(id, empty());
+    if (batchIds.length === 0) return map;
+
+    const rows = await this.prisma.inventory_units.groupBy({
+      by: ["batchId", "status"],
+      where: { tenantId, batchId: { in: batchIds } },
+      _count: { _all: true },
+    });
+
+    for (const row of rows) {
+      const counts = map.get(row.batchId) ?? empty();
+      const n = row._count._all;
+      counts.totalUnits += n;
+      switch (row.status) {
+        case InventoryUnitStatus.Available:
+          counts.availableUnits = n;
+          break;
+        case InventoryUnitStatus.Reserved:
+          counts.reservedUnits = n;
+          break;
+        case InventoryUnitStatus.InTransit:
+          counts.inTransitUnits = n;
+          break;
+        case InventoryUnitStatus.Delivered:
+          counts.deliveredUnits = n;
+          break;
+      }
+      map.set(row.batchId, counts);
+    }
+    return map;
+  }
+
+  /**
+   * Helper: Get batch unit counts (single batch)
    */
   private async getBatchCounts(
     tenantId: string,
@@ -1837,48 +1904,16 @@ export class InventoryService {
     inTransitUnits: number;
     deliveredUnits: number;
   }> {
-    const [total, available, reserved, inTransit, delivered] =
-      await Promise.all([
-        this.prisma.inventory_units.count({
-          where: { tenantId, batchId },
-        }),
-        this.prisma.inventory_units.count({
-          where: {
-            tenantId,
-            batchId,
-            status: InventoryUnitStatus.Available,
-          },
-        }),
-        this.prisma.inventory_units.count({
-          where: {
-            tenantId,
-            batchId,
-            status: InventoryUnitStatus.Reserved,
-          },
-        }),
-        this.prisma.inventory_units.count({
-          where: {
-            tenantId,
-            batchId,
-            status: InventoryUnitStatus.InTransit,
-          },
-        }),
-        this.prisma.inventory_units.count({
-          where: {
-            tenantId,
-            batchId,
-            status: InventoryUnitStatus.Delivered,
-          },
-        }),
-      ]);
-
-    return {
-      totalUnits: total,
-      availableUnits: available,
-      reservedUnits: reserved,
-      inTransitUnits: inTransit,
-      deliveredUnits: delivered,
-    };
+    const map = await this.getBatchCountsForIds(tenantId, [batchId]);
+    return (
+      map.get(batchId) ?? {
+        totalUnits: 0,
+        availableUnits: 0,
+        reservedUnits: 0,
+        inTransitUnits: 0,
+        deliveredUnits: 0,
+      }
+    );
   }
 
   /**

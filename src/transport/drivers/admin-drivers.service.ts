@@ -500,6 +500,7 @@ export class AdminDriversService {
 
     const driver = await this.prisma.drivers.findFirst({
       where: { tenantId, userId: driverUserId },
+      select: { id: true },
     });
     if (!driver) return { month, transactions: [], totalCents: 0 };
 
@@ -510,6 +511,15 @@ export class AdminDriversService {
         createdAt: { gte: start, lt: end },
       },
       orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        tripId: true,
+        amountCents: true,
+        currency: true,
+        type: true,
+        description: true,
+        createdAt: true,
+      },
     });
 
     const totalCents = transactions.reduce((sum, t) => sum + t.amountCents, 0);

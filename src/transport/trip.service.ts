@@ -175,15 +175,73 @@ export class TripService {
       }),
     ]);
 
-    const tripsWithDetails = await Promise.all(
-      trips.map((trip) =>
-        this.toDto(
-          trip,
-          trip.stops.map((stop) => ({
-            ...stop,
-            pod: stop.pods[0] || null,
-          })),
-        ),
+    const driverUserIds = [
+      ...new Set(
+        trips
+          .map((trip) => trip.assignedDriverUserId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+
+    const [memberships, locations] = await Promise.all([
+      driverUserIds.length
+        ? this.prisma.tenantMembership.findMany({
+            where: {
+              tenantId,
+              userId: { in: driverUserIds },
+              status: MembershipStatus.Active,
+            },
+            include: { user: true },
+          })
+        : Promise.resolve([]),
+      driverUserIds.length
+        ? this.prisma.driverLocationLatest.findMany({
+            where: {
+              tenantId,
+              driverUserId: { in: driverUserIds },
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const driverByUserId = new Map<string, DriverInfoDto>();
+    for (const membership of memberships) {
+      const user = membership.user as {
+        id: string;
+        email: string;
+        name: string | null;
+        phone?: string | null;
+      };
+      driverByUserId.set(user.id, {
+        id: user.id,
+        email: user.email,
+        name: user.name ?? null,
+        phone: user.phone ?? null,
+      });
+    }
+
+    const locationByDriverUserId = new Map<string, DriverLocationDto>();
+    for (const loc of locations) {
+      locationByDriverUserId.set(loc.driverUserId, {
+        lat: loc.lat,
+        lng: loc.lng,
+        accuracy: loc.accuracy,
+        heading: loc.heading,
+        speed: loc.speed,
+        capturedAt: loc.capturedAt,
+        updatedAt: loc.updatedAt,
+      });
+    }
+
+    const tripsWithDetails = trips.map((trip) =>
+      this.mapTripToDto(
+        trip,
+        trip.stops.map((stop) => ({
+          ...stop,
+          pod: stop.pods[0] || null,
+        })),
+        driverByUserId,
+        locationByDriverUserId,
       ),
     );
 
@@ -230,32 +288,97 @@ export class TripService {
     );
   }
 
-  private async toDto(trip: any, stops: any[]): Promise<TripDto> {
-    // Get driver info if assigned
-    let assignedDriver: DriverInfoDto | null = null;
-    if (trip.assignedDriverUserId) {
-      const membership = await this.prisma.tenantMembership.findFirst({
-        where: {
-          tenantId: trip.tenantId,
-          userId: trip.assignedDriverUserId,
-          status: MembershipStatus.Active,
-        },
-        include: {
-          user: true,
-        },
-      });
-      if (membership) {
-        const user = membership.user as { id: string; email: string; name: string | null; phone?: string | null };
-        assignedDriver = {
-          id: user.id,
-          email: user.email,
-          name: user.name ?? null,
-          phone: user.phone ?? null,
-        };
+  private async toDto(
+    trip: any,
+    stops: any[],
+    preloaded?: {
+      driverByUserId?: Map<string, DriverInfoDto>;
+      locationByDriverUserId?: Map<string, DriverLocationDto>;
+    },
+  ): Promise<TripDto> {
+    let driverByUserId = preloaded?.driverByUserId;
+    let locationByDriverUserId = preloaded?.locationByDriverUserId;
+
+    if (
+      trip.assignedDriverUserId
+      && (!driverByUserId || !locationByDriverUserId)
+    ) {
+      const driverUserId = trip.assignedDriverUserId as string;
+      const [membership, loc] = await Promise.all([
+        driverByUserId
+          ? Promise.resolve(null)
+          : this.prisma.tenantMembership.findFirst({
+              where: {
+                tenantId: trip.tenantId,
+                userId: driverUserId,
+                status: MembershipStatus.Active,
+              },
+              include: { user: true },
+            }),
+        locationByDriverUserId
+          ? Promise.resolve(null)
+          : this.prisma.driverLocationLatest.findUnique({
+              where: {
+                tenantId_driverUserId: {
+                  tenantId: trip.tenantId,
+                  driverUserId,
+                },
+              },
+            }),
+      ]);
+
+      if (!driverByUserId) {
+        driverByUserId = new Map();
+        if (membership) {
+          const user = membership.user as {
+            id: string;
+            email: string;
+            name: string | null;
+            phone?: string | null;
+          };
+          driverByUserId.set(user.id, {
+            id: user.id,
+            email: user.email,
+            name: user.name ?? null,
+            phone: user.phone ?? null,
+          });
+        }
+      }
+
+      if (!locationByDriverUserId) {
+        locationByDriverUserId = new Map();
+        if (loc) {
+          locationByDriverUserId.set(loc.driverUserId, {
+            lat: loc.lat,
+            lng: loc.lng,
+            accuracy: loc.accuracy,
+            heading: loc.heading,
+            speed: loc.speed,
+            capturedAt: loc.capturedAt,
+            updatedAt: loc.updatedAt,
+          });
+        }
       }
     }
 
-    // Get vehicle info if assigned
+    return this.mapTripToDto(
+      trip,
+      stops,
+      driverByUserId ?? new Map(),
+      locationByDriverUserId ?? new Map(),
+    );
+  }
+
+  private mapTripToDto(
+    trip: any,
+    stops: any[],
+    driverByUserId: Map<string, DriverInfoDto>,
+    locationByDriverUserId: Map<string, DriverLocationDto>,
+  ): TripDto {
+    const assignedDriver = trip.assignedDriverUserId
+      ? driverByUserId.get(trip.assignedDriverUserId) ?? null
+      : null;
+
     let assignedVehicle: VehicleInfoDto | null = null;
     if (trip.vehicles) {
       assignedVehicle = {
@@ -264,30 +387,10 @@ export class TripService {
         type: trip.vehicles.type ?? null,
       };
     }
-    // Get driver's latest location if assigned
-    let driverLocation: DriverLocationDto | null = null;
-    if (trip.assignedDriverUserId) {
-      const loc = await this.prisma.driverLocationLatest.findUnique({
-        where: {
-          tenantId_driverUserId: {
-            tenantId: trip.tenantId,
-            driverUserId: trip.assignedDriverUserId,
-          },
-        },
-      });
 
-      if (loc) {
-        driverLocation = {
-          lat: loc.lat,
-          lng: loc.lng,
-          accuracy: loc.accuracy,
-          heading: loc.heading,
-          speed: loc.speed,
-          capturedAt: loc.capturedAt,
-          updatedAt: loc.updatedAt,
-        };
-      }
-    }
+    const driverLocation = trip.assignedDriverUserId
+      ? locationByDriverUserId.get(trip.assignedDriverUserId) ?? null
+      : null;
 
     return {
       id: trip.id,

@@ -15,32 +15,29 @@ export class FinanceService {
   ): Promise<DriverWalletSummaryDto[]> {
     const dateFilter = this.buildMonthFilter(month);
 
-    const transactions = await this.prisma.driverWalletTransaction.findMany({
+    const grouped = await this.prisma.driverWalletTransaction.groupBy({
+      by: ['driverId'],
       where: {
         driver: { tenantId },
         ...dateFilter,
       },
-      include: {
-        driver: true,
-      },
+      _sum: { amountCents: true },
     });
 
-    const map = new Map<string, DriverWalletSummaryDto>();
+    if (grouped.length === 0) return [];
 
-    for (const tx of transactions) {
-      if (!map.has(tx.driverId)) {
-        map.set(tx.driverId, {
-          driverId: tx.driverId,
-          driverName: tx.driver.name,
-          totalCents: 0,
-        });
-      }
+    const driverIds = grouped.map((g) => g.driverId);
+    const drivers = await this.prisma.drivers.findMany({
+      where: { tenantId, id: { in: driverIds } },
+      select: { id: true, name: true },
+    });
+    const nameById = new Map(drivers.map((d) => [d.id, d.name]));
 
-      const entry = map.get(tx.driverId)!;
-      entry.totalCents += tx.amountCents;
-    }
-
-    return Array.from(map.values());
+    return grouped.map((g) => ({
+      driverId: g.driverId,
+      driverName: nameById.get(g.driverId) ?? '',
+      totalCents: g._sum.amountCents ?? 0,
+    }));
   }
 
   async getDriverWalletTransactions(
@@ -59,13 +56,19 @@ export class FinanceService {
       orderBy: {
         createdAt: 'desc',
       },
+      select: {
+        id: true,
+        amountCents: true,
+        type: true,
+        createdAt: true,
+      },
     });
 
     return transactions.map((tx) => ({
       id: tx.id,
       amountCents: tx.amountCents,
       type: tx.type,
-      referenceId: tx.referenceId,
+      referenceId: null,
       createdAt: tx.createdAt,
     }));
   }

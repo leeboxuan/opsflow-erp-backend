@@ -57,4 +57,21 @@ describe("dashboard job metrics", () => {
       },
     });
   });
+
+  it("buildDashboardJobMetrics prefers precomputed readyForInvoiceNotInvoiced", () => {
+    const metrics = buildDashboardJobMetrics({
+      total: 10,
+      byStatus: {
+        [JobStatus.ONGOING]: 5,
+        [JobStatus.READY_FOR_INVOICE]: 3,
+        [JobStatus.COMPLETED]: 1,
+        [JobStatus.CANCELLED]: 1,
+      },
+      readyForInvoiceNotInvoiced: 7,
+      readyJobIds: ["r1"],
+      invoicedSourceJobIds: [],
+      readyForInvoiceBroadCount: 4,
+    });
+    expect(metrics.readyForInvoiceNotInvoiced).toBe(7);
+  });
 });

@@ -45,8 +45,10 @@ export function countReadyForInvoiceNotInvoiced(
 export function buildDashboardJobMetrics(input: {
   total: number;
   byStatus: JobStatusCountMap;
-  readyJobIds: string[];
-  invoicedSourceJobIds: Array<string | null>;
+  /** Precomputed count (preferred). When omitted, derived from ID lists. */
+  readyForInvoiceNotInvoiced?: number;
+  readyJobIds?: string[];
+  invoicedSourceJobIds?: Array<string | null>;
   /** Jobs with READY_FOR_INVOICE status or invoiceReadyAt set (non-terminal). */
   readyForInvoiceBroadCount?: number;
 }): DashboardJobMetrics {
@@ -56,14 +58,18 @@ export function buildDashboardJobMetrics(input: {
     byStatus[JobStatus.READY_FOR_INVOICE] ??
     0;
 
+  const readyForInvoiceNotInvoiced =
+    input.readyForInvoiceNotInvoiced ??
+    countReadyForInvoiceNotInvoiced(
+      input.readyJobIds ?? [],
+      input.invoicedSourceJobIds ?? [],
+    );
+
   return {
     total: input.total,
     ongoing: byStatus[JobStatus.ONGOING] ?? 0,
     readyForInvoice,
-    readyForInvoiceNotInvoiced: countReadyForInvoiceNotInvoiced(
-      input.readyJobIds,
-      input.invoicedSourceJobIds,
-    ),
+    readyForInvoiceNotInvoiced,
     completed: byStatus[JobStatus.COMPLETED] ?? 0,
     cancelled: byStatus[JobStatus.CANCELLED] ?? 0,
     byStatus,

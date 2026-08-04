@@ -381,9 +381,35 @@ export class DispatchService {
     }
   }
 
-  private async toBoardTrip(
+  /** Batch signed URLs once per unique storage key. */
+  private async createSignedUrlMap(
+    storageKeys: Iterable<string | null | undefined>,
+  ): Promise<Map<string, string | null>> {
+    const uniqueKeys = [
+      ...new Set(
+        [...storageKeys].filter((key): key is string => Boolean(key)),
+      ),
+    ];
+    const signedUrlByKey = new Map<string, string | null>();
+    await Promise.all(
+      uniqueKeys.map(async (key) => {
+        signedUrlByKey.set(key, await this.createSignedUrl(key));
+      }),
+    );
+    return signedUrlByKey;
+  }
+
+  private localDayBounds(selectedDate: string): { dayStart: Date; dayEnd: Date } {
+    const [year, month, day] = selectedDate.split("-").map(Number);
+    const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0);
+    const dayEnd = new Date(year, month - 1, day + 1, 0, 0, 0, 0);
+    return { dayStart, dayEnd };
+  }
+
+  private toBoardTrip(
     trip: any,
     trailerLocationMap: Map<string, string>,
+    signedUrlByKey?: Map<string, string | null>,
   ) {
     const startPhoto = (trip.documents ?? []).find(
       (d: any) => d.type === TripDocumentType.TRAILER_START_PHOTO,
@@ -391,8 +417,12 @@ export class DispatchService {
     const endPhoto = (trip.documents ?? []).find(
       (d: any) => d.type === TripDocumentType.TRAILER_END_PHOTO,
     );
-    const startUrl = startPhoto ? await this.createSignedUrl(startPhoto.storageKey) : null;
-    const endUrl = endPhoto ? await this.createSignedUrl(endPhoto.storageKey) : null;
+    const startUrl = startPhoto?.storageKey
+      ? (signedUrlByKey?.get(startPhoto.storageKey) ?? null)
+      : null;
+    const endUrl = endPhoto?.storageKey
+      ? (signedUrlByKey?.get(endPhoto.storageKey) ?? null)
+      : null;
     const startMeta = startPhoto
       ? {
           fileUrl: startUrl,
@@ -506,29 +536,51 @@ export class DispatchService {
     const selectedDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date))
       ? date
       : this.toLocalDayKey(new Date())!;
+    const { dayStart, dayEnd } = this.localDayBounds(selectedDate);
     const generatedAt = new Date();
-    const [driverMemberships, locations, trips, trailerLocations] = await Promise.all([
-      this.prisma.tenantMembership.findMany({
-        where: {
-          tenantId,
-          role: Role.DRIVER,
-          status: MembershipStatus.Active,
-        },
-        include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              phone: true,
-            },
+
+    const driverMemberships = await this.prisma.tenantMembership.findMany({
+      where: {
+        tenantId,
+        role: Role.DRIVER,
+        status: MembershipStatus.Active,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
           },
         },
-      }),
-      this.prisma.driverLocationLatest.findMany({
-        where: { tenantId },
-      }),
+      },
+    });
+
+    const driverUsers = driverMemberships
+      .map((membership) => membership.user)
+      .filter(Boolean);
+    const driverUserIds = driverUsers.map((d) => d.id);
+
+    const [locations, trips, trailerLocations] = await Promise.all([
+      driverUserIds.length
+        ? this.prisma.driverLocationLatest.findMany({
+            where: { tenantId, driverUserId: { in: driverUserIds } },
+          })
+        : Promise.resolve([]),
       this.prisma.trip.findMany({
-        where: { tenantId, status: { notIn: [TripStatus.DRAFT] } },
+        where: {
+          tenantId,
+          status: { notIn: [TripStatus.DRAFT] },
+          OR: [
+            {
+              plannedStartAt: { not: null, gte: dayStart, lt: dayEnd },
+            },
+            {
+              plannedStartAt: null,
+              createdAt: { gte: dayStart, lt: dayEnd },
+            },
+          ],
+        },
         include: {
           job: {
             select: {
@@ -551,10 +603,6 @@ export class DispatchService {
         .catch(() => []),
     ]);
 
-    const driverUsers = driverMemberships
-      .map((membership) => membership.user)
-      .filter(Boolean);
-
     const trailerLocationMap = new Map<string, string>(
       trailerLocations.map((l) => [l.code, l.name]),
     );
@@ -563,7 +611,7 @@ export class DispatchService {
     );
 
     const driverProfiles = await this.prisma.drivers.findMany({
-      where: { tenantId, userId: { in: driverUsers.map((d) => d.id) } },
+      where: { tenantId, userId: { in: driverUserIds } },
       select: {
         id: true,
         userId: true,
@@ -575,9 +623,27 @@ export class DispatchService {
       driverProfiles.map((d) => [d.userId ?? "", d]),
     );
 
+    // Safety post-filter for exact toLocalDayKey parity with the SQL day window.
     const selectedDateTrips = trips.filter(
       (trip) => this.toLocalDayKey(trip.plannedStartAt ?? trip.createdAt) === selectedDate,
     );
+
+    const storageKeys: Array<string | null | undefined> = [];
+    for (const trip of selectedDateTrips) {
+      for (const doc of trip.documents ?? []) {
+        storageKeys.push(doc.storageKey);
+      }
+    }
+    const signedUrlByKey = await this.createSignedUrlMap(storageKeys);
+
+    const boardTripById = new Map<string, ReturnType<DispatchService["toBoardTrip"]>>();
+    for (const trip of selectedDateTrips) {
+      boardTripById.set(
+        trip.id,
+        this.toBoardTrip(trip, trailerLocationMap, signedUrlByKey),
+      );
+    }
+
     const ongoingTrips = selectedDateTrips.filter((t) => t.status === TripStatus.ONGOING);
     const unassignedTrips = selectedDateTrips.filter(
       (t) => !t.assignedDriverUserId && this.isOpenStatus(t.status),
@@ -629,6 +695,8 @@ export class DispatchService {
         gpsStatus = DispatchGpsStatus.STALE;
       }
 
+      const boardTrips = driverTrips.map((trip) => boardTripById.get(trip.id)!);
+
       return {
         driverUserId: driver.id,
         driverId: profile?.id ?? null,
@@ -656,15 +724,11 @@ export class DispatchService {
         activeTrip: activeTrip
           ? await this.attachBoardTripRoute(
             tenantId,
-            await this.toBoardTrip(activeTrip, trailerLocationMap),
+            boardTripById.get(activeTrip.id)!,
           )
           : null,
-        todayTrips: await Promise.all(
-          driverTrips.map((trip) => this.toBoardTrip(trip, trailerLocationMap)),
-        ),
-        trips: await Promise.all(
-          driverTrips.map((trip) => this.toBoardTrip(trip, trailerLocationMap)),
-        ),
+        todayTrips: boardTrips,
+        trips: boardTrips,
       };
     }));
 
@@ -672,12 +736,8 @@ export class DispatchService {
       generatedAt: generatedAt.toISOString(),
       date: selectedDate,
       drivers,
-      unassignedTrips: await Promise.all(
-        unassignedTrips.map((trip) => this.toBoardTrip(trip, trailerLocationMap)),
-      ),
-      ongoingTrips: await Promise.all(
-        ongoingTrips.map((trip) => this.toBoardTrip(trip, trailerLocationMap)),
-      ),
+      unassignedTrips: unassignedTrips.map((trip) => boardTripById.get(trip.id)!),
+      ongoingTrips: ongoingTrips.map((trip) => boardTripById.get(trip.id)!),
     };
   }
 
