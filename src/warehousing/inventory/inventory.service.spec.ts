@@ -96,4 +96,44 @@ describe("InventoryService.listBatches", () => {
       deliveredUnits: 4,
     });
   });
+
+  it("keeps tenantId on batch listing and unit aggregation (cross-tenant isolation)", async () => {
+    const prisma: any = {
+      $transaction: jest.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
+      inventory_batches: {
+        count: jest.fn().mockResolvedValue(1),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "batch-x",
+            containerNumber: "X1",
+            customerName: null,
+            customerRef: null,
+            receivedAt: null,
+            notes: null,
+            status: "Open",
+            createdAt: new Date("2026-01-01"),
+            updatedAt: new Date("2026-01-02"),
+          },
+        ]),
+      },
+      inventory_units: {
+        groupBy: jest.fn().mockResolvedValue([]),
+        count: jest.fn(),
+      },
+    };
+    const svc = new InventoryService(prisma);
+    const result = await svc.listBatches("tenant-secure", { page: 1, pageSize: 10 });
+
+    expect(prisma.inventory_batches.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: "tenant-secure" }),
+      }),
+    );
+    expect(prisma.inventory_units.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: "tenant-secure" }),
+      }),
+    );
+    expect(result.data[0].totalUnits).toBe(0);
+  });
 });

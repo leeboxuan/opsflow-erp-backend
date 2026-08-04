@@ -125,6 +125,54 @@ describe("TripService.listTrips", () => {
     expect(res.data[2].driverLocation).toBeNull();
   });
 
+  it("never queries membership or location without tenantId (cross-tenant isolation)", async () => {
+    const now = new Date("2026-05-05T08:00:00.000Z");
+    const membershipFindMany = jest.fn().mockResolvedValue([]);
+    const locationFindMany = jest.fn().mockResolvedValue([
+      // Would be a leak if returned without tenant filter matching.
+      {
+        driverUserId: "driver-1",
+        lat: 9.9,
+        lng: 9.9,
+        accuracy: null,
+        heading: null,
+        speed: null,
+        capturedAt: now,
+        updatedAt: now,
+      },
+    ]);
+    const prisma: any = {
+      $transaction: jest.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
+      trip: {
+        count: jest.fn().mockResolvedValue(1),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "trip-1",
+            tenantId: "tenant-secure",
+            status: TripStatus.PUBLISHED,
+            pendingState: TripPendingState.NONE,
+            plannedStartAt: now,
+            plannedEndAt: null,
+            assignedDriverUserId: "driver-1",
+            vehicleId: null,
+            createdAt: now,
+            updatedAt: now,
+            vehicles: null,
+            stops: [],
+          },
+        ]),
+      },
+      tenantMembership: { findMany: membershipFindMany, findFirst: jest.fn() },
+      driverLocationLatest: { findMany: locationFindMany, findUnique: jest.fn() },
+    };
+    const svc = new TripService(prisma, { logEvent: jest.fn() } as any);
+    await svc.listTrips("tenant-secure", { page: 1, pageSize: 20 });
+
+    expect(membershipFindMany.mock.calls[0][0].where.tenantId).toBe("tenant-secure");
+    expect(locationFindMany.mock.calls[0][0].where.tenantId).toBe("tenant-secure");
+    expect(prisma.trip.findMany.mock.calls[0][0].where.tenantId).toBe("tenant-secure");
+  });
+
   it("skips membership/location batch queries when no drivers are assigned", async () => {
     const now = new Date("2026-05-05T08:00:00.000Z");
     const prisma: any = {
