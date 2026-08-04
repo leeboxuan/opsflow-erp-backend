@@ -5,6 +5,7 @@ import { SupabaseService } from './supabase.service';
 import { AuthGuard } from './guards/auth.guard';
 import { TenantGuard } from './guards/tenant.guard';
 import { RoleGuard } from './guards/role.guard';
+import { PlatformAdminGuard } from './guards/platform-admin.guard';
 import { PrismaModule } from '../prisma/prisma.module';
 
 /**
@@ -13,11 +14,30 @@ import { PrismaModule } from '../prisma/prisma.module';
  *   - SUPABASE_URL or SUPABASE_PROJECT_URL: Supabase project URL (e.g. https://<ref>.supabase.co)
  *   - SUPABASE_ANON_KEY: Supabase anon/public key (for login and JWKS)
  *   - SUPABASE_JWT_SECRET: Supabase JWT Secret (required for HS256 access token verification after login)
+ *
+ * Platform Super Admin:
+ *   - SUPERADMIN is a global User.role bridge only — never a tenant Role.
+ *   - PlatformAdminGuard gates future /platform/* routes (Phase 0 legacy SUPERADMIN;
+ *     Phase 1 switches to PlatformAdmin table). Never trust client isPlatformAdmin flags.
  */
 @Module({
   imports: [PrismaModule],
   controllers: [AuthController],
-  providers: [AuthService, SupabaseService, AuthGuard, TenantGuard, RoleGuard],
-  exports: [AuthService, SupabaseService, AuthGuard, TenantGuard, RoleGuard],
+  providers: [
+    AuthService,
+    SupabaseService,
+    AuthGuard,
+    TenantGuard,
+    RoleGuard,
+    PlatformAdminGuard,
+  ],
+  exports: [
+    AuthService,
+    SupabaseService,
+    AuthGuard,
+    TenantGuard,
+    RoleGuard,
+    PlatformAdminGuard,
+  ],
 })
 export class AuthModule {}

@@ -20,9 +20,16 @@ export interface AuthUser {
   authUserId: string;
   /** User email from JWT / public.users.email */
   email: string;
-  /** Global app role from public.users.role (e.g. 'USER', 'SUPERADMIN') */
+  /**
+   * Global app role from public.users.role (e.g. 'USER', 'SUPERADMIN').
+   * SUPERADMIN is NOT a tenant Role — platform authority moves to PlatformAdmin (Phase 1).
+   */
   role: string;
-  /** True when role === 'SUPERADMIN' (platform-level access) */
+  /**
+   * True when role === 'SUPERADMIN' (legacy platform-level access).
+   * Phase 1: prefer PlatformAdmin ACTIVE; keep this for transition/backfill.
+   * Never accept this flag from the client — AuthService sets it from DB only.
+   */
   isSuperadmin: boolean;
 }
 

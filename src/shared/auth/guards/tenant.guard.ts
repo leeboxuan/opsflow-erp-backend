@@ -16,6 +16,16 @@ import {
   type CachedTenantContext,
 } from "../tenant-context.cache";
 
+/**
+ * Resolves X-Tenant-Id into request.tenant for ordinary tenant APIs.
+ *
+ * Security notes (Platform Super Admin):
+ * - SUPERADMIN is not a tenant Role; legacy isSuperadmin bypass remains for
+ *   existing ops until Phase 1 migrates authority to PlatformAdmin + TenantStatus.
+ * - Never trust client-supplied role / isSuperadmin flags — only AuthGuard mapping.
+ * - Phase 1 will block ordinary users when Tenant.status === SUSPENDED while
+ *   allowing Platform Admin with tenantSuspended visible in request context.
+ */
 @Injectable()
 export class TenantGuard implements CanActivate {
   constructor(

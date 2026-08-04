@@ -27,6 +27,13 @@
  * Does NOT delete Supabase auth users.
  * Does NOT wipe warehouse domain or master/reference data.
  *
+ * GPS PERMANENTLY EXCLUDED (never wipe — see src/scripts/wipe-never-delete.ts):
+ *   gps_positions / GpsPosition history
+ *   gps_devices / GpsDevice tracker records
+ *   chassis ↔ tracker associations, fleet_vehicles, vehicles used for tracking
+ *   fleet-tracking config / history
+ * Do not add deleteMany for those models in this script.
+ *
  * TripJobItem: if `trip_job_items` table is missing (migration not applied yet),
  * that step is skipped and reported — wipe remains safe either before or after migrate.
  */
@@ -37,6 +44,10 @@ import {
   parseWipeScopeArgs,
   resolveWipeScope,
 } from "../src/scripts/wipe-operational-scope";
+import {
+  WIPE_NEVER_DELETE_PRISMA_MODELS,
+  assertWipeDoesNotTargetGps,
+} from "../src/scripts/wipe-never-delete";
 
 /** Job/trip docs, invoice PDFs, generated company docs — see job-document-signed-url.ts */
 const JOB_DOCUMENTS_BUCKET = "job-documents";
@@ -173,7 +184,9 @@ Deletes (transport operational / job-linked financial):
 
 Preserves:
   tenants, users/memberships, customers, drivers, vehicles/fleet, chassis,
-  master rates/locations/files, warehouse domain, system config
+  master rates/locations/files, warehouse domain, system config,
+  GPS devices/positions, fleet–chassis associations, fleet-tracking config/history
+  (see WIPE_NEVER_DELETE_* in src/scripts/wipe-never-delete.ts — permanent)
 
 Storage buckets cleaned:
   job-documents  Job/trip documents, invoice PDFs, job-sourced company docs
@@ -1083,9 +1096,37 @@ async function wipeOperationalData(
 }
 
 async function main(): Promise<void> {
+  // Fail closed: operational wipe keys must never include GPS / fleet-tracking models.
+  assertWipeDoesNotTargetGps([
+    "notificationRecipient",
+    "notification",
+    "invoiceLineItem_byInvoice",
+    "transportOrder_invoiceId_nulled",
+    "invoiceLineItem_byTrip",
+    "customerCompanyDocument",
+    "invoice",
+    "auditLog",
+    "eventLog",
+    "tripJobItem",
+    "tripDocumentRequirement",
+    "tripPayoutLine",
+    "tripDocument",
+    "driverWalletTransaction",
+    "jobCharge",
+    "jobItem",
+    "jobDocument",
+    "driver_wallet_entries",
+    "trip",
+    "job",
+    "job_internal_ref_counters",
+  ]);
+
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
     printHelp();
+    console.log(
+      `\nGPS permanently excluded Prisma models:\n  ${WIPE_NEVER_DELETE_PRISMA_MODELS.join(", ")}`,
+    );
     return;
   }
 
