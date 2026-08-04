@@ -1,4 +1,5 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, ServiceUnavailableException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../shared/prisma/prisma.service";
 
 export type PlatformAuditAction =
@@ -23,30 +24,78 @@ export type PlatformAuditAction =
   | "PLATFORM_TENANT_ENTER_FAILED"
   | string;
 
+export type PlatformAuditAppendParams = {
+  actorPlatformAdminId: string;
+  actorUserId: string;
+  action: PlatformAuditAction;
+  targetTenantId?: string | null;
+  entityType?: string | null;
+  entityId?: string | null;
+  correlationId?: string | null;
+  reason?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+/** Prisma client or interactive transaction client. */
+export type PlatformAuditDb = {
+  platformAuditLog: {
+    create: (args: {
+      data: {
+        actorPlatformAdminId: string;
+        actorUserId: string;
+        action: string;
+        targetTenantId: string | null;
+        entityType: string | null;
+        entityId: string | null;
+        correlationId: string | null;
+        reason: string | null;
+        metadata: object | null;
+      };
+    }) => Promise<unknown>;
+  };
+};
+
+export const PLATFORM_AUDIT_RECONCILIATION_CODE =
+  "PLATFORM_AUDIT_RECONCILIATION_REQUIRED";
+
 /**
  * Append-only platform audit writer.
  * Never update/delete PlatformAuditLog rows from application code.
+ *
+ * Transaction guidance:
+ * - Prefer `appendInTx` inside the same Prisma `$transaction` as the domain write
+ *   when both target the same database (atomic commit / rollback).
+ * - Use `runWithRequiredAudit` for control-plane Prisma-only mutations.
+ * - Do NOT nest `$transaction` calls. Pass the outer `tx` into domain helpers.
+ * - External side effects (Supabase Auth / storage) cannot join the Prisma tx —
+ *   see docs/platform-admin-production-rollout.md § audit / compensation.
  */
 @Injectable()
 export class PlatformAuditService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async append(params: {
-    actorPlatformAdminId: string;
-    actorUserId: string;
-    action: PlatformAuditAction;
-    targetTenantId?: string | null;
-    entityType?: string | null;
-    entityId?: string | null;
-    correlationId?: string | null;
-    reason?: string | null;
-    metadata?: Record<string, unknown> | null;
-  }): Promise<void> {
+  async append(params: PlatformAuditAppendParams): Promise<void> {
+    await this.appendInTx(this.prisma as unknown as PlatformAuditDb, params);
+  }
+
+  /**
+   * Same as append but rethrows — use for sensitive mutations that must
+   * fail closed when the audit row cannot be written.
+   */
+  async appendOrThrow(params: PlatformAuditAppendParams): Promise<void> {
+    await this.append(params);
+  }
+
+  /** Write using an interactive transaction client (or root PrismaService). */
+  async appendInTx(
+    db: PlatformAuditDb,
+    params: PlatformAuditAppendParams,
+  ): Promise<void> {
     const metadata = params.metadata
       ? this.redactMetadata(params.metadata)
       : null;
 
-    await this.prisma.platformAuditLog.create({
+    await db.platformAuditLog.create({
       data: {
         actorPlatformAdminId: params.actorPlatformAdminId,
         actorUserId: params.actorUserId,
@@ -62,21 +111,42 @@ export class PlatformAuditService {
   }
 
   /**
-   * Same as append but rethrows — use for sensitive mutations that must
-   * fail closed when the audit row cannot be written.
+   * Run a Prisma-owned domain mutation and required PlatformAuditLog write
+   * in one interactive transaction. Both commit or both roll back.
+   *
+   * Does not open a nested transaction — callers must not already be inside
+   * an interactive tx when invoking this helper.
    */
-  async appendOrThrow(params: {
-    actorPlatformAdminId: string;
-    actorUserId: string;
-    action: PlatformAuditAction;
-    targetTenantId?: string | null;
-    entityType?: string | null;
-    entityId?: string | null;
-    correlationId?: string | null;
-    reason?: string | null;
-    metadata?: Record<string, unknown> | null;
-  }): Promise<void> {
-    await this.append(params);
+  async runWithRequiredAudit<T>(
+    audit: PlatformAuditAppendParams,
+    domain: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    return this.prisma.$transaction(async (tx) => {
+      const result = await domain(tx);
+      await this.appendInTx(tx, {
+        ...audit,
+        metadata: {
+          ...(audit.metadata ?? {}),
+          outcome: "success",
+        },
+      });
+      return result;
+    });
+  }
+
+  /**
+   * Explicit ambiguous-outcome error for post-commit audit failure
+   * (interceptor path). Clients must refresh/reconcile — never blind-retry.
+   */
+  reconciliationRequiredError(message?: string): ServiceUnavailableException {
+    return new ServiceUnavailableException({
+      statusCode: 503,
+      code: PLATFORM_AUDIT_RECONCILIATION_CODE,
+      message:
+        message ??
+        "Platform audit write failed after mutation; refresh and reconcile before retry",
+      reconciliationRequired: true,
+    });
   }
 
   /** Strip obvious secret keys from metadata before persist. */

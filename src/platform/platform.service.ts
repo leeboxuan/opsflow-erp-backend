@@ -255,33 +255,41 @@ export class PlatformService {
     const status = dto.status ?? TenantStatus.SETUP;
     const modules = dto.modules?.length ? dto.modules : ALL_MODULES;
 
-    const tenant = await this.prisma.tenant.create({
-      data: {
-        name: dto.name.trim(),
-        slug,
-        timezone: dto.timezone ?? null,
-        status,
-        moduleEntitlements: {
-          create: modules.map((module) => ({
-            module,
-            enabled: true,
-          })),
+    // Domain create + required PlatformAuditLog in one Prisma transaction.
+    const tenant = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.tenant.create({
+        data: {
+          name: dto.name.trim(),
+          slug,
+          timezone: dto.timezone ?? null,
+          status,
+          moduleEntitlements: {
+            create: modules.map((module) => ({
+              module,
+              enabled: true,
+            })),
+          },
         },
-      },
-      include: {
-        moduleEntitlements: true,
-        _count: { select: { memberships: true } },
-      },
-    });
-
-    await this.audit.append({
-      actorPlatformAdminId: actor.platformAdminId,
-      actorUserId: actor.userId,
-      action: "TENANT_CREATE",
-      targetTenantId: tenant.id,
-      entityType: "Tenant",
-      entityId: tenant.id,
-      metadata: { slug: tenant.slug, status: tenant.status, modules },
+        include: {
+          moduleEntitlements: true,
+          _count: { select: { memberships: true } },
+        },
+      });
+      await this.audit.appendInTx(tx, {
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "TENANT_CREATE",
+        targetTenantId: created.id,
+        entityType: "Tenant",
+        entityId: created.id,
+        metadata: {
+          slug: created.slug,
+          status: created.status,
+          modules,
+          outcome: "success",
+        },
+      });
+      return created;
     });
 
     return this.mapTenant(tenant);
@@ -311,30 +319,32 @@ export class PlatformService {
       if (clash) throw new ConflictException(`Tenant slug already exists: ${slug}`);
     }
 
-    const updated = await this.prisma.tenant.update({
-      where: { id: tenantId },
-      data: {
-        ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
-        ...(dto.slug !== undefined
-          ? { slug: dto.slug.trim().toLowerCase() }
-          : {}),
-        ...(dto.timezone !== undefined ? { timezone: dto.timezone } : {}),
-        ...(dto.status !== undefined ? { status: dto.status } : {}),
-      },
-      include: {
-        moduleEntitlements: true,
-        _count: { select: { memberships: true } },
-      },
-    });
-
-    await this.audit.append({
-      actorPlatformAdminId: actor.platformAdminId,
-      actorUserId: actor.userId,
-      action: "TENANT_UPDATE",
-      targetTenantId: tenantId,
-      entityType: "Tenant",
-      entityId: tenantId,
-      metadata: { patch: dto },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.tenant.update({
+        where: { id: tenantId },
+        data: {
+          ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+          ...(dto.slug !== undefined
+            ? { slug: dto.slug.trim().toLowerCase() }
+            : {}),
+          ...(dto.timezone !== undefined ? { timezone: dto.timezone } : {}),
+          ...(dto.status !== undefined ? { status: dto.status } : {}),
+        },
+        include: {
+          moduleEntitlements: true,
+          _count: { select: { memberships: true } },
+        },
+      });
+      await this.audit.appendInTx(tx, {
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "TENANT_UPDATE",
+        targetTenantId: tenantId,
+        entityType: "Tenant",
+        entityId: tenantId,
+        metadata: { patch: dto, outcome: "success" },
+      });
+      return row;
     });
 
     return this.mapTenant(updated);
@@ -348,23 +358,26 @@ export class PlatformService {
     const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant) throw new NotFoundException("Tenant not found");
 
-    const updated = await this.prisma.tenant.update({
-      where: { id: tenantId },
-      data: { status: TenantStatus.SUSPENDED },
-      include: {
-        moduleEntitlements: true,
-        _count: { select: { memberships: true } },
-      },
-    });
-
-    await this.audit.append({
-      actorPlatformAdminId: actor.platformAdminId,
-      actorUserId: actor.userId,
-      action: "TENANT_SUSPEND",
-      targetTenantId: tenantId,
-      entityType: "Tenant",
-      entityId: tenantId,
-      reason: reason ?? null,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.tenant.update({
+        where: { id: tenantId },
+        data: { status: TenantStatus.SUSPENDED },
+        include: {
+          moduleEntitlements: true,
+          _count: { select: { memberships: true } },
+        },
+      });
+      await this.audit.appendInTx(tx, {
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "TENANT_SUSPEND",
+        targetTenantId: tenantId,
+        entityType: "Tenant",
+        entityId: tenantId,
+        reason: reason ?? null,
+        metadata: { outcome: "success" },
+      });
+      return row;
     });
 
     return this.mapTenant(updated);
@@ -378,23 +391,26 @@ export class PlatformService {
     const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant) throw new NotFoundException("Tenant not found");
 
-    const updated = await this.prisma.tenant.update({
-      where: { id: tenantId },
-      data: { status: TenantStatus.ACTIVE },
-      include: {
-        moduleEntitlements: true,
-        _count: { select: { memberships: true } },
-      },
-    });
-
-    await this.audit.append({
-      actorPlatformAdminId: actor.platformAdminId,
-      actorUserId: actor.userId,
-      action: "TENANT_REACTIVATE",
-      targetTenantId: tenantId,
-      entityType: "Tenant",
-      entityId: tenantId,
-      reason: reason ?? null,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.tenant.update({
+        where: { id: tenantId },
+        data: { status: TenantStatus.ACTIVE },
+        include: {
+          moduleEntitlements: true,
+          _count: { select: { memberships: true } },
+        },
+      });
+      await this.audit.appendInTx(tx, {
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "TENANT_REACTIVATE",
+        targetTenantId: tenantId,
+        entityType: "Tenant",
+        entityId: tenantId,
+        reason: reason ?? null,
+        metadata: { outcome: "success" },
+      });
+      return row;
     });
 
     return this.mapTenant(updated);
@@ -428,31 +444,33 @@ export class PlatformService {
       throw new BadRequestException("modules array is required");
     }
 
-    for (const entry of dto.modules) {
-      if (!ALL_MODULES.includes(entry.module)) {
-        throw new BadRequestException(`Invalid module: ${entry.module}`);
+    await this.prisma.$transaction(async (tx) => {
+      for (const entry of dto.modules) {
+        if (!ALL_MODULES.includes(entry.module)) {
+          throw new BadRequestException(`Invalid module: ${entry.module}`);
+        }
+        await tx.tenantModuleEntitlement.upsert({
+          where: {
+            tenantId_module: { tenantId, module: entry.module },
+          },
+          create: {
+            tenantId,
+            module: entry.module,
+            enabled: entry.enabled === true,
+          },
+          update: { enabled: entry.enabled === true },
+        });
       }
-      await this.prisma.tenantModuleEntitlement.upsert({
-        where: {
-          tenantId_module: { tenantId, module: entry.module },
-        },
-        create: {
-          tenantId,
-          module: entry.module,
-          enabled: entry.enabled === true,
-        },
-        update: { enabled: entry.enabled === true },
-      });
-    }
 
-    await this.audit.append({
-      actorPlatformAdminId: actor.platformAdminId,
-      actorUserId: actor.userId,
-      action: "TENANT_MODULES_SET",
-      targetTenantId: tenantId,
-      entityType: "TenantModuleEntitlement",
-      entityId: tenantId,
-      metadata: { modules: dto.modules },
+      await this.audit.appendInTx(tx, {
+        actorPlatformAdminId: actor.platformAdminId,
+        actorUserId: actor.userId,
+        action: "TENANT_MODULES_SET",
+        targetTenantId: tenantId,
+        entityType: "TenantModuleEntitlement",
+        entityId: tenantId,
+        metadata: { modules: dto.modules, outcome: "success" },
+      });
     });
 
     return this.getModules(tenantId);

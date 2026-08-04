@@ -3,12 +3,14 @@ import {
   ExecutionContext,
   Injectable,
   NestInterceptor,
-  ServiceUnavailableException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { Observable, from, throwError } from "rxjs";
 import { catchError, switchMap } from "rxjs/operators";
-import { PlatformAuditService } from "../../platform/platform-audit.service";
+import {
+  PLATFORM_AUDIT_RECONCILIATION_CODE,
+  PlatformAuditService,
+} from "../../platform/platform-audit.service";
 import {
   DESTRUCTIVE_ACTION_KEY,
   type DestructiveActionMeta,
@@ -26,12 +28,15 @@ const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
  * Fires only when RequestContext is PLATFORM_TENANT_OPERATION.
  * Writes PLATFORM_TENANT_<RESOURCE>_<ACTION> (or path-derived) events.
  *
- * Failure semantics:
- * - Destructive / @DestructiveAction routes: fail closed — if audit cannot be
- *   written after a successful handler, throw ServiceUnavailableException so
- *   the client does not treat the mutation as silently unaudited.
- *   (Prisma mutation may already have committed; compensation is operational.)
- * - Other mutating routes: best-effort audit (log failure, still return success).
+ * Atomicity limits (Phase 5 — honest):
+ * - Control-plane PlatformService Prisma mutations use runWithRequiredAudit /
+ *   appendInTx so domain + PlatformAuditLog share one transaction.
+ * - This interceptor runs AFTER the handler. For @DestructiveAction routes the
+ *   domain write may already be committed. On audit failure we return 503 with
+ *   code PLATFORM_AUDIT_RECONCILIATION_REQUIRED — clients must refresh, never
+ *   blind-retry. Remaining ambiguous cases are listed in the rollout runbook.
+ * - Non-destructive mutating routes: best-effort audit.
+ * - Never move domain logic into this interceptor.
  */
 @Injectable()
 export class PlatformTenantMutationAuditInterceptor implements NestInterceptor {
@@ -56,6 +61,11 @@ export class PlatformTenantMutationAuditInterceptor implements NestInterceptor {
     // Skip /platform/* control-plane (handled by PlatformService directly).
     const path = String(request.route?.path ?? request.url ?? "");
     if (path.includes("platform") && String(request.url ?? "").includes("/platform")) {
+      return next.handle();
+    }
+
+    // Domain already wrote transactional audit (opt-in marker).
+    if (request.platformAuditCommittedInTx === true) {
       return next.handle();
     }
 
@@ -87,6 +97,9 @@ export class PlatformTenantMutationAuditInterceptor implements NestInterceptor {
           outcome,
           ...(errMsg ? { error: errMsg.slice(0, 200) } : {}),
           actorType: "PLATFORM_ADMIN",
+          ...(failClosed && outcome === "success"
+            ? { auditCoupling: "post_commit_interceptor" }
+            : {}),
         },
       });
     };
@@ -97,10 +110,10 @@ export class PlatformTenantMutationAuditInterceptor implements NestInterceptor {
           (async () => {
             try {
               await writeAudit("success");
-            } catch (e: any) {
+            } catch {
               if (failClosed) {
-                throw new ServiceUnavailableException(
-                  "Platform audit write failed; mutation must be reviewed before retry",
+                throw this.audit.reconciliationRequiredError(
+                  `Platform audit write failed after mutation (${PLATFORM_AUDIT_RECONCILIATION_CODE}); refresh and reconcile before retry`,
                 );
               }
               // best-effort for non-destructive

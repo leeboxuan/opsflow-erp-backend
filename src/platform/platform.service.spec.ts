@@ -9,7 +9,12 @@ import { PlatformAuditService } from "./platform-audit.service";
 describe("PlatformService", () => {
   let service: PlatformService;
   let prisma: any;
-  let audit: { append: jest.Mock; redactMetadata: jest.Mock };
+  let audit: {
+    append: jest.Mock;
+    appendInTx: jest.Mock;
+    runWithRequiredAudit: jest.Mock;
+    redactMetadata: jest.Mock;
+  };
 
   const actor = { platformAdminId: "pa-actor", userId: "user-actor" };
 
@@ -38,6 +43,7 @@ describe("PlatformService", () => {
       platformAuditLog: {
         count: jest.fn(),
         findMany: jest.fn(),
+        create: jest.fn(),
       },
       user: {
         findUnique: jest.fn(),
@@ -53,6 +59,8 @@ describe("PlatformService", () => {
 
     audit = {
       append: jest.fn().mockResolvedValue(undefined),
+      appendInTx: jest.fn().mockResolvedValue(undefined),
+      runWithRequiredAudit: jest.fn(),
       redactMetadata: jest.fn((m) => m),
     };
 
@@ -91,7 +99,8 @@ describe("PlatformService", () => {
     );
 
     expect(result.slug).toBe("acme");
-    expect(audit.append).toHaveBeenCalledWith(
+    expect(audit.appendInTx).toHaveBeenCalledWith(
+      prisma,
       expect.objectContaining({ action: "TENANT_CREATE", targetTenantId: "t1" }),
     );
   });
@@ -151,7 +160,8 @@ describe("PlatformService", () => {
 
     const result = await service.suspendTenant("t1", "non-payment", actor);
     expect(result.status).toBe(TenantStatus.SUSPENDED);
-    expect(audit.append).toHaveBeenCalledWith(
+    expect(audit.appendInTx).toHaveBeenCalledWith(
+      prisma,
       expect.objectContaining({ action: "TENANT_SUSPEND", reason: "non-payment" }),
     );
   });
@@ -172,7 +182,8 @@ describe("PlatformService", () => {
 
     const result = await service.reactivateTenant("t1", "paid", actor);
     expect(result.status).toBe(TenantStatus.ACTIVE);
-    expect(audit.append).toHaveBeenCalledWith(
+    expect(audit.appendInTx).toHaveBeenCalledWith(
+      prisma,
       expect.objectContaining({ action: "TENANT_REACTIVATE" }),
     );
   });
@@ -207,7 +218,8 @@ describe("PlatformService", () => {
     expect(after.modules.find((m) => m.module === TenantModule.FINANCE)?.enabled).toBe(
       true,
     );
-    expect(audit.append).toHaveBeenCalledWith(
+    expect(audit.appendInTx).toHaveBeenCalledWith(
+      prisma,
       expect.objectContaining({ action: "TENANT_MODULES_SET" }),
     );
   });

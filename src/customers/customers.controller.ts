@@ -21,11 +21,15 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { FileInterceptor } from "@nestjs/platform-express";
-import { MembershipStatus, Role } from "@prisma/client";
+import { MembershipStatus, Role, TenantModule } from "@prisma/client";
 
 import { AuthGuard } from "../shared/auth/guards/auth.guard";
 import { RoleGuard, Roles } from "../shared/auth/guards/role.guard";
 import { TenantGuard } from "../shared/auth/guards/tenant.guard";
+import {
+  ModuleEntitlementGuard,
+  RequiresTenantModule,
+} from "../shared/auth/guards/module-entitlement.guard";
 import { CustomersService } from "./customers.service";
 import {
   CreateCustomerCompanyDto,
@@ -96,8 +100,9 @@ export class CustomersController {
   }
 
   @Post("companies/:companyId/quotation")
-  @UseGuards(RoleGuard)
+  @UseGuards(RoleGuard, ModuleEntitlementGuard)
   @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @RequiresTenantModule(TenantModule.TRANSPORT)
   @ApiOperation({
     summary:
       "Upload signed company quotation for record only (no parsing); supersedes prior ACTIVE",
@@ -138,8 +143,9 @@ export class CustomersController {
   }
 
   @Get("companies/:companyId/quotations")
-  @UseGuards(RoleGuard)
+  @UseGuards(RoleGuard, ModuleEntitlementGuard)
   @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @RequiresTenantModule(TenantModule.TRANSPORT)
   @ApiOperation({ summary: "List quotation versions for a company" })
   async listCompanyQuotations(
     @Request() req: any,
@@ -150,8 +156,9 @@ export class CustomersController {
   }
 
   @Get("companies/:companyId/quotation/active")
-  @UseGuards(RoleGuard)
+  @UseGuards(RoleGuard, ModuleEntitlementGuard)
   @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @RequiresTenantModule(TenantModule.TRANSPORT)
   @ApiOperation({ summary: "Get ACTIVE quotation with signed URL" })
   async getActiveQuotation(
     @Request() req: any,
@@ -162,8 +169,9 @@ export class CustomersController {
   }
 
   @Get("companies/:companyId/quotation/lines")
-  @UseGuards(RoleGuard)
+  @UseGuards(RoleGuard, ModuleEntitlementGuard)
   @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @RequiresTenantModule(TenantModule.TRANSPORT)
   @ApiOperation({
     summary:
       "[Deprecated] Customer signed quotation lines endpoint (returns empty; use tenant master QUOTATION active items)",

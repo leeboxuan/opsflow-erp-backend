@@ -45,13 +45,15 @@ describe('WarehouseJobsController metadata', () => {
     expect(path).toBe('warehouse-jobs');
   });
 
-  it('uses AuthGuard, TenantGuard, and RoleGuard at class level', () => {
+  it('uses AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard, DestructiveActionGuard', () => {
     expect(controllerSource).toMatch(
-      /@UseGuards\(AuthGuard, TenantGuard, RoleGuard\)/,
+      /@UseGuards\(\s*AuthGuard,\s*TenantGuard,\s*RoleGuard,\s*ModuleEntitlementGuard,\s*DestructiveActionGuard\s*\)/,
     );
     expect(controllerSource).toContain('AuthGuard');
     expect(controllerSource).toContain('TenantGuard');
     expect(controllerSource).toContain('RoleGuard');
+    expect(controllerSource).toContain('ModuleEntitlementGuard');
+    expect(controllerSource).toContain('DestructiveActionGuard');
   });
 
   it('defaults class roles to ADMIN, OPS, FINANCE, WAREHOUSE (excludes DRIVER and CUSTOMER)', () => {

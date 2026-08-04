@@ -162,6 +162,15 @@ describe("CustomersService customer-company documents listing", () => {
         count: jest.fn().mockResolvedValue(0),
         findFirst: jest.fn(),
       },
+      tenantModuleEntitlement: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            { module: "TRANSPORT" },
+            { module: "WAREHOUSING" },
+            { module: "FINANCE" },
+          ]),
+      },
       $transaction: jest.fn(async (ops: any) => {
         if (Array.isArray(ops)) return Promise.all(ops);
         return ops(prisma);

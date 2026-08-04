@@ -9,6 +9,7 @@ import {
   MembershipStatus,
   QuotationVersionStatus,
   Role,
+  TenantModule,
   UserRole,
 } from "@prisma/client";
 import { PrismaService } from "../shared/prisma/prisma.service";
@@ -73,6 +74,58 @@ export class CustomersService {
 
   private normalizeEmail(email: string): string {
     return String(email ?? "").trim().toLowerCase();
+  }
+
+  /** Enabled TenantModule set for projection stripping (not a trust boundary). */
+  async getEnabledModules(tenantId: string): Promise<Set<TenantModule>> {
+    const rows = await this.prisma.tenantModuleEntitlement.findMany({
+      where: { tenantId, enabled: true },
+      select: { module: true },
+    });
+    return new Set(rows.map((r) => r.module));
+  }
+
+  /**
+   * Shared customer identity stays module-neutral; strip FINANCE-owned document
+   * rows (invoice PDFs) when FINANCE is disabled so counts/lists cannot leak.
+   */
+  private applyModuleDocumentProjection(where: any, enabled: Set<TenantModule>) {
+    if (!enabled.has(TenantModule.FINANCE)) {
+      const financeExclude = {
+        AND: [
+          { type: { notIn: ["INVOICE", "COMPANY_INVOICE"] } },
+          { sourceInvoiceId: null },
+        ],
+      };
+      if (!where.AND) {
+        where.AND = [financeExclude];
+      } else if (Array.isArray(where.AND)) {
+        where.AND.push(financeExclude);
+      } else {
+        where.AND = [where.AND, financeExclude];
+      }
+    }
+    return where;
+  }
+
+  /**
+   * Hide finance-owned docs when FINANCE disabled — same 404 as missing to
+   * avoid existence leaks via error differences.
+   */
+  private async assertDocumentVisibleUnderModules(
+    tenantId: string,
+    row: { type?: string | null; sourceInvoiceId?: string | null },
+  ): Promise<void> {
+    const enabled = await this.getEnabledModules(tenantId);
+    if (enabled.has(TenantModule.FINANCE)) return;
+    const type = String(row?.type ?? "").toUpperCase();
+    if (
+      type === "INVOICE" ||
+      type === "COMPANY_INVOICE" ||
+      String(row?.sourceInvoiceId ?? "").trim()
+    ) {
+      throw new NotFoundException("Customer company document not found");
+    }
   }
 
   async searchCompanies(
@@ -756,6 +809,7 @@ export class CustomersService {
   }> {
     await this.assertCustomerCompanyExists(tenantId, customerCompanyId);
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
+    const enabled = await this.getEnabledModules(tenantId);
 
     const where: any = {
       tenantId,
@@ -763,6 +817,7 @@ export class CustomersService {
       status: "ACTIVE",
     };
     applyQSearch(where, query.q, ["fileName"]);
+    this.applyModuleDocumentProjection(where, enabled);
 
     const orderBy = buildOrderBy(
       query.sortBy,
@@ -857,6 +912,7 @@ export class CustomersService {
       },
     });
     if (!row) throw new NotFoundException("Customer company document not found");
+    await this.assertDocumentVisibleUnderModules(tenantId, row);
     return this.attachCustomerDocumentSignedUrl(row as any);
   }
 
@@ -878,6 +934,7 @@ export class CustomersService {
       },
     });
     if (!row) throw new NotFoundException("Company document not found");
+    await this.assertDocumentVisibleUnderModules(tenantId, row);
     return this.attachCustomerDocumentSignedUrl(row as any);
   }
 
@@ -971,6 +1028,7 @@ export class CustomersService {
       select: { type: true, sourceInvoiceId: true, storageKey: true, fileUrl: true },
     });
     if (!row) throw new NotFoundException("Customer company document not found");
+    await this.assertDocumentVisibleUnderModules(tenantId, row);
 
     const supabase = this.supabaseService.getClient();
     const bucket = this.resolveCustomerDocumentBucket(row as any);
@@ -1000,6 +1058,7 @@ export class CustomersService {
       select: { type: true, sourceInvoiceId: true, storageKey: true, fileUrl: true },
     });
     if (!row) throw new NotFoundException("Company document not found");
+    await this.assertDocumentVisibleUnderModules(tenantId, row);
     const supabase = this.supabaseService.getClient();
     const bucket = this.resolveCustomerDocumentBucket(row as any);
     const objectKey = row.storageKey ?? row.fileUrl;
