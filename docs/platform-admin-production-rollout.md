@@ -14,7 +14,7 @@ Fill in after Phase 5 push (placeholders until commit hashes are known):
 | Component | Branch | Commit |
 |-----------|--------|--------|
 | Backend (`opsflow-erp-backend`) | `v3/main` | `a5217c2` (Phase 5 tip; Phase 1–4: `d13a720`…`9618375`) |
-| Web (`opsflow-erp-web-v2`) | `v3/main` | _(fill after web Phase 5 push)_ |
+| Web (`opsflow-erp-web-v2`) | `v3/main` | `f36de05` (Phase 5 tip; Phase 1–4: `f424153`…`a5916d9`) |
 | Driver mobile | `main` | `84a1102` (unchanged) |
 | Warehouse mobile | `main` | `8b1e0a0` (unchanged) |
 
