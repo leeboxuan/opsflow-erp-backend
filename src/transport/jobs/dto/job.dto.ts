@@ -1,4 +1,4 @@
-import { ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   CollectionType,
   JobType,
@@ -455,4 +455,104 @@ export class JobItemDto {
   qty: number | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export class JobDetailsTripPayoutLineDto {
+  id!: string;
+  sourceType!: JobChargeSourceType;
+  payoutItemId!: string | null;
+  earningRateMasterId!: string | null;
+  code!: string | null;
+  label!: string;
+  description!: string | null;
+  unit!: string | null;
+  quantity!: number;
+
+  @ApiPropertyOptional({ description: "Stored payout rate in integer cents." })
+  amountCents!: number | null;
+
+  @ApiPropertyOptional({ description: "Stored payout line total in integer cents." })
+  totalCents!: number | null;
+
+  @ApiProperty({ description: "Effective line total in integer cents." })
+  effectiveTotalCents!: number;
+
+  isManual!: boolean;
+  requiresManualAmount!: boolean;
+  isSelectableForTripEarning!: boolean;
+  sortOrder!: number;
+}
+
+export class JobDetailsTripDto {
+  id!: string;
+  tripDisplayRef!: string;
+  tripSequence!: number | null;
+  jobSequence!: number | null;
+  displayTitle!: string | null;
+  status!: string;
+  assignedDriverUserId!: string | null;
+  driverId!: string | null;
+  assignedDriverName!: string | null;
+  assignedVehiclePlateNo!: string | null;
+  plannedStartAt!: Date | null;
+  startedAt!: Date | null;
+  closedAt!: Date | null;
+  stopCount!: number;
+  containerCount!: number;
+
+  @ApiProperty({ description: "Canonical selectable payout total in integer cents." })
+  payoutTotalCents!: number;
+
+  payoutLines!: JobDetailsTripPayoutLineDto[];
+  documents!: JobDocumentDto[];
+}
+
+export class JobPayoutSummaryDto {
+  @ApiProperty({ example: "SGD" })
+  currency!: string;
+
+  @ApiProperty({ description: "Job payout total in integer cents." })
+  totalCents!: number;
+
+  @ApiProperty({ description: "All trips attached to the job, including cancelled trips." })
+  totalTrips!: number;
+
+  @ApiProperty({ description: "Non-cancelled trips with an effective payout above zero." })
+  tripsWithPayout!: number;
+
+  @ApiProperty({ description: "Non-cancelled trips with no effective payout." })
+  tripsWithoutPayout!: number;
+}
+
+export class JobContainerSummaryItemDto {
+  id!: string;
+  tripJobItemId!: string | null;
+  itemCode!: string;
+  sealNo!: string | null;
+  description!: string | null;
+  qty!: number | null;
+  pickupReference!: string | null;
+  tripId!: string | null;
+  tripDisplayRef!: string | null;
+  containerNumberSnapshot!: string | null;
+}
+
+export class JobContainerSummaryDto {
+  @ApiProperty({ description: "Distinct JobItem records attached to the job." })
+  totalContainers!: number;
+
+  @ApiProperty({ description: "Non-cancelled trips with canonical TripJobItem links." })
+  tripsWithContainers!: number;
+
+  @ApiProperty({ description: "Non-cancelled trips without canonical TripJobItem links." })
+  tripsWithoutContainers!: number;
+
+  containers!: JobContainerSummaryItemDto[];
+}
+
+export class JobDetailsDto {
+  job!: JobDto;
+  payoutSummary!: JobPayoutSummaryDto;
+  containerSummary!: JobContainerSummaryDto;
+  trips!: JobDetailsTripDto[];
 }

@@ -58,7 +58,12 @@ import {
   ReorderJobTripsDto,
   SuggestJobTripOrderDto,
 } from "../trips/dto/job-trip.dto";
-import { JobDto, JobDocumentDto, JobTripResponseDto } from "./dto/job.dto";
+import {
+  JobDetailsDto,
+  JobDto,
+  JobDocumentDto,
+  JobTripResponseDto,
+} from "./dto/job.dto";
 import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
 
 @ApiTags("transport-jobs")
@@ -354,6 +359,20 @@ export class TransportJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.listLiveTripTracking(tenantId, accessUser);
+  }
+
+  @Get(":jobId/details")
+  @ApiOperation({ summary: "Get complete job operational and payout details" })
+  @ApiOkResponse({ type: JobDetailsDto })
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  async getDetails(@Req() req: any, @Param("jobId") jobId: string) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.getDetails(tenantId, jobId, accessUser);
   }
 
   @Get(":jobId")

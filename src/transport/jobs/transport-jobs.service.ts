@@ -107,11 +107,18 @@ import { CancelJobDto } from "./dto/cancel-job.dto";
 import { JobListQueryDto } from "./dto/job-list-query.dto";
 import {
   JobDto,
+  JobDetailsDto,
   JobDocumentDto,
   JobTrackingDto,
   JobTripResponseDto,
   AuditLogEntryDto,
 } from "./dto/job.dto";
+import {
+  buildJobContainerSummary,
+  buildJobPayoutSummary,
+  effectivePayoutLineTotalCents,
+  tripPayoutTotalCents,
+} from "./job-details-summary";
 import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
 import {
   AppendJobTripDto,
@@ -2616,6 +2623,152 @@ export class TransportJobsService {
     await this.attachTripDocumentsToJobDto(tenantId, dto);
 
     return dto;
+  }
+
+  async getDetails(
+    tenantId: string,
+    jobId: string,
+    user: any,
+  ): Promise<JobDetailsDto> {
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+      include: {
+        customerCompany: { select: { id: true, name: true } },
+        assignedDriver: { select: { id: true, name: true, email: true } },
+        createdBy: { select: { id: true, name: true, email: true } },
+        items: { orderBy: { createdAt: "asc" } },
+        charges: {
+          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        },
+        documents: {
+          where: { isActive: true },
+          orderBy: { createdAt: "desc" },
+          include: documentUploadedByInclude,
+        },
+        trips: {
+          orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
+          include: {
+            drivers: { select: { id: true, name: true, email: true } },
+            vehicles: { select: { id: true, plateNo: true, type: true } },
+            fleetVehicle: { select: { id: true, plateNo: true, type: true } },
+            payoutLines: {
+              orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+            },
+            tripJobItems: {
+              select: {
+                id: true,
+                jobItemId: true,
+                containerNumberSnapshot: true,
+              },
+            },
+            documents: {
+              where: {
+                isActive: true,
+                type: { in: ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES },
+              },
+              orderBy: { createdAt: "desc" },
+              include: documentUploadedByInclude,
+            },
+            _count: { select: { stops: true, tripJobItems: true } },
+          },
+        },
+      },
+    });
+
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job, user);
+
+    const driverNameMap = await this.buildUserNameMapByIds(
+      tenantId,
+      Array.from(
+        new Set(
+          job.trips
+            .map((trip) => trip.assignedDriverUserId)
+            .filter((id): id is string => Boolean(id)),
+        ),
+      ),
+    );
+
+    const tripDisplayRefById = new Map<string, string>(
+      job.trips.map((trip): [string, string] => [
+        trip.id,
+        buildTripDisplayRef({
+          jobInternalRef: job.internalRef,
+          tripSequence: trip.tripSequence,
+          jobSequence: trip.jobSequence,
+          tripId: trip.id,
+        }),
+      ]),
+    );
+
+    const payoutSummary = buildJobPayoutSummary(job.trips);
+    const containerSummary = buildJobContainerSummary(
+      job.items,
+      job.trips,
+      tripDisplayRefById,
+    );
+    const coreJob = toJobDto(job);
+    coreJob.trips = undefined;
+    coreJob.documents = job.documents.map((document) =>
+      this.toDocumentMetadataDto(document),
+    );
+
+    const trips = job.trips.map((trip) => {
+      const payoutLines = trip.payoutLines.map((line) => ({
+        id: line.id,
+        sourceType: line.sourceType,
+        payoutItemId: line.payoutItemId ?? null,
+        earningRateMasterId: line.earningRateMasterId ?? null,
+        code: line.code ?? null,
+        label: line.label,
+        description: line.description ?? null,
+        unit: line.unit ?? null,
+        quantity: line.quantity,
+        amountCents: line.amountCents ?? null,
+        totalCents: line.totalCents ?? null,
+        effectiveTotalCents: effectivePayoutLineTotalCents(line),
+        isManual: line.isManual,
+        requiresManualAmount: line.requiresManualAmount,
+        isSelectableForTripEarning: line.isSelectableForTripEarning,
+        sortOrder: line.sortOrder,
+      }));
+
+      return {
+        id: trip.id,
+        tripDisplayRef: tripDisplayRefById.get(trip.id) ?? trip.id,
+        tripSequence: trip.tripSequence ?? null,
+        jobSequence: trip.jobSequence ?? null,
+        displayTitle: trip.displayTitle ?? trip.title ?? null,
+        status: trip.status,
+        assignedDriverUserId: trip.assignedDriverUserId ?? null,
+        driverId: trip.driverId ?? null,
+        assignedDriverName:
+          (trip.assignedDriverUserId
+            ? driverNameMap.get(trip.assignedDriverUserId)
+            : null) ??
+          trip.drivers?.name ??
+          null,
+        assignedVehiclePlateNo:
+          trip.fleetVehicle?.plateNo ?? trip.vehicles?.plateNo ?? null,
+        plannedStartAt: trip.plannedStartAt ?? null,
+        startedAt: trip.startedAt ?? null,
+        closedAt: trip.closedAt ?? null,
+        stopCount: trip._count.stops,
+        containerCount: trip._count.tripJobItems,
+        payoutTotalCents: tripPayoutTotalCents(trip.payoutLines),
+        payoutLines,
+        documents: trip.documents.map((document) =>
+          this.toDocumentMetadataDto(document),
+        ),
+      };
+    });
+
+    return {
+      job: coreJob,
+      payoutSummary,
+      containerSummary,
+      trips,
+    };
   }
 
   private async attachTripDocumentsToJobDto(
