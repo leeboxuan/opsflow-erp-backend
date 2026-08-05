@@ -40,11 +40,14 @@ function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
   });
   const parts = dtf.formatToParts(date);
   const map = new Map(parts.map((p) => [p.type, p.value] as const));
+  // Some Intl implementations represent midnight as 24:00 on the same
+  // calendar date. Date.UTC would otherwise advance it by a full day.
+  const hour = Number(map.get("hour"));
   const asUtc = Date.UTC(
     Number(map.get("year")),
     Number(map.get("month")) - 1,
     Number(map.get("day")),
-    Number(map.get("hour")),
+    hour === 24 ? 0 : hour,
     Number(map.get("minute")),
     Number(map.get("second")),
   );
