@@ -5,6 +5,8 @@ import { StatisticsDriversController } from "./statistics-drivers.controller";
 import { StatisticsDriversService } from "./statistics-drivers.service";
 import { StatisticsExceptionsController } from "./statistics-exceptions.controller";
 import { StatisticsExceptionsService } from "./statistics-exceptions.service";
+import { StatisticsExportController } from "./statistics-export.controller";
+import { StatisticsExportService } from "./statistics-export.service";
 import { StatisticsFinanceController } from "./statistics-finance.controller";
 import { StatisticsFinanceService } from "./statistics-finance.service";
 import { StatisticsOverviewController } from "./statistics-overview.controller";
@@ -24,12 +26,14 @@ import { StatisticsOverviewService } from "./statistics-overview.service";
     StatisticsDriversController,
     StatisticsFinanceController,
     StatisticsExceptionsController,
+    StatisticsExportController,
   ],
   providers: [
     StatisticsOverviewService,
     StatisticsDriversService,
     StatisticsFinanceService,
     StatisticsExceptionsService,
+    StatisticsExportService,
   ],
 })
 export class StatisticsModule {}

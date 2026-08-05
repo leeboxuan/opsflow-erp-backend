@@ -139,12 +139,7 @@ class BoundedExceptionCollector {
     if (this.limit === 0) return;
     this.rows.push(row);
     this.rows.sort((left, right) =>
-      compareExceptions(
-        left,
-        right,
-        this.sortBy,
-        this.sortDir,
-      ),
+      compareExceptions(left, right, this.sortBy, this.sortDir),
     );
     if (this.rows.length > this.limit) this.rows.pop();
   }
@@ -169,6 +164,40 @@ export class StatisticsExceptionsService {
     tenantId: string,
     query: StatisticsExceptionsQueryDto,
   ): Promise<StatisticsExceptionsDto> {
+    const pagination = parsePaginationFromQuery(query);
+    return this.collectExceptions(
+      tenantId,
+      query,
+      pagination.skip,
+      pagination.take,
+      pagination.skip + pagination.take,
+      pagination.page,
+      pagination.pageSize,
+    );
+  }
+
+  /**
+   * Internal bounded export projection. It scans each existing category once,
+   * retains at most maxRows + 1 sorted rows, and still computes the exact total.
+   */
+  async getExceptionsForExport(
+    tenantId: string,
+    query: StatisticsExceptionsQueryDto,
+    maxRows: number,
+  ): Promise<StatisticsExceptionsDto> {
+    const take = maxRows + 1;
+    return this.collectExceptions(tenantId, query, 0, take, take, 1, take);
+  }
+
+  private async collectExceptions(
+    tenantId: string,
+    query: StatisticsExceptionsQueryDto,
+    skip: number,
+    take: number,
+    collectorLimit: number,
+    page: number,
+    pageSize: number,
+  ): Promise<StatisticsExceptionsDto> {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       select: { timezone: true },
@@ -179,68 +208,30 @@ export class StatisticsExceptionsService {
       tenant?.timezone,
       now,
     );
-    const pagination = parsePaginationFromQuery(query);
     const sortBy: ExceptionSortField =
-      query.sortBy === "reportingTimestamp" ||
-      query.sortBy === "key"
+      query.sortBy === "reportingTimestamp" || query.sortBy === "key"
         ? query.sortBy
         : "severity";
     const sortDir: ExceptionSortDirection =
       query.sortDir === "asc" ? "asc" : "desc";
     const collector = new BoundedExceptionCollector(
-      pagination.skip + pagination.take,
+      collectorLimit,
       sortBy,
       sortDir,
     );
 
-    await this.scanCompletedTripExceptions(
-      tenantId,
-      query,
-      range,
-      collector,
-    );
-    await this.scanClosedAtNullTimestampExceptions(
-      tenantId,
-      query,
-      collector,
-    );
+    await this.scanCompletedTripExceptions(tenantId, query, range, collector);
+    await this.scanClosedAtNullTimestampExceptions(tenantId, query, collector);
     await this.scanStaleTrips(tenantId, query, now, collector);
-    await this.scanCancelledTrips(
-      tenantId,
-      query,
-      range,
-      collector,
-    );
-    await this.scanReadyNotInvoiced(
-      tenantId,
-      query,
-      range,
-      collector,
-    );
-    await this.scanJobFinancialExceptions(
-      tenantId,
-      query,
-      range,
-      collector,
-    );
-    await this.scanOrphanInvoices(
-      tenantId,
-      query,
-      range,
-      collector,
-    );
+    await this.scanCancelledTrips(tenantId, query, range, collector);
+    await this.scanReadyNotInvoiced(tenantId, query, range, collector);
+    await this.scanJobFinancialExceptions(tenantId, query, range, collector);
+    await this.scanOrphanInvoices(tenantId, query, range, collector);
 
-    const result = collector.result(
-      pagination.skip,
-      pagination.take,
-    );
+    const result = collector.result(skip, take);
     return {
       data: result.data,
-      meta: buildPaginationMeta(
-        pagination.page,
-        pagination.pageSize,
-        result.total,
-      ),
+      meta: buildPaginationMeta(page, pageSize, result.total),
       countsByKey: result.countsByKey,
       timeZone: range.timeZone,
       generatedAt: now,
@@ -270,10 +261,7 @@ export class StatisticsExceptionsService {
       "ex_trip_missing_required_docs",
       query,
     );
-    const scanTimestamps = this.shouldScan(
-      "ex_invalid_timestamps",
-      query,
-    );
+    const scanTimestamps = this.shouldScan("ex_invalid_timestamps", query);
     if (!scanPayout && !scanDocuments && !scanTimestamps) return;
 
     let cursor: string | undefined;
@@ -347,11 +335,7 @@ export class StatisticsExceptionsService {
           })?.kind === "missing"
         ) {
           collector.add(
-            this.tripRow(
-              "ex_trip_missing_payout",
-              trip,
-              trip.closedAt,
-            ),
+            this.tripRow("ex_trip_missing_payout", trip, trip.closedAt),
           );
         }
         if (
@@ -363,23 +347,12 @@ export class StatisticsExceptionsService {
           ).complete
         ) {
           collector.add(
-            this.tripRow(
-              "ex_trip_missing_required_docs",
-              trip,
-              trip.closedAt,
-            ),
+            this.tripRow("ex_trip_missing_required_docs", trip, trip.closedAt),
           );
         }
-        if (
-          scanTimestamps &&
-          isInvalidCompletedTripTimestamp(trip)
-        ) {
+        if (scanTimestamps && isInvalidCompletedTripTimestamp(trip)) {
           collector.add(
-            this.tripRow(
-              "ex_invalid_timestamps",
-              trip,
-              trip.closedAt,
-            ),
+            this.tripRow("ex_invalid_timestamps", trip, trip.closedAt),
           );
         }
       }
@@ -402,9 +375,7 @@ export class StatisticsExceptionsService {
       },
       async (trip) => {
         if (isInvalidCompletedTripTimestamp(trip)) {
-          collector.add(
-            this.tripRow("ex_invalid_timestamps", trip, null),
-          );
+          collector.add(this.tripRow("ex_invalid_timestamps", trip, null));
         }
       },
     );
@@ -424,9 +395,7 @@ export class StatisticsExceptionsService {
       },
       async (trip) => {
         if (isStaleOperationalTrip(trip, now)) {
-          collector.add(
-            this.tripRow("ex_stale_operational_work", trip, null),
-          );
+          collector.add(this.tripRow("ex_stale_operational_work", trip, null));
         }
       },
     );
@@ -446,13 +415,7 @@ export class StatisticsExceptionsService {
         updatedAt: { gte: range.gte, lt: range.lt },
       },
       async (trip) => {
-        collector.add(
-          this.tripRow(
-            "ex_cancelled_trip",
-            trip,
-            trip.updatedAt,
-          ),
-        );
+        collector.add(this.tripRow("ex_cancelled_trip", trip, trip.updatedAt));
       },
     );
   }
@@ -476,7 +439,10 @@ export class StatisticsExceptionsService {
         take: EXCEPTION_BATCH_SIZE,
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
         select: { id: true, invoiceReadyAt: true },
-      })) as Array<{ id: string; invoiceReadyAt: Date | null }>;
+      })) as Array<{
+        id: string;
+        invoiceReadyAt: Date | null;
+      }>;
       if (jobs.length === 0) break;
       const jobIds = jobs.map((job) => job.id);
       const invoices = (await this.prisma.invoice.findMany({
@@ -495,11 +461,7 @@ export class StatisticsExceptionsService {
       for (const job of jobs) {
         if (!invoiced.has(job.id)) {
           collector.add(
-            this.jobRow(
-              "ex_ready_not_invoiced",
-              job.id,
-              job.invoiceReadyAt,
-            ),
+            this.jobRow("ex_ready_not_invoiced", job.id, job.invoiceReadyAt),
           );
         }
       }
@@ -514,10 +476,7 @@ export class StatisticsExceptionsService {
     range: { gte: Date; lt: Date },
     collector: BoundedExceptionCollector,
   ): Promise<void> {
-    const scanMissingCharges = this.shouldScan(
-      "ex_job_missing_charges",
-      query,
-    );
+    const scanMissingCharges = this.shouldScan("ex_job_missing_charges", query);
     const scanExcludedProfit = this.shouldScan(
       "ex_excluded_from_profit",
       query,
@@ -535,8 +494,13 @@ export class StatisticsExceptionsService {
               trips: {
                 some: {
                   tenantId,
-                  status: { in: [...COMPLETED_TRIP_STATUSES] },
-                  closedAt: { gte: range.gte, lt: range.lt },
+                  status: {
+                    in: [...COMPLETED_TRIP_STATUSES],
+                  },
+                  closedAt: {
+                    gte: range.gte,
+                    lt: range.lt,
+                  },
                 },
               },
             },
@@ -593,8 +557,7 @@ export class StatisticsExceptionsService {
               },
             })) as ExceptionPayoutLine[])
           : [];
-      const payoutsByTrip =
-        this.groupByTripId<ExceptionPayoutLine>(payoutRows);
+      const payoutsByTrip = this.groupByTripId<ExceptionPayoutLine>(payoutRows);
       const tripsByJob = new Map<string, ExceptionTrip[]>();
       for (const trip of trips) {
         if (!trip.jobId) continue;
@@ -627,11 +590,7 @@ export class StatisticsExceptionsService {
         const charges = chargesByJob.get(job.id) ?? [];
         if (scanMissingCharges && charges.length === 0) {
           collector.add(
-            this.jobRow(
-              "ex_job_missing_charges",
-              job.id,
-              reportingTimestamp,
-            ),
+            this.jobRow("ex_job_missing_charges", job.id, reportingTimestamp),
           );
         }
         if (scanExcludedProfit) {
@@ -677,39 +636,31 @@ export class StatisticsExceptionsService {
     if (!this.shouldScan("ex_orphan_invoice_job_link", query)) return;
     const hasEntityFilter = Boolean(
       query.customerId ||
-        query.jobId ||
-        query.tripId ||
-        query.driverId ||
-        query.vehicleId,
+      query.jobId ||
+      query.tripId ||
+      query.driverId ||
+      query.vehicleId,
     );
     if (!hasEntityFilter) {
+      await this.scanInvoiceBatchSet(tenantId, range, collector);
+      return;
+    }
+    await this.forEachFilteredJobIdBatch(tenantId, query, async (jobIds) => {
+      const trips = (await this.prisma.trip.findMany({
+        where: {
+          ...this.buildTripScope(tenantId, query),
+          jobId: { in: jobIds },
+        },
+        select: { id: true },
+      })) as Array<{ id: string }>;
       await this.scanInvoiceBatchSet(
         tenantId,
         range,
         collector,
+        jobIds,
+        trips.map((trip) => trip.id),
       );
-      return;
-    }
-    await this.forEachFilteredJobIdBatch(
-      tenantId,
-      query,
-      async (jobIds) => {
-        const trips = (await this.prisma.trip.findMany({
-          where: {
-            ...this.buildTripScope(tenantId, query),
-            jobId: { in: jobIds },
-          },
-          select: { id: true },
-        })) as Array<{ id: string }>;
-        await this.scanInvoiceBatchSet(
-          tenantId,
-          range,
-          collector,
-          jobIds,
-          trips.map((trip) => trip.id),
-        );
-      },
-    );
+    });
   }
 
   private async scanInvoiceBatchSet(
@@ -734,7 +685,9 @@ export class StatisticsExceptionsService {
                         lineItems: {
                           some: {
                             tenantId,
-                            sourceTripId: { in: filterTripIds },
+                            sourceTripId: {
+                              in: filterTripIds,
+                            },
                           },
                         },
                       },
@@ -750,7 +703,12 @@ export class StatisticsExceptionsService {
           AND: [
             {
               OR: [
-                { issuedAt: { gte: range.gte, lt: range.lt } },
+                {
+                  issuedAt: {
+                    gte: range.gte,
+                    lt: range.lt,
+                  },
+                },
                 {
                   issuedAt: null,
                   sentAt: { gte: range.gte, lt: range.lt },
@@ -758,7 +716,10 @@ export class StatisticsExceptionsService {
                 {
                   issuedAt: null,
                   sentAt: null,
-                  issueDate: { gte: range.gte, lt: range.lt },
+                  issueDate: {
+                    gte: range.gte,
+                    lt: range.lt,
+                  },
                 },
               ],
             },
@@ -804,8 +765,7 @@ export class StatisticsExceptionsService {
                 in: invoices
                   .map((invoice) => invoice.sourceJobId)
                   .filter(
-                    (jobId): jobId is string =>
-                      typeof jobId === "string",
+                    (jobId): jobId is string => typeof jobId === "string",
                   ),
               },
             },
@@ -816,17 +776,20 @@ export class StatisticsExceptionsService {
       const sourceTrips =
         sourceTripIds.length > 0
           ? ((await this.prisma.trip.findMany({
-              where: { tenantId, id: { in: sourceTripIds } },
+              where: {
+                tenantId,
+                id: { in: sourceTripIds },
+              },
               select: { id: true, jobId: true },
-            })) as Array<{ id: string; jobId: string | null }>)
+            })) as Array<{
+              id: string;
+              jobId: string | null;
+            }>)
           : [];
       const tripJobById = new Map(
         sourceTrips.map((trip) => [trip.id, trip.jobId] as const),
       );
-      const linesByInvoice = new Map<
-        string,
-        Array<string | null>
-      >();
+      const linesByInvoice = new Map<string, Array<string | null>>();
       for (const line of lineItems) {
         const rows = linesByInvoice.get(line.invoiceId) ?? [];
         rows.push(
@@ -842,20 +805,15 @@ export class StatisticsExceptionsService {
           isOrphanInvoiceJobLink({
             sourceJobId: invoice.sourceJobId,
             sourceJobExistsInTenant:
-              !!invoice.sourceJobId &&
-              sourceJobs.has(invoice.sourceJobId),
-            snapshotSourceJobIds: this.snapshotSourceJobIds(
-              invoice.snapshot,
-            ),
+              !!invoice.sourceJobId && sourceJobs.has(invoice.sourceJobId),
+            snapshotSourceJobIds: this.snapshotSourceJobIds(invoice.snapshot),
             lineSourceJobIds: linesByInvoice.get(invoice.id) ?? [],
           })
         ) {
           collector.add(
             this.invoiceRow(
               invoice.id,
-              invoice.issuedAt ??
-                invoice.sentAt ??
-                invoice.issueDate,
+              invoice.issuedAt ?? invoice.sentAt ?? invoice.issueDate,
             ),
           );
         }
@@ -902,9 +860,7 @@ export class StatisticsExceptionsService {
       tenantId,
       jobId: query.jobId ?? { not: null },
       ...(query.tripId ? { id: query.tripId } : {}),
-      ...(query.driverId
-        ? { assignedDriverUserId: query.driverId }
-        : {}),
+      ...(query.driverId ? { assignedDriverUserId: query.driverId } : {}),
       ...(query.vehicleId
         ? {
             OR: [
@@ -916,9 +872,7 @@ export class StatisticsExceptionsService {
       job: {
         is: {
           tenantId,
-          ...(query.customerId
-            ? { customerCompanyId: query.customerId }
-            : {}),
+          ...(query.customerId ? { customerCompanyId: query.customerId } : {}),
         },
       },
     };
@@ -933,9 +887,7 @@ export class StatisticsExceptionsService {
         ? {
             tenantId,
             ...(query.tripId ? { id: query.tripId } : {}),
-            ...(query.driverId
-              ? { assignedDriverUserId: query.driverId }
-              : {}),
+            ...(query.driverId ? { assignedDriverUserId: query.driverId } : {}),
             ...(query.vehicleId
               ? {
                   OR: [
@@ -949,9 +901,7 @@ export class StatisticsExceptionsService {
     return {
       tenantId,
       ...(query.jobId ? { id: query.jobId } : {}),
-      ...(query.customerId
-        ? { customerCompanyId: query.customerId }
-        : {}),
+      ...(query.customerId ? { customerCompanyId: query.customerId } : {}),
       ...(matchingTrip ? { trips: { some: matchingTrip } } : {}),
     };
   }
@@ -1002,9 +952,7 @@ export class StatisticsExceptionsService {
     return result;
   }
 
-  private snapshotSourceJobIds(
-    snapshot: Prisma.JsonValue | null,
-  ): string[] {
+  private snapshotSourceJobIds(snapshot: Prisma.JsonValue | null): string[] {
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
       return [];
     }

@@ -19,6 +19,7 @@ import { StatisticsController } from "./statistics.controller";
 import { StatisticsDriversController } from "./statistics-drivers.controller";
 import { StatisticsDriversService } from "./statistics-drivers.service";
 import { StatisticsExceptionsController } from "./statistics-exceptions.controller";
+import { StatisticsExportController } from "./statistics-export.controller";
 import { StatisticsFinanceController } from "./statistics-finance.controller";
 import { StatisticsModule } from "./statistics.module";
 import { StatisticsOverviewController } from "./statistics-overview.controller";
@@ -34,6 +35,7 @@ describe("StatisticsDriversController", () => {
       StatisticsDriversController,
       StatisticsFinanceController,
       StatisticsExceptionsController,
+      StatisticsExportController,
     ]);
     expect(controllers).not.toContain(StatisticsController);
     expect(
@@ -64,12 +66,7 @@ describe("StatisticsDriversController", () => {
   it("preserves the strongest Transport reporting authorization", () => {
     expect(
       Reflect.getMetadata(GUARDS_METADATA, StatisticsDriversController),
-    ).toEqual([
-      AuthGuard,
-      TenantGuard,
-      RoleGuard,
-      ModuleEntitlementGuard,
-    ]);
+    ).toEqual([AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard]);
     expect(Reflect.getMetadata("roles", StatisticsDriversController)).toEqual([
       Role.ADMIN,
       Role.TRANSPORT_STAFF,
@@ -77,10 +74,10 @@ describe("StatisticsDriversController", () => {
     ]);
     const reflector = new Reflector();
     expect(
-      reflector.getAllAndOverride<TenantModule[]>(
-        REQUIRES_TENANT_MODULE_KEY,
-        [routeHandler, StatisticsDriversController],
-      ),
+      reflector.getAllAndOverride<TenantModule[]>(REQUIRES_TENANT_MODULE_KEY, [
+        routeHandler,
+        StatisticsDriversController,
+      ]),
     ).toEqual([TenantModule.TRANSPORT]);
   });
 
@@ -112,10 +109,7 @@ describe("StatisticsDriversController", () => {
         query,
       ),
     ).resolves.toBe(response);
-    expect(service.getDrivers).toHaveBeenCalledWith(
-      "trusted-tenant",
-      query,
-    );
+    expect(service.getDrivers).toHaveBeenCalledWith("trusted-tenant", query);
   });
 
   it("exposes no financial response fields in Swagger DTOs", () => {

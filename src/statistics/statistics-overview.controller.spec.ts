@@ -28,6 +28,8 @@ import { StatisticsDriversController } from "./statistics-drivers.controller";
 import { StatisticsDriversService } from "./statistics-drivers.service";
 import { StatisticsExceptionsController } from "./statistics-exceptions.controller";
 import { StatisticsExceptionsService } from "./statistics-exceptions.service";
+import { StatisticsExportController } from "./statistics-export.controller";
+import { StatisticsExportService } from "./statistics-export.service";
 import { StatisticsFinanceController } from "./statistics-finance.controller";
 import { StatisticsFinanceService } from "./statistics-finance.service";
 import { StatisticsModule } from "./statistics.module";
@@ -45,6 +47,7 @@ describe("StatisticsOverviewController", () => {
       StatisticsDriversController,
       StatisticsFinanceController,
       StatisticsExceptionsController,
+      StatisticsExportController,
     ]);
     expect(controllers).not.toContain(StatisticsController);
     expect(
@@ -60,26 +63,21 @@ describe("StatisticsOverviewController", () => {
     expect(Reflect.getMetadata(METHOD_METADATA, routeHandler)).toBe(
       RequestMethod.GET,
     );
-    expect(
-      StatisticsOverviewController.prototype,
-    ).not.toHaveProperty("getDrivers");
-    expect(
-      StatisticsOverviewController.prototype,
-    ).not.toHaveProperty("getFinance");
-    expect(
-      StatisticsOverviewController.prototype,
-    ).not.toHaveProperty("getExceptions");
+    expect(StatisticsOverviewController.prototype).not.toHaveProperty(
+      "getDrivers",
+    );
+    expect(StatisticsOverviewController.prototype).not.toHaveProperty(
+      "getFinance",
+    );
+    expect(StatisticsOverviewController.prototype).not.toHaveProperty(
+      "getExceptions",
+    );
   });
 
   it("preserves the WP2 staff and Transport authorization policy", () => {
     expect(
       Reflect.getMetadata(GUARDS_METADATA, StatisticsOverviewController),
-    ).toEqual([
-      AuthGuard,
-      TenantGuard,
-      RoleGuard,
-      ModuleEntitlementGuard,
-    ]);
+    ).toEqual([AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard]);
     expect(Reflect.getMetadata("roles", StatisticsOverviewController)).toEqual([
       Role.ADMIN,
       Role.TRANSPORT_STAFF,
@@ -87,10 +85,10 @@ describe("StatisticsOverviewController", () => {
     ]);
     const reflector = new Reflector();
     expect(
-      reflector.getAllAndOverride<TenantModule[]>(
-        REQUIRES_TENANT_MODULE_KEY,
-        [routeHandler, StatisticsOverviewController],
-      ),
+      reflector.getAllAndOverride<TenantModule[]>(REQUIRES_TENANT_MODULE_KEY, [
+        routeHandler,
+        StatisticsOverviewController,
+      ]),
     ).toEqual([TenantModule.TRANSPORT]);
   });
 
@@ -120,9 +118,7 @@ describe("StatisticsOverviewController", () => {
     const overviewService = {
       getOverview: jest.fn().mockResolvedValue(result),
     };
-    const controller = new StatisticsOverviewController(
-      overviewService as any,
-    );
+    const controller = new StatisticsOverviewController(overviewService as any);
     const filters = Object.assign(new StatisticsFiltersQueryDto(), {
       jobId: "job-1",
       tenantId: "untrusted-tenant",
@@ -206,6 +202,7 @@ describe("Statistics WP6 HTTP reachability", () => {
         StatisticsDriversController,
         StatisticsFinanceController,
         StatisticsExceptionsController,
+        StatisticsExportController,
       ],
       providers: [
         {
@@ -230,6 +227,26 @@ describe("Statistics WP6 HTTP reachability", () => {
             getExceptions: jest.fn().mockResolvedValue(exceptionsResult),
           },
         },
+        {
+          provide: StatisticsExportService,
+          useValue: {
+            exportDrivers: jest.fn().mockResolvedValue({
+              body: Buffer.from("\uFEFFdrivers"),
+              filename: "drivers.csv",
+              rowCount: 0,
+            }),
+            exportFinance: jest.fn().mockResolvedValue({
+              body: Buffer.from("\uFEFFfinance"),
+              filename: "finance.csv",
+              rowCount: 0,
+            }),
+            exportExceptions: jest.fn().mockResolvedValue({
+              body: Buffer.from("\uFEFFexceptions"),
+              filename: "exceptions.csv",
+              rowCount: 0,
+            }),
+          },
+        },
       ],
     })
       .overrideGuard(AuthGuard)
@@ -250,7 +267,7 @@ describe("Statistics WP6 HTTP reachability", () => {
     if (app) await app.close();
   });
 
-  it("reaches all four truthful Statistics routes", async () => {
+  it("reaches all truthful Statistics routes", async () => {
     await request(app.getHttpServer())
       .get("/api/statistics/overview")
       .expect(200)
@@ -279,5 +296,11 @@ describe("Statistics WP6 HTTP reachability", () => {
         expect(body.data).toEqual([]);
         expect(body).not.toHaveProperty("currencyGroups");
       });
+    for (const view of ["drivers", "finance", "exceptions"]) {
+      await request(app.getHttpServer())
+        .get(`/api/statistics/${view}/export`)
+        .expect(200)
+        .expect("Content-Type", /text\/csv/);
+    }
   });
 });

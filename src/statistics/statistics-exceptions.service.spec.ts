@@ -1,7 +1,4 @@
-import {
-  TripDocumentType,
-  TripStatus,
-} from "@prisma/client";
+import { TripDocumentType, TripStatus } from "@prisma/client";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
@@ -95,6 +92,35 @@ function exceptionRow(
 }
 
 describe("StatisticsExceptionsService categories", () => {
+  it("collects more than a normal page for one bounded export scan", async () => {
+    const prisma = createPrismaMock();
+    prisma.trip.findMany
+      .mockResolvedValueOnce(
+        Array.from({ length: 101 }, (_, index) =>
+          trip({
+            id: `trip-${String(index).padStart(3, "0")}`,
+            status: TripStatus.CANCELLED,
+          }),
+        ),
+      )
+      .mockResolvedValueOnce([]);
+
+    const result = await service(prisma).getExceptionsForExport(
+      "tenant-1",
+      query({ key: "ex_cancelled_trip" }),
+      200,
+    );
+
+    expect(result.data).toHaveLength(101);
+    expect(result.meta.total).toBe(101);
+    expect(prisma.trip.findMany).toHaveBeenCalledTimes(1);
+    expect(
+      prisma.trip.findMany.mock.calls.every(
+        ([args]) => args.where.tenantId === "tenant-1" && args.take === 200,
+      ),
+    ).toBe(true);
+  });
+
   it("emits missing-payout rows from canonical payout lines with all filters tenant-scoped", async () => {
     const prisma = createPrismaMock();
     prisma.trip.findMany.mockResolvedValue([trip()]);
@@ -128,10 +154,7 @@ describe("StatisticsExceptionsService categories", () => {
       jobId: "job-1",
       id: "trip-1",
       assignedDriverUserId: "driver-1",
-      OR: [
-        { vehicleId: "vehicle-1" },
-        { fleetVehicleId: "vehicle-1" },
-      ],
+      OR: [{ vehicleId: "vehicle-1" }, { fleetVehicleId: "vehicle-1" }],
       job: {
         is: {
           tenantId: "tenant-1",
@@ -163,9 +186,7 @@ describe("StatisticsExceptionsService categories", () => {
           tripUploads: {
             minUploadCount: 1,
             allowedUploadTypes: [TripDocumentType.POD_SIGNATURE],
-            requiredUploadTypesExact: [
-              TripDocumentType.POD_SIGNATURE,
-            ],
+            requiredUploadTypesExact: [TripDocumentType.POD_SIGNATURE],
           },
         },
       }),
@@ -241,9 +262,9 @@ describe("StatisticsExceptionsService categories", () => {
       lt: new Date("2026-08-01T16:00:00.000Z"),
     });
     expect(prisma.trip.findMany.mock.calls[1][0].where.closedAt).toBeNull();
-    expect(
-      prisma.trip.findMany.mock.calls[1][0].where,
-    ).not.toHaveProperty("updatedAt");
+    expect(prisma.trip.findMany.mock.calls[1][0].where).not.toHaveProperty(
+      "updatedAt",
+    );
   });
 
   it("uses one request time and the inclusive stale boundary as a current snapshot", async () => {
@@ -270,9 +291,7 @@ describe("StatisticsExceptionsService categories", () => {
       });
       expect(where).not.toHaveProperty("closedAt");
       expect(where).not.toHaveProperty("updatedAt");
-      expect(result.generatedAt).toEqual(
-        new Date("2026-08-05T12:00:00.000Z"),
-      );
+      expect(result.generatedAt).toEqual(new Date("2026-08-05T12:00:00.000Z"));
     } finally {
       jest.useRealTimers();
     }
@@ -344,22 +363,15 @@ describe("StatisticsExceptionsService categories", () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ id: "job-1" }]);
     prisma.trip.findMany
-      .mockResolvedValueOnce([
-        trip({ id: "trip-1", jobId: "job-1" }),
-      ])
+      .mockResolvedValueOnce([trip({ id: "trip-1", jobId: "job-1" })])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        trip({ id: "trip-1", jobId: "job-1" }),
-      ]);
+      .mockResolvedValueOnce([trip({ id: "trip-1", jobId: "job-1" })]);
     prisma.jobCharge.groupBy.mockResolvedValue([]);
     prisma.tripPayoutLine.findMany.mockResolvedValue([]);
 
-    const result = await service(prisma).getExceptions(
-      "tenant-1",
-      query(),
-    );
+    const result = await service(prisma).getExceptions("tenant-1", query());
     const jobRows = result.data.filter((row) => row.entityId === "job-1");
     expect(jobRows.map((row) => row.key)).toEqual(
       expect.arrayContaining([
@@ -419,10 +431,7 @@ describe("StatisticsExceptionsService categories", () => {
     ]);
     const missingChargeResult = await service(
       missingChargePrisma,
-    ).getExceptions(
-      "tenant-1",
-      query({ key: "ex_job_missing_charges" }),
-    );
+    ).getExceptions("tenant-1", query({ key: "ex_job_missing_charges" }));
     expect(missingChargeResult.data).toEqual([]);
   });
 
@@ -464,9 +473,7 @@ describe("StatisticsExceptionsService categories", () => {
   it("keeps null-sourceJobId orphans visible under trip filters via line linkage", async () => {
     const prisma = createPrismaMock();
     prisma.job.findMany.mockResolvedValue([{ id: "job-1" }]);
-    prisma.trip.findMany.mockResolvedValue([
-      { id: "trip-1", jobId: "job-1" },
-    ]);
+    prisma.trip.findMany.mockResolvedValue([{ id: "trip-1", jobId: "job-1" }]);
     prisma.invoice.findMany.mockResolvedValue([
       {
         id: "invoice-orphan",
@@ -489,9 +496,7 @@ describe("StatisticsExceptionsService categories", () => {
       }),
     );
 
-    expect(result.data.map((row) => row.entityId)).toEqual([
-      "invoice-orphan",
-    ]);
+    expect(result.data.map((row) => row.entityId)).toEqual(["invoice-orphan"]);
     const invoiceWhere = prisma.invoice.findMany.mock.calls[0][0].where;
     expect(invoiceWhere.tenantId).toBe("tenant-1");
     expect(invoiceWhere.OR).toEqual(

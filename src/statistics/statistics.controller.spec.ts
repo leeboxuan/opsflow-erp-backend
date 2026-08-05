@@ -35,6 +35,7 @@ import {
 import { StatisticsController } from "./statistics.controller";
 import { StatisticsDriversController } from "./statistics-drivers.controller";
 import { StatisticsExceptionsController } from "./statistics-exceptions.controller";
+import { StatisticsExportController } from "./statistics-export.controller";
 import { StatisticsFinanceController } from "./statistics-finance.controller";
 import { StatisticsModule } from "./statistics.module";
 import { StatisticsOverviewController } from "./statistics-overview.controller";
@@ -107,10 +108,7 @@ describe("StatisticsModule", () => {
   });
 
   it("is registered in AppModule without modifying DashboardModule", () => {
-    const source = readFileSync(
-      join(__dirname, "..", "app.module.ts"),
-      "utf8",
-    );
+    const source = readFileSync(join(__dirname, "..", "app.module.ts"), "utf8");
     expect(source).toContain(
       'import { StatisticsModule } from "./statistics/statistics.module";',
     );
@@ -126,6 +124,7 @@ describe("StatisticsModule", () => {
       StatisticsDriversController,
       StatisticsFinanceController,
       StatisticsExceptionsController,
+      StatisticsExportController,
     ]);
   });
 });
@@ -212,11 +211,7 @@ describe("StatisticsController route contracts", () => {
         query,
       ),
     ).toThrow("deferred-test-sentinel");
-    expect(deferred).toHaveBeenCalledWith(
-      "overview",
-      "trusted-tenant",
-      query,
-    );
+    expect(deferred).toHaveBeenCalledWith("overview", "trusted-tenant", query);
     expect("tenantId" in new StatisticsFiltersQueryDto()).toBe(false);
   });
 });
@@ -249,9 +244,7 @@ describe("StatisticsController authorization behavior", () => {
               };
             };
           }) => ({
-            enabled: enabledModules.includes(
-              where.tenantId_module.module,
-            ),
+            enabled: enabledModules.includes(where.tenantId_module.module),
           }),
         ),
       },
@@ -280,9 +273,7 @@ describe("StatisticsController authorization behavior", () => {
   });
 
   it("allows finance staff only when Finance is entitled", async () => {
-    await expectAuthorized("getFinance", Role.FINANCE, [
-      TenantModule.FINANCE,
-    ]);
+    await expectAuthorized("getFinance", Role.FINANCE, [TenantModule.FINANCE]);
   });
 
   it.each([Role.DRIVER, Role.CUSTOMER, Role.WAREHOUSE])(
@@ -341,9 +332,9 @@ describe("StatisticsController authorization behavior", () => {
   });
 
   it("denies requests without tenant context", async () => {
-    expect(() =>
-      roleGuard.canActivate(contextFor("getOverview", {})),
-    ).toThrow(ForbiddenException);
+    expect(() => roleGuard.canActivate(contextFor("getOverview", {}))).toThrow(
+      ForbiddenException,
+    );
 
     const entitlementGuard = new ModuleEntitlementGuard(
       { tenantModuleEntitlement: { findUnique: jest.fn() } } as any,
@@ -359,9 +350,7 @@ describe("StatisticsController authorization behavior", () => {
       verifyToken: jest.fn(),
     } as any);
     await expect(
-      authGuard.canActivate(
-        contextFor("getOverview", { headers: {} }),
-      ),
+      authGuard.canActivate(contextFor("getOverview", { headers: {} })),
     ).rejects.toThrow(UnauthorizedException);
   });
 
@@ -374,6 +363,7 @@ describe("StatisticsController authorization behavior", () => {
       StatisticsDriversController,
       StatisticsFinanceController,
       StatisticsExceptionsController,
+      StatisticsExportController,
     ]);
   });
 });

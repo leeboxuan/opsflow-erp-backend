@@ -27,6 +27,7 @@ import {
 import { StatisticsController } from "./statistics.controller";
 import { StatisticsDriversController } from "./statistics-drivers.controller";
 import { StatisticsExceptionsController } from "./statistics-exceptions.controller";
+import { StatisticsExportController } from "./statistics-export.controller";
 import { StatisticsFinanceController } from "./statistics-finance.controller";
 import { StatisticsModule } from "./statistics.module";
 import { StatisticsOverviewController } from "./statistics-overview.controller";
@@ -55,12 +56,13 @@ describe("Statistics V1 security and integration audit", () => {
     const registered =
       Reflect.getMetadata(MODULE_METADATA.CONTROLLERS, StatisticsModule) ?? [];
 
-    it("registers exactly the four truthful controllers and not the reserved stub", () => {
+    it("registers the truthful controllers and not the reserved stub", () => {
       expect(registered).toEqual([
         StatisticsOverviewController,
         StatisticsDriversController,
         StatisticsFinanceController,
         StatisticsExceptionsController,
+        StatisticsExportController,
       ]);
       expect(registered).not.toContain(StatisticsController);
     });
@@ -264,9 +266,7 @@ describe("Statistics V1 security and integration audit", () => {
       });
       const text = statement.sql.replace(/\s+/g, " ");
       expect(text).toContain('t."tenantId" = ?');
-      expect(text).toContain(
-        '( t."vehicleId" = ? OR t."fleetVehicleId" = ? )',
-      );
+      expect(text).toContain('( t."vehicleId" = ? OR t."fleetVehicleId" = ? )');
       expect(statement.values).toEqual(
         expect.arrayContaining(["tenant-1", "customer-1", "vehicle-1"]),
       );
@@ -275,18 +275,18 @@ describe("Statistics V1 security and integration audit", () => {
 
   describe("query-bound conventions", () => {
     it("documents batch sizes for Finance and Exceptions", () => {
-      expect(
-        readStatisticsSource("statistics-finance.service.ts"),
-      ).toContain("FINANCE_JOB_BATCH_SIZE = 200");
+      expect(readStatisticsSource("statistics-finance.service.ts")).toContain(
+        "FINANCE_JOB_BATCH_SIZE = 200",
+      );
       expect(
         readStatisticsSource("statistics-exceptions.service.ts"),
       ).toContain("EXCEPTION_BATCH_SIZE = 200");
-      expect(
-        readStatisticsSource("statistics-overview.service.ts"),
-      ).toContain("OVERVIEW_JOB_BATCH_SIZE = 200");
-      expect(
-        readStatisticsSource("statistics-overview.service.ts"),
-      ).toContain("OVERVIEW_TRIP_BATCH_SIZE = 200");
+      expect(readStatisticsSource("statistics-overview.service.ts")).toContain(
+        "OVERVIEW_JOB_BATCH_SIZE = 200",
+      );
+      expect(readStatisticsSource("statistics-overview.service.ts")).toContain(
+        "OVERVIEW_TRIP_BATCH_SIZE = 200",
+      );
     });
 
     it("keeps Driver pagination in SQL rather than loading all aggregate rows", () => {

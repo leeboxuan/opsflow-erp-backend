@@ -14,21 +14,18 @@ import {
 } from "../shared/auth/guards/module-entitlement.guard";
 import { RoleGuard } from "../shared/auth/guards/role.guard";
 import { TenantGuard } from "../shared/auth/guards/tenant.guard";
-import {
-  StatisticsExceptionsDto,
-  StatisticsExceptionsQueryDto,
-} from "./dto";
+import { StatisticsExceptionsDto, StatisticsExceptionsQueryDto } from "./dto";
 import { StatisticsController } from "./statistics.controller";
 import { StatisticsDriversController } from "./statistics-drivers.controller";
 import { StatisticsExceptionsController } from "./statistics-exceptions.controller";
 import { StatisticsExceptionsService } from "./statistics-exceptions.service";
+import { StatisticsExportController } from "./statistics-export.controller";
 import { StatisticsFinanceController } from "./statistics-finance.controller";
 import { StatisticsModule } from "./statistics.module";
 import { StatisticsOverviewController } from "./statistics-overview.controller";
 
 describe("StatisticsExceptionsController", () => {
-  const routeHandler =
-    StatisticsExceptionsController.prototype.getExceptions;
+  const routeHandler = StatisticsExceptionsController.prototype.getExceptions;
 
   it("registers Exceptions beside all truthful Statistics controllers", () => {
     const controllers =
@@ -38,6 +35,7 @@ describe("StatisticsExceptionsController", () => {
       StatisticsDriversController,
       StatisticsFinanceController,
       StatisticsExceptionsController,
+      StatisticsExportController,
     ]);
     expect(controllers).not.toContain(StatisticsController);
     expect(
@@ -49,9 +47,7 @@ describe("StatisticsExceptionsController", () => {
     expect(
       Reflect.getMetadata(PATH_METADATA, StatisticsExceptionsController),
     ).toBe("statistics");
-    expect(Reflect.getMetadata(PATH_METADATA, routeHandler)).toBe(
-      "exceptions",
-    );
+    expect(Reflect.getMetadata(PATH_METADATA, routeHandler)).toBe("exceptions");
     expect(Reflect.getMetadata(METHOD_METADATA, routeHandler)).toBe(
       RequestMethod.GET,
     );
@@ -70,21 +66,16 @@ describe("StatisticsExceptionsController", () => {
   it("uses the complete guard stack and both required entitlements", () => {
     expect(
       Reflect.getMetadata(GUARDS_METADATA, StatisticsExceptionsController),
-    ).toEqual([
-      AuthGuard,
-      TenantGuard,
-      RoleGuard,
-      ModuleEntitlementGuard,
-    ]);
+    ).toEqual([AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard]);
     expect(
       Reflect.getMetadata("roles", StatisticsExceptionsController),
     ).toEqual([Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE]);
     const reflector = new Reflector();
     expect(
-      reflector.getAllAndOverride<TenantModule[]>(
-        REQUIRES_TENANT_MODULE_KEY,
-        [routeHandler, StatisticsExceptionsController],
-      ),
+      reflector.getAllAndOverride<TenantModule[]>(REQUIRES_TENANT_MODULE_KEY, [
+        routeHandler,
+        StatisticsExceptionsController,
+      ]),
     ).toEqual([TenantModule.TRANSPORT, TenantModule.FINANCE]);
   });
 
@@ -101,13 +92,10 @@ describe("StatisticsExceptionsController", () => {
       getExceptions: jest.fn().mockResolvedValue(response),
     };
     const controller = new StatisticsExceptionsController(service as any);
-    const exceptionsQuery = Object.assign(
-      new StatisticsExceptionsQueryDto(),
-      {
-        key: "ex_cancelled_trip",
-        tenantId: "untrusted-tenant",
-      },
-    );
+    const exceptionsQuery = Object.assign(new StatisticsExceptionsQueryDto(), {
+      key: "ex_cancelled_trip",
+      tenantId: "untrusted-tenant",
+    });
     await expect(
       controller.getExceptions(
         {
@@ -127,10 +115,7 @@ describe("StatisticsExceptionsController", () => {
 
   it("denies unauthorized roles and tenants missing either entitlement", async () => {
     const reflector = new Reflector();
-    const contextFor = (
-      role: Role,
-      enabledModules: TenantModule[],
-    ) => ({
+    const contextFor = (role: Role, enabledModules: TenantModule[]) => ({
       switchToHttp: () => ({
         getRequest: () => ({
           tenant: { tenantId: "tenant-1", role },
@@ -141,9 +126,7 @@ describe("StatisticsExceptionsController", () => {
       enabledModules,
     });
     expect(() =>
-      new RoleGuard(reflector).canActivate(
-        contextFor(Role.DRIVER, []) as any,
-      ),
+      new RoleGuard(reflector).canActivate(contextFor(Role.DRIVER, []) as any),
     ).toThrow(ForbiddenException);
 
     const incompleteEntitlementSets: TenantModule[][] = [
@@ -162,9 +145,7 @@ describe("StatisticsExceptionsController", () => {
                   tenantId_module: { module: TenantModule };
                 };
               }) => ({
-                enabled: enabledModules.includes(
-                  where.tenantId_module.module,
-                ),
+                enabled: enabledModules.includes(where.tenantId_module.module),
               }),
             ),
           },
@@ -172,9 +153,7 @@ describe("StatisticsExceptionsController", () => {
         reflector,
       );
       await expect(
-        guard.canActivate(
-          contextFor(Role.ADMIN, enabledModules) as any,
-        ),
+        guard.canActivate(contextFor(Role.ADMIN, enabledModules) as any),
       ).rejects.toThrow(ForbiddenException);
     }
   });

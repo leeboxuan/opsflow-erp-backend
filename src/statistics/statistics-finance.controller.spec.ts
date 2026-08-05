@@ -18,6 +18,7 @@ import { StatisticsFinanceDto, StatisticsFinanceQueryDto } from "./dto";
 import { StatisticsController } from "./statistics.controller";
 import { StatisticsDriversController } from "./statistics-drivers.controller";
 import { StatisticsExceptionsController } from "./statistics-exceptions.controller";
+import { StatisticsExportController } from "./statistics-export.controller";
 import { StatisticsFinanceController } from "./statistics-finance.controller";
 import { StatisticsFinanceService } from "./statistics-finance.service";
 import { StatisticsModule } from "./statistics.module";
@@ -34,6 +35,7 @@ describe("StatisticsFinanceController", () => {
       StatisticsDriversController,
       StatisticsFinanceController,
       StatisticsExceptionsController,
+      StatisticsExportController,
     ]);
     expect(controllers).not.toContain(StatisticsController);
     expect(
@@ -64,12 +66,7 @@ describe("StatisticsFinanceController", () => {
   it("uses the complete guard stack and Finance entitlement", () => {
     expect(
       Reflect.getMetadata(GUARDS_METADATA, StatisticsFinanceController),
-    ).toEqual([
-      AuthGuard,
-      TenantGuard,
-      RoleGuard,
-      ModuleEntitlementGuard,
-    ]);
+    ).toEqual([AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard]);
     expect(Reflect.getMetadata("roles", StatisticsFinanceController)).toEqual([
       Role.ADMIN,
       Role.TRANSPORT_STAFF,
@@ -77,10 +74,10 @@ describe("StatisticsFinanceController", () => {
     ]);
     const reflector = new Reflector();
     expect(
-      reflector.getAllAndOverride<TenantModule[]>(
-        REQUIRES_TENANT_MODULE_KEY,
-        [routeHandler, StatisticsFinanceController],
-      ),
+      reflector.getAllAndOverride<TenantModule[]>(REQUIRES_TENANT_MODULE_KEY, [
+        routeHandler,
+        StatisticsFinanceController,
+      ]),
     ).toEqual([TenantModule.FINANCE]);
   });
 
@@ -158,9 +155,9 @@ describe("StatisticsFinanceController", () => {
       } as any,
       reflector,
     );
-    await expect(
-      entitlementGuard.canActivate(financeContext),
-    ).rejects.toThrow(ForbiddenException);
+    await expect(entitlementGuard.canActivate(financeContext)).rejects.toThrow(
+      ForbiddenException,
+    );
     expect(findUnique).toHaveBeenCalledWith({
       where: {
         tenantId_module: {

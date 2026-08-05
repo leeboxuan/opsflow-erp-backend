@@ -1,5 +1,6 @@
 export * from "./statistics-drivers.query.dto";
 export * from "./statistics-exceptions.query.dto";
+export * from "./statistics-export.query.dto";
 export * from "./statistics-filters.query.dto";
 export * from "./statistics-finance.query.dto";
 export * from "./statistics-response.dto";
