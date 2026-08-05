@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsEnum, IsIn, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
-import { Type } from "class-transformer";
+import { IsBoolean, IsEnum, IsIn, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
+import { Transform, Type } from "class-transformer";
 import { VehicleStatus, VehicleType } from "@prisma/client";
 import { SORT_DIR_VALUES } from "../../../../shared/common/constants";
 
@@ -26,6 +26,15 @@ export class ListFleetVehiclesQueryDto {
   @IsOptional()
   @IsString()
   q?: string;
+
+  @ApiPropertyOptional({
+    type: Boolean,
+    description: "Return only ACTIVE, unassigned fleet vehicles eligible for driver assignment",
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === "true")
+  @IsBoolean()
+  eligibleForAssignment?: boolean;
 
   @ApiPropertyOptional({
     enum: Object.values(FLEET_VEHICLE_LIST_FILTER),

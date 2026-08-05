@@ -17,7 +17,8 @@ import {
   ModuleEntitlementGuard,
   RequiresTenantModule,
 } from "../../shared/auth/guards/module-entitlement.guard";
-import { TenantModule } from "@prisma/client";
+import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
+import { Role, TenantModule } from "@prisma/client";
 import { VehiclesService } from "./vehicles.service";
 import { CreateVehicleDto } from "./dto/create-vehicle.dto";
 import { UpdateVehicleDto } from "./dto/update-vehicle.dto";
@@ -87,6 +88,8 @@ export class VehiclesController {
 
   @Patch(":id/assign-driver")
   @ApiOperation({ summary: "Assign/unassign a driver to this vehicle" })
+  @UseGuards(RoleGuard)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
   async assignDriver(
     @Req() req: any,
     @Param("id") id: string,

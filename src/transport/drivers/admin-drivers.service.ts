@@ -139,6 +139,7 @@ export class AdminDriversService {
           id: true,
           plateNo: true,
           type: true,
+          status: true,
           driverId: true,
         },
       }),
@@ -151,6 +152,7 @@ export class AdminDriversService {
           id: true,
           plateNo: true,
           type: true,
+          status: true,
           driverId: true,
         },
       }),
@@ -168,14 +170,14 @@ export class AdminDriversService {
 
     const vehicleByDriverId = new Map<
       string,
-      { id: string; plateNo: string; type: any }
+      { id: string; plateNo: string; type: any; status: any }
     >();
     for (const v of vehicles) {
       if (v.driverId) vehicleByDriverId.set(v.driverId, v);
     }
     const fleetVehicleByDriverId = new Map<
       string,
-      { id: string; plateNo: string; type: any }
+      { id: string; plateNo: string; type: any; status: any }
     >();
     for (const v of fleetVehicles) {
       if (v.driverId) fleetVehicleByDriverId.set(v.driverId, v);
@@ -217,9 +219,11 @@ export class AdminDriversService {
         assignedVehicleId: v?.id ?? null,
         assignedVehiclePlateNo: v?.plateNo ?? null,
         assignedVehicleType: v?.type ?? null,
+        assignedVehicleStatus: v?.status ?? null,
         assignedFleetVehicleId: fv?.id ?? null,
         assignedFleetVehiclePlateNo: fv?.plateNo ?? null,
         assignedFleetVehicleType: fv?.type ?? null,
+        assignedFleetVehicleStatus: fv?.status ?? null,
       };
     }));
 
@@ -602,11 +606,11 @@ export class AdminDriversService {
       }),
       this.prisma.vehicle.findFirst({
         where: { tenantId, driverId: userId },
-        select: { id: true, plateNo: true, type: true },
+        select: { id: true, plateNo: true, type: true, status: true },
       }),
       this.prisma.fleetVehicle.findFirst({
         where: { tenantId, driverId: userId },
-        select: { id: true, plateNo: true, type: true },
+        select: { id: true, plateNo: true, type: true, status: true },
       }),
     ]);
 
@@ -641,9 +645,11 @@ export class AdminDriversService {
       assignedVehicleId: vehicle?.id ?? null,
       assignedVehiclePlateNo: vehicle?.plateNo ?? null,
       assignedVehicleType: vehicle?.type ?? null,
+      assignedVehicleStatus: vehicle?.status ?? null,
       assignedFleetVehicleId: fleetVehicle?.id ?? null,
       assignedFleetVehiclePlateNo: fleetVehicle?.plateNo ?? null,
       assignedFleetVehicleType: fleetVehicle?.type ?? null,
+      assignedFleetVehicleStatus: fleetVehicle?.status ?? null,
     };
   }
 

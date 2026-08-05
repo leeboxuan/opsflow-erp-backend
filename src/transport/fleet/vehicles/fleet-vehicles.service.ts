@@ -117,6 +117,10 @@ export class FleetVehiclesService {
 
     if (query.status) where.status = query.status;
     if (query.type) where.type = query.type;
+    if (query.eligibleForAssignment) {
+      where.driverId = null;
+      where.status = VehicleStatus.ACTIVE;
+    }
 
     const q = query.q?.trim();
     if (q) {
@@ -135,12 +139,14 @@ export class FleetVehiclesService {
       where.AND.push({ OR: orConditions });
     }
 
-    const orderBy = buildOrderBy(
-      query.sortBy,
-      query.sortDir === "asc" ? "asc" : "desc",
-      [...FLEET_VEHICLE_SORT_FIELDS],
-      { createdAt: "desc" },
-    );
+    const orderBy = query.eligibleForAssignment
+      ? [{ plateNo: "asc" as const }, { id: "asc" as const }]
+      : buildOrderBy(
+          query.sortBy,
+          query.sortDir === "asc" ? "asc" : "desc",
+          [...FLEET_VEHICLE_SORT_FIELDS],
+          { createdAt: "desc" },
+        );
 
     const [total, data] = await this.prisma.$transaction([
       this.prisma.fleetVehicle.count({ where }),
@@ -274,7 +280,7 @@ export class FleetVehiclesService {
   ): Promise<FleetVehicleDto> {
     const vehicle = await this.prisma.fleetVehicle.findFirst({
       where: { id: fleetVehicleId, tenantId },
-      select: { id: true, driverId: true },
+      select: { id: true, driverId: true, status: true },
     });
     if (!vehicle) throw new NotFoundException("Fleet vehicle not found");
 
@@ -294,6 +300,17 @@ export class FleetVehiclesService {
       return toFleetVehicleDto(updated);
     }
 
+    if (vehicle.status !== VehicleStatus.ACTIVE) {
+      throw new BadRequestException(
+        "Only active vehicles can be assigned to drivers.",
+      );
+    }
+    if (vehicle.driverId && vehicle.driverId !== driverId) {
+      throw new BadRequestException(
+        "Vehicle is already assigned to another driver.",
+      );
+    }
+
     const driver = await this.prisma.user.findFirst({
       where: {
         id: driverId,
@@ -304,8 +321,33 @@ export class FleetVehiclesService {
     if (!driver) throw new BadRequestException("Driver not found in this tenant");
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.fleetVehicle.updateMany({
+        where: {
+          id: fleetVehicleId,
+          tenantId,
+          status: VehicleStatus.ACTIVE,
+          OR: [{ driverId: null }, { driverId }],
+        },
+        data: { driverId },
+      });
+      if (claimed.count !== 1) {
+        const latest = await tx.fleetVehicle.findFirst({
+          where: { id: fleetVehicleId, tenantId },
+          select: { status: true, driverId: true },
+        });
+        if (!latest) throw new NotFoundException("Fleet vehicle not found");
+        if (latest.status !== VehicleStatus.ACTIVE) {
+          throw new BadRequestException(
+            "Only active vehicles can be assigned to drivers.",
+          );
+        }
+        throw new BadRequestException(
+          "Vehicle is already assigned to another driver.",
+        );
+      }
+
       await tx.fleetVehicle.updateMany({
-        where: { tenantId, driverId },
+        where: { tenantId, driverId, id: { not: fleetVehicleId } },
         data: { driverId: null },
       });
 
@@ -319,17 +361,14 @@ export class FleetVehiclesService {
         data: { assignedVehicleId: null },
       });
 
-      const v = await tx.fleetVehicle.update({
-        where: { id: fleetVehicleId },
-        data: { driverId },
-      });
-
       await tx.drivers.updateMany({
         where: { tenantId, userId: driverId },
         data: { assignedFleetVehicleId: fleetVehicleId },
       });
 
-      return v;
+      return tx.fleetVehicle.findUniqueOrThrow({
+        where: { id: fleetVehicleId },
+      });
     });
 
     return toFleetVehicleDto(updated);

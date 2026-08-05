@@ -63,6 +63,9 @@ export class AdminDriverDto {
   assignedVehicleType?: string | null;
 
   @ApiProperty({ nullable: true, required: false })
+  assignedVehicleStatus?: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
   assignedFleetVehicleId?: string | null;
 
   @ApiProperty({ nullable: true, required: false })
@@ -70,4 +73,7 @@ export class AdminDriverDto {
 
   @ApiProperty({ nullable: true, required: false })
   assignedFleetVehicleType?: string | null;
+
+  @ApiProperty({ nullable: true, required: false })
+  assignedFleetVehicleStatus?: string | null;
 }

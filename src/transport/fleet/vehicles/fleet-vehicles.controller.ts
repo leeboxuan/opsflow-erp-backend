@@ -17,7 +17,8 @@ import {
   ModuleEntitlementGuard,
   RequiresTenantModule,
 } from "../../../shared/auth/guards/module-entitlement.guard";
-import { TenantModule } from "@prisma/client";
+import { RoleGuard, Roles } from "../../../shared/auth/guards/role.guard";
+import { Role, TenantModule } from "@prisma/client";
 import { AssignFleetVehicleDriverDto } from "./dto/assign-fleet-vehicle-driver.dto";
 import { CreateFleetVehicleDto } from "./dto/create-fleet-vehicle.dto";
 import { ListFleetVehiclesQueryDto } from "./dto/list-fleet-vehicles.query.dto";
@@ -80,6 +81,8 @@ export class FleetVehiclesController {
 
   @Patch(":id/assign-driver")
   @ApiOperation({ summary: "Assign/unassign a driver to this fleet vehicle" })
+  @UseGuards(RoleGuard)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
   async assignDriver(
     @Req() req: any,
     @Param("id") id: string,
