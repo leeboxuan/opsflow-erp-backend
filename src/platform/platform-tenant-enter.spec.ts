@@ -25,7 +25,7 @@ describe("PlatformService enter/exit tenant (Phase 3)", () => {
       id: "t1",
       name: "Acme",
       slug: "acme",
-      timezone: null,
+      timezone: "Pacific/Auckland",
       status: TenantStatus.ACTIVE,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -41,6 +41,7 @@ describe("PlatformService enter/exit tenant (Phase 3)", () => {
     expect(result.id).toBe("t1");
     expect(result.operable).toBe(true);
     expect(result.tenantSuspended).toBe(false);
+    expect(result.timezone).toBe("Pacific/Auckland");
     expect(audit.append).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "PLATFORM_TENANT_ENTERED",

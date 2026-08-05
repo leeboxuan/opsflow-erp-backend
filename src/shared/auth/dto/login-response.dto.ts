@@ -23,6 +23,15 @@ export class LoginResponseDto {
   @ApiProperty({ nullable: true, required: false })
   activeTenantId?: string | null;
 
+  @ApiProperty({
+    nullable: true,
+    required: false,
+    description:
+      'Validated IANA timezone for the selected active tenant; null when no tenant is selected',
+    example: 'Asia/Singapore',
+  })
+  activeTenantTimezone?: string | null;
+
   @ApiProperty({ required: false, type: [Object] })
   tenantMemberships?: Array<{
     tenantId: string;

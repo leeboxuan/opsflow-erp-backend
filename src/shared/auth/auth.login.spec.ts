@@ -22,6 +22,7 @@ describe('AuthController.login', () => {
     id: 'tenant-a',
     name: 'Tenant A',
     slug: 'tenant-a',
+    timezone: 'Australia/Perth',
   };
 
   let controller: AuthController;
@@ -96,7 +97,12 @@ describe('AuthController.login', () => {
         tenantId: tenantA.id,
         role: Role.WAREHOUSE,
         status: MembershipStatus.Active,
-        tenant: { id: tenantA.id, name: tenantA.name, status: 'ACTIVE' },
+        tenant: {
+          id: tenantA.id,
+          name: tenantA.name,
+          status: 'ACTIVE',
+          timezone: tenantA.timezone,
+        },
       },
     ]);
     prisma.user.findUnique.mockResolvedValue({
@@ -133,6 +139,7 @@ describe('AuthController.login', () => {
     });
     expect(result.user.email).toBeNull();
     expect(result.user.username).toBe('floor1');
+    expect(result.activeTenantTimezone).toBe('Australia/Perth');
     expect(JSON.stringify(result)).not.toContain(AUTH_INTERNAL_EMAIL_DOMAIN);
   });
 
@@ -292,6 +299,7 @@ describe('AuthController.login', () => {
     expect(result.platformAdmin).toEqual({ id: 'pa-1', status: 'ACTIVE' });
     expect(result.tenantMemberships).toEqual([]);
     expect(result.activeTenantId).toBeNull();
+    expect(result.activeTenantTimezone).toBeNull();
   });
 
   it('rejects platform-only admin on mobile clientApp', async () => {

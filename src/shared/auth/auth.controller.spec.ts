@@ -46,7 +46,12 @@ describe("AuthController getMe", () => {
             tenantId: "t1",
             role: "ADMIN",
             status: "Active",
-            tenant: { id: "t1", name: "Tenant One" },
+            tenant: {
+              id: "t1",
+              name: "Tenant One",
+              status: "ACTIVE",
+              timezone: "Pacific/Auckland",
+            },
             createdAt: new Date("2026-05-08T00:00:00.000Z"),
           },
         ]),
@@ -55,6 +60,12 @@ describe("AuthController getMe", () => {
           status: "Active",
         }),
         update: jest.fn().mockResolvedValue({}),
+      },
+      platformAdmin: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+      tenant: {
+        findUnique: jest.fn().mockResolvedValue(null),
       },
       ...overrides,
     };
@@ -80,7 +91,7 @@ describe("AuthController getMe", () => {
         tenantId: "t1",
         role: "ADMIN",
         status: "Active",
-        tenant: { id: "t1", name: "Tenant One" },
+        tenant: { id: "t1", name: "Tenant One", status: "ACTIVE" },
       },
     ]);
   });
@@ -165,5 +176,87 @@ describe("AuthController getMe", () => {
     } as any);
     expect(res.tenantId).toBeUndefined();
     expect(Array.isArray(res.tenantMemberships)).toBe(true);
+    expect(res.activeTenantTimezone).toBeNull();
+  });
+
+  it("returns only the active ordinary member tenant timezone", async () => {
+    const { controller, prisma } = makeController();
+    const res = await controller.getMe({
+      headers: { "x-tenant-id": "t1" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
+    } as any);
+
+    expect(res.activeTenantTimezone).toBe("Pacific/Auckland");
+    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("does not leak a foreign tenant timezone to an ordinary user", async () => {
+    const { controller, prisma } = makeController({
+      tenant: {
+        findUnique: jest.fn().mockResolvedValue({
+          timezone: "America/New_York",
+          status: "ACTIVE",
+        }),
+      },
+    });
+    const res = await controller.getMe({
+      headers: { "x-tenant-id": "foreign-tenant" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
+    } as any);
+
+    expect(res.activeTenantTimezone).toBeNull();
+    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("returns the operated tenant timezone for an active Platform Admin", async () => {
+    const { controller, prisma } = makeController({
+      platformAdmin: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: "pa-1", status: "ACTIVE" }),
+      },
+      tenant: {
+        findUnique: jest.fn().mockResolvedValue({
+          timezone: "America/New_York",
+          status: "ACTIVE",
+        }),
+      },
+    });
+    const res = await controller.getMe({
+      headers: { "x-tenant-id": "operated-tenant" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
+    } as any);
+
+    expect(res.activeTenantTimezone).toBe("America/New_York");
+    expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
+      where: { id: "operated-tenant" },
+      select: { timezone: true, status: true },
+    });
+  });
+
+  it("falls back safely for an invalid active tenant timezone", async () => {
+    const { controller } = makeController({
+      tenantMembership: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            tenantId: "t1",
+            role: "ADMIN",
+            status: "Active",
+            tenant: {
+              id: "t1",
+              name: "Tenant One",
+              status: "ACTIVE",
+              timezone: "Not/AZone",
+            },
+          },
+        ]),
+      },
+    });
+    const res = await controller.getMe({
+      headers: { "x-tenant-id": "t1" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
+    } as any);
+
+    expect(res.activeTenantTimezone).toBe("Asia/Singapore");
   });
 });

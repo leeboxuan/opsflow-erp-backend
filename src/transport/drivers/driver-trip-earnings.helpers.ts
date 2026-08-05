@@ -1,6 +1,10 @@
 import { BadRequestException } from "@nestjs/common";
+import {
+  DEFAULT_TENANT_TIMEZONE,
+  getSafeTenantTimezone,
+} from "../../shared/common/tenant-timezone";
 
-export const DEFAULT_TENANT_TIMEZONE = "Asia/Singapore";
+export { DEFAULT_TENANT_TIMEZONE, getSafeTenantTimezone };
 export const DEFAULT_DRIVER_EARNING_CURRENCY = "SGD";
 
 /** Driver payout total for mobile cards: persisted cents, else sum of payout lines. */
@@ -15,16 +19,6 @@ export function resolveDriverTripEarningCents(trip: {
   if (!lines.length) return null;
   const total = lines.reduce((sum, line) => sum + (line.totalCents ?? 0), 0);
   return total > 0 ? total : null;
-}
-
-export function getSafeTenantTimezone(value?: string | null): string {
-  const timezone = value?.trim() || DEFAULT_TENANT_TIMEZONE;
-  try {
-    Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
-    return timezone;
-  } catch {
-    return DEFAULT_TENANT_TIMEZONE;
-  }
 }
 
 function getTimeZoneOffsetMs(date: Date, timeZone: string): number {

@@ -28,6 +28,7 @@ import { parsePaginationFromQuery, buildPaginationMeta } from "../shared/common/
 import { listTenantUsers } from "../admin/admin-users.list";
 import { TenantUserProvisioningService } from "../admin/tenant-user-provisioning.service";
 import type { PublicAdminUserDto } from "../admin/admin-users.mapper";
+import { getSafeTenantTimezone } from "../shared/common/tenant-timezone";
 
 const ALL_MODULES: TenantModule[] = [
   TenantModule.TRANSPORT,
@@ -943,7 +944,7 @@ export class PlatformService {
       id: t.id,
       name: t.name,
       slug: t.slug,
-      timezone: t.timezone,
+      timezone: getSafeTenantTimezone(t.timezone),
       status: t.status,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,

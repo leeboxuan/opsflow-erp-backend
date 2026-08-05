@@ -26,6 +26,7 @@ import {
   normalizeUsername,
   publicEmailOrNull,
 } from './auth-internal-email';
+import { getSafeTenantTimezone } from '../common/tenant-timezone';
 
 const USERNAME_LOGIN_ERROR = 'Invalid username or password';
 const EMAIL_LOGIN_ERROR = 'Invalid email or password';
@@ -121,6 +122,7 @@ export class AuthController {
             id: true,
             name: true,
             status: true,
+            timezone: true,
           },
         },
       },
@@ -185,6 +187,9 @@ export class AuthController {
       expiresAt,
       user,
       activeTenantId: activeMembership?.tenantId ?? null,
+      activeTenantTimezone: activeMembership
+        ? getSafeTenantTimezone(activeMembership.tenant.timezone)
+        : null,
       tenantMemberships: visibleMemberships.map((membership) => ({
         tenantId: membership.tenantId,
         role: membership.role,
@@ -360,6 +365,7 @@ export class AuthController {
             id: true,
             name: true,
             status: true,
+            timezone: true,
           },
         },
       },
@@ -384,6 +390,12 @@ export class AuthController {
     });
 
     const platformAdmin = await this.resolvePlatformAdminPayload(user.id);
+    const activeTenantTimezone = await this.resolveActiveTenantTimezone({
+      requestedTenantId: req.headers?.['x-tenant-id'],
+      memberships,
+      platformAdmin,
+      requestUser: req.user,
+    });
 
     return {
       id: user.id,
@@ -404,6 +416,54 @@ export class AuthController {
       avatarUpdatedAt: (user as any).avatarUpdatedAt ?? null,
       tenantMemberships,
       platformAdmin,
+      activeTenantTimezone,
     };
+  }
+
+  private async resolveActiveTenantTimezone(params: {
+    requestedTenantId: unknown;
+    memberships: Array<{
+      tenantId: string;
+      status: MembershipStatus;
+      tenant: { status?: string | null; timezone?: string | null };
+    }>;
+    platformAdmin: { id: string; status: string } | null;
+    requestUser: {
+      isSuperadmin?: boolean;
+      isPlatformAdmin?: boolean;
+      role?: string;
+    };
+  }): Promise<string | null> {
+    const tenantId =
+      typeof params.requestedTenantId === 'string'
+        ? params.requestedTenantId.trim()
+        : '';
+    if (!tenantId) return null;
+
+    const membership = params.memberships.find(
+      (item) =>
+        item.tenantId === tenantId &&
+        item.status === MembershipStatus.Active &&
+        item.tenant.status !== 'SUSPENDED' &&
+        item.tenant.status !== 'ARCHIVED',
+    );
+    if (membership) {
+      return getSafeTenantTimezone(membership.tenant.timezone);
+    }
+
+    const isPlatformAdmin =
+      params.platformAdmin?.status === 'ACTIVE' ||
+      params.requestUser.isPlatformAdmin === true ||
+      params.requestUser.isSuperadmin === true ||
+      params.requestUser.role === 'SUPERADMIN';
+    if (!isPlatformAdmin) return null;
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timezone: true, status: true },
+    });
+    return tenant && tenant.status !== 'ARCHIVED'
+      ? getSafeTenantTimezone(tenant.timezone)
+      : null;
   }
 }
