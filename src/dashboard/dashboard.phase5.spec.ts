@@ -4,6 +4,9 @@ describe("DashboardService Phase 5 aggregates", () => {
   it("does not load ready/invoiced job ID arrays for summary metrics", async () => {
     const jobFindMany = jest.fn();
     const prisma: any = {
+      tenant: {
+        findUnique: jest.fn().mockResolvedValue({ timezone: "Asia/Singapore" }),
+      },
       job: {
         count: jest.fn().mockResolvedValue(10),
         groupBy: jest.fn().mockResolvedValue([]),
@@ -33,9 +36,12 @@ describe("DashboardService Phase 5 aggregates", () => {
     expect(jobFindMany).not.toHaveBeenCalled();
     expect(prisma.$queryRaw).toHaveBeenCalled();
     expect(summary.jobs.readyForInvoiceNotInvoiced).toBe(3);
+    expect(summary.kpis.readyToInvoiceNotInvoiced).toBe(3);
     // Every job aggregate path must include tenantId
     expect(prisma.job.count).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ tenantId: "tenant-a" }) }),
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: "tenant-a" }),
+      }),
     );
   });
 });

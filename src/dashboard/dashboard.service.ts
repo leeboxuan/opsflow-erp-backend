@@ -1,11 +1,28 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { JobStatus, InventoryUnitStatus, OrderStatus, Prisma, TripStatus } from "@prisma/client";
+import {
+  JobStatus,
+  InventoryUnitStatus,
+  OrderStatus,
+  Prisma,
+  TripStatus,
+} from "@prisma/client";
 import { PrismaService } from "../shared/prisma/prisma.service";
+import { resolveDashboardDateRange } from "./dashboard-date-range";
+import {
+  buildCompletedScheduledTripsInPeriodWhere,
+  buildDashboardKpis,
+  buildJobsInPeriodWhere,
+  buildPendingDriverAssignmentWhere,
+  buildScheduledTripsInPeriodWhere,
+  buildTripsCompletedInPeriodWhere,
+  buildTripsInProgressWhere,
+} from "./dashboard-kpis";
 import {
   INVOICED_INVOICE_STATUSES,
   buildDashboardJobMetrics,
   buildJobStatusCountMap,
 } from "./dashboard-job-metrics";
+import type { DashboardSummaryQueryDto } from "./dto";
 
 function toCountMap<T extends string>(
   rows: Array<{ key: T; count: number }>,
@@ -21,13 +38,26 @@ function toCountMap<T extends string>(
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getSummary(tenantId: string | null) {
+  async getSummary(
+    tenantId: string | null,
+    query: DashboardSummaryQueryDto = {},
+  ) {
     if (!tenantId) {
       throw new BadRequestException("Tenant context is required for dashboard");
     }
 
     const now = new Date();
     const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timezone: true },
+    });
+    const range = resolveDashboardDateRange(
+      { from: query.from, to: query.to },
+      tenant?.timezone,
+      now,
+    );
 
     const [
       jobTotal,
@@ -44,6 +74,12 @@ export class DashboardService {
       driversTotal,
       activeTrips,
       activity,
+      jobsInPeriod,
+      tripsInProgress,
+      tripsCompletedInPeriod,
+      pendingDriverAssignment,
+      scheduledTripsInPeriod,
+      completedScheduledTripsInPeriod,
     ] = await Promise.all([
       this.prisma.job.count({ where: { tenantId } }),
       this.prisma.job.groupBy({
@@ -126,6 +162,24 @@ export class DashboardService {
           payload: true,
         },
       }),
+      this.prisma.job.count({
+        where: buildJobsInPeriodWhere(tenantId, range),
+      }),
+      this.prisma.trip.count({
+        where: buildTripsInProgressWhere(tenantId),
+      }),
+      this.prisma.trip.count({
+        where: buildTripsCompletedInPeriodWhere(tenantId, range),
+      }),
+      this.prisma.trip.count({
+        where: buildPendingDriverAssignmentWhere(tenantId),
+      }),
+      this.prisma.trip.count({
+        where: buildScheduledTripsInPeriodWhere(tenantId, range),
+      }),
+      this.prisma.trip.count({
+        where: buildCompletedScheduledTripsInPeriodWhere(tenantId, range),
+      }),
     ]);
 
     const jobByStatus = buildJobStatusCountMap(
@@ -171,7 +225,22 @@ export class DashboardService {
       activeTrips.map((t) => t.driverId).filter(Boolean) as string[],
     );
 
+    const kpis = buildDashboardKpis({
+      jobsInPeriod,
+      tripsInProgress,
+      tripsCompletedInPeriod,
+      pendingDriverAssignment,
+      readyToInvoiceNotInvoiced: readyForInvoiceNotInvoiced,
+      scheduledTripsInPeriod,
+      completedScheduledTripsInPeriod,
+    });
+
     return {
+      timeZone: range.timeZone,
+      from: range.from,
+      to: range.to,
+      kpis,
+
       jobs,
 
       orders: {
