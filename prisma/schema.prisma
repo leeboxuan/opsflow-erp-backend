@@ -49,6 +49,11 @@ model Tenant {
   customerCompanyDocuments     CustomerCompanyDocument[]
   customerQuotationRateLines   CustomerQuotationRateLine[]
   customerRateMasterLines      CustomerRateMasterLine[]
+  customerRateTemplates        CustomerRateTemplate[]
+  customerRateTemplateRows     CustomerRateTemplateRow[]
+  customerQuotations           CustomerQuotation[]
+  customerQuotationLines       CustomerQuotationLine[]
+  quotationNoCounters          quotation_no_counters[]
   masterFiles                  MasterFile[]
   customerQuotationItems       CustomerQuotationItem[]
   tenantQuotationItems         TenantQuotationItem[]
@@ -133,6 +138,13 @@ model User {
   warehouseJobDocumentsReviewed WarehouseJobDocument[] @relation("WarehouseJobDocumentReviewedBy")
   tripJobItemsLinked            TripJobItem[]          @relation("TripJobItemLinkedBy")
 
+  customerRateTemplatesCreated  CustomerRateTemplate[] @relation("CustomerRateTemplateCreatedBy")
+  customerRateTemplatesUpdated  CustomerRateTemplate[] @relation("CustomerRateTemplateUpdatedBy")
+  customerQuotationsCreated     CustomerQuotation[]    @relation("CustomerQuotationCreatedBy")
+  customerQuotationsUpdated     CustomerQuotation[]    @relation("CustomerQuotationUpdatedBy")
+  customerQuotationsIssued      CustomerQuotation[]    @relation("CustomerQuotationIssuedBy")
+  customerQuotationsAccepted    CustomerQuotation[]    @relation("CustomerQuotationAcceptedBy")
+
   @@index([customerCompanyId])
   @@index([customerContactId])
   @@index([email])
@@ -189,6 +201,8 @@ model customer_companies {
   quotations      CustomerCompanyQuotation[]
   documents       CustomerCompanyDocument[]
   rateMasterLines CustomerRateMasterLine[]
+  rateTemplates   CustomerRateTemplate[]
+  customerQuotations CustomerQuotation[]
   masterFiles     MasterFile[]
 
   @@unique([tenantId, normalizedName])
@@ -2435,4 +2449,194 @@ model GpsPosition {
   @@index([tenantId, chassisId, recordedAt])
   @@index([tenantId, recordedAt])
   @@map("gps_positions")
+}
+
+/// Customer-scoped commercial rate template (independent copy; source IDs audit-only).
+model CustomerRateTemplate {
+  id                          String                     @id @default(cuid())
+  tenantId                    String
+  customerCompanyId           String
+  name                        String
+  status                      CustomerRateTemplateStatus @default(DRAFT)
+  currency                    String                     @default("SGD")
+  effectiveFrom               DateTime?
+  effectiveTo                 DateTime?
+  notes                       String?
+  sourceMasterDatasetId       String?
+  sourceMasterDatasetVersionNo Int?
+  createdAt                   DateTime                   @default(now())
+  createdByUserId             String?
+  updatedAt                   DateTime                   @updatedAt
+  updatedByUserId             String?
+
+  tenant          Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerCompany customer_companies       @relation(fields: [customerCompanyId], references: [id], onDelete: Cascade)
+  createdBy       User?                    @relation("CustomerRateTemplateCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy       User?                    @relation("CustomerRateTemplateUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  rows            CustomerRateTemplateRow[]
+  quotations      CustomerQuotation[]
+
+  @@index([tenantId, customerCompanyId])
+  @@index([tenantId, customerCompanyId, status])
+  @@map("customer_rate_templates")
+}
+
+model CustomerRateTemplateRow {
+  id                     String   @id @default(cuid())
+  templateId             String
+  tenantId               String
+  code                   String
+  label                  String
+  section                String?
+  description            String?
+  category               String?
+  unit                   String?
+  containerSize          String?
+  tripMode               String?
+  areaScope              String?
+  currency               String   @default("SGD")
+  rateCents              Int?
+  rawRateText            String?
+  requiresManualAmount   Boolean  @default(false)
+  hasMultipleRates       Boolean  @default(false)
+  rateOptionsJson        Json?
+  defaultRateOptionIndex Int?
+  notes                  String?
+  sortOrder              Int?
+  isActive               Boolean  @default(true)
+  metadataJson           Json?
+  sourceMasterRowId      String?
+  createdAt              DateTime @default(now())
+  createdByUserId        String?
+  updatedAt              DateTime @updatedAt
+  updatedByUserId        String?
+
+  template CustomerRateTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  tenant   Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, templateId])
+  @@index([tenantId, code])
+  @@index([tenantId, isActive, sortOrder])
+  @@map("customer_rate_template_rows")
+}
+
+/// Structured customer quotation (commercial offer). Distinct from CustomerCompanyQuotation PDF archive.
+model CustomerQuotation {
+  id                           String                            @id @default(cuid())
+  tenantId                     String
+  customerCompanyId            String
+  quotationNo                  String
+  title                        String?
+  status                       CustomerQuotationStatus           @default(DRAFT)
+  currency                     String                            @default("SGD")
+  issueDate                    DateTime?
+  validFrom                    DateTime?
+  validUntil                   DateTime?
+  notes                        String?
+  sourceTemplateId             String?
+  sourceTemplateNameSnapshot   String?
+  subtotalCents                Int                               @default(0)
+  taxCents                     Int                               @default(0)
+  totalCents                   Int                               @default(0)
+  issuedAt                     DateTime?
+  issuedByUserId               String?
+  lockedAt                     DateTime?
+  acceptedAt                   DateTime?
+  acceptedByUserId             String?
+  acceptanceMethod             CustomerQuotationAcceptanceMethod?
+  acceptanceEvidenceNote       String?
+  acceptanceEvidenceStorageKey String?
+  rejectedAt                   DateTime?
+  voidedAt                     DateTime?
+  expiredAt                    DateTime?
+  customerNameSnapshot        String?
+  pdfKey                       String?
+  pdfGeneratedAt               DateTime?
+  createdAt                    DateTime                          @default(now())
+  createdByUserId              String?
+  updatedAt                    DateTime                          @updatedAt
+  updatedByUserId              String?
+
+  tenant          Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerCompany customer_companies     @relation(fields: [customerCompanyId], references: [id], onDelete: Restrict)
+  sourceTemplate  CustomerRateTemplate?  @relation(fields: [sourceTemplateId], references: [id], onDelete: SetNull)
+  createdBy       User?                  @relation("CustomerQuotationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy       User?                  @relation("CustomerQuotationUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  issuedBy        User?                  @relation("CustomerQuotationIssuedBy", fields: [issuedByUserId], references: [id], onDelete: SetNull)
+  acceptedBy      User?                  @relation("CustomerQuotationAcceptedBy", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+  lines           CustomerQuotationLine[]
+
+  @@unique([tenantId, quotationNo])
+  @@index([tenantId, customerCompanyId])
+  @@index([tenantId, customerCompanyId, status])
+  @@index([tenantId, status, validUntil])
+  @@map("customer_quotations")
+}
+
+model CustomerQuotationLine {
+  id                   String   @id @default(cuid())
+  quotationId          String
+  tenantId             String
+  sortOrder            Int      @default(0)
+  code                 String
+  label                String
+  description          String?
+  unit                 String?
+  qty                  Float    @default(1)
+  unitPriceCents       Int      @default(0)
+  amountCents          Int      @default(0)
+  currency             String   @default("SGD")
+  taxCode              String   @default("SR")
+  taxRate              Int      @default(900)
+  taxCents             Int      @default(0)
+  requiresManualAmount Boolean  @default(false)
+  sourceTemplateRowId  String?
+  sourceMasterRowId    String?
+  metadataJson         Json?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  quotation CustomerQuotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, quotationId])
+  @@index([tenantId, code])
+  @@map("customer_quotation_lines")
+}
+
+model quotation_no_counters {
+  tenantId  String
+  yyyymm    String
+  nextSeq   Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, yyyymm])
+  @@index([tenantId])
+  @@map("quotation_no_counters")
+}
+
+enum CustomerRateTemplateStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum CustomerQuotationStatus {
+  DRAFT
+  ISSUED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  VOID
+}
+
+enum CustomerQuotationAcceptanceMethod {
+  EMAIL
+  PORTAL
+  PHONE
+  SIGNED_DOCUMENT
+  OTHER
 }
