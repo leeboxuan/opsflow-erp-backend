@@ -3,11 +3,19 @@ import {
   JobStatus,
   InventoryUnitStatus,
   OrderStatus,
-  Prisma,
   TripStatus,
 } from "@prisma/client";
 import { PrismaService } from "../shared/prisma/prisma.service";
 import { resolveDashboardDateRange } from "./dashboard-date-range";
+import {
+  DASHBOARD_ATTENTION_ITEM_LIMIT,
+  buildDashboardAttention,
+  buildOverdueActiveTripItem,
+  buildOverdueActiveTripWhere,
+  buildReadyNotInvoicedItem,
+  buildUnassignedStartingSoonItem,
+  buildUnassignedStartingSoonWhere,
+} from "./dashboard-attention";
 import {
   buildCompletedScheduledTripsInPeriodWhere,
   buildDashboardKpis,
@@ -18,9 +26,10 @@ import {
   buildTripsInProgressWhere,
 } from "./dashboard-kpis";
 import {
-  INVOICED_INVOICE_STATUSES,
   buildDashboardJobMetrics,
   buildJobStatusCountMap,
+  readyForInvoiceNotInvoicedCountSql,
+  readyForInvoiceNotInvoicedListSql,
 } from "./dashboard-job-metrics";
 import type { DashboardSummaryQueryDto } from "./dto";
 
@@ -33,6 +42,12 @@ function toCountMap<T extends string>(
   for (const r of rows) map[r.key] = r.count;
   return map as Record<T, number>;
 }
+
+type ReadyNotInvoicedListRow = {
+  id: string;
+  invoiceReadyAt: Date | null;
+  updatedAt: Date;
+};
 
 @Injectable()
 export class DashboardService {
@@ -48,6 +63,7 @@ export class DashboardService {
 
     const now = new Date();
     const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const attentionLimit = DASHBOARD_ATTENTION_ITEM_LIMIT;
 
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -58,6 +74,9 @@ export class DashboardService {
       tenant?.timezone,
       now,
     );
+
+    const unassignedWhere = buildUnassignedStartingSoonWhere(tenantId, now);
+    const overdueWhere = buildOverdueActiveTripWhere(tenantId, now);
 
     const [
       jobTotal,
@@ -80,6 +99,11 @@ export class DashboardService {
       pendingDriverAssignment,
       scheduledTripsInPeriod,
       completedScheduledTripsInPeriod,
+      unassignedStartingSoonCount,
+      overdueActiveTripCount,
+      unassignedStartingSoonRows,
+      overdueActiveTripRows,
+      readyNotInvoicedRows,
     ] = await Promise.all([
       this.prisma.job.count({ where: { tenantId } }),
       this.prisma.job.groupBy({
@@ -97,23 +121,8 @@ export class DashboardService {
           ],
         },
       }),
-      // Count READY_FOR_INVOICE jobs with no Sent/Issued/Paid invoice (same math as ID-set subtract)
       this.prisma
-        .$queryRaw(
-          Prisma.sql`
-        SELECT COUNT(*)::bigint AS count
-        FROM "jobs" j
-        WHERE j."tenantId" = ${tenantId}
-          AND j."status"::text = ${JobStatus.READY_FOR_INVOICE}
-          AND NOT EXISTS (
-            SELECT 1
-            FROM "invoices" i
-            WHERE i."tenantId" = ${tenantId}
-              AND i."sourceJobId" = j."id"
-              AND i."status" IN (${Prisma.join([...INVOICED_INVOICE_STATUSES])})
-          )
-      `,
-        )
+        .$queryRaw(readyForInvoiceNotInvoicedCountSql(tenantId))
         .then((rows: Array<{ count: bigint }>) => Number(rows[0]?.count ?? 0n)),
       this.prisma.transportOrder.count({ where: { tenantId } }),
       this.prisma.transportOrder.groupBy({
@@ -180,6 +189,31 @@ export class DashboardService {
       this.prisma.trip.count({
         where: buildCompletedScheduledTripsInPeriodWhere(tenantId, range),
       }),
+      this.prisma.trip.count({ where: unassignedWhere }),
+      this.prisma.trip.count({ where: overdueWhere }),
+      this.prisma.trip.findMany({
+        where: unassignedWhere,
+        orderBy: [{ plannedStartAt: "asc" }, { id: "asc" }],
+        take: attentionLimit,
+        select: {
+          id: true,
+          jobId: true,
+          plannedStartAt: true,
+        },
+      }),
+      this.prisma.trip.findMany({
+        where: overdueWhere,
+        orderBy: [{ plannedEndAt: "asc" }, { id: "asc" }],
+        take: attentionLimit,
+        select: {
+          id: true,
+          jobId: true,
+          plannedEndAt: true,
+        },
+      }),
+      this.prisma
+        .$queryRaw(readyForInvoiceNotInvoicedListSql(tenantId, attentionLimit))
+        .then((rows: ReadyNotInvoicedListRow[]) => rows),
     ]);
 
     const jobByStatus = buildJobStatusCountMap(
@@ -235,11 +269,60 @@ export class DashboardService {
       completedScheduledTripsInPeriod,
     });
 
+    const attention = buildDashboardAttention({
+      unassignedCount: unassignedStartingSoonCount,
+      overdueCount: overdueActiveTripCount,
+      readyNotInvoicedCount: readyForInvoiceNotInvoiced,
+      unassignedItems: unassignedStartingSoonRows
+        .filter(
+          (
+            row,
+          ): row is {
+            id: string;
+            jobId: string;
+            plannedStartAt: Date;
+          } => row.jobId != null && row.plannedStartAt instanceof Date,
+        )
+        .map((row) =>
+          buildUnassignedStartingSoonItem({
+            id: row.id,
+            jobId: row.jobId,
+            plannedStartAt: row.plannedStartAt,
+          }),
+        ),
+      overdueItems: overdueActiveTripRows
+        .filter(
+          (
+            row,
+          ): row is {
+            id: string;
+            jobId: string;
+            plannedEndAt: Date;
+          } => row.jobId != null && row.plannedEndAt instanceof Date,
+        )
+        .map((row) =>
+          buildOverdueActiveTripItem({
+            id: row.id,
+            jobId: row.jobId,
+            plannedEndAt: row.plannedEndAt,
+          }),
+        ),
+      readyNotInvoicedItems: readyNotInvoicedRows.map((row) =>
+        buildReadyNotInvoicedItem({
+          id: row.id,
+          invoiceReadyAt: row.invoiceReadyAt,
+          updatedAt: row.updatedAt,
+        }),
+      ),
+      limit: attentionLimit,
+    });
+
     return {
       timeZone: range.timeZone,
       from: range.from,
       to: range.to,
       kpis,
+      attention,
 
       jobs,
 

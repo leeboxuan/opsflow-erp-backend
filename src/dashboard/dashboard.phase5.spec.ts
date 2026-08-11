@@ -27,7 +27,13 @@ describe("DashboardService Phase 5 aggregates", () => {
       },
       drivers: { count: jest.fn().mockResolvedValue(0) },
       eventLog: { findMany: jest.fn().mockResolvedValue([]) },
-      $queryRaw: jest.fn().mockResolvedValue([{ count: 3n }]),
+      $queryRaw: jest.fn((sql: { strings?: string[] }) => {
+        const text = String(sql?.strings?.join("") ?? "");
+        if (text.includes("COUNT(*)")) {
+          return Promise.resolve([{ count: 3n }]);
+        }
+        return Promise.resolve([]);
+      }),
     };
 
     const svc = new DashboardService(prisma);

@@ -19,7 +19,13 @@ function createCompatiblePrismaMock() {
         { status: JobStatus.CANCELLED, _count: { _all: 1 } },
       ]),
     },
-    $queryRaw: jest.fn().mockResolvedValue([{ count: 1n }]),
+    $queryRaw: jest.fn((sql: { strings?: string[] }) => {
+      const text = String(sql?.strings?.join("") ?? "");
+      if (text.includes("COUNT(*)")) {
+        return Promise.resolve([{ count: 1n }]);
+      }
+      return Promise.resolve([]);
+    }),
     transportOrder: {
       count: jest.fn().mockResolvedValue(0),
       groupBy: jest.fn().mockResolvedValue([]),

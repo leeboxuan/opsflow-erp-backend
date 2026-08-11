@@ -16,7 +16,13 @@ function createPrismaMock(overrides: Record<string, unknown> = {}) {
       groupBy: jest.fn().mockResolvedValue([]),
       findMany: jest.fn(),
     },
-    $queryRaw: jest.fn().mockResolvedValue([{ count: 0n }]),
+    $queryRaw: jest.fn((sql: { strings?: string[] }) => {
+      const text = String(sql?.strings?.join("") ?? "");
+      if (text.includes("COUNT(*)")) {
+        return Promise.resolve([{ count: 0n }]);
+      }
+      return Promise.resolve([]);
+    }),
     transportOrder: {
       count: jest.fn().mockResolvedValue(0),
       groupBy: jest.fn().mockResolvedValue([]),
@@ -38,8 +44,13 @@ function createPrismaMock(overrides: Record<string, unknown> = {}) {
 
 describe("DashboardService KPIs (Phase 1)", () => {
   it("returns additive metadata and kpis while preserving legacy fields including activity", async () => {
-    const prisma: any = createPrismaMock({
-      $queryRaw: jest.fn().mockResolvedValue([{ count: 2n }]),
+    const prisma: any = createPrismaMock();
+    prisma.$queryRaw = jest.fn((sql: { strings?: string[] }) => {
+      const text = String(sql?.strings?.join("") ?? "");
+      if (text.includes("COUNT(*)")) {
+        return Promise.resolve([{ count: 2n }]);
+      }
+      return Promise.resolve([]);
     });
     prisma.job.count
       .mockResolvedValueOnce(8) // total
@@ -52,7 +63,9 @@ describe("DashboardService KPIs (Phase 1)", () => {
       .mockResolvedValueOnce(4) // tripsCompletedInPeriod
       .mockResolvedValueOnce(2) // pendingDriverAssignment
       .mockResolvedValueOnce(8) // scheduled
-      .mockResolvedValueOnce(6); // completed scheduled
+      .mockResolvedValueOnce(6) // completed scheduled
+      .mockResolvedValueOnce(0) // unassigned attention
+      .mockResolvedValueOnce(0); // overdue attention
 
     const svc = new DashboardService(prisma);
     const summary = await svc.getSummary("tenant-a", {});
@@ -67,6 +80,11 @@ describe("DashboardService KPIs (Phase 1)", () => {
       readyToInvoiceNotInvoiced: 2,
       completionRate: 0.75,
       completionRateBasis: { completed: 6, scheduled: 8 },
+    });
+    expect(summary.attention).toEqual({
+      total: 2,
+      counts: { critical: 0, warning: 2, info: 0 },
+      items: [],
     });
     expect(summary.jobs.readyForInvoiceNotInvoiced).toBe(2);
     expect(summary.trips.activeToday).toBe(1);
@@ -189,14 +207,15 @@ describe("DashboardService KPIs (Phase 1)", () => {
   });
 
   it("ready-to-invoice raw SQL uses Sent/Issued/Paid and tenantId on jobs and invoices", async () => {
-    const prisma: any = createPrismaMock({
-      $queryRaw: jest.fn().mockResolvedValue([{ count: 1n }]),
-    });
+    const prisma: any = createPrismaMock();
     const svc = new DashboardService(prisma);
     await svc.getSummary("tenant-a");
 
-    expect(prisma.$queryRaw).toHaveBeenCalled();
-    const sqlArg = prisma.$queryRaw.mock.calls[0][0];
+    const countCall = prisma.$queryRaw.mock.calls.find((call: any[]) =>
+      String(call[0]?.strings?.join("") ?? "").includes("COUNT(*)"),
+    );
+    expect(countCall).toBeDefined();
+    const sqlArg = countCall[0];
     const sqlText = String(sqlArg?.strings?.join("?") ?? sqlArg);
     const sqlValues = Array.isArray(sqlArg?.values) ? sqlArg.values : [];
     expect(sqlText).toContain('j."tenantId"');

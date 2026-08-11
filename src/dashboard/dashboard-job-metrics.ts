@@ -1,7 +1,48 @@
-import { JobStatus } from "@prisma/client";
+import { JobStatus, Prisma } from "@prisma/client";
 
 /** Invoice statuses that mean the job has a generated/saved invoice (see finance InvoicesService). */
 export const INVOICED_INVOICE_STATUSES = ["Sent", "Issued", "Paid"] as const;
+
+/**
+ * Shared READY_FOR_INVOICE − Sent/Issued/Paid predicate (tenant-scoped on job and invoice).
+ * Used by Phase 1 KPI count and Phase 2 attention list.
+ */
+export function readyForInvoiceNotInvoicedCountSql(tenantId: string) {
+  return Prisma.sql`
+    SELECT COUNT(*)::bigint AS count
+    FROM "jobs" j
+    WHERE j."tenantId" = ${tenantId}
+      AND j."status"::text = ${JobStatus.READY_FOR_INVOICE}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "invoices" i
+        WHERE i."tenantId" = ${tenantId}
+          AND i."sourceJobId" = j."id"
+          AND i."status" IN (${Prisma.join([...INVOICED_INVOICE_STATUSES])})
+      )
+  `;
+}
+
+export function readyForInvoiceNotInvoicedListSql(
+  tenantId: string,
+  limit: number,
+) {
+  return Prisma.sql`
+    SELECT j."id", j."invoiceReadyAt", j."updatedAt"
+    FROM "jobs" j
+    WHERE j."tenantId" = ${tenantId}
+      AND j."status"::text = ${JobStatus.READY_FOR_INVOICE}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "invoices" i
+        WHERE i."tenantId" = ${tenantId}
+          AND i."sourceJobId" = j."id"
+          AND i."status" IN (${Prisma.join([...INVOICED_INVOICE_STATUSES])})
+      )
+    ORDER BY COALESCE(j."invoiceReadyAt", j."updatedAt") ASC, j."id" ASC
+    LIMIT ${limit}
+  `;
+}
 
 export type JobStatusCountMap = Record<JobStatus, number>;
 
