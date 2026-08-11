@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -7,9 +8,18 @@ import {
   Post,
   Put,
   Request,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
-import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
+import { FileInterceptor } from "@nestjs/platform-express";
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiTags,
+} from "@nestjs/swagger";
 import { Role, TenantModule } from "@prisma/client";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
@@ -22,6 +32,7 @@ import { CustomerQuotationsService } from "./customer-quotations.service";
 import {
   AcceptCustomerQuotationDto,
   CreateBlankCustomerQuotationDto,
+  CreateCustomerQuotationFromRateExcelDto,
   CreateCustomerQuotationFromTemplateDto,
   ReplaceCustomerQuotationLinesDto,
   UpdateCustomerQuotationDto,
@@ -70,6 +81,67 @@ export class CustomerQuotationsController {
       req.tenant.tenantId,
       customerId,
       dto,
+      req.user?.userId ?? null,
+    );
+  }
+
+  @Post("from-rate-excel/preview")
+  @ApiOperation({
+    summary: "Preview DRAFT quotation lines parsed from a rate Excel workbook (in-memory)",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  previewFromRateExcel(
+    @Request() req: any,
+    @Param("customerId") customerId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    return this.quotations.previewFromRateExcel(
+      req.tenant.tenantId,
+      customerId,
+      file,
+    );
+  }
+
+  @Post("from-rate-excel")
+  @ApiOperation({
+    summary:
+      "Create DRAFT quotation from rate Excel (frozen lines; does not touch templates/master datasets)",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+        title: { type: "string" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  createFromRateExcel(
+    @Request() req: any,
+    @Param("customerId") customerId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: CreateCustomerQuotationFromRateExcelDto,
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    return this.quotations.createFromRateExcel(
+      req.tenant.tenantId,
+      customerId,
+      file,
+      dto ?? {},
       req.user?.userId ?? null,
     );
   }

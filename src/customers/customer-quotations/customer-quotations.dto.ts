@@ -89,6 +89,15 @@ export class CreateCustomerQuotationFromTemplateDto {
   validUntil?: string;
 }
 
+export class CreateCustomerQuotationFromRateExcelDto {
+  @ApiPropertyOptional({
+    description: "Quotation title; defaults to Excel file name without extension",
+  })
+  @IsOptional()
+  @IsString()
+  title?: string;
+}
+
 export class UpdateCustomerQuotationDto {
   @ApiPropertyOptional()
   @IsOptional()

@@ -20,10 +20,18 @@ import {
 import {
   AcceptCustomerQuotationDto,
   CreateBlankCustomerQuotationDto,
+  CreateCustomerQuotationFromRateExcelDto,
   CreateCustomerQuotationFromTemplateDto,
   CustomerQuotationLineInputDto,
   UpdateCustomerQuotationDto,
 } from "./customer-quotations.dto";
+import {
+  buildQuotationReconciliation,
+  parseQuotationMatrixFromXlsxBuffer,
+  parseQuotationRateLinesFromXlsxBuffer,
+  type ParsedQuotationRateLineInput,
+  type QuotationReconciliationSummary,
+} from "../quotation-parse.helpers";
 
 const QUOTATION_PDF_BUCKET = "job-documents";
 const PDF_SIGNED_URL_TTL_SECONDS = 60 * 60;
@@ -54,6 +62,9 @@ type LineTotals = {
 
 @Injectable()
 export class CustomerQuotationsService {
+  /** Single-flight guard: one in-progress Excel→quotation create per tenant+customer. */
+  private readonly rateExcelCreateInFlight = new Set<string>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -455,6 +466,288 @@ export class CustomerQuotationsService {
     return created;
   }
 
+  private assertExcelQuotationFile(file: Express.Multer.File) {
+    const name = String(file?.originalname ?? "").toLowerCase();
+    const isExcel = /\.xlsx?$/i.test(name);
+    if (!file?.buffer?.length) throw new BadRequestException("file is required");
+    if (!isExcel) {
+      throw new BadRequestException("Quotation import must be Excel (.xlsx/.xls)");
+    }
+  }
+
+  private parseRateExcelWithReconciliation(file: Express.Multer.File): {
+    lines: ParsedQuotationRateLineInput[];
+    reconciliation: QuotationReconciliationSummary;
+  } {
+    this.assertExcelQuotationFile(file);
+    const lines = parseQuotationRateLinesFromXlsxBuffer(file.buffer);
+    const matrix = parseQuotationMatrixFromXlsxBuffer(file.buffer);
+    const reconciliation = buildQuotationReconciliation(matrix);
+    const hasWfSections = Object.keys(reconciliation.counts).some((k) =>
+      ["A/A", "A/B", "B/C"].includes(k),
+    );
+    if (!reconciliation.isMatch && hasWfSections) {
+      throw new BadRequestException(
+        `Quotation workbook failed structural reconciliation for OpsFlow WF reference layout: ${reconciliation.warnings.join(
+          "; ",
+        )}`,
+      );
+    }
+    if (lines.length === 0) {
+      throw new BadRequestException(
+        "No usable quotation lines found in Excel file",
+      );
+    }
+    return { lines, reconciliation };
+  }
+
+  private buildRateExcelLineMetadata(
+    l: ParsedQuotationRateLineInput,
+    sourceFileName: string,
+  ): Prisma.InputJsonValue {
+    return {
+      ...(l.metadataJson ?? {}),
+      annex: l.annex ?? (l.metadataJson as any)?.annex ?? null,
+      sectionCode: l.sectionCode ?? (l.metadataJson as any)?.sectionCode ?? null,
+      groupTitle: l.groupTitle ?? (l.metadataJson as any)?.groupTitle ?? null,
+      sectionDisplay:
+        l.sectionDisplay ?? (l.metadataJson as any)?.sectionDisplay ?? null,
+      baseCode: l.baseCode ?? (l.metadataJson as any)?.baseCode ?? null,
+      baseLabel: l.baseLabel ?? (l.metadataJson as any)?.baseLabel ?? null,
+      variantType: l.variantType ?? (l.metadataJson as any)?.variantType ?? null,
+      variantLabel:
+        l.variantLabel ?? (l.metadataJson as any)?.variantLabel ?? null,
+      containerSize:
+        l.containerSize ?? (l.metadataJson as any)?.containerSize ?? null,
+      equipmentType:
+        l.equipmentType ?? (l.metadataJson as any)?.equipmentType ?? null,
+      areaScope: l.areaScope ?? (l.metadataJson as any)?.areaScope ?? null,
+      itemNo: l.itemNo ?? (l.metadataJson as any)?.itemNo ?? null,
+      additionalRuleText:
+        l.additionalRuleText ??
+        (l.metadataJson as any)?.additionalRuleText ??
+        null,
+      rawValueText:
+        l.rawRateText ?? (l.metadataJson as any)?.rawValueText ?? null,
+      parserSourceType:
+        (l.metadataJson as any)?.parserSourceType ?? "PARSER_ANNEX_MATRIX",
+      section: l.section ?? null,
+      category: l.category ?? null,
+      notes: l.notes ?? null,
+      rawRateText: l.rawRateText ?? null,
+      tripMode: l.tripMode ?? null,
+      importSource: "RATE_EXCEL",
+      sourceFileName,
+    } as Prisma.InputJsonValue;
+  }
+
+  private mapParsedRateExcelLines(
+    lines: ParsedQuotationRateLineInput[],
+    sourceFileName: string,
+    quotationCurrency = "SGD",
+  ): CustomerQuotationLineInputDto[] {
+    return lines.map((l, index) => {
+      const rateCents = l.rateCents;
+      const unitPriceCents =
+        rateCents !== null &&
+        Number.isInteger(rateCents) &&
+        rateCents >= 0
+          ? rateCents
+          : 0;
+      const requiresManualAmount =
+        !!l.requiresManualAmount || rateCents == null;
+      const taxRate = DEFAULT_TAX_RATE_BP;
+      const lineCurrency =
+        typeof (l as any).currency === "string" &&
+        String((l as any).currency).trim()
+          ? String((l as any).currency).trim()
+          : quotationCurrency;
+      return {
+        sortOrder: Number.isInteger(l.sortOrder) ? l.sortOrder : index,
+        code: l.code,
+        label: l.label,
+        description: l.description ?? null,
+        unit: l.unit ?? null,
+        qty: 1,
+        unitPriceCents,
+        currency: lineCurrency,
+        taxCode: taxRate > 0 ? "SR" : "ZR",
+        taxRate,
+        requiresManualAmount,
+        sourceTemplateRowId: null,
+        sourceMasterRowId: null,
+        metadataJson: this.buildRateExcelLineMetadata(l, sourceFileName),
+      };
+    });
+  }
+
+  private defaultTitleFromFileName(originalname: string): string {
+    const base = String(originalname ?? "").trim() || "quotation";
+    return base.replace(/\.[^.]+$/, "") || "quotation";
+  }
+
+  async previewFromRateExcel(
+    tenantId: string,
+    customerId: string,
+    file: Express.Multer.File,
+  ) {
+    await this.assertCustomerCompany(tenantId, customerId);
+    const { lines, reconciliation } = this.parseRateExcelWithReconciliation(file);
+    const sourceFileName = file.originalname ?? "quotation.xlsx";
+    const mapped = this.mapParsedRateExcelLines(lines, sourceFileName, "SGD");
+    const items = mapped.map((m, index) => {
+      const src = lines[index];
+      const meta = (m.metadataJson ?? {}) as Record<string, unknown>;
+      return {
+        code: m.code,
+        label: m.label,
+        description: m.description,
+        section: (meta.section as string | null | undefined) ?? src?.section ?? null,
+        unit: m.unit,
+        rateCents: src?.rateCents ?? null,
+        unitPriceCents: m.unitPriceCents,
+        requiresManualAmount: m.requiresManualAmount,
+        rawRateText: src?.rawRateText ?? null,
+        notes: src?.notes ?? null,
+        sortOrder: m.sortOrder ?? index,
+        currency: m.currency ?? "SGD",
+        metadataJson: m.metadataJson,
+        variantLabel: (meta.variantLabel as string | null | undefined) ?? undefined,
+        additionalRuleText:
+          (meta.additionalRuleText as string | null | undefined) ?? undefined,
+        annex: (meta.annex as string | null | undefined) ?? undefined,
+        groupTitle: (meta.groupTitle as string | null | undefined) ?? undefined,
+      };
+    });
+    const validRows = items.filter(
+      (i) => String(i.code ?? "").trim() && String(i.label ?? "").trim(),
+    ).length;
+    return {
+      fileName: sourceFileName,
+      datasetType: "QUOTATION" as const,
+      totalRows: items.length,
+      validRows,
+      errorCount: 0,
+      errors: [] as string[],
+      warnings: reconciliation.warnings ?? [],
+      reconciliation,
+      items,
+    };
+  }
+
+  async createFromRateExcel(
+    tenantId: string,
+    customerId: string,
+    file: Express.Multer.File,
+    dto: CreateCustomerQuotationFromRateExcelDto,
+    actorUserId: string | null,
+  ) {
+    const flightKey = `${tenantId}:${customerId}`;
+    if (this.rateExcelCreateInFlight.has(flightKey)) {
+      throw new BadRequestException(
+        "A rate Excel import is already in progress for this customer",
+      );
+    }
+    this.rateExcelCreateInFlight.add(flightKey);
+    try {
+      return await this.createFromRateExcelUnlocked(
+        tenantId,
+        customerId,
+        file,
+        dto,
+        actorUserId,
+      );
+    } finally {
+      this.rateExcelCreateInFlight.delete(flightKey);
+    }
+  }
+
+  private async createFromRateExcelUnlocked(
+    tenantId: string,
+    customerId: string,
+    file: Express.Multer.File,
+    dto: CreateCustomerQuotationFromRateExcelDto,
+    actorUserId: string | null,
+  ) {
+    const company = await this.assertCustomerCompany(tenantId, customerId);
+    const { lines } = this.parseRateExcelWithReconciliation(file);
+    const sourceFileName = file.originalname ?? "quotation.xlsx";
+    const currency = "SGD";
+    const lineInputs = this.mapParsedRateExcelLines(
+      lines,
+      sourceFileName,
+      currency,
+    );
+    const totals = this.computeLineTotals(lineInputs, currency);
+    const title =
+      dto.title?.trim() || this.defaultTitleFromFileName(sourceFileName);
+    const sourceTemplateNameSnapshot = `Excel: ${sourceFileName}`;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const quotationNo = await this.allocateQuotationNo(tenantId, tx);
+      return tx.customerQuotation.create({
+        data: {
+          tenantId,
+          customerCompanyId: customerId,
+          quotationNo,
+          title,
+          status: CustomerQuotationStatus.DRAFT,
+          currency,
+          notes: null,
+          validFrom: null,
+          validUntil: null,
+          sourceTemplateId: null,
+          sourceTemplateNameSnapshot,
+          customerNameSnapshot: company.name,
+          subtotalCents: totals.subtotalCents,
+          taxCents: totals.taxCents,
+          totalCents: totals.totalCents,
+          createdByUserId: actorUserId,
+          updatedByUserId: actorUserId,
+          lines: {
+            create: totals.normalized.map((l) => ({
+              tenantId,
+              sortOrder: l.sortOrder,
+              code: l.code,
+              label: l.label,
+              description: l.description,
+              unit: l.unit,
+              qty: l.qty,
+              unitPriceCents: l.unitPriceCents,
+              amountCents: l.amountCents,
+              currency: l.currency,
+              taxCode: l.taxCode,
+              taxRate: l.taxRate,
+              taxCents: l.taxCents,
+              requiresManualAmount: l.requiresManualAmount,
+              sourceTemplateRowId: l.sourceTemplateRowId,
+              sourceMasterRowId: l.sourceMasterRowId,
+              metadataJson: l.metadataJson,
+            })),
+          },
+        },
+        include: {
+          lines: { orderBy: [{ sortOrder: "asc" }, { id: "asc" }] },
+        },
+      });
+    });
+
+    await this.audit.log(
+      tenantId,
+      "CREATE",
+      "CustomerQuotation",
+      created.id,
+      {
+        quotationNo: created.quotationNo,
+        importSource: "RATE_EXCEL",
+        sourceFileName,
+        lineCount: totals.normalized.length,
+      },
+      actorUserId,
+    );
+    return created;
+  }
+
   async update(
     tenantId: string,
     customerId: string,
@@ -689,6 +982,16 @@ export class CustomerQuotationsService {
     if (!quotation.lines?.length) {
       throw new BadRequestException(
         "Cannot issue a quotation with no commercial lines",
+      );
+    }
+    const incompleteManualLines = quotation.lines.filter(
+      (l) =>
+        l.requiresManualAmount &&
+        (!Number.isInteger(l.unitPriceCents) || l.unitPriceCents <= 0),
+    );
+    if (incompleteManualLines.length > 0) {
+      throw new BadRequestException(
+        `Cannot issue quotation: ${incompleteManualLines.length} line(s) require a manual unit price greater than 0 (requiresManualAmount)`,
       );
     }
 

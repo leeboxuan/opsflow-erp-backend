@@ -709,4 +709,381 @@ describe("CustomerQuotationsService", () => {
     expect(findFirst).toHaveBeenCalled();
     expect(res.status).toBe(CustomerQuotationStatus.ACCEPTED);
   });
+
+  function buildAnnexQuotationXlsxBuffer(): Buffer {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const XLSX = require("xlsx");
+    const wb = XLSX.utils.book_new();
+    const rows: any[] = [];
+    rows.push(["Annex A"]);
+    rows.push(["A", "SECTION A"]);
+    for (let i = 1; i <= 8; i++) {
+      rows.push([String(i), `Item A${i}`, `$${i}.00`]);
+    }
+    rows.push(["B", "SECTION B"]);
+    for (let i = 1; i <= 14; i++) {
+      rows.push([String(i), `Item B${i}`, `$${i}.00`]);
+    }
+    rows.push(["Annex B"]);
+    rows.push(["C", "SECTION C"]);
+    for (let i = 1; i <= 5; i++) {
+      rows.push([String(i), `Item C${i}`, `$${i}.00`]);
+    }
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Annex A");
+    return Buffer.from(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
+  }
+
+  function buildEmptyControlledXlsxBuffer(): Buffer {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const XLSX = require("xlsx");
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["code", "label", "rateCents"],
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    return Buffer.from(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
+  }
+
+  it("previewFromRateExcel rejects non-excel", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+    };
+    const { svc } = makeService(prisma);
+    await expect(
+      svc.previewFromRateExcel("t1", "c1", {
+        originalname: "rates.pdf",
+        mimetype: "application/pdf",
+        buffer: Buffer.from("x"),
+      } as any),
+    ).rejects.toThrow("Quotation import must be Excel (.xlsx/.xls)");
+  });
+
+  it("previewFromRateExcel rejects empty parse", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+    };
+    const { svc } = makeService(prisma);
+    await expect(
+      svc.previewFromRateExcel("t1", "c1", {
+        originalname: "empty.xlsx",
+        mimetype:
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        buffer: buildEmptyControlledXlsxBuffer(),
+      } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("previewFromRateExcel parses in-memory xlsx with usable lines", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+    };
+    const { svc } = makeService(prisma);
+    const preview = await svc.previewFromRateExcel("t1", "c1", {
+      originalname: "rates.xlsx",
+      mimetype:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      buffer: buildAnnexQuotationXlsxBuffer(),
+    } as any);
+    expect(preview.datasetType).toBe("QUOTATION");
+    expect(preview.fileName).toBe("rates.xlsx");
+    expect(preview.validRows).toBeGreaterThan(0);
+    expect(preview.items.length).toBeGreaterThan(0);
+    expect(preview.items[0].code).toBeTruthy();
+    expect(preview.items[0].label).toBeTruthy();
+    expect(preview.items[0].metadataJson).toEqual(
+      expect.objectContaining({
+        importSource: "RATE_EXCEL",
+        sourceFileName: "rates.xlsx",
+      }),
+    );
+  });
+
+  it("createFromRateExcel creates DRAFT without template/master dataset writes", async () => {
+    const customerRateTemplateCreate = jest.fn();
+    const masterRateDatasetCreate = jest.fn();
+    const create = jest.fn().mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: "q-excel",
+        ...data,
+        lines: data.lines.create,
+      }),
+    );
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerRateTemplate: { create: customerRateTemplateCreate },
+      masterRateDataset: { create: masterRateDatasetCreate },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          quotation_no_counters: {
+            upsert: jest.fn().mockResolvedValue({ nextSeq: 3 }),
+          },
+          customerQuotation: { create },
+        }),
+      ),
+    };
+    const { svc } = makeService(prisma);
+    const res = await svc.createFromRateExcel(
+      "t1",
+      "c1",
+      {
+        originalname: "customer-rates.xlsx",
+        mimetype:
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        buffer: buildAnnexQuotationXlsxBuffer(),
+      } as any,
+      {},
+      "u1",
+    );
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(customerRateTemplateCreate).not.toHaveBeenCalled();
+    expect(masterRateDatasetCreate).not.toHaveBeenCalled();
+    expect(res.status).toBe(CustomerQuotationStatus.DRAFT);
+    expect(res.sourceTemplateId).toBeNull();
+    expect(res.sourceTemplateNameSnapshot).toBe("Excel: customer-rates.xlsx");
+    expect(res.title).toBe("customer-rates");
+    expect(res.lines.length).toBeGreaterThan(0);
+    expect(res.lines[0].sourceTemplateRowId).toBeNull();
+    expect(res.lines[0].sourceMasterRowId).toBeNull();
+    expect(res.lines[0].metadataJson).toEqual(
+      expect.objectContaining({ importSource: "RATE_EXCEL" }),
+    );
+  });
+
+  it("createFromRateExcel is transactional (line failure leaves no quotation)", async () => {
+    const create = jest.fn().mockRejectedValue(new Error("line create failed"));
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerRateTemplate: { create: jest.fn() },
+      masterRateDataset: { create: jest.fn() },
+      customerQuotation: { findFirst: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          quotation_no_counters: {
+            upsert: jest.fn().mockResolvedValue({ nextSeq: 1 }),
+          },
+          customerQuotation: { create },
+        }),
+      ),
+    };
+    const { svc } = makeService(prisma);
+    await expect(
+      svc.createFromRateExcel(
+        "t1",
+        "c1",
+        {
+          originalname: "rates.xlsx",
+          buffer: buildAnnexQuotationXlsxBuffer(),
+        } as any,
+        { title: "T" },
+        "u1",
+      ),
+    ).rejects.toThrow("line create failed");
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(prisma.customerQuotation.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("createFromRateExcel wrong customer → NotFound; get after create also cross-customer NotFound", async () => {
+    const prismaMissing: any = {
+      customer_companies: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const { svc: svcMissing } = makeService(prismaMissing);
+    await expect(
+      svcMissing.createFromRateExcel(
+        "t1",
+        "c-missing",
+        {
+          originalname: "rates.xlsx",
+          buffer: buildAnnexQuotationXlsxBuffer(),
+        } as any,
+        {},
+        "u1",
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    const created = draftQuotation({
+      id: "q-excel",
+      customerCompanyId: "c1",
+      lines: [{ id: "l1", code: "A", label: "Item" }],
+    });
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({ id: "c1", name: "Acme" })
+          .mockResolvedValueOnce({ id: "c2", name: "Beta" }),
+      },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          quotation_no_counters: {
+            upsert: jest.fn().mockResolvedValue({ nextSeq: 1 }),
+          },
+          customerQuotation: {
+            create: jest.fn().mockResolvedValue(created),
+          },
+        }),
+      ),
+      customerQuotation: {
+        findFirst: jest.fn().mockResolvedValue(created),
+      },
+    };
+    const { svc } = makeService(prisma);
+    await svc.createFromRateExcel(
+      "t1",
+      "c1",
+      {
+        originalname: "rates.xlsx",
+        buffer: buildAnnexQuotationXlsxBuffer(),
+      } as any,
+      { title: "From Excel" },
+      "u1",
+    );
+    await expect(svc.getById("t1", "c2", "q-excel")).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+
+  it("createFromRateExcel rejects empty parse", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      $transaction: jest.fn(),
+    };
+    const { svc } = makeService(prisma);
+    await expect(
+      svc.createFromRateExcel(
+        "t1",
+        "c1",
+        {
+          originalname: "empty.xlsx",
+          buffer: buildEmptyControlledXlsxBuffer(),
+        } as any,
+        {},
+        "u1",
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("createFromRateExcel single-flight rejects concurrent create for same customer", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const create = jest.fn().mockImplementation(async ({ data }) => {
+      await gate;
+      return { id: "q-excel", ...data, lines: data.lines.create };
+    });
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          quotation_no_counters: {
+            upsert: jest.fn().mockResolvedValue({ nextSeq: 1 }),
+          },
+          customerQuotation: { create },
+        }),
+      ),
+    };
+    const { svc } = makeService(prisma);
+    const file = {
+      originalname: "rates.xlsx",
+      buffer: buildAnnexQuotationXlsxBuffer(),
+    } as any;
+    const first = svc.createFromRateExcel("t1", "c1", file, {}, "u1");
+    await expect(
+      svc.createFromRateExcel("t1", "c1", file, {}, "u1"),
+    ).rejects.toThrow(/already in progress/i);
+    release();
+    await first;
+  });
+
+  it("createFromRateExcel preserves annex/section metadata on lines", async () => {
+    const create = jest.fn().mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: "q-excel",
+        ...data,
+        lines: data.lines.create,
+      }),
+    );
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          quotation_no_counters: {
+            upsert: jest.fn().mockResolvedValue({ nextSeq: 4 }),
+          },
+          customerQuotation: { create },
+        }),
+      ),
+    };
+    const { svc } = makeService(prisma);
+    const res = await svc.createFromRateExcel(
+      "t1",
+      "c1",
+      {
+        originalname: "annex.xlsx",
+        buffer: buildAnnexQuotationXlsxBuffer(),
+      } as any,
+      {},
+      "u1",
+    );
+    expect(res.lines.length).toBeGreaterThan(1);
+    const withMeta = res.lines.find(
+      (l: any) => l.metadataJson && (l.metadataJson as any).annex,
+    );
+    expect(withMeta).toBeTruthy();
+    expect(withMeta.metadataJson).toEqual(
+      expect.objectContaining({
+        importSource: "RATE_EXCEL",
+        annex: expect.anything(),
+      }),
+    );
+    const codes = res.lines.map((l: any) => l.code);
+    expect(new Set(codes).size).toBeGreaterThan(1);
+  });
+
+  it("issue blocked when requiresManualAmount and unitPriceCents 0", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findFirst: jest.fn().mockResolvedValue(
+          draftQuotation({
+            lines: [
+              {
+                ...sampleLine,
+                unitPriceCents: 0,
+                amountCents: 0,
+                taxCents: 0,
+                requiresManualAmount: true,
+              },
+            ],
+          }),
+        ),
+        updateMany: jest.fn(),
+      },
+    };
+    const { svc } = makeService(prisma);
+    await expect(svc.issue("t1", "c1", "q1", "u1")).rejects.toThrow(
+      /require a manual unit price/i,
+    );
+    expect(prisma.customerQuotation.updateMany).not.toHaveBeenCalled();
+  });
 });
