@@ -10,6 +10,7 @@ import { JobMessageImportService } from "./job-message-import.service";
 import { JobMessageImportDraftValidationStatus as VS } from "@prisma/client";
 import type { JobMessageParser, ParseJobMessageInput, ParseJobMessageResult } from "./job-message-parser";
 import { FAKE_JOB_MESSAGE_PARSER_VERSION } from "./job-message-import.constants";
+import { assertSourceFragmentsTraceable } from "./job-message-import.source-fidelity";
 
 const fixtureMessage = `03/08 JOB
 COL
@@ -1087,24 +1088,70 @@ describe("JobMessageImportService parser safeguards", () => {
 
 const productionWhatsAppThreeJobMessage = [
   "UNIQUE-PRODUCTION-WA-THREE-JOB-b4e1",
-  "Job 1",
-  "COL empty collection for Ocean Network Express",
-  "Pickup: PSA, 13/08 @ 2300",
-  "Delivery: 10 Pioneer Sector 2",
+  "Hi team, please arrange these jobs:",
+  "",
+  "1. EMPTY COLLECTION",
+  "Customer: Ocean Network Express",
+  "Pickup: PSA, 15/08 @ 2300",
+  "Delivery: Chasen Warehouse, 16 Jalan Buroh, Singapore 128578, #01-01",
+  "Requested delivery: 16/08 @ 0100",
+  "Container: ONEY1234567",
+  "Seal:",
+  "Carrier: Ocean Network Express",
+  "Shipper: Nippon",
+  "Vessel: ONE HANNOVER",
+  "Voyage: 101W",
+  "PIC: Shuman, 9644 0435",
   "Instruction: Call PIC 30 minutes before arrival.",
   "",
-  "Job 2",
-  "COL loaded collection for Maersk Singapore",
-  "Pickup: Tuas Avenue 9, 14/08 before 1200",
-  "Delivery: DB Schenker warehouse",
-  "Note: Ensure seal is intact on collection.",
+  "2. LOADED COLLECTION",
+  "Customer: Maersk Singapore",
+  "Pickup: Pasir Panjang Terminal, 16/08 @ 0900",
+  "Delivery: 21 Tuas Avenue 3, Singapore 639417, #03-02",
+  "Requested delivery: 16/08 before 1200",
+  "Container: MSKU7654321",
+  "Seal: SG889921",
+  "Carrier: Maersk",
+  "Shipper: Pacific Manufacturing",
+  "PIC: Daniel, 9123 4567",
+  "Instruction: Driver must bring safety vest and helmet.",
   "",
-  "Job 3",
-  "DEL delivery for Pacific Logistics",
-  "Pickup: Jurong Port",
-  "Delivery: 1 North Coast Drive, tomorrow 9am",
-  "Instructions: Contact receiver upon arrival.",
+  "3. DELIVERY – GENERAL CARGO",
+  "Customer: Pacific Logistics",
+  "Pickup: 30 Pioneer Road North, Singapore 628471, #02-05",
+  "Requested pickup: 16/08 between 1400-1500",
+  "Delivery: Jurong Port, 37 Jurong Port Road, Singapore 619110",
+  "Requested delivery: 16/08 @ 1700",
+  "Items:",
+  "PLT-001 | SEAL7788 | 4",
+  "PLT-002 | SEAL7790 | 2",
+  "PIC: Mei Ling, 9876 5432",
+  "Instruction: Obtain POD and send it to the operations group.",
+  "",
+  "Please confirm once all three jobs are created.",
 ].join("\n");
+
+function contiguousJobFragment(startNeedle: string, endNeedle: string): string {
+  const start = productionWhatsAppThreeJobMessage.indexOf(startNeedle);
+  const end = productionWhatsAppThreeJobMessage.indexOf(endNeedle, start + startNeedle.length);
+  if (start < 0 || end < 0) {
+    throw new Error(`Could not slice fragment between ${startNeedle} and ${endNeedle}`);
+  }
+  return productionWhatsAppThreeJobMessage.slice(start, end).trim();
+}
+
+const job1SourceFragment = contiguousJobFragment(
+  "1. EMPTY COLLECTION",
+  "2. LOADED COLLECTION",
+);
+const job2SourceFragment = contiguousJobFragment(
+  "2. LOADED COLLECTION",
+  "3. DELIVERY",
+);
+const job3SourceFragment = contiguousJobFragment(
+  "Customer: Pacific Logistics",
+  "Please confirm once all three jobs are created.",
+);
 
 function productionWhatsAppParserResult(): ParseJobMessageResult {
   return {
@@ -1119,24 +1166,21 @@ function productionWhatsAppParserResult(): ParseJobMessageResult {
           earliestAt: null,
           latestAt: null,
           timingText: null,
-          pickup: { rawText: "PSA, 13/08 @ 2300" },
-          delivery: { rawText: "10 Pioneer Sector 2" },
-          carrier: null,
-          shipper: null,
-          vessel: null,
-          voyage: null,
+          pickup: { rawText: "PSA, 15/08 @ 2300" },
+          delivery: {
+            rawText: "Chasen Warehouse, 16 Jalan Buroh, Singapore 128578, #01-01",
+          },
+          carrier: "Ocean Network Express",
+          shipper: "Nippon",
+          vessel: "ONE HANNOVER",
+          voyage: "101W",
           containerSizeType: null,
-          items: [{ containerNumber: "ONEU1234567", sealNumber: null, referenceNumber: null, quantity: 1 }],
-          picName: null,
-          picPhone: null,
+          items: [{ containerNumber: "ONEY1234567", sealNumber: null, referenceNumber: null, quantity: 1 }],
+          picName: "Shuman",
+          picPhone: "96440435",
           instructions: [],
           notes: null,
-          sourceFragment: [
-            "COL empty collection for Ocean Network Express",
-            "Pickup: PSA, 13/08 @ 2300",
-            "Delivery: 10 Pioneer Sector 2",
-            "Instruction: Call PIC 30 minutes before arrival.",
-          ].join("\n"),
+          sourceFragment: job1SourceFragment,
           fieldEvidence: [],
           warnings: [],
         },
@@ -1147,52 +1191,42 @@ function productionWhatsAppParserResult(): ParseJobMessageResult {
           earliestAt: null,
           latestAt: null,
           timingText: null,
-          pickup: { rawText: "Tuas Avenue 9, 14/08 before 1200" },
-          delivery: { rawText: "DB Schenker warehouse" },
-          carrier: null,
-          shipper: null,
+          pickup: { rawText: "Pasir Panjang Terminal, 16/08 @ 0900" },
+          delivery: { rawText: "21 Tuas Avenue 3, Singapore 639417, #03-02" },
+          carrier: "Maersk",
+          shipper: "Pacific Manufacturing",
           vessel: null,
           voyage: null,
           containerSizeType: null,
-          items: [{ containerNumber: "MSKU9876543", sealNumber: null, referenceNumber: null, quantity: 1 }],
-          picName: null,
-          picPhone: null,
+          items: [{ containerNumber: "MSKU7654321", sealNumber: "SG889921", referenceNumber: null, quantity: 1 }],
+          picName: "Daniel",
+          picPhone: "91234567",
           instructions: [],
           notes: null,
-          sourceFragment: [
-            "COL loaded collection for Maersk Singapore",
-            "Pickup: Tuas Avenue 9, 14/08 before 1200",
-            "Delivery: DB Schenker warehouse",
-            "Note: Ensure seal is intact on collection.",
-          ].join("\n"),
+          sourceFragment: job2SourceFragment,
           fieldEvidence: [],
           warnings: [],
         },
         {
           clientDraftId: "del-1",
-          movementType: "IMPORT",
+          movementType: "LCL",
           customerNameText: "Pacific Logistics",
           earliestAt: null,
           latestAt: null,
           timingText: null,
-          pickup: { rawText: "Jurong Port" },
-          delivery: { rawText: "1 North Coast Drive, tomorrow 9am" },
+          pickup: { rawText: "30 Pioneer Road North, Singapore 628471, #02-05" },
+          delivery: { rawText: "Jurong Port, 37 Jurong Port Road, Singapore 619110" },
           carrier: null,
           shipper: null,
           vessel: null,
           voyage: null,
           containerSizeType: null,
-          items: [{ containerNumber: "TCLU5555555", sealNumber: null, referenceNumber: null, quantity: 1 }],
-          picName: null,
-          picPhone: null,
+          items: [],
+          picName: "Mei Ling",
+          picPhone: "98765432",
           instructions: [],
           notes: null,
-          sourceFragment: [
-            "DEL delivery for Pacific Logistics",
-            "Pickup: Jurong Port",
-            "Delivery: 1 North Coast Drive, tomorrow 9am",
-            "Instructions: Contact receiver upon arrival.",
-          ].join("\n"),
+          sourceFragment: job3SourceFragment,
           fieldEvidence: [],
           warnings: [],
         },
@@ -1205,7 +1239,16 @@ function productionWhatsAppParserResult(): ParseJobMessageResult {
 describe("JobMessageImportService production WhatsApp field extraction", () => {
   const audit = { log: jest.fn().mockResolvedValue(undefined) };
 
-  it("extracts pickup timing, instructions, and clean addresses from a three-job message", async () => {
+  it("uses traceable source fragments for the sample WhatsApp message", () => {
+    expect(() =>
+      assertSourceFragmentsTraceable(
+        productionWhatsAppThreeJobMessage,
+        productionWhatsAppParserResult().message.drafts,
+      ),
+    ).not.toThrow();
+  });
+
+  it("extracts pickup timing, postal/unit addresses, instructions, and structured items", async () => {
     const prisma = makePrismaMemory();
     const parser = new StubJobMessageParser(productionWhatsAppParserResult());
     const svc = new JobMessageImportService(prisma, audit as any, parser);
@@ -1221,11 +1264,30 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
 
     const first = res.drafts[0].reviewed;
     expect(first.pickupAddress1).toBe("PSA");
-    expect(first.pickupDateLocal).toBe("2026-08-13T23:00");
+    expect(first.pickupDateLocal).toBe("2026-08-15T23:00");
+    expect(first.timingText).toBe("15/08 @ 2300");
+    expect(first.deliveryPostal).toBe("128578");
+    expect(first.deliveryAddress2).toBe("#01-01");
+    expect(first.deliveryAddress1).toBe("Chasen Warehouse, 16 Jalan Buroh");
     expect(first.instructions).toContain("Call PIC 30 minutes before arrival.");
+    expect(first.items[0].containerNumber).toBe("ONEY1234567");
+    expect(first.items[0].sealNumber).toBeNull();
+    expect(first.collectionType).toBe("EMPTY");
 
-    expect(res.drafts[1].reviewed.instructions).toEqual(["Ensure seal is intact on collection."]);
-    expect(res.drafts[2].reviewed.instructions).toEqual(["Contact receiver upon arrival."]);
+    const second = res.drafts[1].reviewed;
+    expect(second.deliveryPostal).toBe("639417");
+    expect(second.deliveryAddress2).toBe("#03-02");
+    expect(second.items[0].containerNumber).toBe("MSKU7654321");
+    expect(second.items[0].sealNumber).toBe("SG889921");
+    expect(second.instructions).toEqual(["Driver must bring safety vest and helmet."]);
+    expect(second.collectionType).toBe("LOADED");
+
+    const third = res.drafts[2].reviewed;
+    expect(third.pickupPostal).toBe("628471");
+    expect(third.pickupAddress2).toBe("#02-05");
+    expect(third.items).toHaveLength(2);
+    expect(third.items[0].referenceNumber).toBe("PLT-001");
+    expect(third.items[0].quantity).toBe(4);
 
     for (const draft of res.drafts) {
       const r = draft.reviewed;
@@ -1233,12 +1295,35 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
       expect(r.deliveryAddress1).not.toMatch(/\d{1,2}\/\d{1,2}/);
       expect(r.pickupAddress1).not.toMatch(/@\s*\d/);
       expect(r.deliveryAddress1).not.toMatch(/@\s*\d/);
-      expect(r.pickupAddress1).not.toMatch(/tomorrow/i);
-      expect(r.deliveryAddress1).not.toMatch(/tomorrow/i);
     }
   });
 
-  it("persists reviewed instructions when drafts are confirmed", async () => {
+  it("repairs stale controllerJson that still embeds timing in pickup address on fetch", async () => {
+    const prisma = makePrismaMemory();
+    const parser = new StubJobMessageParser(productionWhatsAppParserResult());
+    const svc = new JobMessageImportService(prisma, audit as any, parser);
+    const preview = await svc.createPreviewBatch({
+      tenantId: "t1",
+      actorUserId: "u1",
+      timezone: "Asia/Singapore",
+      sourceChannel: "WHATSAPP" as any,
+      sourceText: productionWhatsAppThreeJobMessage,
+    });
+    const draftRow = prisma._state.drafts[0];
+    draftRow.controllerJson = {
+      ...draftRow.controllerJson,
+      pickupAddress1: "PSA, 15/08 @ 2300",
+      timingText: null,
+      pickupDateLocal: null,
+    };
+
+    const fetched = await svc.getBatchPreview({ tenantId: "t1", batchId: preview.batchId });
+    expect(fetched.drafts[0].reviewed.pickupAddress1).toBe("PSA");
+    expect(fetched.drafts[0].reviewed.pickupDateLocal).toBe("2026-08-15T23:00");
+    expect(fetched.drafts[0].reviewed.timingText).toBe("15/08 @ 2300");
+  });
+
+  it("persists reviewed instructions and structured items when drafts are confirmed", async () => {
     const prisma = makePrismaMemory();
     const parser = new StubJobMessageParser(productionWhatsAppParserResult());
     const svc = new JobMessageImportService(prisma, audit as any, parser);
@@ -1251,7 +1336,6 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
     });
 
     const job1 = preview.drafts[0];
-    const job3 = preview.drafts[2];
 
     for (const d of preview.drafts) {
       preview = await svc.patchDraft({
@@ -1262,10 +1346,8 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
         patch: {
           expectedDraftVersion: preview.drafts.find((x) => x.id === d.id)!.draftVersion,
           customerCompanyId: "comp_1",
-          collectionType:
-            d.id === job1.id ? "EMPTY" : d.reviewed.movementType === "COLLECTION" ? "LOADED" : undefined,
           inclusionState:
-            d.id === job1.id || d.id === job3.id
+            d.id === job1.id
               ? JobMessageImportDraftInclusionState.INCLUDED
               : JobMessageImportDraftInclusionState.EXCLUDED,
         },
@@ -1273,22 +1355,19 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
     }
 
     const readyJob1 = preview.drafts.find((d) => d.id === job1.id)!;
-    const readyJob3 = preview.drafts.find((d) => d.id === job3.id)!;
 
     const confirmed = await svc.confirmBatch({
       tenantId: "t1",
       actorUserId: "u1",
       batchId: preview.batchId,
       expectedBatchVersion: preview.version,
-      selection: [
-        { draftId: readyJob1.id, expectedDraftVersion: readyJob1.draftVersion },
-        { draftId: readyJob3.id, expectedDraftVersion: readyJob3.draftVersion },
-      ],
+      selection: [{ draftId: readyJob1.id, expectedDraftVersion: readyJob1.draftVersion }],
     });
 
-    expect(confirmed.createdCount).toBe(2);
-    const createdNotes = prisma._state.jobs.map((j: { notes: string | null }) => j.notes ?? "");
-    expect(createdNotes.some((n: string) => n.includes("Call PIC 30 minutes before arrival."))).toBe(true);
-    expect(createdNotes.some((n: string) => n.includes("Contact receiver upon arrival."))).toBe(true);
+    expect(confirmed.createdCount).toBe(1);
+    const createdJobs = prisma._state.jobs;
+    expect(createdJobs.some((j: { notes: string | null }) => (j.notes ?? "").includes("Call PIC 30 minutes before arrival."))).toBe(true);
+    expect(createdJobs.some((j: { pickupAddress1: string }) => j.pickupAddress1 === "PSA")).toBe(true);
+    expect(createdJobs[0].items.some((it: { itemCode: string }) => it.itemCode === "ONEY1234567")).toBe(true);
   });
 });

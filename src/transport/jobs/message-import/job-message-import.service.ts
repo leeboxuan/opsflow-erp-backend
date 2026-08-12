@@ -49,9 +49,14 @@ import {
 import { normalizeLocationLabel } from "./job-message-import.text-normalize";
 import {
   extractLabelledInstructions,
+  extractCargoItemsFromFragment,
+  extractLabelledTiming,
+  inferCollectionTypeFromFragment,
   mergeInstructions,
   splitLocationFromTiming,
 } from "./job-message-import.labelled-fields";
+import { enrichAddressFields } from "./job-message-import.address-parse";
+import { sanitizeReviewedDraftForResponse } from "./job-message-import.repair";
 import type {
   ControllerReviewedDraft,
   DuplicateCandidate,
@@ -145,19 +150,28 @@ export function controllerJsonFromParsed(
   const pickupSplit = splitLocationFromTiming(parsed.pickup?.rawText);
   const deliverySplit = splitLocationFromTiming(parsed.delivery?.rawText);
 
+  const labelledTiming = extractLabelledTiming(parsed.sourceFragment);
+
   const timingText =
     trimToNull(parsed.timingText) ??
     pickupSplit.timingText ??
     deliverySplit.timingText ??
+    labelledTiming.pickupTimingText ??
+    labelledTiming.deliveryTimingText ??
     null;
 
+  const pickupTimingSource =
+    pickupSplit.timingText ??
+    labelledTiming.pickupTimingText ??
+    (deliverySplit.timingText || labelledTiming.deliveryTimingText ? null : timingText);
+
   const pickupTiming = parseOperationalTiming({
-    text: pickupSplit.timingText ?? (deliverySplit.timingText ? null : timingText),
+    text: pickupTimingSource,
     referenceDate,
     timezone,
   });
   const deliveryTiming = parseOperationalTiming({
-    text: deliverySplit.timingText,
+    text: deliverySplit.timingText ?? labelledTiming.deliveryTimingText,
     referenceDate,
     timezone,
   });
@@ -180,32 +194,59 @@ export function controllerJsonFromParsed(
     }
   }
 
-  const pickupAddress1 =
-    normalizeLocationLabel(pickupSplit.location) ||
-    (resolvedPickupTiming.locationHint
-      ? normalizeLocationLabel(resolvedPickupTiming.locationHint)
-      : null);
-  const deliveryAddress1 = normalizeLocationLabel(deliverySplit.location);
+  const pickupEnriched = enrichAddressFields({
+    address1:
+      normalizeLocationLabel(pickupSplit.location) ||
+      (resolvedPickupTiming.locationHint
+        ? normalizeLocationLabel(resolvedPickupTiming.locationHint)
+        : null),
+    address2: null,
+    postal: null,
+  });
+  const deliveryEnriched = enrichAddressFields({
+    address1: normalizeLocationLabel(deliverySplit.location),
+    address2: null,
+    postal: null,
+  });
 
   const instructions = mergeInstructions(
     Array.isArray(parsed.instructions) ? parsed.instructions : [],
     extractLabelledInstructions(parsed.sourceFragment),
   );
 
+  const fragmentItems = extractCargoItemsFromFragment(parsed.sourceFragment);
+  const parsedItems = (parsed.items ?? []).map((it) => ({
+    containerNumber: it.containerNumber ?? null,
+    sealNumber: it.sealNumber ?? null,
+    referenceNumber: it.referenceNumber ?? null,
+    quantity: it.quantity ?? null,
+  }));
+  const items =
+    parsedItems.length > 0
+      ? parsedItems
+      : fragmentItems.map((it) => ({
+          containerNumber: null,
+          sealNumber: it.sealNumber,
+          referenceNumber: it.referenceNumber,
+          quantity: it.quantity,
+        }));
+
+  const collectionType = inferCollectionTypeFromFragment(parsed.sourceFragment);
+
   return normalizeReviewedDraft({
     movementType: mapParsedMovementType(parsed.movementType),
-    collectionType: null,
+    collectionType,
     customerCompanyId,
     customerNameText: parsed.customerNameText ?? null,
-    pickupAddress1,
-    pickupAddress2: null,
-    pickupPostal: null,
+    pickupAddress1: pickupEnriched.address1,
+    pickupAddress2: pickupEnriched.address2,
+    pickupPostal: pickupEnriched.postal,
     pickupPlaceId: null,
     pickupLat: null,
     pickupLng: null,
-    deliveryAddress1,
-    deliveryAddress2: null,
-    deliveryPostal: null,
+    deliveryAddress1: deliveryEnriched.address1,
+    deliveryAddress2: deliveryEnriched.address2,
+    deliveryPostal: deliveryEnriched.postal,
     deliveryPlaceId: null,
     deliveryLat: null,
     deliveryLng: null,
@@ -224,12 +265,7 @@ export function controllerJsonFromParsed(
     shipper: parsed.shipper ?? null,
     vesselName: parsed.vessel ?? null,
     voyage: parsed.voyage ?? null,
-    items: (parsed.items ?? []).map((it) => ({
-      containerNumber: it.containerNumber ?? null,
-      sealNumber: it.sealNumber ?? null,
-      referenceNumber: it.referenceNumber ?? null,
-      quantity: it.quantity ?? null,
-    })),
+    items,
   });
 }
 
@@ -919,7 +955,11 @@ export class JobMessageImportService {
 
     const drafts: ReviewableJobDraft[] = [];
     for (const d of batch.drafts) {
-      const reviewed = readControllerJson(d.controllerJson);
+      const referenceDate = parseReferenceDateForTimezone(batch.timezone);
+      const reviewed = sanitizeReviewedDraftForResponse(readControllerJson(d.controllerJson), {
+        timezone: batch.timezone,
+        referenceDate,
+      });
       const parsed = (d.parsedJson ?? {}) as JobMessageImportParsedDraft;
       const validation = validateReviewedDraft(reviewed);
       const candidates: DuplicateCandidate[] = await findDuplicateCandidates({

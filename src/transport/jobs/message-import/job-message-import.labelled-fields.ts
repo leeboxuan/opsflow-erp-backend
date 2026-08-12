@@ -93,3 +93,73 @@ export function addressContainsTimingExpression(address: string | null | undefin
   if (!address?.trim()) return false;
   return looksLikeOperationalTimingExpression(address);
 }
+
+const REQUESTED_PICKUP_RE = /^Requested\s+pickup\s*:\s*(.+)$/i;
+const REQUESTED_DELIVERY_RE = /^Requested\s+delivery\s*:\s*(.+)$/i;
+
+/** Extract labelled requested pickup/delivery timing lines from source text. */
+export function extractLabelledTiming(text: string | null | undefined): {
+  pickupTimingText: string | null;
+  deliveryTimingText: string | null;
+} {
+  let pickupTimingText: string | null = null;
+  let deliveryTimingText: string | null = null;
+  if (!text?.trim()) {
+    return { pickupTimingText, deliveryTimingText };
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    const pickupMatch = REQUESTED_PICKUP_RE.exec(trimmed);
+    if (pickupMatch) {
+      pickupTimingText = pickupMatch[1].trim();
+      continue;
+    }
+    const deliveryMatch = REQUESTED_DELIVERY_RE.exec(trimmed);
+    if (deliveryMatch) {
+      deliveryTimingText = deliveryMatch[1].trim();
+    }
+  }
+  return { pickupTimingText, deliveryTimingText };
+}
+
+/** Infer EMPTY/LOADED collection type from a source fragment. */
+export function inferCollectionTypeFromFragment(
+  sourceFragment: string | null | undefined,
+): "EMPTY" | "LOADED" | null {
+  const text = (sourceFragment ?? "").toLowerCase();
+  if (/\bempty\s+collection\b/.test(text)) return "EMPTY";
+  if (/\bloaded\s+collection\b/.test(text)) return "LOADED";
+  return null;
+}
+
+const CARGO_ITEM_LINE_RE =
+  /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*\|\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*\|\s*(\d+)\s*$/;
+
+/** Parse general-cargo item lines (`code | seal | qty`) from a source fragment. */
+export function extractCargoItemsFromFragment(sourceFragment: string | null | undefined): Array<{
+  referenceNumber: string;
+  sealNumber: string;
+  quantity: number;
+}> {
+  if (!sourceFragment?.trim()) return [];
+  const items: Array<{ referenceNumber: string; sealNumber: string; quantity: number }> = [];
+  let inItemsSection = false;
+  for (const line of sourceFragment.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (/^Items\s*:/i.test(trimmed)) {
+      inItemsSection = true;
+      continue;
+    }
+    if (!inItemsSection) continue;
+    if (!trimmed) break;
+    if (/^[A-Za-z]+:/.test(trimmed)) break;
+    const match = CARGO_ITEM_LINE_RE.exec(trimmed);
+    if (!match) continue;
+    items.push({
+      referenceNumber: match[1].trim(),
+      sealNumber: match[2].trim(),
+      quantity: Number(match[3]),
+    });
+  }
+  return items;
+}
