@@ -4,8 +4,10 @@ import type {
   ParseJobMessageInput,
   ParseJobMessageResult,
 } from "./job-message-parser";
+import { FAKE_JOB_MESSAGE_PARSER_VERSION } from "./job-message-import.constants";
+import { normalizeSourceTextForTraceability } from "./job-message-import.source-fidelity";
 
-const PARSER_VERSION = "fake.fixture.v1";
+const PARSER_VERSION = FAKE_JOB_MESSAGE_PARSER_VERSION;
 const EMPTY_META = {
   modelName: null,
   usage: null,
@@ -128,7 +130,7 @@ export class FakeJobMessageParser implements JobMessageParser {
         instructions: [],
         notes: null,
         sourceFragment:
-          "IMP\n1) GESU6311344 / FJ28581743 (chukong) - PSA 04/08\nfrom - tuas\nto - db whse",
+          "IMP\n1) GESU6311344 / FJ28581743\nfrom - tuas\nto - db whse",
         fieldEvidence: [
           baseField("containerNumber", "GESU6311344"),
           baseField("sealNumber", "FJ28581743"),
@@ -296,11 +298,24 @@ export class FakeJobMessageParser implements JobMessageParser {
       }),
     ];
 
+    const normalizedSource = normalizeSourceTextForTraceability(src);
+    const traceableDrafts = drafts.filter((draft) =>
+      normalizedSource.includes(normalizeSourceTextForTraceability(draft.sourceFragment)),
+    );
+
     return {
       message: {
         parserVersion: PARSER_VERSION,
-        batchWarnings: [],
-        drafts,
+        batchWarnings: traceableDrafts.length === drafts.length ? [] : [
+          {
+            code: "FAKE_PARSER_PARTIAL_FIXTURE",
+            field: null,
+            message:
+              "Deterministic fake parser omitted fixture drafts whose source fragments were absent from the submitted text.",
+            severity: "WARNING",
+          },
+        ],
+        drafts: traceableDrafts,
       },
       meta: EMPTY_META,
     };

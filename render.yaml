@@ -22,3 +22,8 @@ services:
       # CORS: comma-separated origins (e.g. https://opsflow-erp-web.onrender.com)
       - key: WEB_APP_URLS
         sync: false
+      # Job message import (OpenAI). Required in production.
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_JOB_IMPORT_MODEL
+        sync: false

@@ -4,3 +4,6 @@ export const JOB_MESSAGE_IMPORT_MAX_INPUT_CHARS = 20_000;
 
 export const JOB_MESSAGE_IMPORT_SOURCE_CHANNEL = "WHATSAPP" as const;
 
+/** Parser version returned by the deterministic test fixture parser. */
+export const FAKE_JOB_MESSAGE_PARSER_VERSION = "fake.fixture.v1";
+

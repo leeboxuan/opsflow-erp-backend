@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import {
   JobMessageImportBatchStatus,
@@ -23,7 +24,10 @@ import {
 import {
   JOB_MESSAGE_IMPORT_MAX_INPUT_CHARS,
   JOB_MESSAGE_PARSER_TOKEN,
+  FAKE_JOB_MESSAGE_PARSER_VERSION,
 } from "./job-message-import.constants";
+import { assertSourceFragmentsTraceable } from "./job-message-import.source-fidelity";
+import { JOB_MESSAGE_IMPORT_UNAVAILABLE_MESSAGE } from "./job-message-parser.factory";
 import {
   computeBatchFingerprint,
   computeDraftFingerprint,
@@ -234,6 +238,9 @@ function isUniqueConflict(e: any): boolean {
 
 function mapParserError(e: any): never {
   const code = e?.code ? String(e.code) : "";
+  if (code === "PARSER_CONFIGURATION") {
+    throw new ServiceUnavailableException(JOB_MESSAGE_IMPORT_UNAVAILABLE_MESSAGE);
+  }
   if (code === "INPUT_TOO_LARGE") {
     throw new BadRequestException("sourceText is too large");
   }
@@ -308,6 +315,8 @@ export class JobMessageImportService {
 
     const parsed = parseResult.message;
     this.assertParsedMessageShape(parsed);
+    this.assertProductionParserOutput(parsed);
+    assertSourceFragmentsTraceable(params.sourceText, parsed.drafts);
 
     const customerByName = new Map<string, string>();
     const draftCustomerNames = parsed.drafts
@@ -839,6 +848,15 @@ export class JobMessageImportService {
     }
 
     return { createdJobIds: result.createdJobIds, createdCount: result.createdJobIds.length };
+  }
+
+  private assertProductionParserOutput(parsed: ParseJobMessageResult["message"]): void {
+    if (
+      (process.env.NODE_ENV ?? "development") === "production" &&
+      parsed.parserVersion === FAKE_JOB_MESSAGE_PARSER_VERSION
+    ) {
+      throw new ServiceUnavailableException(JOB_MESSAGE_IMPORT_UNAVAILABLE_MESSAGE);
+    }
   }
 
   private assertParsedMessageShape(parsed: ParseJobMessageResult["message"]): void {

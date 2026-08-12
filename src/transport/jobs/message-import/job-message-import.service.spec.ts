@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
 import {
   JobMessageImportBatchStatus,
   JobMessageImportDraftInclusionState,
@@ -8,12 +8,18 @@ import {
 import { FakeJobMessageParser } from "./fake-job-message-parser";
 import { JobMessageImportService } from "./job-message-import.service";
 import { JobMessageImportDraftValidationStatus as VS } from "@prisma/client";
+import type { JobMessageParser, ParseJobMessageInput, ParseJobMessageResult } from "./job-message-parser";
+import { FAKE_JOB_MESSAGE_PARSER_VERSION } from "./job-message-import.constants";
 
 const fixtureMessage = `03/08 JOB
 COL
 1) 1x20FR pick up ref - ONEYSING45428400
+carrier: ocean
+shipper: nippon
+vessel: ONE HANNOVER / 101W
 from - EK 30 pioneer sector 2
-to - Chasen whse
+to - Chasen whse. 16/18 jln besut
+PIC: Shuman 96440435
 IMP
 1) GESU6311344 / FJ28581743
 from - tuas
@@ -844,5 +850,237 @@ describe("JobMessageImportService workflow", () => {
     expect(preview.drafts.some((d) => d.inclusionState === "EXCLUDED" && d.validationStatus !== "READY")).toBe(
       true,
     );
+  });
+});
+
+const threeJobMessage = [
+  "UNIQUE-THREE-JOB-MESSAGE-9c2d",
+  "COL empty collection for Ocean Network Express",
+  "from - 10 Pioneer Sector 2",
+  "to - PSA Terminal",
+  "COL loaded collection for Maersk Singapore",
+  "from - Tuas Avenue 9",
+  "to - DB Schenker warehouse",
+  "DEL delivery for Pacific Logistics",
+  "from - Jurong Port",
+  "to - 1 North Coast Drive",
+].join("\n");
+
+class StubJobMessageParser implements JobMessageParser {
+  constructor(private readonly result: ParseJobMessageResult) {}
+
+  getParserVersion(): string {
+    return this.result.message.parserVersion;
+  }
+
+  getModelName(): string | null {
+    return this.result.meta.modelName;
+  }
+
+  async parse(_input: ParseJobMessageInput): Promise<ParseJobMessageResult> {
+    return this.result;
+  }
+}
+
+describe("JobMessageImportService parser safeguards", () => {
+  const audit = { log: jest.fn().mockResolvedValue(undefined) };
+
+  it("rejects parser output whose sourceFragment is absent from the submitted text", async () => {
+    const prisma = makePrismaMemory();
+    const parser = new StubJobMessageParser({
+      message: {
+        parserVersion: "opsflow.job_message_parser.v1",
+        batchWarnings: [],
+        drafts: [
+          {
+            clientDraftId: "d1",
+            movementType: "IMPORT",
+            customerNameText: null,
+            earliestAt: null,
+            latestAt: null,
+            timingText: null,
+            pickup: { rawText: "tuas" },
+            delivery: { rawText: "db whse" },
+            carrier: null,
+            shipper: null,
+            vessel: null,
+            voyage: null,
+            containerSizeType: null,
+            items: [],
+            picName: null,
+            picPhone: null,
+            instructions: [],
+            notes: null,
+            sourceFragment: "GESU6311344 / FJ28581743",
+            fieldEvidence: [],
+            warnings: [],
+          },
+        ],
+      },
+      meta: { modelName: "gpt-4.1-mini", usage: null, providerRequestId: "req_1" },
+    });
+    const svc = new JobMessageImportService(prisma, audit as any, parser);
+
+    await expect(
+      svc.createPreviewBatch({
+        tenantId: "t1",
+        actorUserId: "u1",
+        timezone: "Asia/Singapore",
+        sourceChannel: "WHATSAPP" as any,
+        sourceText: threeJobMessage,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("accepts three traceable drafts for a three-job message", async () => {
+    const prisma = makePrismaMemory();
+    const parser = new StubJobMessageParser({
+      message: {
+        parserVersion: "opsflow.job_message_parser.v1",
+        batchWarnings: [],
+        drafts: [
+          {
+            clientDraftId: "col-empty",
+            movementType: "COLLECTION",
+            customerNameText: "Ocean Network Express",
+            earliestAt: null,
+            latestAt: null,
+            timingText: null,
+            pickup: { rawText: "10 Pioneer Sector 2" },
+            delivery: { rawText: "PSA Terminal" },
+            carrier: null,
+            shipper: null,
+            vessel: null,
+            voyage: null,
+            containerSizeType: null,
+            items: [],
+            picName: null,
+            picPhone: null,
+            instructions: [],
+            notes: null,
+            sourceFragment: "COL empty collection for Ocean Network Express",
+            fieldEvidence: [],
+            warnings: [],
+          },
+          {
+            clientDraftId: "col-loaded",
+            movementType: "COLLECTION",
+            customerNameText: "Maersk Singapore",
+            earliestAt: null,
+            latestAt: null,
+            timingText: null,
+            pickup: { rawText: "Tuas Avenue 9" },
+            delivery: { rawText: "DB Schenker warehouse" },
+            carrier: null,
+            shipper: null,
+            vessel: null,
+            voyage: null,
+            containerSizeType: null,
+            items: [],
+            picName: null,
+            picPhone: null,
+            instructions: [],
+            notes: null,
+            sourceFragment: "COL loaded collection for Maersk Singapore",
+            fieldEvidence: [],
+            warnings: [],
+          },
+          {
+            clientDraftId: "del-1",
+            movementType: "IMPORT",
+            customerNameText: "Pacific Logistics",
+            earliestAt: null,
+            latestAt: null,
+            timingText: null,
+            pickup: { rawText: "Jurong Port" },
+            delivery: { rawText: "1 North Coast Drive" },
+            carrier: null,
+            shipper: null,
+            vessel: null,
+            voyage: null,
+            containerSizeType: null,
+            items: [],
+            picName: null,
+            picPhone: null,
+            instructions: [],
+            notes: null,
+            sourceFragment: "DEL delivery for Pacific Logistics",
+            fieldEvidence: [],
+            warnings: [],
+          },
+        ],
+      },
+      meta: { modelName: "gpt-4.1-mini", usage: null, providerRequestId: "req_2" },
+    });
+    const svc = new JobMessageImportService(prisma, audit as any, parser);
+    const res = await svc.createPreviewBatch({
+      tenantId: "t1",
+      actorUserId: "u1",
+      timezone: "Asia/Singapore",
+      sourceChannel: "WHATSAPP" as any,
+      sourceText: threeJobMessage,
+    });
+
+    expect(res.drafts).toHaveLength(3);
+    expect(res.parserVersion).toBe("opsflow.job_message_parser.v1");
+    expect(res.modelName).toBe("gpt-4.1-mini");
+    expect(res.drafts.map((d) => d.sourceFragment)).toEqual([
+      "COL empty collection for Ocean Network Express",
+      "COL loaded collection for Maersk Singapore",
+      "DEL delivery for Pacific Logistics",
+    ]);
+  });
+
+  it("rejects fake fixture parser output in production", async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      const prisma = makePrismaMemory();
+      const parser = new StubJobMessageParser({
+        message: {
+          parserVersion: FAKE_JOB_MESSAGE_PARSER_VERSION,
+          batchWarnings: [],
+          drafts: [
+            {
+              clientDraftId: "d1",
+              movementType: "IMPORT",
+              customerNameText: null,
+              earliestAt: null,
+              latestAt: null,
+              timingText: null,
+              pickup: { rawText: null },
+              delivery: { rawText: null },
+              carrier: null,
+              shipper: null,
+              vessel: null,
+              voyage: null,
+              containerSizeType: null,
+              items: [],
+              picName: null,
+              picPhone: null,
+              instructions: [],
+              notes: null,
+              sourceFragment: "UNIQUE-THREE-JOB-MESSAGE-9c2d",
+              fieldEvidence: [],
+              warnings: [],
+            },
+          ],
+        },
+        meta: { modelName: null, usage: null, providerRequestId: null },
+      });
+      const svc = new JobMessageImportService(prisma, audit as any, parser);
+
+      await expect(
+        svc.createPreviewBatch({
+          tenantId: "t1",
+          actorUserId: "u1",
+          timezone: "Asia/Singapore",
+          sourceChannel: "WHATSAPP" as any,
+          sourceText: threeJobMessage,
+        }),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
   });
 });
