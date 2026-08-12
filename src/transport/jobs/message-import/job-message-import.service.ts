@@ -38,6 +38,7 @@ import { reviewedDraftToCanonicalJobCreate } from "./job-message-import.mapping"
 import {
   classifyValidationStatus,
   normalizeReviewedDraft,
+  trimToNull,
   validateReviewedDraft,
 } from "./job-message-import.validator";
 import { parseOperationalTiming } from "./job-message-import.timing";
@@ -46,6 +47,11 @@ import {
   requestedPickupDateYmd,
 } from "./job-message-import.planning-date";
 import { normalizeLocationLabel } from "./job-message-import.text-normalize";
+import {
+  extractLabelledInstructions,
+  mergeInstructions,
+  splitLocationFromTiming,
+} from "./job-message-import.labelled-fields";
 import type {
   ControllerReviewedDraft,
   DuplicateCandidate,
@@ -135,25 +141,57 @@ export function controllerJsonFromParsed(
 ): ControllerReviewedDraft {
   const timezone = context?.timezone || "Asia/Singapore";
   const referenceDate = context?.referenceDate ?? parseReferenceDateForTimezone(timezone);
-  let timing = parseOperationalTiming({
-    text: parsed.timingText,
+
+  const pickupSplit = splitLocationFromTiming(parsed.pickup?.rawText);
+  const deliverySplit = splitLocationFromTiming(parsed.delivery?.rawText);
+
+  const timingText =
+    trimToNull(parsed.timingText) ??
+    pickupSplit.timingText ??
+    deliverySplit.timingText ??
+    null;
+
+  const pickupTiming = parseOperationalTiming({
+    text: pickupSplit.timingText ?? (deliverySplit.timingText ? null : timingText),
     referenceDate,
     timezone,
   });
-  if (!parsed.timingText) {
+  const deliveryTiming = parseOperationalTiming({
+    text: deliverySplit.timingText,
+    referenceDate,
+    timezone,
+  });
+
+  let resolvedPickupTiming = pickupTiming;
+  let resolvedDeliveryTiming = deliveryTiming;
+
+  if (
+    !pickupSplit.timingText &&
+    !deliverySplit.timingText &&
+    !trimToNull(parsed.timingText)
+  ) {
     const fromFragment = parseOperationalTiming({
       text: parsed.sourceFragment,
       referenceDate,
       timezone,
     });
     if (fromFragment.pickupDateLocal && !fromFragment.needsReview) {
-      timing = fromFragment;
+      resolvedPickupTiming = fromFragment;
     }
   }
-  const pickupRaw = parsed.pickup?.rawText ?? null;
+
   const pickupAddress1 =
-    normalizeLocationLabel(pickupRaw) ||
-    (timing.locationHint ? normalizeLocationLabel(timing.locationHint) : null);
+    normalizeLocationLabel(pickupSplit.location) ||
+    (resolvedPickupTiming.locationHint
+      ? normalizeLocationLabel(resolvedPickupTiming.locationHint)
+      : null);
+  const deliveryAddress1 = normalizeLocationLabel(deliverySplit.location);
+
+  const instructions = mergeInstructions(
+    Array.isArray(parsed.instructions) ? parsed.instructions : [],
+    extractLabelledInstructions(parsed.sourceFragment),
+  );
+
   return normalizeReviewedDraft({
     movementType: mapParsedMovementType(parsed.movementType),
     collectionType: null,
@@ -165,23 +203,23 @@ export function controllerJsonFromParsed(
     pickupPlaceId: null,
     pickupLat: null,
     pickupLng: null,
-    deliveryAddress1: parsed.delivery?.rawText ?? null,
+    deliveryAddress1,
     deliveryAddress2: null,
     deliveryPostal: null,
     deliveryPlaceId: null,
     deliveryLat: null,
     deliveryLng: null,
-    pickupDateLocal: timing.pickupDateLocal,
-    deliveryDateLocal: timing.deliveryDateLocal,
-    pickupDateDisplay: timing.display,
-    deliveryDateDisplay: null,
-    pickupDateNeedsReview: timing.needsReview,
-    deliveryDateNeedsReview: false,
+    pickupDateLocal: resolvedPickupTiming.pickupDateLocal,
+    deliveryDateLocal: resolvedDeliveryTiming.pickupDateLocal,
+    pickupDateDisplay: resolvedPickupTiming.display,
+    deliveryDateDisplay: resolvedDeliveryTiming.display,
+    pickupDateNeedsReview: resolvedPickupTiming.needsReview,
+    deliveryDateNeedsReview: resolvedDeliveryTiming.needsReview,
     picName: parsed.picName ?? null,
     picPhone: parsed.picPhone ?? null,
     notes: parsed.notes ?? null,
-    instructions: Array.isArray(parsed.instructions) ? parsed.instructions : [],
-    timingText: parsed.timingText ?? null,
+    instructions,
+    timingText,
     carrierName: parsed.carrier ?? null,
     shipper: parsed.shipper ?? null,
     vesselName: parsed.vessel ?? null,
