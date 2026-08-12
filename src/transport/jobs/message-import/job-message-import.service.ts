@@ -27,6 +27,7 @@ import {
   FAKE_JOB_MESSAGE_PARSER_VERSION,
 } from "./job-message-import.constants";
 import { assertSourceFragmentsTraceable } from "./job-message-import.source-fidelity";
+import { mapParserError } from "./job-message-import.parser-http-errors";
 import { JOB_MESSAGE_IMPORT_UNAVAILABLE_MESSAGE } from "./job-message-parser.factory";
 import {
   computeBatchFingerprint,
@@ -234,26 +235,6 @@ function readControllerJson(raw: unknown): ControllerReviewedDraft {
 
 function isUniqueConflict(e: any): boolean {
   return e?.code === "P2002";
-}
-
-function mapParserError(e: any): never {
-  const code = e?.code ? String(e.code) : "";
-  if (code === "PARSER_CONFIGURATION") {
-    throw new ServiceUnavailableException(JOB_MESSAGE_IMPORT_UNAVAILABLE_MESSAGE);
-  }
-  if (code === "INPUT_TOO_LARGE") {
-    throw new BadRequestException("sourceText is too large");
-  }
-  if (code === "OPENAI_REFUSAL") {
-    throw new BadRequestException("AI refused to parse this job message");
-  }
-  if (code === "OPENAI_TIMEOUT") {
-    throw new BadRequestException("AI provider timed out");
-  }
-  if (code === "OPENAI_INVALID_OUTPUT") {
-    throw new BadRequestException("Malformed provider output");
-  }
-  throw new BadRequestException("AI provider failure");
 }
 
 @Injectable()

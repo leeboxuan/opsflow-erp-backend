@@ -1,6 +1,7 @@
 import { FakeJobMessageParser } from "./fake-job-message-parser";
 import type { JobMessageParser } from "./job-message-parser";
 import { OpenAIJobMessageParser } from "./openai-job-message-parser";
+import { readOpenAIJobImportParserConfig } from "./openai-job-message-parser.config";
 import {
   JOB_MESSAGE_IMPORT_UNAVAILABLE_MESSAGE,
   UnconfiguredJobMessageParser,
@@ -9,7 +10,11 @@ import {
 export type JobMessageParserEnv = Partial<
   Pick<
     NodeJS.ProcessEnv,
-    "NODE_ENV" | "JOB_MESSAGE_IMPORT_PARSER" | "OPENAI_API_KEY" | "OPENAI_JOB_IMPORT_MODEL"
+    | "NODE_ENV"
+    | "JOB_MESSAGE_IMPORT_PARSER"
+    | "OPENAI_API_KEY"
+    | "OPENAI_JOB_IMPORT_MODEL"
+    | "OPENAI_JOB_IMPORT_TIMEOUT_MS"
   >
 >;
 
@@ -44,5 +49,9 @@ export function createJobMessageParser(
     return new UnconfiguredJobMessageParser();
   }
 
-  return new OpenAIJobMessageParser({ apiKey, model });
+  return new OpenAIJobMessageParser({
+    apiKey,
+    model,
+    ...readOpenAIJobImportParserConfig(env),
+  });
 }

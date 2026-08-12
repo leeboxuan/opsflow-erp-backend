@@ -38,6 +38,7 @@ Required Supabase Storage bucket:
 | `WEB_APP_URLS` | Recommended | Comma-separated CORS origins (e.g. `https://opsflow-erp-web.onrender.com`) |
 | `OPENAI_API_KEY` | Yes (production) | OpenAI API key for AI job message import preview. Set only in Render/host secrets — never commit it. If missing, the ERP still starts and preview returns `503`. |
 | `OPENAI_JOB_IMPORT_MODEL` | No | OpenAI model for job message import (default `gpt-4.1-mini`) |
+| `OPENAI_JOB_IMPORT_TIMEOUT_MS` | No | Per-attempt OpenAI timeout in ms (default `60000`; total budget `125000` with one retry) |
 | `JOB_MESSAGE_IMPORT_PARSER` | No | Set to `FAKE` for deterministic local fixtures only; never use in production |
 | `PORT` | No | Render sets this automatically |
 

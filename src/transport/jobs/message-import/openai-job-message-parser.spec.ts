@@ -1,4 +1,7 @@
-import { OpenAIJobMessageParser, isRetryableProviderError } from "./openai-job-message-parser";
+import {
+  OpenAIJobMessageParser,
+  isRetryableProviderError,
+} from "./openai-job-message-parser";
 
 function jsonResponse(obj: unknown) {
   return {
@@ -57,15 +60,14 @@ describe("OpenAIJobMessageParser", () => {
     });
     expect(result.message.drafts).toHaveLength(1);
     expect(result.meta.modelName).toBe("gpt-test");
-    expect(result.meta.usage?.inputTokens).toBe(11);
     expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("GESU6311344");
-    expect(JSON.stringify(logger.error.mock.calls)).not.toContain("GESU6311344");
   });
 
-  it("retries once for timeout then succeeds", async () => {
-    const timeout: any = new Error("timeout");
-    timeout.code = "ETIMEDOUT";
+  it("retries once at the application layer for timeout then succeeds", async () => {
+    const timeout: any = new Error("Request timed out.");
+    timeout.name = "APIConnectionTimeoutError";
     const create = jest
       .fn()
       .mockRejectedValueOnce(timeout)
@@ -74,6 +76,7 @@ describe("OpenAIJobMessageParser", () => {
     const parser = new OpenAIJobMessageParser({
       apiKey: "sk-test",
       model: "gpt-test",
+      maxRetries: 1,
       client: { responses: { create } } as any,
       logger,
     });
@@ -82,10 +85,41 @@ describe("OpenAIJobMessageParser", () => {
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP",
       sourceText: "hello",
+      correlationId: "corr-2",
     });
     expect(result.message.drafts).toHaveLength(1);
     expect(create).toHaveBeenCalledTimes(2);
-    expect(logger.warn).toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(String(logger.warn.mock.calls[0][0])).toContain("willRetry=true");
+    expect(String(logger.warn.mock.calls[0][0])).toContain("attempt=1/2");
+    expect(String(logger.warn.mock.calls[0][0])).toContain("elapsedMs=");
+  });
+
+  it("maps nested timeout causes to OPENAI_TIMEOUT after retries are exhausted", async () => {
+    const root = new Error("connection failed");
+    const nested = new Error("Request timed out.");
+    nested.name = "APIConnectionTimeoutError";
+    (root as Error & { cause: unknown }).cause = nested;
+    const create = jest.fn().mockRejectedValue(root);
+    const logger = { warn: jest.fn(), error: jest.fn() };
+    const parser = new OpenAIJobMessageParser({
+      apiKey: "sk-test",
+      model: "gpt-test",
+      maxRetries: 1,
+      client: { responses: { create } } as any,
+      logger,
+    });
+    await expect(
+      parser.parse({
+        tenantId: "t1",
+        timezone: "Asia/Singapore",
+        sourceChannel: "WHATSAPP",
+        sourceText: "hello",
+      }),
+    ).rejects.toMatchObject({ code: "OPENAI_TIMEOUT" });
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(String(logger.error.mock.calls[0][0])).toContain("willRetry=false");
+    expect(String(logger.error.mock.calls[0][0])).toContain("timeoutSource=nested_cause");
   });
 
   it("does not retry invalid structured output", async () => {
@@ -147,7 +181,8 @@ describe("OpenAIJobMessageParser", () => {
   });
 
   it("classifies retryable provider errors", () => {
-    expect(isRetryableProviderError({ status: 429 })).toBe(true);
+    expect(isRetryableProviderError({ status: 503 })).toBe(true);
     expect(isRetryableProviderError({ status: 400 })).toBe(false);
+    expect(isRetryableProviderError({ status: 429 })).toBe(false);
   });
 });

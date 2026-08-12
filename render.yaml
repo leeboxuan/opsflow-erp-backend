@@ -27,3 +27,5 @@ services:
         sync: false
       - key: OPENAI_JOB_IMPORT_MODEL
         sync: false
+      - key: OPENAI_JOB_IMPORT_TIMEOUT_MS
+        sync: false
