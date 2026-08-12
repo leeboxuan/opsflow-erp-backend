@@ -24,13 +24,14 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
     });
     const canonical = reviewedDraftToCanonicalJobCreate({
       reviewed,
-      serviceDate: new Date("2026-08-03T00:00:00.000Z"),
+      timezone: "Asia/Singapore",
     });
+    expect(canonical.pickupDate).toBeNull();
     expect(canonical.jobType).toBe(JobType.IMPORT);
     expect(canonical.status).toBe(JobStatus.ONGOING);
     expect(canonical.customerCompanyId).toBe("comp_1");
     expect(canonical.pickupAddress1).toBe("Tuas");
-    expect(canonical.deliveryAddress1).toBe("DB warehouse");
+    expect(canonical.deliveryAddress1).toBe("DB Warehouse");
     expect(canonical.receiverName).toBe("Shuman");
     expect(canonical.items[0].itemCode).toBe("GESU6311344");
     expect(canonical.items[0].sealNo).toBe("FJ28581743");
@@ -48,8 +49,9 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
     });
     const canonical = reviewedDraftToCanonicalJobCreate({
       reviewed,
-      serviceDate: new Date("2026-08-03T00:00:00.000Z"),
+      timezone: "Asia/Singapore",
     });
+    expect(canonical.pickupDate).toBeNull();
     expect(canonical.jobType).toBe(JobType.LCL);
     expect(canonical.receiverName).toBe("");
     expect(canonical.receiverPhone).toBe("");
@@ -69,8 +71,9 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
     });
     const canonical = reviewedDraftToCanonicalJobCreate({
       reviewed,
-      serviceDate: new Date("2026-08-03T00:00:00.000Z"),
+      timezone: "Asia/Singapore",
     });
+    expect(canonical.pickupDate).toBeNull();
     expect(canonical.pickupAddress1).toBe("CONTROLLER PICKUP");
     expect(canonical.deliveryAddress1).toBe("CONTROLLER DELIVERY");
   });

@@ -50,18 +50,13 @@ export class FakeJobMessageParser implements JobMessageParser {
       };
     }
 
-    const serviceDate = input.serviceDate; // already YYYY-MM-DD in tests
-
     const baseField = (field: string, sourceText: string) => ({
       field,
       sourceText,
       confidence: "HIGH" as const,
     });
 
-    const mkDraft = (d: Omit<JobMessageImportParsedJobMessage["drafts"][number], "serviceDate">) => ({
-      ...d,
-      serviceDate,
-    });
+    const mkDraft = (d: JobMessageImportParsedJobMessage["drafts"][number]) => d;
 
     const drafts: JobMessageImportParsedJobMessage["drafts"] = [
       mkDraft({

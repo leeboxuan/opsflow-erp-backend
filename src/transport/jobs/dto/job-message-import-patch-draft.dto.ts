@@ -68,7 +68,83 @@ export class JobMessageImportPatchDraftDto {
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
   @IsString()
+  pickupAddress2?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  pickupPostal?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  pickupPlaceId?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  pickupLat?: number | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  pickupLng?: number | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
   deliveryAddress1?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  deliveryAddress2?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  deliveryPostal?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  deliveryPlaceId?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  deliveryLat?: number | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  deliveryLng?: number | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  pickupDateLocal?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  deliveryDateLocal?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  pickupDateDisplay?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  deliveryDateDisplay?: string | null;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  pickupDateNeedsReview?: boolean;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  deliveryDateNeedsReview?: boolean;
 
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()

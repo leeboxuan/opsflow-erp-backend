@@ -15,7 +15,6 @@ const validPayload = {
       clientDraftId: "d1",
       movementType: "IMPORT",
       customerNameText: null,
-      serviceDate: "2026-08-03",
       earliestAt: null,
       latestAt: null,
       timingText: null,
@@ -51,7 +50,6 @@ describe("OpenAIJobMessageParser", () => {
     });
     const result = await parser.parse({
       tenantId: "t1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP",
       sourceText: "IMP GESU6311344 from tuas",
@@ -81,7 +79,6 @@ describe("OpenAIJobMessageParser", () => {
     });
     const result = await parser.parse({
       tenantId: "t1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP",
       sourceText: "hello",
@@ -102,7 +99,6 @@ describe("OpenAIJobMessageParser", () => {
     await expect(
       parser.parse({
         tenantId: "t1",
-        serviceDate: "2026-08-03",
         timezone: "Asia/Singapore",
         sourceChannel: "WHATSAPP",
         sourceText: "hello",
@@ -124,7 +120,6 @@ describe("OpenAIJobMessageParser", () => {
     await expect(
       parser.parse({
         tenantId: "t1",
-        serviceDate: "2026-08-03",
         timezone: "Asia/Singapore",
         sourceChannel: "WHATSAPP",
         sourceText: "hello",
@@ -143,7 +138,6 @@ describe("OpenAIJobMessageParser", () => {
     await expect(
       parser.parse({
         tenantId: "t1",
-        serviceDate: "2026-08-03",
         timezone: "Asia/Singapore",
         sourceChannel: "WHATSAPP",
         sourceText: "x".repeat(25_000),

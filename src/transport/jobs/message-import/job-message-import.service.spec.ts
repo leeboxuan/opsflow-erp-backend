@@ -204,7 +204,6 @@ describe("JobMessageImportService workflow", () => {
     const res = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -222,7 +221,6 @@ describe("JobMessageImportService workflow", () => {
     const a = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -230,7 +228,6 @@ describe("JobMessageImportService workflow", () => {
     const b = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -247,7 +244,6 @@ describe("JobMessageImportService workflow", () => {
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -269,7 +265,6 @@ describe("JobMessageImportService workflow", () => {
       svc.createPreviewBatch({
         tenantId: "t1",
         actorUserId: "u1",
-        serviceDate: "2026-08-03",
         timezone: "Asia/Singapore",
         sourceChannel: "WHATSAPP" as any,
         sourceText: "x".repeat(25_000),
@@ -290,7 +285,6 @@ describe("JobMessageImportService workflow", () => {
       svc.createPreviewBatch({
         tenantId: "t1",
         actorUserId: "u1",
-        serviceDate: "2026-08-03",
         timezone: "Asia/Singapore",
         sourceChannel: "WHATSAPP" as any,
         sourceText: "anything",
@@ -304,7 +298,6 @@ describe("JobMessageImportService workflow", () => {
     const res = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -320,7 +313,6 @@ describe("JobMessageImportService workflow", () => {
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -352,7 +344,6 @@ describe("JobMessageImportService workflow", () => {
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -375,7 +366,6 @@ describe("JobMessageImportService workflow", () => {
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -440,7 +430,6 @@ describe("JobMessageImportService workflow", () => {
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -480,7 +469,6 @@ describe("JobMessageImportService workflow", () => {
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -554,7 +542,6 @@ describe("JobMessageImportService workflow", () => {
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -598,7 +585,6 @@ describe("JobMessageImportService workflow", () => {
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -661,7 +647,6 @@ describe("JobMessageImportService workflow", () => {
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -697,7 +682,6 @@ describe("JobMessageImportService workflow", () => {
     const second = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -713,7 +697,6 @@ describe("JobMessageImportService workflow", () => {
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -763,7 +746,6 @@ describe("JobMessageImportService workflow", () => {
     const first = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -784,7 +766,6 @@ describe("JobMessageImportService workflow", () => {
     const reused = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -800,7 +781,6 @@ describe("JobMessageImportService workflow", () => {
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,
@@ -839,7 +819,6 @@ describe("JobMessageImportService workflow", () => {
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceChannel: "WHATSAPP" as any,
       sourceText: fixtureMessage,

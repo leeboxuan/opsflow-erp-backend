@@ -68,7 +68,7 @@ function toCandidate(job: {
 export async function findDuplicateCandidates(params: {
   tx: any;
   tenantId: string;
-  serviceDateYmd: string;
+  requestedPickupDateYmd?: string | null;
   reviewed: ControllerReviewedDraft;
   duplicateFingerprint?: string | null;
   excludeDraftId?: string | null;
@@ -82,7 +82,13 @@ export async function findDuplicateCandidates(params: {
   if (!jobType) return [];
 
   const itemCodes = reviewedItemCodes(params.reviewed);
-  const { start, end } = utcCivilDayBounds(params.serviceDateYmd);
+  const dateYmd = params.requestedPickupDateYmd?.trim() || null;
+  const pickupDateFilter = dateYmd
+    ? (() => {
+        const { start, end } = utcCivilDayBounds(dateYmd);
+        return { gte: start, lte: end };
+      })()
+    : undefined;
   const byJobId = new Map<string, DuplicateCandidate>();
   const excluded = new Set(params.excludeJobIds ?? []);
 
@@ -93,7 +99,7 @@ export async function findDuplicateCandidates(params: {
       job: {
         tenantId: params.tenantId,
         jobType: jobType as JobType,
-        pickupDate: { gte: start, lte: end },
+        ...(pickupDateFilter ? { pickupDate: pickupDateFilter } : {}),
         ...(excluded.size ? { id: { notIn: Array.from(excluded) } } : {}),
       },
     },
@@ -150,7 +156,7 @@ export async function findDuplicateCandidates(params: {
           tenantId: params.tenantId,
           id: { in: extraJobIds },
           jobType: jobType as JobType,
-          pickupDate: { gte: start, lte: end },
+          ...(pickupDateFilter ? { pickupDate: pickupDateFilter } : {}),
         },
         select: {
           id: true,

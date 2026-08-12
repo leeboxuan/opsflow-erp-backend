@@ -35,6 +35,12 @@ import {
   normalizeReviewedDraft,
   validateReviewedDraft,
 } from "./job-message-import.validator";
+import { parseOperationalTiming } from "./job-message-import.timing";
+import {
+  parseReferenceDateForTimezone,
+  requestedPickupDateYmd,
+} from "./job-message-import.planning-date";
+import { normalizeLocationLabel } from "./job-message-import.text-normalize";
 import type {
   ControllerReviewedDraft,
   DuplicateCandidate,
@@ -55,7 +61,23 @@ export type PatchDraftInput = {
   customerCompanyId?: string | null;
   customerNameText?: string | null;
   pickupAddress1?: string | null;
+  pickupAddress2?: string | null;
+  pickupPostal?: string | null;
+  pickupPlaceId?: string | null;
+  pickupLat?: number | null;
+  pickupLng?: number | null;
   deliveryAddress1?: string | null;
+  deliveryAddress2?: string | null;
+  deliveryPostal?: string | null;
+  deliveryPlaceId?: string | null;
+  deliveryLat?: number | null;
+  deliveryLng?: number | null;
+  pickupDateLocal?: string | null;
+  deliveryDateLocal?: string | null;
+  pickupDateDisplay?: string | null;
+  deliveryDateDisplay?: string | null;
+  pickupDateNeedsReview?: boolean;
+  deliveryDateNeedsReview?: boolean;
   picName?: string | null;
   picPhone?: string | null;
   notes?: string | null;
@@ -104,14 +126,52 @@ function mapParsedMovementType(
 export function controllerJsonFromParsed(
   parsed: JobMessageImportParsedDraft,
   customerCompanyId: string | null,
+  context?: { timezone: string; referenceDate?: string },
 ): ControllerReviewedDraft {
+  const timezone = context?.timezone || "Asia/Singapore";
+  const referenceDate = context?.referenceDate ?? parseReferenceDateForTimezone(timezone);
+  let timing = parseOperationalTiming({
+    text: parsed.timingText,
+    referenceDate,
+    timezone,
+  });
+  if (!parsed.timingText) {
+    const fromFragment = parseOperationalTiming({
+      text: parsed.sourceFragment,
+      referenceDate,
+      timezone,
+    });
+    if (fromFragment.pickupDateLocal && !fromFragment.needsReview) {
+      timing = fromFragment;
+    }
+  }
+  const pickupRaw = parsed.pickup?.rawText ?? null;
+  const pickupAddress1 =
+    normalizeLocationLabel(pickupRaw) ||
+    (timing.locationHint ? normalizeLocationLabel(timing.locationHint) : null);
   return normalizeReviewedDraft({
     movementType: mapParsedMovementType(parsed.movementType),
     collectionType: null,
     customerCompanyId,
     customerNameText: parsed.customerNameText ?? null,
-    pickupAddress1: parsed.pickup?.rawText ?? null,
+    pickupAddress1,
+    pickupAddress2: null,
+    pickupPostal: null,
+    pickupPlaceId: null,
+    pickupLat: null,
+    pickupLng: null,
     deliveryAddress1: parsed.delivery?.rawText ?? null,
+    deliveryAddress2: null,
+    deliveryPostal: null,
+    deliveryPlaceId: null,
+    deliveryLat: null,
+    deliveryLng: null,
+    pickupDateLocal: timing.pickupDateLocal,
+    deliveryDateLocal: timing.deliveryDateLocal,
+    pickupDateDisplay: timing.display,
+    deliveryDateDisplay: null,
+    pickupDateNeedsReview: timing.needsReview,
+    deliveryDateNeedsReview: false,
     picName: parsed.picName ?? null,
     picPhone: parsed.picPhone ?? null,
     notes: parsed.notes ?? null,
@@ -138,7 +198,23 @@ function readControllerJson(raw: unknown): ControllerReviewedDraft {
     customerCompanyId: c.customerCompanyId ?? null,
     customerNameText: c.customerNameText ?? null,
     pickupAddress1: c.pickupAddress1 ?? null,
+    pickupAddress2: c.pickupAddress2 ?? null,
+    pickupPostal: c.pickupPostal ?? null,
+    pickupPlaceId: c.pickupPlaceId ?? null,
+    pickupLat: c.pickupLat ?? null,
+    pickupLng: c.pickupLng ?? null,
     deliveryAddress1: c.deliveryAddress1 ?? null,
+    deliveryAddress2: c.deliveryAddress2 ?? null,
+    deliveryPostal: c.deliveryPostal ?? null,
+    deliveryPlaceId: c.deliveryPlaceId ?? null,
+    deliveryLat: c.deliveryLat ?? null,
+    deliveryLng: c.deliveryLng ?? null,
+    pickupDateLocal: c.pickupDateLocal ?? null,
+    deliveryDateLocal: c.deliveryDateLocal ?? null,
+    pickupDateDisplay: c.pickupDateDisplay ?? null,
+    deliveryDateDisplay: c.deliveryDateDisplay ?? null,
+    pickupDateNeedsReview: c.pickupDateNeedsReview ?? false,
+    deliveryDateNeedsReview: c.deliveryDateNeedsReview ?? false,
     picName: c.picName ?? null,
     picPhone: c.picPhone ?? null,
     notes: c.notes ?? null,
@@ -184,7 +260,6 @@ export class JobMessageImportService {
   async createPreviewBatch(params: {
     tenantId: string;
     actorUserId: string | null;
-    serviceDate: string;
     timezone: string;
     sourceChannel: JobMessageImportSourceChannel;
     sourceText: string;
@@ -201,7 +276,6 @@ export class JobMessageImportService {
     const batchFingerprint = computeBatchFingerprint({
       tenantId: params.tenantId,
       sourceChannel: params.sourceChannel,
-      serviceDate: params.serviceDate,
       timezone: params.timezone,
       sourceText: params.sourceText,
       parserVersion,
@@ -223,7 +297,6 @@ export class JobMessageImportService {
     try {
       parseResult = await this.parser.parse({
         tenantId: params.tenantId,
-        serviceDate: params.serviceDate,
         timezone: params.timezone,
         sourceChannel: "WHATSAPP",
         sourceText: params.sourceText,
@@ -249,23 +322,27 @@ export class JobMessageImportService {
       if (match?.id) customerByName.set(name, match.id);
     }
 
+    const referenceDate = parseReferenceDateForTimezone(params.timezone);
+
     const draftsToCreate = [];
     for (const d of parsed.drafts) {
       const customerId = d.customerNameText
         ? customerByName.get(d.customerNameText) ?? null
         : null;
-      const reviewed = controllerJsonFromParsed(d, customerId);
+      const reviewed = controllerJsonFromParsed(d, customerId, {
+        timezone: params.timezone,
+        referenceDate,
+      });
       const duplicateFingerprint = computeDraftFingerprint({
         tenantId: params.tenantId,
         movementType: reviewed.movementType,
-        serviceDate: params.serviceDate,
         reviewed,
       });
       const validation = validateReviewedDraft(reviewed);
       const candidates = await findDuplicateCandidates({
         tx: this.prisma,
         tenantId: params.tenantId,
-        serviceDateYmd: params.serviceDate,
+        requestedPickupDateYmd: requestedPickupDateYmd(reviewed),
         reviewed,
         duplicateFingerprint,
       });
@@ -297,7 +374,6 @@ export class JobMessageImportService {
           createdByUserId: params.actorUserId,
           status: JobMessageImportBatchStatus.IN_REVIEW,
           sourceChannel: params.sourceChannel,
-          serviceDate: new Date(`${params.serviceDate}T00:00:00.000Z`),
           timezone: params.timezone,
           sourceFingerprint: batchFingerprint,
           parserVersion,
@@ -328,7 +404,7 @@ export class JobMessageImportService {
       "AI_JOB_MESSAGE_IMPORT_PREVIEW",
       "TENANT",
       batch.id,
-      { sourceChannel: params.sourceChannel, serviceDate: params.serviceDate },
+      { sourceChannel: params.sourceChannel, timezone: params.timezone },
       params.actorUserId,
     );
 
@@ -387,8 +463,52 @@ export class JobMessageImportService {
       ...(params.patch.pickupAddress1 !== undefined
         ? { pickupAddress1: params.patch.pickupAddress1 }
         : {}),
+      ...(params.patch.pickupAddress2 !== undefined
+        ? { pickupAddress2: params.patch.pickupAddress2 }
+        : {}),
+      ...(params.patch.pickupPostal !== undefined
+        ? { pickupPostal: params.patch.pickupPostal }
+        : {}),
+      ...(params.patch.pickupPlaceId !== undefined
+        ? { pickupPlaceId: params.patch.pickupPlaceId }
+        : {}),
+      ...(params.patch.pickupLat !== undefined ? { pickupLat: params.patch.pickupLat } : {}),
+      ...(params.patch.pickupLng !== undefined ? { pickupLng: params.patch.pickupLng } : {}),
       ...(params.patch.deliveryAddress1 !== undefined
         ? { deliveryAddress1: params.patch.deliveryAddress1 }
+        : {}),
+      ...(params.patch.deliveryAddress2 !== undefined
+        ? { deliveryAddress2: params.patch.deliveryAddress2 }
+        : {}),
+      ...(params.patch.deliveryPostal !== undefined
+        ? { deliveryPostal: params.patch.deliveryPostal }
+        : {}),
+      ...(params.patch.deliveryPlaceId !== undefined
+        ? { deliveryPlaceId: params.patch.deliveryPlaceId }
+        : {}),
+      ...(params.patch.deliveryLat !== undefined
+        ? { deliveryLat: params.patch.deliveryLat }
+        : {}),
+      ...(params.patch.deliveryLng !== undefined
+        ? { deliveryLng: params.patch.deliveryLng }
+        : {}),
+      ...(params.patch.pickupDateLocal !== undefined
+        ? { pickupDateLocal: params.patch.pickupDateLocal }
+        : {}),
+      ...(params.patch.deliveryDateLocal !== undefined
+        ? { deliveryDateLocal: params.patch.deliveryDateLocal }
+        : {}),
+      ...(params.patch.pickupDateDisplay !== undefined
+        ? { pickupDateDisplay: params.patch.pickupDateDisplay }
+        : {}),
+      ...(params.patch.deliveryDateDisplay !== undefined
+        ? { deliveryDateDisplay: params.patch.deliveryDateDisplay }
+        : {}),
+      ...(params.patch.pickupDateNeedsReview !== undefined
+        ? { pickupDateNeedsReview: params.patch.pickupDateNeedsReview }
+        : {}),
+      ...(params.patch.deliveryDateNeedsReview !== undefined
+        ? { deliveryDateNeedsReview: params.patch.deliveryDateNeedsReview }
         : {}),
       ...(params.patch.picName !== undefined ? { picName: params.patch.picName } : {}),
       ...(params.patch.picPhone !== undefined ? { picPhone: params.patch.picPhone } : {}),
@@ -420,11 +540,9 @@ export class JobMessageImportService {
       }
     }
 
-    const serviceDate = toYmdString(batch.serviceDate);
     const nextFingerprint = computeDraftFingerprint({
       tenantId: params.tenantId,
       movementType: nextReviewed.movementType,
-      serviceDate,
       reviewed: nextReviewed,
     });
     const fingerprintChanged = nextFingerprint !== draft.duplicateFingerprint;
@@ -445,7 +563,7 @@ export class JobMessageImportService {
     const candidates = await findDuplicateCandidates({
       tx: this.prisma,
       tenantId: params.tenantId,
-      serviceDateYmd: serviceDate,
+      requestedPickupDateYmd: requestedPickupDateYmd(nextReviewed),
       reviewed: nextReviewed,
       duplicateFingerprint: nextFingerprint,
       excludeDraftId: draft.id,
@@ -596,7 +714,6 @@ export class JobMessageImportService {
       );
       const createdJobIds: string[] = [];
       const auditEvents: Array<{ jobId: string; draftId: string; clientDraftId: string }> = [];
-      const serviceDateYmd = toYmdString(batch.serviceDate);
 
       for (const d of includedNow) {
         if (d.confirmedAt) {
@@ -607,7 +724,7 @@ export class JobMessageImportService {
         const candidates = await findDuplicateCandidates({
           tx,
           tenantId: params.tenantId,
-          serviceDateYmd,
+          requestedPickupDateYmd: requestedPickupDateYmd(reviewed),
           reviewed,
           duplicateFingerprint: d.duplicateFingerprint,
           excludeDraftId: d.id,
@@ -637,7 +754,7 @@ export class JobMessageImportService {
 
         const canonical = reviewedDraftToCanonicalJobCreate({
           reviewed,
-          serviceDate: batch.serviceDate,
+          timezone: batch.timezone,
         });
         const internalRef = await this.getNextInternalRef(tx, params.tenantId, canonical.jobType);
         const createdJob = await tx.job.create({
@@ -652,13 +769,13 @@ export class JobMessageImportService {
             createdByUserId: params.actorUserId,
             pickupDate: canonical.pickupDate,
             pickupAddress1: canonical.pickupAddress1,
-            pickupAddress2: null,
-            pickupPostal: null,
+            pickupAddress2: canonical.pickupAddress2,
+            pickupPostal: canonical.pickupPostal,
             pickupContactName: canonical.pickupContactName,
             pickupContactPhone: canonical.pickupContactPhone,
             deliveryAddress1: canonical.deliveryAddress1,
-            deliveryAddress2: null,
-            deliveryPostal: null,
+            deliveryAddress2: canonical.deliveryAddress2,
+            deliveryPostal: canonical.deliveryPostal,
             receiverName: canonical.receiverName,
             receiverPhone: canonical.receiverPhone,
             description: canonical.description,
@@ -762,7 +879,6 @@ export class JobMessageImportService {
       include: { drafts: true },
     });
     if (!batch) throw new NotFoundException("Batch not found");
-    const serviceDate = toYmdString(batch.serviceDate);
 
     const drafts: ReviewableJobDraft[] = [];
     for (const d of batch.drafts) {
@@ -772,7 +888,7 @@ export class JobMessageImportService {
       const candidates: DuplicateCandidate[] = await findDuplicateCandidates({
         tx: this.prisma,
         tenantId,
-        serviceDateYmd: serviceDate,
+        requestedPickupDateYmd: requestedPickupDateYmd(reviewed),
         reviewed,
         duplicateFingerprint: d.duplicateFingerprint,
         excludeDraftId: d.id,
@@ -842,7 +958,6 @@ export class JobMessageImportService {
       batchId: batch.id,
       status: batch.status,
       version: batch.version,
-      serviceDate,
       timezone: batch.timezone,
       parserVersion: batch.parserVersion,
       modelName: batch.modelName,

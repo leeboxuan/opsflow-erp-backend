@@ -28,7 +28,6 @@ export type JobMessageImportParsedDraft = {
 
   customerNameText: string | null;
 
-  serviceDate: string;
   earliestAt: string | null;
   latestAt: string | null;
   timingText: string | null;
@@ -62,7 +61,6 @@ export type JobMessageImportParsedJobMessage = {
 
 export type ParseJobMessageInput = {
   tenantId: string;
-  serviceDate: string; // YYYY-MM-DD
   timezone: string;
   sourceChannel: "WHATSAPP";
   sourceText: string;

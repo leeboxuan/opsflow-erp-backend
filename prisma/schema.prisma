@@ -1028,7 +1028,7 @@ model JobMessageImportBatch {
   status          JobMessageImportBatchStatus @default(IN_REVIEW)
 
   sourceChannel JobMessageImportSourceChannel
-  serviceDate   DateTime
+  serviceDate   DateTime?
   timezone      String
 
   /// Server-side fingerprint for idempotent batch creation.

@@ -11,14 +11,19 @@ import {
 } from "../create-job-validation.helpers";
 import { movementTypeToJobType } from "./job-message-import.validator";
 import type { ControllerReviewedDraft } from "./job-message-import.types";
+import { zonedLocalDateTimeToUtc } from "./job-message-import.timing";
 
 export type CanonicalJobCreateData = {
   jobType: JobType;
   collectionType: ReturnType<typeof resolveCollectionTypeForJobCreate>;
   customerCompanyId: string;
-  pickupDate: Date;
+  pickupDate: Date | null;
   pickupAddress1: string;
+  pickupAddress2: string | null;
+  pickupPostal: string | null;
   deliveryAddress1: string;
+  deliveryAddress2: string | null;
+  deliveryPostal: string | null;
   pickupContactName: string | null;
   pickupContactPhone: string | null;
   receiverName: string;
@@ -42,6 +47,8 @@ export type CanonicalJobCreateData = {
 function composeNotes(reviewed: ControllerReviewedDraft): string | null {
   const parts: string[] = [];
   if (reviewed.timingText) parts.push(reviewed.timingText);
+  if (reviewed.pickupDateDisplay) parts.push(`Pickup: ${reviewed.pickupDateDisplay}`);
+  if (reviewed.deliveryDateDisplay) parts.push(`Delivery: ${reviewed.deliveryDateDisplay}`);
   for (const i of reviewed.instructions) parts.push(i);
   if (reviewed.notes) parts.push(reviewed.notes);
   const out = parts.map((p) => p.trim()).filter(Boolean).join("\n");
@@ -54,7 +61,7 @@ function composeNotes(reviewed: ControllerReviewedDraft): string | null {
  */
 export function reviewedDraftToCanonicalJobCreate(input: {
   reviewed: ControllerReviewedDraft;
-  serviceDate: Date;
+  timezone: string;
 }): CanonicalJobCreateData {
   const reviewed = input.reviewed;
   const jobType = movementTypeToJobType(reviewed.movementType);
@@ -93,12 +100,12 @@ export function reviewedDraftToCanonicalJobCreate(input: {
     assertImportPickupSourceForCreate({
       pickupPortCode: null,
       pickupAddress1: reviewed.pickupAddress1,
-      pickupPlaceId: null,
+      pickupPlaceId: reviewed.pickupPlaceId,
     });
     assertDeliveryLocationForCreate({
       jobType: JobType.IMPORT,
       deliveryAddress1: reviewed.deliveryAddress1,
-      deliveryPlaceId: null,
+      deliveryPlaceId: reviewed.deliveryPlaceId,
     });
   } else if (jobType === JobType.EXPORT) {
     const exportPickup = resolveExportPickupFields({
@@ -107,12 +114,12 @@ export function reviewedDraftToCanonicalJobCreate(input: {
     assertPickupLocationForCreate({
       jobType: JobType.EXPORT,
       pickupAddress1: exportPickup.address1,
-      pickupPlaceId: null,
+      pickupPlaceId: reviewed.pickupPlaceId,
     });
     assertDeliveryLocationForCreate({
       jobType: JobType.EXPORT,
       deliveryAddress1: reviewed.deliveryAddress1,
-      deliveryPlaceId: null,
+      deliveryPlaceId: reviewed.deliveryPlaceId,
       stuffingAddress1: null,
     });
     void resolveExportDestinationFields({
@@ -122,12 +129,12 @@ export function reviewedDraftToCanonicalJobCreate(input: {
     assertPickupLocationForCreate({
       jobType,
       pickupAddress1: reviewed.pickupAddress1,
-      pickupPlaceId: null,
+      pickupPlaceId: reviewed.pickupPlaceId,
     });
     assertDeliveryLocationForCreate({
       jobType,
       deliveryAddress1: reviewed.deliveryAddress1,
-      deliveryPlaceId: null,
+      deliveryPlaceId: reviewed.deliveryPlaceId,
     });
   }
 
@@ -135,9 +142,15 @@ export function reviewedDraftToCanonicalJobCreate(input: {
     jobType,
     collectionType,
     customerCompanyId: reviewed.customerCompanyId,
-    pickupDate: new Date(input.serviceDate),
+    pickupDate: reviewed.pickupDateLocal
+      ? zonedLocalDateTimeToUtc(reviewed.pickupDateLocal, input.timezone)
+      : null,
     pickupAddress1: reviewed.pickupAddress1,
+    pickupAddress2: reviewed.pickupAddress2,
+    pickupPostal: reviewed.pickupPostal,
     deliveryAddress1: reviewed.deliveryAddress1,
+    deliveryAddress2: reviewed.deliveryAddress2,
+    deliveryPostal: reviewed.deliveryPostal,
     pickupContactName: reviewed.picName,
     pickupContactPhone: reviewed.picPhone,
     // Manual Job.create persists omitted receiver contact as "" (required String columns).

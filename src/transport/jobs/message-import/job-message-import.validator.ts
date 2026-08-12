@@ -11,6 +11,12 @@ import type {
   ControllerReviewedItem,
   JobMessageImportFieldError,
 } from "./job-message-import.types";
+import {
+  normalizeCompanyName,
+  normalizeLocationLabel,
+  normalizeNotes,
+  normalizePersonName,
+} from "./job-message-import.text-normalize";
 
 const ISO_CONTAINER_RE = /^[A-Z]{4}\d{7}$/;
 
@@ -58,16 +64,38 @@ export function normalizeReviewedDraft(
       ? collectionRaw
       : null;
 
+  const toCoord = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
   return {
     movementType: input.movementType,
     collectionType,
     customerCompanyId: trimToNull(input.customerCompanyId),
-    customerNameText: trimToNull(input.customerNameText),
-    pickupAddress1: trimToNull(input.pickupAddress1),
-    deliveryAddress1: trimToNull(input.deliveryAddress1),
-    picName: trimToNull(input.picName),
+    customerNameText: normalizeCompanyName(input.customerNameText),
+    pickupAddress1: normalizeLocationLabel(input.pickupAddress1),
+    pickupAddress2: trimToNull(input.pickupAddress2),
+    pickupPostal: trimToNull(input.pickupPostal)?.replace(/\D/g, "").slice(0, 6) ?? null,
+    pickupPlaceId: trimToNull(input.pickupPlaceId),
+    pickupLat: toCoord(input.pickupLat),
+    pickupLng: toCoord(input.pickupLng),
+    deliveryAddress1: normalizeLocationLabel(input.deliveryAddress1),
+    deliveryAddress2: trimToNull(input.deliveryAddress2),
+    deliveryPostal: trimToNull(input.deliveryPostal)?.replace(/\D/g, "").slice(0, 6) ?? null,
+    deliveryPlaceId: trimToNull(input.deliveryPlaceId),
+    deliveryLat: toCoord(input.deliveryLat),
+    deliveryLng: toCoord(input.deliveryLng),
+    pickupDateLocal: trimToNull(input.pickupDateLocal),
+    deliveryDateLocal: trimToNull(input.deliveryDateLocal),
+    pickupDateDisplay: trimToNull(input.pickupDateDisplay),
+    deliveryDateDisplay: trimToNull(input.deliveryDateDisplay),
+    pickupDateNeedsReview: Boolean(input.pickupDateNeedsReview),
+    deliveryDateNeedsReview: Boolean(input.deliveryDateNeedsReview),
+    picName: normalizePersonName(input.picName),
     picPhone: normalizePhone(input.picPhone),
-    notes: trimToNull(input.notes),
+    notes: normalizeNotes(input.notes),
     instructions: Array.isArray(input.instructions)
       ? input.instructions.map((x) => String(x).trim()).filter(Boolean)
       : [],
@@ -143,6 +171,29 @@ export function validateReviewedDraft(
       "deliveryAddress1",
       "MISSING_DELIVERY",
       "Delivery location is required.",
+    );
+  }
+
+  const postalOk = (v: string | null) => !v || /^\d{6}$/.test(v);
+  if (!postalOk(reviewed.pickupPostal)) {
+    pushBlocking("pickupPostal", "INVALID_POSTAL", "Postal code must be 6 digits.");
+  }
+  if (!postalOk(reviewed.deliveryPostal)) {
+    pushBlocking("deliveryPostal", "INVALID_POSTAL", "Postal code must be 6 digits.");
+  }
+
+  if (reviewed.pickupDateNeedsReview) {
+    pushBlocking(
+      "pickupDateLocal",
+      "PICKUP_TIME_NEEDS_REVIEW",
+      reviewed.pickupDateDisplay || "Pickup date/time needs review.",
+    );
+  }
+  if (reviewed.deliveryDateNeedsReview) {
+    pushBlocking(
+      "deliveryDateLocal",
+      "DELIVERY_TIME_NEEDS_REVIEW",
+      reviewed.deliveryDateDisplay || "Delivery date/time needs review.",
     );
   }
 

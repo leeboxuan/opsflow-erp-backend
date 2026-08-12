@@ -11,15 +11,15 @@ const reviewed = normalizeReviewedDraft({
   customerCompanyId: "c1",
   pickupAddress1: "Tuas",
   deliveryAddress1: "DB",
+  pickupDateLocal: "2026-08-12T09:00",
   items: [{ containerNumber: "GESU6311344", sealNumber: null, referenceNumber: null, quantity: 1 }],
 });
 
 describe("job-message-import fingerprints", () => {
-  it("batch fingerprint includes service date so a later day is a new batch", () => {
+  it("batch fingerprint is stable for the same source text", () => {
     const a = computeBatchFingerprint({
       tenantId: "t1",
       sourceChannel: "WHATSAPP",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceText: "hello",
       parserVersion: "v1",
@@ -27,19 +27,17 @@ describe("job-message-import fingerprints", () => {
     const b = computeBatchFingerprint({
       tenantId: "t1",
       sourceChannel: "WHATSAPP",
-      serviceDate: "2026-08-04",
       timezone: "Asia/Singapore",
       sourceText: "hello",
       parserVersion: "v1",
     });
-    expect(a).not.toBe(b);
+    expect(a).toBe(b);
   });
 
   it("normalizes whitespace in source text", () => {
     const a = computeBatchFingerprint({
       tenantId: "t1",
       sourceChannel: "WHATSAPP",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceText: "hello   world",
       parserVersion: "v1",
@@ -47,7 +45,6 @@ describe("job-message-import fingerprints", () => {
     const b = computeBatchFingerprint({
       tenantId: "t1",
       sourceChannel: "WHATSAPP",
-      serviceDate: "2026-08-03",
       timezone: "Asia/Singapore",
       sourceText: "hello world",
       parserVersion: "v1",
@@ -59,17 +56,29 @@ describe("job-message-import fingerprints", () => {
     const a = computeDraftFingerprint({
       tenantId: "t1",
       movementType: JobMessageImportMovementType.IMPORT,
-      serviceDate: "2026-08-03",
       reviewed,
     });
     const b = computeDraftFingerprint({
       tenantId: "t1",
       movementType: JobMessageImportMovementType.IMPORT,
-      serviceDate: "2026-08-03",
       reviewed: { ...reviewed, pickupAddress1: "PPZ" },
     });
     expect(a).not.toBe(b);
     expect(fingerprintHasStrongIdentity(reviewed)).toBe(true);
     expect(fingerprintHasStrongIdentity({ ...reviewed, items: [] })).toBe(false);
+  });
+
+  it("draft fingerprint includes requested planning date when present", () => {
+    const a = computeDraftFingerprint({
+      tenantId: "t1",
+      movementType: JobMessageImportMovementType.IMPORT,
+      reviewed,
+    });
+    const b = computeDraftFingerprint({
+      tenantId: "t1",
+      movementType: JobMessageImportMovementType.IMPORT,
+      reviewed: { ...reviewed, pickupDateLocal: "2026-08-13T09:00" },
+    });
+    expect(a).not.toBe(b);
   });
 });

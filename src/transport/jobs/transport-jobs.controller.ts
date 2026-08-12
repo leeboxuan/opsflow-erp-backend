@@ -234,7 +234,6 @@ export class TransportJobsController {
     return this.messageImports.createPreviewBatch({
       tenantId,
       actorUserId,
-      serviceDate: dto.serviceDate,
       timezone: dto.timezone,
       sourceChannel: dto.sourceChannel,
       sourceText: dto.sourceText,

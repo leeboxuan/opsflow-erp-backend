@@ -21,7 +21,7 @@ describe("findDuplicateCandidates", () => {
     const result = await findDuplicateCandidates({
       tx,
       tenantId: "t1",
-      serviceDateYmd: "2026-08-03",
+      requestedPickupDateYmd: "2026-08-03",
       reviewed: { ...reviewed, items: [] },
     });
     expect(result).toEqual([]);
@@ -53,7 +53,7 @@ describe("findDuplicateCandidates", () => {
     const result = await findDuplicateCandidates({
       tx,
       tenantId: "t1",
-      serviceDateYmd: "2026-08-03",
+      requestedPickupDateYmd: "2026-08-03",
       reviewed,
       duplicateFingerprint: "fp",
     });
@@ -88,7 +88,7 @@ describe("findDuplicateCandidates", () => {
     const result = await findDuplicateCandidates({
       tx,
       tenantId: "t1",
-      serviceDateYmd: "2026-08-03",
+      requestedPickupDateYmd: "2026-08-03",
       reviewed,
     });
     expect(result.length).toBeLessThanOrEqual(10);
@@ -121,7 +121,7 @@ describe("findDuplicateCandidates", () => {
     const result = await findDuplicateCandidates({
       tx,
       tenantId: "t1",
-      serviceDateYmd: "2026-08-03",
+      requestedPickupDateYmd: "2026-08-03",
       reviewed,
       duplicateFingerprint: "fp",
       excludeDraftId: "draft_self",
@@ -140,7 +140,7 @@ describe("findDuplicateCandidates", () => {
     await findDuplicateCandidates({
       tx,
       tenantId: "t1",
-      serviceDateYmd: "2026-08-03",
+      requestedPickupDateYmd: "2026-08-03",
       reviewed,
       duplicateFingerprint: "fp",
       excludeDraftId: "draft_self",
@@ -194,7 +194,7 @@ describe("findDuplicateCandidates", () => {
     const result = await findDuplicateCandidates({
       tx,
       tenantId: "t1",
-      serviceDateYmd: "2026-08-03",
+      requestedPickupDateYmd: "2026-08-03",
       reviewed,
     });
     expect(result.map((c) => c.jobId)).toEqual(["job_a", "job_b"]);
@@ -231,7 +231,7 @@ describe("findDuplicateCandidates", () => {
     const result = await findDuplicateCandidates({
       tx,
       tenantId: "t1",
-      serviceDateYmd: "2026-08-03",
+      requestedPickupDateYmd: "2026-08-03",
       reviewed,
       duplicateFingerprint: "fp",
     });
@@ -274,7 +274,7 @@ describe("findDuplicateCandidates", () => {
     const result = await findDuplicateCandidates({
       tx,
       tenantId: "t1",
-      serviceDateYmd: "2026-08-03",
+      requestedPickupDateYmd: "2026-08-03",
       reviewed,
     });
     expect(result).toEqual([]);

@@ -23,13 +23,11 @@ export function reviewedItemCodes(reviewed: ControllerReviewedDraft): string[] {
 
 /**
  * Accidental double-submit protection for preview.
- * Includes service date so the same pasted text on a different ops day is a new batch.
  * Does not permanently block re-import after a prior batch is confirmed.
  */
 export function computeBatchFingerprint(input: {
   tenantId: string;
   sourceChannel: JobMessageImportSourceChannel | string;
-  serviceDate: string;
   timezone: string;
   sourceText: string;
   parserVersion: string;
@@ -39,7 +37,6 @@ export function computeBatchFingerprint(input: {
     [
       input.tenantId,
       input.sourceChannel,
-      input.serviceDate,
       input.timezone,
       input.parserVersion,
       normalized,
@@ -48,20 +45,23 @@ export function computeBatchFingerprint(input: {
 }
 
 /**
- * Strongest practical V1 fingerprint: tenant + service date + movement + item codes
+ * Strongest practical V1 fingerprint: tenant + movement + requested planning date + item codes
  * + normalized pickup/delivery. Skips weak/absent customer names.
  */
 export function computeDraftFingerprint(input: {
   tenantId: string;
   movementType: JobMessageImportMovementType | string;
-  serviceDate: string;
   reviewed: ControllerReviewedDraft;
 }): string {
   const itemCodes = reviewedItemCodes(input.reviewed);
+  const planningDate =
+    input.reviewed.pickupDateLocal?.slice(0, 10) ??
+    input.reviewed.deliveryDateLocal?.slice(0, 10) ??
+    "";
   const parts = [
     input.tenantId,
     String(input.movementType),
-    input.serviceDate,
+    planningDate,
     input.reviewed.customerCompanyId ?? "",
     normalizeForFingerprint(input.reviewed.pickupAddress1),
     normalizeForFingerprint(input.reviewed.deliveryAddress1),
