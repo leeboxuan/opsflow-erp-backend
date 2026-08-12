@@ -263,6 +263,30 @@ export class CreateCustomerCompanyDto {
   @Type(() => Boolean)
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({
+    enum: [
+      "PROSPECT",
+      "PENDING_COMMERCIAL_APPROVAL",
+      "ACTIVE",
+      "SUSPENDED",
+    ],
+    default: "PROSPECT",
+    description:
+      "Commercial lifecycle. Missing signed quotation may block ACTIVE, not customer create.",
+  })
+  @IsOptional()
+  @IsIn([
+    "PROSPECT",
+    "PENDING_COMMERCIAL_APPROVAL",
+    "ACTIVE",
+    "SUSPENDED",
+  ])
+  commercialStatus?:
+    | "PROSPECT"
+    | "PENDING_COMMERCIAL_APPROVAL"
+    | "ACTIVE"
+    | "SUSPENDED";
 }
 
 export class UpdateCustomerCompanyDto {
@@ -357,6 +381,27 @@ export class UpdateCustomerCompanyDto {
   @Type(() => Boolean)
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({
+    enum: [
+      "PROSPECT",
+      "PENDING_COMMERCIAL_APPROVAL",
+      "ACTIVE",
+      "SUSPENDED",
+    ],
+  })
+  @IsOptional()
+  @IsIn([
+    "PROSPECT",
+    "PENDING_COMMERCIAL_APPROVAL",
+    "ACTIVE",
+    "SUSPENDED",
+  ])
+  commercialStatus?:
+    | "PROSPECT"
+    | "PENDING_COMMERCIAL_APPROVAL"
+    | "ACTIVE"
+    | "SUSPENDED";
 }
 
 export class CreateCustomerContactDto {

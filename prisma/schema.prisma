@@ -187,6 +187,8 @@ model customer_companies {
   uen      String?
   notes    String?
   isActive Boolean @default(true)
+  /// Commercial lifecycle. Missing signed quotation may block ACTIVE, not create.
+  commercialStatus CustomerCommercialStatus @default(PROSPECT)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -208,6 +210,7 @@ model customer_companies {
   @@unique([tenantId, normalizedName])
   @@index([tenantId])
   @@index([tenantId, isActive])
+  @@index([tenantId, commercialStatus])
   @@map("customer_companies")
 }
 
@@ -514,6 +517,8 @@ model MasterRateDataset {
   type             MasterRateDatasetType
   versionNo        Int
   status           MasterRateDatasetStatus @default(DRAFT)
+  /// Exactly one current base template per (tenantId, type). Enforced by partial unique index.
+  isCurrent        Boolean               @default(false)
   createdAt        DateTime              @default(now())
   createdByUserId  String?
   updatedAt        DateTime              @updatedAt
@@ -528,6 +533,7 @@ model MasterRateDataset {
   rows   MasterRateDatasetRow[]
 
   @@index([tenantId, type, status])
+  @@index([tenantId, type, isCurrent])
   @@unique([tenantId, type, versionNo])
   @@map("master_rate_datasets")
 }
@@ -2679,8 +2685,15 @@ model CustomerQuotation {
   voidedAt                     DateTime?
   expiredAt                    DateTime?
   customerNameSnapshot        String?
+  /// Generated (unsigned) quotation PDF — never overwritten by signed upload.
   pdfKey                       String?
   pdfGeneratedAt               DateTime?
+  /// Signed customer copy (separate from generated PDF).
+  signedDocumentKey            String?
+  signedDocumentOriginalName   String?
+  signedDocumentUploadedAt     DateTime?
+  signedDocumentUploadedByUserId String?
+  signedDocumentVersion        Int                               @default(0)
   createdAt                    DateTime                          @default(now())
   createdByUserId              String?
   updatedAt                    DateTime                          @updatedAt
@@ -2753,13 +2766,22 @@ enum CustomerRateTemplateStatus {
   ARCHIVED
 }
 
+enum CustomerCommercialStatus {
+  PROSPECT
+  PENDING_COMMERCIAL_APPROVAL
+  ACTIVE
+  SUSPENDED
+}
+
 enum CustomerQuotationStatus {
   DRAFT
   ISSUED
+  SIGNED
   ACCEPTED
   REJECTED
   EXPIRED
   VOID
+  CANCELLED
 }
 
 enum CustomerQuotationAcceptanceMethod {

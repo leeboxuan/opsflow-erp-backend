@@ -16,10 +16,12 @@ import { Type } from "class-transformer";
 export const CUSTOMER_QUOTATION_STATUSES = [
   "DRAFT",
   "ISSUED",
+  "SIGNED",
   "ACCEPTED",
   "REJECTED",
   "EXPIRED",
   "VOID",
+  "CANCELLED",
 ] as const;
 
 export const CUSTOMER_QUOTATION_ACCEPTANCE_METHODS = [
@@ -87,6 +89,33 @@ export class CreateCustomerQuotationFromTemplateDto {
   @IsOptional()
   @IsString()
   validUntil?: string;
+}
+
+export class CreateCustomerQuotationFromMasterDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  title?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  notes?: string;
+
+  @ApiPropertyOptional({ description: "ISO date" })
+  @IsOptional()
+  @IsString()
+  validFrom?: string;
+
+  @ApiPropertyOptional({ description: "ISO date" })
+  @IsOptional()
+  @IsString()
+  validUntil?: string;
+
+  @ApiPropertyOptional({ default: "SGD" })
+  @IsOptional()
+  @IsString()
+  currency?: string;
 }
 
 export class CreateCustomerQuotationFromRateExcelDto {

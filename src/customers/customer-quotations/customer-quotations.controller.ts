@@ -32,6 +32,7 @@ import { CustomerQuotationsService } from "./customer-quotations.service";
 import {
   AcceptCustomerQuotationDto,
   CreateBlankCustomerQuotationDto,
+  CreateCustomerQuotationFromMasterDto,
   CreateCustomerQuotationFromRateExcelDto,
   CreateCustomerQuotationFromTemplateDto,
   ReplaceCustomerQuotationLinesDto,
@@ -81,6 +82,24 @@ export class CustomerQuotationsController {
       req.tenant.tenantId,
       customerId,
       dto,
+      req.user?.userId ?? null,
+    );
+  }
+
+  @Post("from-master")
+  @ApiOperation({
+    summary:
+      "Create DRAFT quotation from ACTIVE master QUOTATION base template (deep copy, no Excel parse)",
+  })
+  createFromMaster(
+    @Request() req: any,
+    @Param("customerId") customerId: string,
+    @Body() dto: CreateCustomerQuotationFromMasterDto,
+  ) {
+    return this.quotations.createFromMaster(
+      req.tenant.tenantId,
+      customerId,
+      dto ?? {},
       req.user?.userId ?? null,
     );
   }
@@ -266,6 +285,52 @@ export class CustomerQuotationsController {
     @Param("id") id: string,
   ) {
     return this.quotations.getPdfSignedUrl(
+      req.tenant.tenantId,
+      customerId,
+      id,
+    );
+  }
+
+  @Post(":id/signed-document")
+  @ApiOperation({
+    summary:
+      "Upload signed customer copy for ISSUED quotation (does not overwrite generated PDF)",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  uploadSignedDocument(
+    @Request() req: any,
+    @Param("customerId") customerId: string,
+    @Param("id") id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    return this.quotations.uploadSignedDocument(
+      req.tenant.tenantId,
+      customerId,
+      id,
+      file,
+      req.user?.userId ?? null,
+    );
+  }
+
+  @Get(":id/signed-document")
+  @ApiOperation({ summary: "Get signed URL for uploaded signed customer copy" })
+  getSignedDocument(
+    @Request() req: any,
+    @Param("customerId") customerId: string,
+    @Param("id") id: string,
+  ) {
+    return this.quotations.getSignedDocumentUrl(
       req.tenant.tenantId,
       customerId,
       id,

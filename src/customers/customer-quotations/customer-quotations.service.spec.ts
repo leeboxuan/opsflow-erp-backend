@@ -1,6 +1,11 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
-import { CustomerQuotationStatus } from "@prisma/client";
+import {
+  CustomerQuotationStatus,
+  MasterRateDatasetStatus,
+  MasterRateDatasetType,
+} from "@prisma/client";
 import { CustomerQuotationsService } from "./customer-quotations.service";
+import * as quotationParseHelpers from "../quotation-parse.helpers";
 
 jest.mock("./customer-quotation-pdf", () => ({
   createCustomerQuotationPdfBuffer: jest
@@ -199,6 +204,178 @@ describe("CustomerQuotationsService", () => {
     expect(res.subtotalCents).toBe(10000);
     expect(res.taxCents).toBe(900);
     expect(res.totalCents).toBe(10900);
+  });
+
+  it("from-master deep-copies ACTIVE QUOTATION dataset; no parser; snapshot independent", async () => {
+    const masterMeta = {
+      annex: "A",
+      variantType: "CONTAINER",
+      additionalRuleText: "Rule X",
+      rate20ftCents: 12000,
+      rate40ftCents: 18000,
+      rawRateText: "see note",
+    };
+    const masterRows = [
+      {
+        id: "mr1",
+        code: "A1",
+        label: "Haulage 20'",
+        description: "Door delivery",
+        unit: "trip",
+        currency: "SGD",
+        rateCents: 10000,
+        rawRateText: "see note",
+        requiresManualAmount: false,
+        notes: "Handle with care",
+        sortOrder: 0,
+        isActive: true,
+        metadataJson: masterMeta,
+      },
+      {
+        id: "mr2",
+        code: "B1",
+        label: "Manual fee",
+        description: null,
+        unit: null,
+        currency: "SGD",
+        rateCents: null,
+        rawRateText: "TBA",
+        requiresManualAmount: true,
+        notes: null,
+        sortOrder: 1,
+        isActive: true,
+        metadataJson: { annex: "B", rawRateText: "TBA" },
+      },
+    ];
+    const createMany = jest.fn().mockResolvedValue({ count: 2 });
+    const create = jest.fn().mockResolvedValue({
+      id: "q-master",
+      tenantId: "t1",
+      customerCompanyId: "c1",
+      quotationNo: "QT-202608-0001",
+      status: CustomerQuotationStatus.DRAFT,
+      sourceTemplateId: null,
+      sourceTemplateNameSnapshot: "Master quotation template v4",
+    });
+    const findFirstAfter = jest.fn().mockImplementation(async () => {
+      const copied = createMany.mock.calls[0][0].data.map((row: any, i: number) => ({
+        id: `ql${i + 1}`,
+        ...row,
+      }));
+      return {
+        id: "q-master",
+        tenantId: "t1",
+        customerCompanyId: "c1",
+        quotationNo: "QT-202608-0001",
+        status: CustomerQuotationStatus.DRAFT,
+        currency: "SGD",
+        title: "Master quotation template v4",
+        sourceTemplateId: null,
+        sourceTemplateNameSnapshot: "Master quotation template v4",
+        subtotalCents: 10000,
+        taxCents: 900,
+        totalCents: 10900,
+        lines: copied,
+      };
+    });
+    const parseRateSpy = jest.spyOn(
+      quotationParseHelpers,
+      "parseQuotationRateLinesFromXlsxBuffer",
+    );
+    const parseMatrixSpy = jest.spyOn(
+      quotationParseHelpers,
+      "parseQuotationMatrixFromXlsxBuffer",
+    );
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      masterRateDataset: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "ds1",
+          versionNo: 4,
+          type: MasterRateDatasetType.QUOTATION,
+          status: MasterRateDatasetStatus.ACTIVE,
+          rows: masterRows,
+        }),
+      },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          quotation_no_counters: {
+            upsert: jest.fn().mockResolvedValue({ nextSeq: 1 }),
+          },
+          customerQuotation: { create, findFirst: findFirstAfter },
+          customerQuotationLine: { createMany },
+        }),
+      ),
+    };
+    const { svc, audit } = makeService(prisma);
+
+    const res = await svc.createFromMaster("t1", "c1", {}, "u1");
+
+    expect(parseRateSpy).not.toHaveBeenCalled();
+    expect(parseMatrixSpy).not.toHaveBeenCalled();
+    expect(createMany).toHaveBeenCalled();
+    const rowData = createMany.mock.calls[0][0].data;
+    expect(rowData).toHaveLength(2);
+    expect(rowData[0].sourceMasterRowId).toBe("mr1");
+    expect(rowData[0].sourceTemplateRowId).toBeNull();
+    expect(rowData[0].unitPriceCents).toBe(10000);
+    expect(rowData[0].qty).toBe(1);
+    expect(rowData[0].metadataJson).toEqual(
+      expect.objectContaining({
+        annex: "A",
+        variantType: "CONTAINER",
+        additionalRuleText: "Rule X",
+        rate20ftCents: 12000,
+        rate40ftCents: 18000,
+        rawRateText: "see note",
+        notes: "Handle with care",
+      }),
+    );
+    expect(rowData[1].sourceMasterRowId).toBe("mr2");
+    expect(rowData[1].unitPriceCents).toBe(0);
+    expect(rowData[1].requiresManualAmount).toBe(true);
+
+    // Snapshot independence: mutating returned line metadata must not mutate master.
+    expect(res.lines[0].metadataJson).not.toBe(masterMeta);
+    (res.lines[0].metadataJson as any).annex = "MUTATED";
+    expect(masterMeta.annex).toBe("A");
+
+    expect(res.sourceTemplateNameSnapshot).toBe("Master quotation template v4");
+    expect(res.sourceTemplateId).toBeNull();
+    expect(audit.log).toHaveBeenCalledWith(
+      "t1",
+      "CREATE",
+      "CustomerQuotation",
+      "q-master",
+      expect.objectContaining({
+        fromMasterDatasetId: "ds1",
+        versionNo: 4,
+        lineCount: 2,
+      }),
+      "u1",
+    );
+
+    parseRateSpy.mockRestore();
+    parseMatrixSpy.mockRestore();
+  });
+
+  it("from-master throws when no ACTIVE master QUOTATION template", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      masterRateDataset: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      $transaction: jest.fn(),
+    };
+    const { svc } = makeService(prisma);
+    await expect(svc.createFromMaster("t1", "c1", {}, "u1")).rejects.toThrow(
+      /no base quotation template/i,
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it("totals include GST (basis points) via money helpers", () => {
@@ -645,7 +822,11 @@ describe("CustomerQuotationsService", () => {
     const res = await svc.void("t1", "c1", "q1", "u1");
     expect(updateMany).toHaveBeenCalled();
     expect(updateMany.mock.calls[0][0].where.status).toEqual({
-      in: [CustomerQuotationStatus.DRAFT, CustomerQuotationStatus.ISSUED],
+      in: [
+        CustomerQuotationStatus.DRAFT,
+        CustomerQuotationStatus.ISSUED,
+        CustomerQuotationStatus.SIGNED,
+      ],
     });
     expect(res.status).toBe(CustomerQuotationStatus.VOID);
   });

@@ -74,4 +74,13 @@ export class SaveTruckingRatesDatasetDto {
   @ValidateNested({ each: true })
   @Type(() => TruckingRateItemDto)
   items: TruckingRateItemDto[];
+
+  @ApiPropertyOptional({
+    description:
+      "Optimistic concurrency: current dataset versionNo expected by the client",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  expectedVersionNo?: number;
 }

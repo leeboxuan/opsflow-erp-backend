@@ -154,10 +154,11 @@ export class MasterDataController {
     );
   }
 
-  @Post("trucking-rates/import")
+  @Post("trucking-rates/import/preview")
   @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
-    summary: "Import tenant trucking rates dataset from Excel (source file stored for audit only)",
+    summary:
+      "Preview trucking rates Excel import against the current template (no DB write)",
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
@@ -170,15 +171,64 @@ export class MasterDataController {
     },
   })
   @UseInterceptors(FileInterceptor("file"))
+  previewTruckingRates(
+    @Req() req: any,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    return this.master.previewTruckingRatesImport(req.tenant.tenantId, file);
+  }
+
+  @Post("trucking-rates/import")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Import tenant trucking rates dataset from Excel (confirmReplace required when a current template exists)",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+        confirmReplace: {
+          type: "string",
+          description: "Set to 'true' to replace an existing current template",
+        },
+        expectedVersionNo: {
+          type: "string",
+          description: "Optimistic concurrency: current versionNo expected by the client",
+        },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
   importTruckingRates(
     @Req() req: any,
     @UploadedFile() file: Express.Multer.File,
+    @Body()
+    body?: { confirmReplace?: string | boolean; expectedVersionNo?: string | number },
   ): Promise<DriverTripRateImportSummaryDto> {
     if (!file) throw new BadRequestException("file is required");
+    const confirmReplace =
+      body?.confirmReplace === true ||
+      String(body?.confirmReplace ?? "").toLowerCase() === "true";
+    const expectedRaw = body?.expectedVersionNo;
+    const expectedVersionNo =
+      expectedRaw === undefined || expectedRaw === null || expectedRaw === ""
+        ? null
+        : Number(expectedRaw);
     return this.master.importTruckingRatesDataset(
       req.tenant.tenantId,
       file,
       req.user?.userId ?? null,
+      {
+        confirmReplace,
+        expectedVersionNo: Number.isFinite(expectedVersionNo as number)
+          ? (expectedVersionNo as number)
+          : null,
+      },
     );
   }
 
@@ -199,9 +249,55 @@ export class MasterDataController {
     );
   }
 
+  @Get("trucking-rates/versions")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({ summary: "List driver payout (trucking) template versions for the tenant" })
+  listTruckingRatesVersions(@Req() req: any) {
+    return this.master.listTruckingRatesTemplateVersions(req.tenant.tenantId);
+  }
+
+  @Post("trucking-rates/versions/:id/restore")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Restore a historical trucking rates template version by copying it into a new current version",
+  })
+  restoreTruckingRatesVersion(
+    @Req() req: any,
+    @Param("id") id: string,
+    @Body() body?: { expectedVersionNo?: number },
+  ) {
+    return this.master.restoreTruckingRatesTemplateVersion(
+      req.tenant.tenantId,
+      id,
+      req.user?.userId ?? null,
+      body?.expectedVersionNo,
+    );
+  }
+
+  @Get("trucking-rates/export")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({ summary: "Export the current driver payout (trucking) template items" })
+  exportTruckingRatesTemplate(@Req() req: any) {
+    return this.master.exportCurrentTruckingRatesTemplate(req.tenant.tenantId);
+  }
+
+  @Post("trucking-rates/blank-template")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Create an empty current trucking rates template when none exists (no Excel import)",
+  })
+  createBlankTruckingRatesTemplate(@Req() req: any) {
+    return this.master.createBlankTruckingRatesTemplate(
+      req.tenant.tenantId,
+      req.user?.userId ?? null,
+    );
+  }
+
   @Patch("trucking-rates/items")
   @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
-  @ApiOperation({ summary: "Replace tenant trucking rates dataset rows" })
+  @ApiOperation({ summary: "Replace tenant trucking rates dataset rows (creates a new version)" })
   saveTruckingRateItems(
     @Req() req: any,
     @Body() dto: SaveTruckingRatesDatasetDto,
@@ -210,13 +306,15 @@ export class MasterDataController {
       req.tenant.tenantId,
       dto.items ?? [],
       req.user?.userId ?? null,
+      dto.expectedVersionNo,
     );
   }
 
-  @Post("dhc-rates/import")
+  @Post("dhc-rates/import/preview")
   @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
-    summary: "Import tenant DHC rates dataset from Excel (source file stored for audit only)",
+    summary:
+      "Preview DHC rates Excel import against the current template (no DB write)",
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
@@ -229,12 +327,61 @@ export class MasterDataController {
     },
   })
   @UseInterceptors(FileInterceptor("file"))
-  importDhcRates(@Req() req: any, @UploadedFile() file: Express.Multer.File) {
+  previewDhcRates(@Req() req: any, @UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException("file is required");
+    return this.master.previewDhcRatesImport(req.tenant.tenantId, file);
+  }
+
+  @Post("dhc-rates/import")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Import tenant DHC rates dataset from Excel (confirmReplace required when a current template exists)",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+        confirmReplace: {
+          type: "string",
+          description: "Set to 'true' to replace an existing current template",
+        },
+        expectedVersionNo: {
+          type: "string",
+          description: "Optimistic concurrency: current versionNo expected by the client",
+        },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  importDhcRates(
+    @Req() req: any,
+    @UploadedFile() file: Express.Multer.File,
+    @Body()
+    body?: { confirmReplace?: string | boolean; expectedVersionNo?: string | number },
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    const confirmReplace =
+      body?.confirmReplace === true ||
+      String(body?.confirmReplace ?? "").toLowerCase() === "true";
+    const expectedRaw = body?.expectedVersionNo;
+    const expectedVersionNo =
+      expectedRaw === undefined || expectedRaw === null || expectedRaw === ""
+        ? null
+        : Number(expectedRaw);
     return this.master.importDhcRatesDataset(
       req.tenant.tenantId,
       file,
       req.user?.userId ?? null,
+      {
+        confirmReplace,
+        expectedVersionNo: Number.isFinite(expectedVersionNo as number)
+          ? (expectedVersionNo as number)
+          : null,
+      },
     );
   }
 
@@ -255,14 +402,61 @@ export class MasterDataController {
     );
   }
 
+  @Get("dhc-rates/versions")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({ summary: "List DHC rates template versions for the tenant" })
+  listDhcRatesVersions(@Req() req: any) {
+    return this.master.listDhcRatesTemplateVersions(req.tenant.tenantId);
+  }
+
+  @Post("dhc-rates/versions/:id/restore")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Restore a historical DHC rates template version by copying it into a new current version",
+  })
+  restoreDhcRatesVersion(
+    @Req() req: any,
+    @Param("id") id: string,
+    @Body() body?: { expectedVersionNo?: number },
+  ) {
+    return this.master.restoreDhcRatesTemplateVersion(
+      req.tenant.tenantId,
+      id,
+      req.user?.userId ?? null,
+      body?.expectedVersionNo,
+    );
+  }
+
+  @Get("dhc-rates/export")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({ summary: "Export the current DHC rates template items" })
+  exportDhcRatesTemplate(@Req() req: any) {
+    return this.master.exportCurrentDhcRatesTemplate(req.tenant.tenantId);
+  }
+
+  @Post("dhc-rates/blank-template")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Create an empty current DHC rates template when none exists (no Excel import)",
+  })
+  createBlankDhcRatesTemplate(@Req() req: any) {
+    return this.master.createBlankDhcRatesTemplate(
+      req.tenant.tenantId,
+      req.user?.userId ?? null,
+    );
+  }
+
   @Patch("dhc-rates/items")
   @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
-  @ApiOperation({ summary: "Replace tenant DHC rates dataset rows" })
+  @ApiOperation({ summary: "Replace tenant DHC rates dataset rows (creates a new version)" })
   saveDhcRateItems(@Req() req: any, @Body() dto: SaveDhcRatesDatasetDto) {
     return this.master.replaceDhcRatesDataset(
       req.tenant.tenantId,
       dto.items ?? [],
       req.user?.userId ?? null,
+      dto.expectedVersionNo,
     );
   }
 
@@ -302,10 +496,11 @@ export class MasterDataController {
     );
   }
 
-  @Post("quotation/import")
+  @Post("quotation/import/preview")
   @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @ApiOperation({
-    summary: "Import tenant quotation dataset from Excel (source file stored for audit only)",
+    summary:
+      "Preview quotation Excel import against the current base template (no DB write)",
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
@@ -318,15 +513,64 @@ export class MasterDataController {
     },
   })
   @UseInterceptors(FileInterceptor("file"))
-  importQuotationDataset(
+  previewQuotationImport(
     @Req() req: any,
     @UploadedFile() file: Express.Multer.File,
   ) {
     if (!file) throw new BadRequestException("file is required");
+    return this.master.previewQuotationImport(req.tenant.tenantId, file);
+  }
+
+  @Post("quotation/import")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Import tenant quotation dataset from Excel (confirmReplace required when a current template exists)",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+        confirmReplace: {
+          type: "string",
+          description: "Set to 'true' to replace an existing current template",
+        },
+        expectedVersionNo: {
+          type: "string",
+          description: "Optimistic concurrency: current versionNo expected by the client",
+        },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  importQuotationDataset(
+    @Req() req: any,
+    @UploadedFile() file: Express.Multer.File,
+    @Body()
+    body?: { confirmReplace?: string | boolean; expectedVersionNo?: string | number },
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    const confirmReplace =
+      body?.confirmReplace === true ||
+      String(body?.confirmReplace ?? "").toLowerCase() === "true";
+    const expectedRaw = body?.expectedVersionNo;
+    const expectedVersionNo =
+      expectedRaw === undefined || expectedRaw === null || expectedRaw === ""
+        ? null
+        : Number(expectedRaw);
     return this.master.importQuotationDataset(
       req.tenant.tenantId,
       file,
       req.user?.userId ?? null,
+      {
+        confirmReplace,
+        expectedVersionNo: Number.isFinite(expectedVersionNo as number)
+          ? (expectedVersionNo as number)
+          : null,
+      },
     );
   }
 
@@ -344,13 +588,60 @@ export class MasterDataController {
     return this.master.getDatasetMetadata(req.tenant.tenantId, MasterRateDatasetType.QUOTATION);
   }
 
+  @Get("quotation/versions")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({ summary: "List base quotation template versions for the tenant" })
+  listQuotationVersions(@Req() req: any) {
+    return this.master.listQuotationTemplateVersions(req.tenant.tenantId);
+  }
+
+  @Post("quotation/versions/:id/restore")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Restore a historical quotation template version by copying it into a new current version",
+  })
+  restoreQuotationVersion(
+    @Req() req: any,
+    @Param("id") id: string,
+    @Body() body?: { expectedVersionNo?: number },
+  ) {
+    return this.master.restoreQuotationTemplateVersion(
+      req.tenant.tenantId,
+      id,
+      req.user?.userId ?? null,
+      body?.expectedVersionNo,
+    );
+  }
+
+  @Get("quotation/export")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({ summary: "Export the current base quotation template items" })
+  exportQuotationTemplate(@Req() req: any) {
+    return this.master.exportCurrentQuotationTemplate(req.tenant.tenantId);
+  }
+
   @Patch("quotation/items")
   @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
-  @ApiOperation({ summary: "Replace tenant quotation dataset rows" })
+  @ApiOperation({ summary: "Replace tenant quotation dataset rows (creates a new version)" })
   saveQuotationItems(@Req() req: any, @Body() dto: SaveQuotationDatasetDto) {
     return this.master.replaceQuotationDatasetItems(
       req.tenant.tenantId,
       dto.items ?? [],
+      req.user?.userId ?? null,
+      dto.expectedVersionNo,
+    );
+  }
+
+  @Post("quotation/blank-template")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Create an empty current base quotation template when none exists (no Excel import)",
+  })
+  createBlankQuotationTemplate(@Req() req: any) {
+    return this.master.createBlankQuotationTemplate(
+      req.tenant.tenantId,
       req.user?.userId ?? null,
     );
   }

@@ -1,6 +1,13 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import { PrismaService } from "../../shared/prisma/prisma.service";
 import { SupabaseService } from "../../shared/auth/supabase.service";
+import { AuditService } from "../../shared/audit/audit.service";
 import {
   LogisticsLocationType,
   MasterFileStatus,
@@ -27,6 +34,9 @@ export class MasterDataService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
+    private readonly audit: AuditService = {
+      log: async () => undefined,
+    } as unknown as AuditService,
   ) {}
   private readonly MASTER_BUCKET = "job-documents";
 
@@ -962,6 +972,12 @@ export class MasterDataService {
       });
       const versionNo = (latest?.versionNo ?? 0) + 1;
 
+      // Clear current pointer on all prior versions for this tenant+type.
+      await tx.masterRateDataset.updateMany({
+        where: { tenantId, type, isCurrent: true },
+        data: { isCurrent: false },
+      });
+      // Demote previous ACTIVE rows to DRAFT (historical versions stay readable).
       await tx.masterRateDataset.updateMany({
         where: { tenantId, type, status: MasterRateDatasetStatus.ACTIVE },
         data: { status: MasterRateDatasetStatus.DRAFT },
@@ -973,6 +989,7 @@ export class MasterDataService {
           type,
           versionNo,
           status: MasterRateDatasetStatus.ACTIVE,
+          isCurrent: true,
           createdByUserId: actorUserId,
           updatedByUserId: actorUserId,
           importedAt: new Date(),
@@ -998,7 +1015,7 @@ export class MasterDataService {
             tripMode: r.tripMode ?? null,
             areaScope: r.areaScope ?? null,
             currency: r.currency ?? "SGD",
-            rateCents: r.rateCents ?? null,
+            rateCents: r.rateCents ?? r.amountCents ?? null,
             rawRateText: r.rawRateText ?? null,
             requiresManualAmount: !!r.requiresManualAmount,
             hasMultipleRates: !!r.hasMultipleRates,
@@ -1030,6 +1047,10 @@ export class MasterDataService {
   private async findPreferredDataset(tenantId: string, type: MasterRateDatasetType) {
     return (
       (await this.prisma.masterRateDataset.findFirst({
+        where: { tenantId, type, isCurrent: true },
+        orderBy: { versionNo: "desc" },
+      })) ??
+      (await this.prisma.masterRateDataset.findFirst({
         where: { tenantId, type, status: MasterRateDatasetStatus.ACTIVE },
         orderBy: { versionNo: "desc" },
       })) ??
@@ -1040,15 +1061,409 @@ export class MasterDataService {
     );
   }
 
+  private templateTypeLabel(type: MasterRateDatasetType): string {
+    switch (type) {
+      case MasterRateDatasetType.QUOTATION:
+        return "base quotation template";
+      case MasterRateDatasetType.DHC_RATES:
+        return "DHC rates template";
+      case MasterRateDatasetType.TRUCKING_RATES:
+        return "driver payout (trucking) template";
+      default:
+        return "rate template";
+    }
+  }
+
+  private assertExpectedVersionNo(
+    currentVersionNo: number,
+    expectedVersionNo?: number | null,
+    type: MasterRateDatasetType = MasterRateDatasetType.QUOTATION,
+  ) {
+    if (
+      expectedVersionNo != null &&
+      Number(expectedVersionNo) !== currentVersionNo
+    ) {
+      throw new ConflictException(
+        `The ${this.templateTypeLabel(type)} was updated by someone else (version ${currentVersionNo}). Reload and try again.`,
+      );
+    }
+  }
+
+  private countQuotationSections(rows: Array<Record<string, any>>): number {
+    const sections = new Set<string>();
+    for (const r of rows) {
+      const meta =
+        r.metadataJson && typeof r.metadataJson === "object"
+          ? (r.metadataJson as Record<string, unknown>)
+          : null;
+      const annex = meta?.annex != null ? String(meta.annex).trim() : "";
+      const section =
+        r.section != null && String(r.section).trim()
+          ? String(r.section).trim()
+          : meta?.sectionDisplay != null
+            ? String(meta.sectionDisplay).trim()
+            : "";
+      const key = annex || section;
+      if (key) sections.add(key);
+    }
+    return sections.size;
+  }
+
+  private normalizeQuotationImportLines(
+    lines: ReturnType<typeof parseQuotationRateLinesFromXlsxBuffer>,
+    tenantId: string,
+  ) {
+    return lines.map((l, index) => ({
+      tenantId,
+      section: l.section ?? null,
+      code: l.code,
+      label: l.label,
+      description: l.description ?? null,
+      category: l.category ?? null,
+      containerSize: l.containerSize ?? null,
+      tripMode: l.tripMode ?? null,
+      areaScope: l.areaScope ?? null,
+      unit: l.unit ?? null,
+      rateCents: l.rateCents ?? null,
+      requiresManualAmount: !!l.requiresManualAmount,
+      rawRateText: l.rawRateText ?? null,
+      notes: l.notes ?? null,
+      sortOrder: Number.isInteger(l.sortOrder) ? l.sortOrder : index,
+      active: true,
+      isActive: true,
+      sourceType: l.sourceType ?? "EXCEL_IMPORT",
+      metadataJson: {
+        ...(l.metadataJson ?? {}),
+        annex: l.annex ?? (l.metadataJson as any)?.annex ?? null,
+        sectionCode: l.sectionCode ?? (l.metadataJson as any)?.sectionCode ?? null,
+        groupTitle: l.groupTitle ?? (l.metadataJson as any)?.groupTitle ?? null,
+        sectionDisplay: l.sectionDisplay ?? (l.metadataJson as any)?.sectionDisplay ?? null,
+        baseCode: l.baseCode ?? (l.metadataJson as any)?.baseCode ?? null,
+        baseLabel: l.baseLabel ?? (l.metadataJson as any)?.baseLabel ?? null,
+        variantType: l.variantType ?? (l.metadataJson as any)?.variantType ?? null,
+        variantLabel: l.variantLabel ?? (l.metadataJson as any)?.variantLabel ?? null,
+        containerSize: l.containerSize ?? (l.metadataJson as any)?.containerSize ?? null,
+        equipmentType: l.equipmentType ?? (l.metadataJson as any)?.equipmentType ?? null,
+        areaScope: l.areaScope ?? (l.metadataJson as any)?.areaScope ?? null,
+        itemNo: l.itemNo ?? (l.metadataJson as any)?.itemNo ?? null,
+        additionalRuleText:
+          l.additionalRuleText ?? (l.metadataJson as any)?.additionalRuleText ?? null,
+        rawValueText: l.rawRateText ?? (l.metadataJson as any)?.rawValueText ?? null,
+        parserSourceType: (l.metadataJson as any)?.parserSourceType ?? "PARSER_ANNEX_MATRIX",
+      } as Prisma.InputJsonValue,
+    }));
+  }
+
+  private parseQuotationExcelOrThrow(file: Express.Multer.File) {
+    const name = String(file?.originalname ?? "").toLowerCase();
+    const isExcel = /\.xlsx?$/i.test(name);
+    if (!file?.buffer?.length) throw new BadRequestException("file is required");
+    if (!isExcel) {
+      throw new BadRequestException("Quotation import must be Excel (.xlsx/.xls)");
+    }
+    const lines = parseQuotationRateLinesFromXlsxBuffer(file.buffer);
+    const matrix = parseQuotationMatrixFromXlsxBuffer(file.buffer);
+    const reconciliation = buildQuotationReconciliation(matrix);
+    const hasWfSections = Object.keys(reconciliation.counts).some((k) =>
+      ["A/A", "A/B", "B/C"].includes(k),
+    );
+    if (!reconciliation.isMatch && hasWfSections) {
+      throw new BadRequestException(
+        `Quotation workbook failed structural reconciliation for OpsFlow WF reference layout: ${reconciliation.warnings.join(
+          "; ",
+        )}`,
+      );
+    }
+    return { lines, reconciliation };
+  }
+
+  private rowRateCents(row: Record<string, any>): number | null {
+    const value = row.rateCents ?? row.amountCents ?? null;
+    return value == null ? null : Number(value);
+  }
+
+  private diffTemplateRows(
+    currentRows: Array<Record<string, any>>,
+    nextRows: Array<Record<string, any>>,
+  ) {
+    const currentByCode = new Map(
+      currentRows.map((r) => [String(r.code ?? "").trim(), r]),
+    );
+    const nextByCode = new Map(
+      nextRows.map((r) => [String(r.code ?? "").trim(), r]),
+    );
+    const added: Array<{ code: string; label: string }> = [];
+    const removed: Array<{ code: string; label: string }> = [];
+    const changed: Array<{ code: string; label: string; changes: string[] }> = [];
+
+    for (const [code, next] of nextByCode) {
+      if (!code) continue;
+      const prev = currentByCode.get(code);
+      if (!prev) {
+        added.push({ code, label: String(next.label ?? "") });
+        continue;
+      }
+      const changes: string[] = [];
+      if (String(prev.label ?? "") !== String(next.label ?? "")) changes.push("label");
+      if (this.rowRateCents(prev) !== this.rowRateCents(next)) changes.push("rate");
+      if (String(prev.rawRateText ?? "") !== String(next.rawRateText ?? "")) {
+        changes.push("rawRateText");
+      }
+      if (String(prev.notes ?? "") !== String(next.notes ?? "")) changes.push("notes");
+      const prevMeta = JSON.stringify(prev.metadataJson ?? null);
+      const nextMeta = JSON.stringify(next.metadataJson ?? null);
+      if (prevMeta !== nextMeta) changes.push("metadata");
+      if (String(prev.section ?? "") !== String(next.section ?? "")) {
+        changes.push("section");
+      }
+      if (changes.length > 0) {
+        changed.push({ code, label: String(next.label ?? prev.label ?? ""), changes });
+      }
+    }
+    for (const [code, prev] of currentByCode) {
+      if (!code) continue;
+      if (!nextByCode.has(code)) {
+        removed.push({ code, label: String(prev.label ?? "") });
+      }
+    }
+    return { added, removed, changed };
+  }
+
+  /** @deprecated Use diffTemplateRows */
+  private diffQuotationTemplateRows(
+    currentRows: Array<Record<string, any>>,
+    nextRows: Array<Record<string, any>>,
+  ) {
+    return this.diffTemplateRows(currentRows, nextRows);
+  }
+
+  async listTemplateVersions(tenantId: string, type: MasterRateDatasetType) {
+    const datasets = await this.prisma.masterRateDataset.findMany({
+      where: { tenantId, type },
+      orderBy: { versionNo: "desc" },
+      select: {
+        id: true,
+        versionNo: true,
+        isCurrent: true,
+        status: true,
+        sourceFileName: true,
+        updatedAt: true,
+        updatedByUserId: true,
+        importedAt: true,
+        _count: { select: { rows: true } },
+      },
+    });
+    return datasets.map((d) => ({
+      id: d.id,
+      versionNo: d.versionNo,
+      isCurrent: d.isCurrent,
+      status: d.status,
+      sourceFileName: d.sourceFileName,
+      updatedAt: d.updatedAt,
+      updatedByUserId: d.updatedByUserId,
+      importedAt: d.importedAt,
+      rowCount: d._count.rows,
+    }));
+  }
+
+  async restoreTemplateVersion(
+    tenantId: string,
+    type: MasterRateDatasetType,
+    datasetId: string,
+    actorUserId: string | null = null,
+    expectedVersionNo?: number | null,
+  ) {
+    const historical = await this.prisma.masterRateDataset.findFirst({
+      where: { id: datasetId, tenantId, type },
+      include: {
+        rows: {
+          orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+        },
+      },
+    });
+    if (!historical) {
+      throw new NotFoundException(
+        `${this.templateTypeLabel(type)} version not found`,
+      );
+    }
+
+    const current = await this.findPreferredDataset(tenantId, type);
+    if (current) {
+      this.assertExpectedVersionNo(current.versionNo, expectedVersionNo, type);
+    }
+    if (historical.isCurrent && current?.id === historical.id) {
+      throw new BadRequestException(
+        `Selected version is already the current ${this.templateTypeLabel(type)}.`,
+      );
+    }
+
+    const copiedRows = historical.rows.map((r, index) => ({
+      code: r.code,
+      label: r.label,
+      section: r.section,
+      description: r.description,
+      category: r.category,
+      unit: r.unit,
+      containerSize: r.containerSize,
+      tripMode: r.tripMode,
+      areaScope: r.areaScope,
+      currency: r.currency,
+      rateCents: r.rateCents,
+      rawRateText: r.rawRateText,
+      requiresManualAmount: r.requiresManualAmount,
+      hasMultipleRates: r.hasMultipleRates,
+      rateOptionsJson: r.rateOptionsJson,
+      defaultRateOptionIndex: r.defaultRateOptionIndex,
+      notes: r.notes,
+      sortOrder: Number.isInteger(r.sortOrder) ? r.sortOrder : index,
+      isActive: r.isActive !== false,
+      metadataJson: r.metadataJson,
+    }));
+
+    const sourceFileName = historical.sourceFileName?.trim()
+      ? `${historical.sourceFileName} (restored from v${historical.versionNo})`
+      : `Restored from v${historical.versionNo}`;
+
+    const dataset = await this.createDatasetVersionWithRows(
+      tenantId,
+      type,
+      copiedRows,
+      actorUserId,
+      sourceFileName,
+    );
+
+    const restoreAction =
+      type === MasterRateDatasetType.QUOTATION
+        ? "RESTORE_BASE_QUOTATION_TEMPLATE"
+        : type === MasterRateDatasetType.DHC_RATES
+          ? "RESTORE_DHC_RATES_TEMPLATE"
+          : "RESTORE_TRUCKING_RATES_TEMPLATE";
+
+    await this.audit.log(
+      tenantId,
+      "CREATE",
+      "MasterRateDataset",
+      dataset.id,
+      {
+        action: restoreAction,
+        restoredFromDatasetId: historical.id,
+        restoredFromVersionNo: historical.versionNo,
+        fromVersionNo: current?.versionNo ?? null,
+        toVersionNo: dataset.versionNo,
+        previousDatasetId: current?.id ?? null,
+        newDatasetId: dataset.id,
+        rowCount: copiedRows.length,
+        type,
+      },
+      actorUserId,
+    );
+
+    const items =
+      type === MasterRateDatasetType.QUOTATION
+        ? await this.listQuotationDatasetItems(tenantId)
+        : type === MasterRateDatasetType.DHC_RATES
+          ? await this.listDhcRateDatasetItems(tenantId)
+          : await this.listDriverTripRateMasters(tenantId);
+
+    return {
+      items,
+      dataset: {
+        id: dataset.id,
+        versionNo: dataset.versionNo,
+        isCurrent: true,
+        restoredFromDatasetId: historical.id,
+        restoredFromVersionNo: historical.versionNo,
+      },
+    };
+  }
+
+  async exportCurrentTemplate(tenantId: string, type: MasterRateDatasetType) {
+    const current = await this.findPreferredDataset(tenantId, type);
+    if (!current) {
+      throw new BadRequestException(
+        `No ${this.templateTypeLabel(type)} configured. Import Excel or create a blank template first.`,
+      );
+    }
+    const items =
+      type === MasterRateDatasetType.QUOTATION
+        ? await this.listQuotationDatasetItems(tenantId)
+        : type === MasterRateDatasetType.DHC_RATES
+          ? await this.listDhcRateDatasetItems(tenantId)
+          : await this.listDriverTripRateMasters(tenantId);
+    return {
+      versionNo: current.versionNo,
+      sourceFileName: current.sourceFileName ?? null,
+      exportedAt: new Date().toISOString(),
+      items,
+    };
+  }
+
+  async createBlankTemplate(
+    tenantId: string,
+    type: MasterRateDatasetType,
+    actorUserId: string | null = null,
+  ) {
+    const existing = await this.findPreferredDataset(tenantId, type);
+    if (existing) {
+      throw new BadRequestException(
+        `A ${this.templateTypeLabel(type)} already exists. Edit and save it, or import/replace from Excel.`,
+      );
+    }
+
+    const dataset = await this.createDatasetVersionWithRows(
+      tenantId,
+      type,
+      [],
+      actorUserId,
+      null,
+    );
+
+    const blankAction =
+      type === MasterRateDatasetType.QUOTATION
+        ? "CREATE_BLANK_BASE_QUOTATION_TEMPLATE"
+        : type === MasterRateDatasetType.DHC_RATES
+          ? "CREATE_BLANK_DHC_RATES_TEMPLATE"
+          : "CREATE_BLANK_TRUCKING_RATES_TEMPLATE";
+
+    await this.audit.log(
+      tenantId,
+      "CREATE",
+      "MasterRateDataset",
+      dataset.id,
+      { action: blankAction, versionNo: dataset.versionNo, type },
+      actorUserId,
+    );
+
+    return this.getDatasetMetadata(tenantId, type);
+  }
+
   async getDatasetMetadata(tenantId: string, type: MasterRateDatasetType) {
     const dataset = await this.findPreferredDataset(tenantId, type);
     if (!dataset) return { dataset: null };
-    const user = dataset.importedByUserId
-      ? await this.prisma.user.findUnique({
-          where: { id: dataset.importedByUserId },
-          select: { id: true, name: true, email: true },
-        })
+    const userIds = [
+      dataset.importedByUserId,
+      dataset.updatedByUserId,
+      dataset.activatedByUserId,
+    ].filter((id): id is string => !!id);
+    type UserLite = { id: string; name: string | null; email: string };
+    const users: UserLite[] =
+      userIds.length > 0
+        ? await this.prisma.user.findMany({
+            where: { id: { in: [...new Set(userIds)] } },
+            select: { id: true, name: true, email: true },
+          })
+        : [];
+    const byId = new Map<string, UserLite>(users.map((u) => [u.id, u]));
+    const importedBy = dataset.importedByUserId
+      ? byId.get(dataset.importedByUserId) ?? null
       : null;
+    const updatedBy = dataset.updatedByUserId
+      ? byId.get(dataset.updatedByUserId) ?? null
+      : null;
+    const rows = await this.prisma.masterRateDatasetRow.findMany({
+      where: { tenantId, datasetId: dataset.id },
+      select: { section: true, metadataJson: true },
+    });
     return {
       dataset: {
         id: dataset.id,
@@ -1056,15 +1471,21 @@ export class MasterDataService {
         type: dataset.type,
         versionNo: dataset.versionNo,
         status: dataset.status,
+        isCurrent: dataset.isCurrent,
         importedAt: dataset.importedAt,
         importedByUserId: dataset.importedByUserId,
-        importedByName: user?.name ?? null,
-        importedByEmail: user?.email ?? null,
+        importedByName: importedBy?.name ?? null,
+        importedByEmail: importedBy?.email ?? null,
         sourceFileName: dataset.sourceFileName ?? null,
         activatedAt: dataset.activatedAt,
         activatedByUserId: dataset.activatedByUserId,
         createdAt: dataset.createdAt,
         updatedAt: dataset.updatedAt,
+        updatedByUserId: dataset.updatedByUserId,
+        updatedByName: updatedBy?.name ?? null,
+        updatedByEmail: updatedBy?.email ?? null,
+        rowCount: rows.length,
+        sectionCount: this.countQuotationSections(rows),
       },
     };
   }
@@ -1102,7 +1523,7 @@ export class MasterDataService {
             tripMode: r.tripMode ?? null,
             areaScope: r.areaScope ?? null,
             currency: r.currency ?? "SGD",
-            rateCents: r.rateCents ?? null,
+            rateCents: r.rateCents ?? r.amountCents ?? null,
             rawRateText: r.rawRateText ?? null,
             requiresManualAmount: !!r.requiresManualAmount,
             hasMultipleRates: !!r.hasMultipleRates,
@@ -1124,17 +1545,60 @@ export class MasterDataService {
     });
   }
 
+  async previewQuotationImport(tenantId: string, file: Express.Multer.File) {
+    const { lines, reconciliation } = this.parseQuotationExcelOrThrow(file);
+    const normalized = this.normalizeQuotationImportLines(lines, tenantId);
+    const current = await this.findPreferredDataset(
+      tenantId,
+      MasterRateDatasetType.QUOTATION,
+    );
+    const currentRows = current
+      ? await this.prisma.masterRateDatasetRow.findMany({
+          where: { tenantId, datasetId: current.id },
+          orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+        })
+      : [];
+    const diff = this.diffTemplateRows(currentRows, normalized);
+    return {
+      currentVersionNo: current?.versionNo ?? null,
+      currentSourceFileName: current?.sourceFileName ?? null,
+      uploadedFileName: file.originalname ?? "quotation-import.xlsx",
+      sectionCount: this.countQuotationSections(normalized),
+      lineCount: normalized.length,
+      warnings: reconciliation.warnings ?? [],
+      reconciliation,
+      diff,
+      items: normalized,
+    };
+  }
+
   async importQuotationDataset(
     tenantId: string,
     file: Express.Multer.File,
     actorUserId: string | null = null,
+    opts?: { confirmReplace?: boolean; expectedVersionNo?: number | null },
   ): Promise<{ importedCount: number; items: any[]; summary: Record<string, unknown> }> {
-    const name = String(file?.originalname ?? "").toLowerCase();
-    const isExcel = /\.xlsx?$/i.test(name);
-    if (!file?.buffer?.length) throw new BadRequestException("file is required");
-    if (!isExcel) {
-      throw new BadRequestException("Quotation import must be Excel (.xlsx/.xls)");
+    // Parse/validate before any DB or storage write so failures never leave partial current.
+    const { lines, reconciliation } = this.parseQuotationExcelOrThrow(file);
+    const normalized = this.normalizeQuotationImportLines(lines, tenantId);
+
+    const current = await this.findPreferredDataset(
+      tenantId,
+      MasterRateDatasetType.QUOTATION,
+    );
+    if (current && opts?.confirmReplace !== true) {
+      throw new BadRequestException(
+        "A current base quotation template already exists. Preview the import and confirm replace to proceed.",
+      );
     }
+    if (current) {
+      this.assertExpectedVersionNo(
+        current.versionNo,
+        opts?.expectedVersionNo,
+        MasterRateDatasetType.QUOTATION,
+      );
+    }
+
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
     const storageKey = `${tenantId}/masters/quotation/${Date.now()}-${Math.random()
       .toString(36)
@@ -1144,56 +1608,6 @@ export class MasterDataService {
       file.buffer,
       file.mimetype ?? "application/octet-stream",
     );
-
-    const lines = parseQuotationRateLinesFromXlsxBuffer(file.buffer);
-    const matrix = parseQuotationMatrixFromXlsxBuffer(file.buffer);
-    const reconciliation = buildQuotationReconciliation(matrix);
-    const hasWfSections =
-      Object.keys(reconciliation.counts).some((k) => ["A/A", "A/B", "B/C"].includes(k));
-    if (!reconciliation.isMatch && hasWfSections) {
-      throw new BadRequestException(
-        `Quotation workbook failed structural reconciliation for OpsFlow WF reference layout: ${reconciliation.warnings.join(
-          "; ",
-        )}`,
-      );
-    }
-    const normalized = lines.map((l, index) => ({
-      tenantId,
-      section: l.section ?? null,
-      code: l.code,
-      label: l.label,
-      description: l.description ?? null,
-      category: l.category ?? null,
-      containerSize: l.containerSize ?? null,
-      tripMode: l.tripMode ?? null,
-      areaScope: l.areaScope ?? null,
-      unit: l.unit ?? null,
-      rateCents: l.rateCents ?? null,
-      requiresManualAmount: !!l.requiresManualAmount,
-      rawRateText: l.rawRateText ?? null,
-      notes: l.notes ?? null,
-      sortOrder: Number.isInteger(l.sortOrder) ? l.sortOrder : index,
-      active: true,
-      sourceType: l.sourceType ?? "EXCEL_IMPORT",
-      metadataJson: ({
-        ...(l.metadataJson ?? {}),
-        annex: l.annex ?? (l.metadataJson as any)?.annex ?? null,
-        sectionCode: l.sectionCode ?? (l.metadataJson as any)?.sectionCode ?? null,
-        groupTitle: l.groupTitle ?? (l.metadataJson as any)?.groupTitle ?? null,
-        sectionDisplay: l.sectionDisplay ?? (l.metadataJson as any)?.sectionDisplay ?? null,
-        baseCode: l.baseCode ?? (l.metadataJson as any)?.baseCode ?? null,
-        baseLabel: l.baseLabel ?? (l.metadataJson as any)?.baseLabel ?? null,
-        variantType: l.variantType ?? (l.metadataJson as any)?.variantType ?? null,
-        variantLabel: l.variantLabel ?? (l.metadataJson as any)?.variantLabel ?? null,
-        containerSize: l.containerSize ?? (l.metadataJson as any)?.containerSize ?? null,
-        equipmentType: l.equipmentType ?? (l.metadataJson as any)?.equipmentType ?? null,
-        areaScope: l.areaScope ?? (l.metadataJson as any)?.areaScope ?? null,
-        itemNo: l.itemNo ?? (l.metadataJson as any)?.itemNo ?? null,
-        additionalRuleText: l.additionalRuleText ?? (l.metadataJson as any)?.additionalRuleText ?? null,
-        rawValueText: l.rawRateText ?? (l.metadataJson as any)?.rawValueText ?? null,
-        parserSourceType: (l.metadataJson as any)?.parserSourceType ?? "PARSER_ANNEX_MATRIX",
-      } as Prisma.InputJsonValue),
-    }));
 
     const dataset = await this.createDatasetVersionWithRows(
       tenantId,
@@ -1233,6 +1647,8 @@ export class MasterDataService {
             datasetId: dataset.id,
             versionNo: dataset.versionNo,
             lineCount: normalized.length,
+            previousDatasetId: current?.id ?? null,
+            previousVersionNo: current?.versionNo ?? null,
           } as Prisma.InputJsonValue,
           isActive: true,
         },
@@ -1245,6 +1661,7 @@ export class MasterDataService {
       summary: {
         datasetId: dataset.id,
         versionNo: dataset.versionNo,
+        isCurrent: true,
         sourceFileStorageKey: storageKey,
         lineCount: normalized.length,
         reconciliation,
@@ -1255,39 +1672,110 @@ export class MasterDataService {
 
   async listQuotationDatasetItems(tenantId: string) {
     return this.listDatasetRows(tenantId, MasterRateDatasetType.QUOTATION).then((rows) =>
-      rows.map((r: any) => ({ ...r, active: r.isActive })),
+      rows.map((r: any) => {
+        const meta =
+          r.metadataJson && typeof r.metadataJson === "object"
+            ? (r.metadataJson as Record<string, unknown>)
+            : null;
+        const rate20ftCents =
+          typeof meta?.rate20ftCents === "number" ? meta.rate20ftCents : null;
+        const rate40ftCents =
+          typeof meta?.rate40ftCents === "number" ? meta.rate40ftCents : null;
+        return {
+          ...r,
+          active: r.isActive,
+          rate20ftCents,
+          rate40ftCents,
+        };
+      }),
     );
   }
 
+  async listQuotationTemplateVersions(tenantId: string) {
+    return this.listTemplateVersions(tenantId, MasterRateDatasetType.QUOTATION);
+  }
+
+  async restoreQuotationTemplateVersion(
+    tenantId: string,
+    datasetId: string,
+    actorUserId: string | null = null,
+    expectedVersionNo?: number | null,
+  ) {
+    return this.restoreTemplateVersion(
+      tenantId,
+      MasterRateDatasetType.QUOTATION,
+      datasetId,
+      actorUserId,
+      expectedVersionNo,
+    );
+  }
+
+  async exportCurrentQuotationTemplate(tenantId: string) {
+    return this.exportCurrentTemplate(tenantId, MasterRateDatasetType.QUOTATION);
+  }
+
+  /**
+   * Save base quotation template:
+   * - preserves metadataJson (annex/variant/rules/20'+40')
+   * - optimistic concurrency via expectedVersionNo
+   * - creates a NEW current dataset version (does not mutate prior version rows)
+   */
   async replaceQuotationDatasetItems(
     tenantId: string,
     items: Array<Record<string, any>>,
     actorUserId: string | null = null,
+    expectedVersionNo?: number | null,
   ) {
-    const normalized = (items ?? []).map((r, index) => ({
-      tenantId,
-      section: r.section ?? null,
-      code: String(r.code ?? "").trim(),
-      label: String(r.label ?? "").trim(),
-      description: r.description ?? null,
-      category: r.category ?? null,
-      containerSize: r.containerSize ?? null,
-      tripMode: r.tripMode ?? null,
-      areaScope: r.areaScope ?? null,
-      unit: r.unit ?? null,
-      rateCents:
+    const normalized = (items ?? []).map((r, index) => {
+      const baseMeta =
+        r.metadataJson && typeof r.metadataJson === "object"
+          ? { ...(r.metadataJson as Record<string, unknown>) }
+          : {};
+      if (r.rate20ftCents !== undefined) {
+        baseMeta.rate20ftCents =
+          r.rate20ftCents === null || r.rate20ftCents === undefined
+            ? null
+            : Number(r.rate20ftCents);
+      }
+      if (r.rate40ftCents !== undefined) {
+        baseMeta.rate40ftCents =
+          r.rate40ftCents === null || r.rate40ftCents === undefined
+            ? null
+            : Number(r.rate40ftCents);
+      }
+      const rateCents =
         r.rateCents === null || r.rateCents === undefined
           ? null
           : Number.isInteger(Number(r.rateCents))
             ? Number(r.rateCents)
-            : null,
-      requiresManualAmount: !!r.requiresManualAmount,
-      rawRateText: r.rawRateText ?? null,
-      notes: r.notes ?? null,
-      sortOrder: Number.isInteger(Number(r.sortOrder)) ? Number(r.sortOrder) : index,
-      isActive: r.active !== false,
-      sourceType: "MANUAL_EDIT",
-    }));
+            : null;
+      const rawRateText =
+        r.rawRateText == null ? null : String(r.rawRateText).trim() || null;
+      return {
+        tenantId,
+        section: r.section ?? null,
+        code: String(r.code ?? "").trim(),
+        label: String(r.label ?? "").trim(),
+        description: r.description ?? null,
+        category: r.category ?? null,
+        containerSize: r.containerSize ?? null,
+        tripMode: r.tripMode ?? null,
+        areaScope: r.areaScope ?? null,
+        unit: r.unit ?? null,
+        rateCents,
+        requiresManualAmount:
+          r.requiresManualAmount === true ||
+          (rateCents == null && !rawRateText),
+        rawRateText,
+        notes: r.notes ?? null,
+        sortOrder: Number.isInteger(Number(r.sortOrder))
+          ? Number(r.sortOrder)
+          : index,
+        isActive: r.active !== false,
+        sourceType: "MANUAL_EDIT",
+        metadataJson: Object.keys(baseMeta).length > 0 ? baseMeta : null,
+      };
+    });
 
     for (const row of normalized) {
       if (!row.code || !row.label) {
@@ -1298,19 +1786,97 @@ export class MasterDataService {
       }
     }
 
-    await this.replaceDatasetRows(
+    const current = await this.findPreferredDataset(
+      tenantId,
+      MasterRateDatasetType.QUOTATION,
+    );
+    if (!current) {
+      throw new BadRequestException(
+        "No base quotation template configured. Import Excel or create a blank template first.",
+      );
+    }
+    this.assertExpectedVersionNo(
+      current.versionNo,
+      expectedVersionNo,
+      MasterRateDatasetType.QUOTATION,
+    );
+
+    const previousRows = await this.prisma.masterRateDatasetRow.findMany({
+      where: { tenantId, datasetId: current.id },
+      select: { code: true, label: true, sortOrder: true },
+      orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
+    });
+
+    const dataset = await this.createDatasetVersionWithRows(
       tenantId,
       MasterRateDatasetType.QUOTATION,
       normalized,
       actorUserId,
+      current.sourceFileName ?? null,
     );
 
-    return this.listQuotationDatasetItems(tenantId);
+    await this.audit.log(
+      tenantId,
+      "UPDATE",
+      "MasterRateDataset",
+      dataset.id,
+      {
+        action: "SAVE_BASE_QUOTATION_TEMPLATE",
+        fromVersionNo: current.versionNo,
+        toVersionNo: dataset.versionNo,
+        previousDatasetId: current.id,
+        newDatasetId: dataset.id,
+        previousRowCount: previousRows.length,
+        nextRowCount: normalized.length,
+        addedCodes: normalized
+          .map((r) => r.code)
+          .filter((code) => !previousRows.some((p) => p.code === code)),
+        removedCodes: previousRows
+          .map((r) => r.code)
+          .filter((code) => !normalized.some((n) => n.code === code)),
+      },
+      actorUserId,
+    );
+
+    return {
+      items: await this.listQuotationDatasetItems(tenantId),
+      dataset: {
+        id: dataset.id,
+        versionNo: dataset.versionNo,
+        isCurrent: true,
+      },
+    };
+  }
+
+  /** Create an empty current base quotation template when none exists. */
+  async createBlankQuotationTemplate(
+    tenantId: string,
+    actorUserId: string | null = null,
+  ) {
+    return this.createBlankTemplate(
+      tenantId,
+      MasterRateDatasetType.QUOTATION,
+      actorUserId,
+    );
   }
 
   listDriverTripRateMasters(tenantId: string) {
     return this.listDatasetRows(tenantId, MasterRateDatasetType.TRUCKING_RATES).then((rows) =>
-      rows.map((r: any) => ({ ...r, active: r.isActive })),
+      rows.map((r: any) => {
+        const meta =
+          r.metadataJson && typeof r.metadataJson === "object"
+            ? (r.metadataJson as Record<string, unknown>)
+            : {};
+        return {
+          ...r,
+          active: r.isActive,
+          amountCents: r.rateCents ?? null,
+          section: r.section ?? meta.section ?? null,
+          category: r.category ?? meta.category ?? null,
+          uom: meta.uom ?? null,
+          notes: r.notes ?? meta.notes ?? null,
+        };
+      }),
     );
   }
 
@@ -1628,10 +2194,58 @@ export class MasterDataService {
     return { createdCount, updatedCount, skippedCount, errors, items: items as any };
   }
 
+  private async parseTruckingExcelOrThrow(file: Express.Multer.File) {
+    const name = String(file?.originalname ?? "").toLowerCase();
+    if (!file?.buffer?.length) throw new BadRequestException("file is required");
+    if (!/\.xlsx?$/i.test(name)) {
+      throw new BadRequestException("Trucking rates import must be Excel (.xlsx/.xls)");
+    }
+    return this.importDriverTripRateMastersFromExcel("parse-only", file.buffer);
+  }
+
+  private normalizeTruckingImportRows(result: DriverTripRateImportSummaryDto) {
+    return (result.items ?? []).map((r: any, i: number) => ({
+      ...r,
+      rateCents: r.rateCents ?? r.amountCents ?? null,
+      amountCents: r.amountCents ?? r.rateCents ?? null,
+      isActive: r.active !== false,
+      sortOrder: Number.isInteger(r.sortOrder) ? r.sortOrder : i,
+    }));
+  }
+
+  async previewTruckingRatesImport(tenantId: string, file: Express.Multer.File) {
+    const parsed = await this.parseTruckingExcelOrThrow(file);
+    const normalized = this.normalizeTruckingImportRows(parsed);
+    const current = await this.findPreferredDataset(
+      tenantId,
+      MasterRateDatasetType.TRUCKING_RATES,
+    );
+    const currentRows = current
+      ? await this.prisma.masterRateDatasetRow.findMany({
+          where: { tenantId, datasetId: current.id },
+          orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+        })
+      : [];
+    const diff = this.diffTemplateRows(currentRows, normalized);
+    return {
+      currentVersionNo: current?.versionNo ?? null,
+      currentSourceFileName: current?.sourceFileName ?? null,
+      uploadedFileName: file.originalname ?? "trucking-rates-import.xlsx",
+      sectionCount: this.countQuotationSections(normalized),
+      lineCount: normalized.length,
+      warnings: (parsed.errors ?? []).map(
+        (e) => `Row ${e.rowNumber}: ${e.reason}`,
+      ),
+      diff,
+      items: normalized,
+    };
+  }
+
   async replaceDriverTripRateMasters(
     tenantId: string,
     items: Array<Record<string, any>>,
     actorUserId: string | null = null,
+    expectedVersionNo?: number | null,
   ) {
     const normalized = (items ?? []).map((r) => {
       const parsed = this.parseTruckingRateOptions(
@@ -1642,21 +2256,33 @@ export class MasterDataService {
                 .filter((v: any) => Number.isInteger(v))
                 .map((c: number) => (c / 100).toFixed(2))
                 .join(" / ")
-            : r.amountCents),
+            : r.amountCents ?? r.rateCents),
       );
       const providedAmount =
         r.amountCents === null || r.amountCents === undefined
-          ? null
+          ? r.rateCents === null || r.rateCents === undefined
+            ? null
+            : Number.isInteger(Number(r.rateCents))
+              ? Number(r.rateCents)
+              : null
           : Number.isInteger(Number(r.amountCents))
             ? Number(r.amountCents)
             : null;
+      const meta =
+        r.metadataJson && typeof r.metadataJson === "object"
+          ? { ...(r.metadataJson as Record<string, unknown>) }
+          : {};
       return {
         tenantId,
         code: String(r.code ?? "").trim(),
         label: String(r.label ?? "").trim(),
         amountCents: providedAmount,
+        rateCents: providedAmount,
         currency: String(r.currency ?? "SGD").trim() || "SGD",
         isActive: r.active !== false,
+        section: r.section ?? meta.section ?? null,
+        category: r.category ?? meta.category ?? null,
+        sortOrder: Number.isInteger(r.sortOrder) ? r.sortOrder : undefined,
         rawRateText: r.rawRateText ?? parsed.rawRateText,
         requiresManualAmount:
           r.requiresManualAmount === undefined
@@ -1672,6 +2298,11 @@ export class MasterDataService {
           r.defaultRateOptionIndex === undefined
             ? parsed.defaultRateOptionIndex
             : r.defaultRateOptionIndex,
+        metadataJson: {
+          ...meta,
+          section: r.section ?? meta.section ?? null,
+          category: r.category ?? meta.category ?? null,
+        },
       };
     });
 
@@ -1684,26 +2315,66 @@ export class MasterDataService {
       }
     }
 
-    await this.replaceDatasetRows(
+    const current = await this.findPreferredDataset(
+      tenantId,
+      MasterRateDatasetType.TRUCKING_RATES,
+    );
+    if (!current) {
+      throw new BadRequestException(
+        "No driver payout (trucking) template configured. Import Excel or create a blank template first.",
+      );
+    }
+    this.assertExpectedVersionNo(
+      current.versionNo,
+      expectedVersionNo,
+      MasterRateDatasetType.TRUCKING_RATES,
+    );
+
+    const dataset = await this.createDatasetVersionWithRows(
       tenantId,
       MasterRateDatasetType.TRUCKING_RATES,
       normalized,
       actorUserId,
+      current.sourceFileName ?? null,
     );
 
-    return this.listDriverTripRateMasters(tenantId);
+    return {
+      items: await this.listDriverTripRateMasters(tenantId),
+      dataset: {
+        id: dataset.id,
+        versionNo: dataset.versionNo,
+        isCurrent: true,
+      },
+    };
   }
 
   async importTruckingRatesDataset(
     tenantId: string,
     file: Express.Multer.File,
     actorUserId: string | null = null,
-  ): Promise<DriverTripRateImportSummaryDto> {
-    const name = String(file?.originalname ?? "").toLowerCase();
-    if (!file?.buffer?.length) throw new BadRequestException("file is required");
-    if (!/\.xlsx?$/i.test(name)) {
-      throw new BadRequestException("Trucking rates import must be Excel (.xlsx/.xls)");
+    opts?: { confirmReplace?: boolean; expectedVersionNo?: number | null },
+  ): Promise<DriverTripRateImportSummaryDto & { summary?: Record<string, unknown> }> {
+    // Parse/validate before any DB or storage write so failures never leave partial current.
+    const parsed = await this.parseTruckingExcelOrThrow(file);
+    const rows = this.normalizeTruckingImportRows(parsed);
+
+    const current = await this.findPreferredDataset(
+      tenantId,
+      MasterRateDatasetType.TRUCKING_RATES,
+    );
+    if (current && opts?.confirmReplace !== true) {
+      throw new BadRequestException(
+        "A current driver payout (trucking) template already exists. Preview the import and confirm replace to proceed.",
+      );
     }
+    if (current) {
+      this.assertExpectedVersionNo(
+        current.versionNo,
+        opts?.expectedVersionNo,
+        MasterRateDatasetType.TRUCKING_RATES,
+      );
+    }
+
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
     const storageKey = `${tenantId}/masters/driver_payout/${Date.now()}-${Math.random()
       .toString(36)
@@ -1713,12 +2384,7 @@ export class MasterDataService {
       file.buffer,
       file.mimetype ?? "application/octet-stream",
     );
-    const result = await this.importDriverTripRateMastersFromExcel(tenantId, file.buffer);
-    const rows = (result.items ?? []).map((r: any, i: number) => ({
-      ...r,
-      isActive: r.active !== false,
-      sortOrder: Number.isInteger(r.sortOrder) ? r.sortOrder : i,
-    }));
+
     const dataset = await this.createDatasetVersionWithRows(
       tenantId,
       MasterRateDatasetType.TRUCKING_RATES,
@@ -1753,6 +2419,8 @@ export class MasterDataService {
             datasetId: dataset.id,
             versionNo: dataset.versionNo,
             lineCount: rows.length,
+            previousDatasetId: current?.id ?? null,
+            previousVersionNo: current?.versionNo ?? null,
           } as Prisma.InputJsonValue,
           isActive: true,
         },
@@ -1762,36 +2430,33 @@ export class MasterDataService {
       `Imported trucking dataset tenant=${tenantId} dataset=${dataset.id} insertedRows=${rows.length} sourceFile=${storageKey}`,
     );
     return {
-      ...result,
+      ...parsed,
       items: await this.listDriverTripRateMasters(tenantId),
+      summary: {
+        datasetId: dataset.id,
+        versionNo: dataset.versionNo,
+        isCurrent: true,
+        sourceFileStorageKey: storageKey,
+        lineCount: rows.length,
+      },
     };
   }
 
-  async importDhcRatesDataset(
-    tenantId: string,
-    file: Express.Multer.File,
-    actorUserId: string | null = null,
-  ): Promise<{ importedCount: number; items: any[]; summary: Record<string, unknown> }> {
+  private parseAndNormalizeDhcExcel(file: Express.Multer.File) {
     const name = String(file?.originalname ?? "").toLowerCase();
     if (!file?.buffer?.length) throw new BadRequestException("file is required");
     if (!/\.xlsx?$/i.test(name)) {
       throw new BadRequestException("DHC rates import must be Excel (.xlsx/.xls)");
     }
-    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
-    const storageKey = `${tenantId}/masters/dhc_reference/${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}${ext}`;
-    await this.uploadMasterObject(
-      storageKey,
-      file.buffer,
-      file.mimetype ?? "application/octet-stream",
-    );
-    const buffer = file.buffer;
-    const parsed = parseDhcExcelBuffer(buffer);
+    const parsed = parseDhcExcelBuffer(file.buffer);
     const rows = parsed.items.map((row, index) => {
       const rateOptions: Array<{ label: string; amountCents: number | null }> = [];
-      if (row.oldRateCents != null) rateOptions.push({ label: "Old", amountCents: row.oldRateCents });
-      if (row.newRateCents != null) rateOptions.push({ label: "New", amountCents: row.newRateCents });
+      if (row.oldRateCents != null) {
+        rateOptions.push({ label: "Old", amountCents: row.oldRateCents });
+      }
+      if (row.newRateCents != null) {
+        rateOptions.push({ label: "New", amountCents: row.newRateCents });
+      }
       const deduped = Array.from(
         new Map(rateOptions.map((opt) => [`${opt.label}:${opt.amountCents}`, opt])).values(),
       );
@@ -1801,10 +2466,14 @@ export class MasterDataService {
       return {
         code: row.code,
         label: row.label,
+        section: row.section ?? null,
         amountCents: singleAmount,
+        rateCents: singleAmount,
         currency: "SGD",
         isActive: true,
-        rawRateText: hasMultipleRates ? `${row.oldRateCents ?? ""}/${row.newRateCents ?? ""}` : null,
+        rawRateText: hasMultipleRates
+          ? `${row.oldRateCents ?? ""}/${row.newRateCents ?? ""}`
+          : null,
         requiresManualAmount: deduped.length === 0,
         hasMultipleRates,
         rateOptionsJson: hasMultipleRates ? deduped : null,
@@ -1826,6 +2495,70 @@ export class MasterDataService {
         } as Prisma.InputJsonValue,
       };
     });
+    return { parsed, rows };
+  }
+
+  async previewDhcRatesImport(tenantId: string, file: Express.Multer.File) {
+    const { parsed, rows } = this.parseAndNormalizeDhcExcel(file);
+    const current = await this.findPreferredDataset(
+      tenantId,
+      MasterRateDatasetType.DHC_RATES,
+    );
+    const currentRows = current
+      ? await this.prisma.masterRateDatasetRow.findMany({
+          where: { tenantId, datasetId: current.id },
+          orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+        })
+      : [];
+    const diff = this.diffTemplateRows(currentRows, rows);
+    return {
+      currentVersionNo: current?.versionNo ?? null,
+      currentSourceFileName: current?.sourceFileName ?? null,
+      uploadedFileName: file.originalname ?? "dhc-rates-import.xlsx",
+      sectionCount: this.countQuotationSections(rows),
+      lineCount: rows.length,
+      warnings: parsed.summary?.warnings ?? [],
+      diff,
+      items: rows,
+      summary: parsed.summary,
+    };
+  }
+
+  async importDhcRatesDataset(
+    tenantId: string,
+    file: Express.Multer.File,
+    actorUserId: string | null = null,
+    opts?: { confirmReplace?: boolean; expectedVersionNo?: number | null },
+  ): Promise<{ importedCount: number; items: any[]; summary: Record<string, unknown> }> {
+    // Parse/validate before any DB or storage write so failures never leave partial current.
+    const { parsed, rows } = this.parseAndNormalizeDhcExcel(file);
+
+    const current = await this.findPreferredDataset(
+      tenantId,
+      MasterRateDatasetType.DHC_RATES,
+    );
+    if (current && opts?.confirmReplace !== true) {
+      throw new BadRequestException(
+        "A current DHC rates template already exists. Preview the import and confirm replace to proceed.",
+      );
+    }
+    if (current) {
+      this.assertExpectedVersionNo(
+        current.versionNo,
+        opts?.expectedVersionNo,
+        MasterRateDatasetType.DHC_RATES,
+      );
+    }
+
+    const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".bin";
+    const storageKey = `${tenantId}/masters/dhc_reference/${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}${ext}`;
+    await this.uploadMasterObject(
+      storageKey,
+      file.buffer,
+      file.mimetype ?? "application/octet-stream",
+    );
 
     const dataset = await this.createDatasetVersionWithRows(
       tenantId,
@@ -1861,6 +2594,8 @@ export class MasterDataService {
             datasetId: dataset.id,
             versionNo: dataset.versionNo,
             lineCount: rows.length,
+            previousDatasetId: current?.id ?? null,
+            previousVersionNo: current?.versionNo ?? null,
           } as Prisma.InputJsonValue,
           isActive: true,
         },
@@ -1874,6 +2609,7 @@ export class MasterDataService {
         ...parsed.summary,
         datasetId: dataset.id,
         versionNo: dataset.versionNo,
+        isCurrent: true,
         sourceFileStorageKey: storageKey,
         lineCount: rows.length,
         note: "DHC rates imported into tenant dataset (source file stored for audit only).",
@@ -1883,7 +2619,11 @@ export class MasterDataService {
 
   async listDhcRateDatasetItems(tenantId: string) {
     return this.listDatasetRows(tenantId, MasterRateDatasetType.DHC_RATES).then((rows) =>
-      rows.map((r: any) => ({ ...r, active: r.isActive })),
+      rows.map((r: any) => ({
+        ...r,
+        active: r.isActive,
+        amountCents: r.rateCents ?? null,
+      })),
     );
   }
 
@@ -1891,29 +2631,38 @@ export class MasterDataService {
     tenantId: string,
     items: Array<Record<string, any>>,
     actorUserId: string | null = null,
+    expectedVersionNo?: number | null,
   ) {
-    const normalized = (items ?? []).map((r) => ({
-      tenantId,
-      code: String(r.code ?? "").trim(),
-      label: String(r.label ?? "").trim(),
-      amountCents:
+    const normalized = (items ?? []).map((r) => {
+      const amountCents =
         r.amountCents === null || r.amountCents === undefined
-          ? null
+          ? r.rateCents === null || r.rateCents === undefined
+            ? null
+            : Number.isInteger(Number(r.rateCents))
+              ? Number(r.rateCents)
+              : null
           : Number.isInteger(Number(r.amountCents))
             ? Number(r.amountCents)
-            : null,
-      currency: String(r.currency ?? "SGD").trim() || "SGD",
-      isActive: r.active !== false,
-      rawRateText: r.rawRateText ?? null,
-      requiresManualAmount: !!r.requiresManualAmount,
-      hasMultipleRates: !!r.hasMultipleRates,
-      rateOptionsJson: r.rateOptionsJson ?? null,
-      defaultRateOptionIndex:
-        r.defaultRateOptionIndex === null || r.defaultRateOptionIndex === undefined
-          ? null
-          : Number(r.defaultRateOptionIndex),
-      metadataJson: r.metadataJson ?? null,
-    }));
+            : null;
+      return {
+        tenantId,
+        code: String(r.code ?? "").trim(),
+        label: String(r.label ?? "").trim(),
+        amountCents,
+        rateCents: amountCents,
+        currency: String(r.currency ?? "SGD").trim() || "SGD",
+        isActive: r.active !== false,
+        rawRateText: r.rawRateText ?? null,
+        requiresManualAmount: !!r.requiresManualAmount,
+        hasMultipleRates: !!r.hasMultipleRates,
+        rateOptionsJson: r.rateOptionsJson ?? null,
+        defaultRateOptionIndex:
+          r.defaultRateOptionIndex === null || r.defaultRateOptionIndex === undefined
+            ? null
+            : Number(r.defaultRateOptionIndex),
+        metadataJson: r.metadataJson ?? null,
+      };
+    });
 
     for (const row of normalized) {
       if (!row.code || !row.label) {
@@ -1924,13 +2673,101 @@ export class MasterDataService {
       }
     }
 
-    await this.replaceDatasetRows(
+    const current = await this.findPreferredDataset(
+      tenantId,
+      MasterRateDatasetType.DHC_RATES,
+    );
+    if (!current) {
+      throw new BadRequestException(
+        "No DHC rates template configured. Import Excel or create a blank template first.",
+      );
+    }
+    this.assertExpectedVersionNo(
+      current.versionNo,
+      expectedVersionNo,
+      MasterRateDatasetType.DHC_RATES,
+    );
+
+    const dataset = await this.createDatasetVersionWithRows(
       tenantId,
       MasterRateDatasetType.DHC_RATES,
       normalized,
       actorUserId,
+      current.sourceFileName ?? null,
     );
 
-    return this.listDhcRateDatasetItems(tenantId);
+    return {
+      items: await this.listDhcRateDatasetItems(tenantId),
+      dataset: {
+        id: dataset.id,
+        versionNo: dataset.versionNo,
+        isCurrent: true,
+      },
+    };
+  }
+
+  listDhcRatesTemplateVersions(tenantId: string) {
+    return this.listTemplateVersions(tenantId, MasterRateDatasetType.DHC_RATES);
+  }
+
+  restoreDhcRatesTemplateVersion(
+    tenantId: string,
+    datasetId: string,
+    actorUserId: string | null = null,
+    expectedVersionNo?: number | null,
+  ) {
+    return this.restoreTemplateVersion(
+      tenantId,
+      MasterRateDatasetType.DHC_RATES,
+      datasetId,
+      actorUserId,
+      expectedVersionNo,
+    );
+  }
+
+  exportCurrentDhcRatesTemplate(tenantId: string) {
+    return this.exportCurrentTemplate(tenantId, MasterRateDatasetType.DHC_RATES);
+  }
+
+  createBlankDhcRatesTemplate(tenantId: string, actorUserId: string | null = null) {
+    return this.createBlankTemplate(
+      tenantId,
+      MasterRateDatasetType.DHC_RATES,
+      actorUserId,
+    );
+  }
+
+  listTruckingRatesTemplateVersions(tenantId: string) {
+    return this.listTemplateVersions(tenantId, MasterRateDatasetType.TRUCKING_RATES);
+  }
+
+  restoreTruckingRatesTemplateVersion(
+    tenantId: string,
+    datasetId: string,
+    actorUserId: string | null = null,
+    expectedVersionNo?: number | null,
+  ) {
+    return this.restoreTemplateVersion(
+      tenantId,
+      MasterRateDatasetType.TRUCKING_RATES,
+      datasetId,
+      actorUserId,
+      expectedVersionNo,
+    );
+  }
+
+  exportCurrentTruckingRatesTemplate(tenantId: string) {
+    return this.exportCurrentTemplate(tenantId, MasterRateDatasetType.TRUCKING_RATES);
+  }
+
+  createBlankTruckingRatesTemplate(
+    tenantId: string,
+    actorUserId: string | null = null,
+  ) {
+    return this.createBlankTemplate(
+      tenantId,
+      MasterRateDatasetType.TRUCKING_RATES,
+      actorUserId,
+    );
   }
 }

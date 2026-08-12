@@ -1,8 +1,22 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
-import { IsArray, IsBoolean, IsInt, IsOptional, IsString, ValidateNested } from "class-validator";
+import {
+  IsArray,
+  IsBoolean,
+  IsInt,
+  IsObject,
+  IsOptional,
+  IsString,
+  Min,
+  ValidateNested,
+} from "class-validator";
 
 export class QuotationDatasetItemDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  id?: string;
+
   @ApiProperty()
   @IsString()
   code: string;
@@ -77,6 +91,25 @@ export class QuotationDatasetItemDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  @ApiPropertyOptional({
+    description: "Semantic metadata (annex, variant, rules, 20/40 rates)",
+  })
+  @IsOptional()
+  @IsObject()
+  metadataJson?: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  rate20ftCents?: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  rate40ftCents?: number | null;
 }
 
 export class SaveQuotationDatasetDto {
@@ -85,4 +118,14 @@ export class SaveQuotationDatasetDto {
   @ValidateNested({ each: true })
   @Type(() => QuotationDatasetItemDto)
   items: QuotationDatasetItemDto[];
+
+  @ApiPropertyOptional({
+    description:
+      "Optimistic concurrency: current dataset versionNo expected by the client",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  expectedVersionNo?: number;
 }

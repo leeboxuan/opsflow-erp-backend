@@ -1226,15 +1226,24 @@ export class TransportJobsService {
     tenantId: string,
     _customerCompanyId: string,
   ): Promise<{ quotationLines: any[]; masterRateLines: any[] }> {
-    const dataset = await this.prisma.masterRateDataset.findFirst({
-      where: {
-        tenantId,
-        type: MasterRateDatasetType.QUOTATION,
-        status: MasterRateDatasetStatus.ACTIVE,
-      },
-      orderBy: { versionNo: "desc" },
-      select: { id: true },
-    });
+    const dataset =
+      (await this.prisma.masterRateDataset.findFirst({
+        where: {
+          tenantId,
+          type: MasterRateDatasetType.QUOTATION,
+          isCurrent: true,
+        },
+        select: { id: true },
+      })) ??
+      (await this.prisma.masterRateDataset.findFirst({
+        where: {
+          tenantId,
+          type: MasterRateDatasetType.QUOTATION,
+          status: MasterRateDatasetStatus.ACTIVE,
+        },
+        orderBy: { versionNo: "desc" },
+        select: { id: true },
+      }));
     if (!dataset) return { quotationLines: [], masterRateLines: [] };
 
     const rows = await this.prisma.masterRateDatasetRow.findMany({
@@ -1304,6 +1313,7 @@ export class TransportJobsService {
       }
 
       await tx.jobCharge.createMany({
+        // unitPriceCents/amountCents are frozen snapshots; later template edits do not rewrite saved charges.
         data: dto.charges.map((c, i) => ({
           ...(c.sourceType === JobChargeSourceType.CUSTOMER_QUOTATION &&
           c.sourceRefId &&
@@ -3795,15 +3805,24 @@ export class TransportJobsService {
       job.customerCompanyId,
     );
 
-    const dhcDataset = await this.prisma.masterRateDataset.findFirst({
-      where: {
-        tenantId,
-        type: MasterRateDatasetType.DHC_RATES,
-        status: MasterRateDatasetStatus.ACTIVE,
-      },
-      orderBy: { versionNo: "desc" },
-      select: { id: true },
-    });
+    const dhcDataset =
+      (await this.prisma.masterRateDataset.findFirst({
+        where: {
+          tenantId,
+          type: MasterRateDatasetType.DHC_RATES,
+          isCurrent: true,
+        },
+        select: { id: true },
+      })) ??
+      (await this.prisma.masterRateDataset.findFirst({
+        where: {
+          tenantId,
+          type: MasterRateDatasetType.DHC_RATES,
+          status: MasterRateDatasetStatus.ACTIVE,
+        },
+        orderBy: { versionNo: "desc" },
+        select: { id: true },
+      }));
     const dhcReferences = dhcDataset
       ? await this.prisma.masterRateDatasetRow.findMany({
           where: { tenantId, datasetId: dhcDataset.id, isActive: true },
@@ -3814,6 +3833,7 @@ export class TransportJobsService {
     return {
       quotationLines,
       dhcReferences,
+      // JobCharge.unitPriceCents/amountCents are frozen snapshots at save time.
       existingSnapshot: job.charges ?? [],
     };
   }
@@ -3832,15 +3852,24 @@ export class TransportJobsService {
 
   async listDriverTripRateMasters(tenantId: string) {
     try {
-      const dataset = await this.prisma.masterRateDataset.findFirst({
-        where: {
-          tenantId,
-          type: MasterRateDatasetType.TRUCKING_RATES,
-          status: MasterRateDatasetStatus.ACTIVE,
-        },
-        orderBy: { versionNo: "desc" },
-        select: { id: true },
-      });
+      const dataset =
+        (await this.prisma.masterRateDataset.findFirst({
+          where: {
+            tenantId,
+            type: MasterRateDatasetType.TRUCKING_RATES,
+            isCurrent: true,
+          },
+          select: { id: true },
+        })) ??
+        (await this.prisma.masterRateDataset.findFirst({
+          where: {
+            tenantId,
+            type: MasterRateDatasetType.TRUCKING_RATES,
+            status: MasterRateDatasetStatus.ACTIVE,
+          },
+          orderBy: { versionNo: "desc" },
+          select: { id: true },
+        }));
       if (!dataset) return [];
       return await this.prisma.masterRateDatasetRow.findMany({
         where: { tenantId, datasetId: dataset.id, isActive: true },
@@ -3862,6 +3891,40 @@ export class TransportJobsService {
     tenantId: string,
     id: string,
   ) {
+    // Prefer current TRUCKING_RATES dataset row when available.
+    if (this.prisma.masterRateDataset?.findFirst) {
+      const dataset =
+        (await this.prisma.masterRateDataset.findFirst({
+          where: {
+            tenantId,
+            type: MasterRateDatasetType.TRUCKING_RATES,
+            isCurrent: true,
+          },
+          select: { id: true },
+        })) ??
+        (await this.prisma.masterRateDataset.findFirst({
+          where: {
+            tenantId,
+            type: MasterRateDatasetType.TRUCKING_RATES,
+            status: MasterRateDatasetStatus.ACTIVE,
+          },
+          orderBy: { versionNo: "desc" },
+          select: { id: true },
+        }));
+      if (dataset && this.prisma.masterRateDatasetRow?.findFirst) {
+        const row = await this.prisma.masterRateDatasetRow.findFirst({
+          where: {
+            id,
+            tenantId,
+            datasetId: dataset.id,
+            isActive: true,
+          },
+        });
+        if (row) return row;
+      }
+    }
+
+    // Legacy DriverPayoutItem fallback for backward compatibility.
     return this.prisma.driverPayoutItem.findFirst({
       where: {
         id,
@@ -6855,6 +6918,7 @@ export class TransportJobsService {
     await this.prisma.$transaction(async (tx) => {
       await tx.tripPayoutLine.deleteMany({ where: { tenantId, tripId } });
       if (normalized.length) {
+        // TripPayoutLine.amountCents/totalCents are frozen snapshots at save/finalize time.
         await tx.tripPayoutLine.createMany({
           data: normalized.map((line) => ({
             tenantId,

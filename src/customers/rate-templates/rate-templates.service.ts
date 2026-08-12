@@ -187,17 +187,28 @@ export class RateTemplatesService {
     const name = String(dto.name ?? "").trim();
     if (!name) throw new BadRequestException("name is required");
 
-    const dataset = await this.prisma.masterRateDataset.findFirst({
-      where: {
-        tenantId,
-        type: MasterRateDatasetType.QUOTATION,
-        status: MasterRateDatasetStatus.ACTIVE,
-      },
-      orderBy: { versionNo: "desc" },
-      include: {
-        rows: { orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }] },
-      },
-    });
+    const dataset =
+      (await this.prisma.masterRateDataset.findFirst({
+        where: {
+          tenantId,
+          type: MasterRateDatasetType.QUOTATION,
+          isCurrent: true,
+        },
+        include: {
+          rows: { orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }] },
+        },
+      })) ??
+      (await this.prisma.masterRateDataset.findFirst({
+        where: {
+          tenantId,
+          type: MasterRateDatasetType.QUOTATION,
+          status: MasterRateDatasetStatus.ACTIVE,
+        },
+        orderBy: { versionNo: "desc" },
+        include: {
+          rows: { orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }] },
+        },
+      }));
     if (!dataset) {
       throw new BadRequestException("No ACTIVE master QUOTATION dataset found");
     }

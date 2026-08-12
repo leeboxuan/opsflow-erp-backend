@@ -6,6 +6,8 @@ import {
 import {
   CustomerQuotationAcceptanceMethod,
   CustomerQuotationStatus,
+  MasterRateDatasetStatus,
+  MasterRateDatasetType,
   Prisma,
 } from "@prisma/client";
 import { PrismaService } from "../../shared/prisma/prisma.service";
@@ -20,6 +22,7 @@ import {
 import {
   AcceptCustomerQuotationDto,
   CreateBlankCustomerQuotationDto,
+  CreateCustomerQuotationFromMasterDto,
   CreateCustomerQuotationFromRateExcelDto,
   CreateCustomerQuotationFromTemplateDto,
   CustomerQuotationLineInputDto,
@@ -464,6 +467,166 @@ export class CustomerQuotationsService {
       actorUserId,
     );
     return created;
+  }
+
+  /**
+   * Create DRAFT quotation by deep-copying the ACTIVE master QUOTATION base template.
+   * Does not invoke the Excel parser; lines are snapshotted independently of master.
+   */
+  async createFromMaster(
+    tenantId: string,
+    customerId: string,
+    dto: CreateCustomerQuotationFromMasterDto,
+    actorUserId: string | null,
+  ) {
+    const company = await this.assertCustomerCompany(tenantId, customerId);
+    const dataset =
+      (await this.prisma.masterRateDataset.findFirst({
+        where: {
+          tenantId,
+          type: MasterRateDatasetType.QUOTATION,
+          isCurrent: true,
+        },
+        include: {
+          rows: {
+            orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+          },
+        },
+      })) ??
+      (await this.prisma.masterRateDataset.findFirst({
+        where: {
+          tenantId,
+          type: MasterRateDatasetType.QUOTATION,
+          status: MasterRateDatasetStatus.ACTIVE,
+        },
+        orderBy: { versionNo: "desc" },
+        include: {
+          rows: {
+            orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+          },
+        },
+      }));
+    if (!dataset) {
+      throw new BadRequestException(
+        "No base quotation template is configured. Import Excel or create a blank template first.",
+      );
+    }
+
+    const currency = dto.currency?.trim() || "SGD";
+    const sourceTemplateNameSnapshot = `Master quotation template v${dataset.versionNo}`;
+    const lineInputs: CustomerQuotationLineInputDto[] = dataset.rows.map(
+      (r, index) => {
+        const baseMeta =
+          r.metadataJson && typeof r.metadataJson === "object"
+            ? { ...(r.metadataJson as Record<string, unknown>) }
+            : {};
+        // Line has no notes column — carry via description/metadata.
+        if (r.notes != null && String(r.notes).trim() !== "") {
+          baseMeta.notes = r.notes;
+        }
+        if (r.rawRateText != null && baseMeta.rawRateText == null) {
+          baseMeta.rawRateText = r.rawRateText;
+        }
+        const description =
+          r.description ??
+          (r.notes != null && String(r.notes).trim() !== ""
+            ? String(r.notes)
+            : null);
+        return {
+          sortOrder: r.sortOrder ?? index,
+          code: r.code,
+          label: r.label,
+          description,
+          unit: r.unit,
+          qty: 1,
+          unitPriceCents: r.rateCents ?? 0,
+          currency: r.currency || currency,
+          taxCode: "SR",
+          taxRate: DEFAULT_TAX_RATE_BP,
+          requiresManualAmount: r.requiresManualAmount,
+          sourceTemplateRowId: null,
+          sourceMasterRowId: r.id,
+          metadataJson:
+            Object.keys(baseMeta).length > 0
+              ? (baseMeta as Prisma.InputJsonValue)
+              : undefined,
+        };
+      },
+    );
+    const totals = this.computeLineTotals(lineInputs, currency);
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const quotationNo = await this.allocateQuotationNo(tenantId, tx);
+      const quotation = await tx.customerQuotation.create({
+        data: {
+          tenantId,
+          customerCompanyId: customerId,
+          quotationNo,
+          title: dto.title?.trim() || sourceTemplateNameSnapshot,
+          status: CustomerQuotationStatus.DRAFT,
+          currency,
+          notes: dto.notes ?? null,
+          validFrom: this.parseOptionalDate(dto.validFrom) ?? null,
+          validUntil: this.parseOptionalDate(dto.validUntil) ?? null,
+          sourceTemplateId: null,
+          sourceTemplateNameSnapshot,
+          customerNameSnapshot: company.name,
+          subtotalCents: totals.subtotalCents,
+          taxCents: totals.taxCents,
+          totalCents: totals.totalCents,
+          createdByUserId: actorUserId,
+          updatedByUserId: actorUserId,
+        },
+      });
+
+      if (totals.normalized.length > 0) {
+        await tx.customerQuotationLine.createMany({
+          data: totals.normalized.map((l) => ({
+            tenantId,
+            quotationId: quotation.id,
+            sortOrder: l.sortOrder,
+            code: l.code,
+            label: l.label,
+            description: l.description,
+            unit: l.unit,
+            qty: l.qty,
+            unitPriceCents: l.unitPriceCents,
+            amountCents: l.amountCents,
+            currency: l.currency,
+            taxCode: l.taxCode,
+            taxRate: l.taxRate,
+            taxCents: l.taxCents,
+            requiresManualAmount: l.requiresManualAmount,
+            sourceTemplateRowId: l.sourceTemplateRowId,
+            sourceMasterRowId: l.sourceMasterRowId,
+            // Deep-copied values — independent of live master rows.
+            metadataJson: l.metadataJson,
+          })),
+        });
+      }
+
+      return tx.customerQuotation.findFirst({
+        where: { tenantId, id: quotation.id },
+        include: {
+          lines: { orderBy: [{ sortOrder: "asc" }, { id: "asc" }] },
+        },
+      });
+    });
+
+    await this.audit.log(
+      tenantId,
+      "CREATE",
+      "CustomerQuotation",
+      created!.id,
+      {
+        quotationNo: created!.quotationNo,
+        fromMasterDatasetId: dataset.id,
+        versionNo: dataset.versionNo,
+        lineCount: totals.normalized.length,
+      },
+      actorUserId,
+    );
+    return created!;
   }
 
   private assertExcelQuotationFile(file: Express.Multer.File) {
@@ -1117,8 +1280,13 @@ export class CustomerQuotationsService {
     if (quotation.status === CustomerQuotationStatus.EXPIRED) {
       throw new BadRequestException("Expired quotations cannot be accepted");
     }
-    if (quotation.status !== CustomerQuotationStatus.ISSUED) {
-      throw new BadRequestException("Only ISSUED quotations can be accepted");
+    if (
+      quotation.status !== CustomerQuotationStatus.ISSUED &&
+      quotation.status !== CustomerQuotationStatus.SIGNED
+    ) {
+      throw new BadRequestException(
+        "Only ISSUED or SIGNED quotations can be accepted",
+      );
     }
     if (!dto.acceptanceMethod) {
       throw new BadRequestException("acceptanceMethod is required");
@@ -1131,12 +1299,13 @@ export class CustomerQuotationsService {
     }
 
     const now = new Date();
+    const fromStatus = quotation.status;
     const result = await this.prisma.customerQuotation.updateMany({
       where: {
         id: quotation.id,
         tenantId,
         customerCompanyId: customerId,
-        status: CustomerQuotationStatus.ISSUED,
+        status: { in: [CustomerQuotationStatus.ISSUED, CustomerQuotationStatus.SIGNED] },
       },
       data: {
         status: CustomerQuotationStatus.ACCEPTED,
@@ -1144,13 +1313,17 @@ export class CustomerQuotationsService {
         acceptedByUserId: actorUserId,
         acceptanceMethod: dto.acceptanceMethod as CustomerQuotationAcceptanceMethod,
         acceptanceEvidenceNote: evidence,
-        acceptanceEvidenceStorageKey: dto.acceptanceEvidenceStorageKey ?? null,
+        acceptanceEvidenceStorageKey:
+          dto.acceptanceEvidenceStorageKey ??
+          quotation.acceptanceEvidenceStorageKey ??
+          quotation.signedDocumentKey ??
+          null,
         updatedByUserId: actorUserId,
       },
     });
     if (result.count === 0) {
       throw new BadRequestException(
-        "Quotation could not be accepted (no longer ISSUED)",
+        "Quotation could not be accepted (no longer ISSUED/SIGNED)",
       );
     }
 
@@ -1167,7 +1340,7 @@ export class CustomerQuotationsService {
       "CustomerQuotation",
       quotation.id,
       {
-        from: CustomerQuotationStatus.ISSUED,
+        from: fromStatus,
         to: CustomerQuotationStatus.ACCEPTED,
         acceptanceMethod: dto.acceptanceMethod,
         note: "acceptedByUserId is staff recorder only; method+evidence prove acceptance",
@@ -1187,16 +1360,22 @@ export class CustomerQuotationsService {
     if (quotation.status === CustomerQuotationStatus.EXPIRED) {
       throw new BadRequestException("Expired quotations cannot be rejected");
     }
-    if (quotation.status !== CustomerQuotationStatus.ISSUED) {
-      throw new BadRequestException("Only ISSUED quotations can be rejected");
+    if (
+      quotation.status !== CustomerQuotationStatus.ISSUED &&
+      quotation.status !== CustomerQuotationStatus.SIGNED
+    ) {
+      throw new BadRequestException(
+        "Only ISSUED or SIGNED quotations can be rejected",
+      );
     }
     const now = new Date();
+    const fromStatus = quotation.status;
     const result = await this.prisma.customerQuotation.updateMany({
       where: {
         id: quotation.id,
         tenantId,
         customerCompanyId: customerId,
-        status: CustomerQuotationStatus.ISSUED,
+        status: { in: [CustomerQuotationStatus.ISSUED, CustomerQuotationStatus.SIGNED] },
       },
       data: {
         status: CustomerQuotationStatus.REJECTED,
@@ -1206,7 +1385,7 @@ export class CustomerQuotationsService {
     });
     if (result.count === 0) {
       throw new BadRequestException(
-        "Quotation could not be rejected (no longer ISSUED)",
+        "Quotation could not be rejected (no longer ISSUED/SIGNED)",
       );
     }
     const updated = await this.prisma.customerQuotation.findFirst({
@@ -1220,7 +1399,7 @@ export class CustomerQuotationsService {
       "STATUS_CHANGE",
       "CustomerQuotation",
       quotation.id,
-      { from: CustomerQuotationStatus.ISSUED, to: CustomerQuotationStatus.REJECTED },
+      { from: fromStatus, to: CustomerQuotationStatus.REJECTED },
       actorUserId,
     );
     return updated!;
@@ -1235,9 +1414,12 @@ export class CustomerQuotationsService {
     const quotation = await this.getById(tenantId, customerId, id);
     if (
       quotation.status !== CustomerQuotationStatus.DRAFT &&
-      quotation.status !== CustomerQuotationStatus.ISSUED
+      quotation.status !== CustomerQuotationStatus.ISSUED &&
+      quotation.status !== CustomerQuotationStatus.SIGNED
     ) {
-      throw new BadRequestException("Only DRAFT or ISSUED quotations can be voided");
+      throw new BadRequestException(
+        "Only DRAFT, ISSUED, or SIGNED quotations can be voided",
+      );
     }
     const from = quotation.status;
     const now = new Date();
@@ -1246,7 +1428,13 @@ export class CustomerQuotationsService {
         id: quotation.id,
         tenantId,
         customerCompanyId: customerId,
-        status: { in: [CustomerQuotationStatus.DRAFT, CustomerQuotationStatus.ISSUED] },
+        status: {
+          in: [
+            CustomerQuotationStatus.DRAFT,
+            CustomerQuotationStatus.ISSUED,
+            CustomerQuotationStatus.SIGNED,
+          ],
+        },
       },
       data: {
         status: CustomerQuotationStatus.VOID,
@@ -1294,6 +1482,142 @@ export class CustomerQuotationsService {
       quotationNo: quotation.quotationNo,
       pdfKey: quotation.pdfKey,
       pdfGeneratedAt: quotation.pdfGeneratedAt,
+      url: data.signedUrl,
+      expiresInSeconds: PDF_SIGNED_URL_TTL_SECONDS,
+    };
+  }
+
+  private buildSignedDocumentStorageKey(
+    tenantId: string,
+    customerId: string,
+    quotationId: string,
+    version: number,
+    originalName: string,
+  ) {
+    const ext = originalName.match(/\.[a-z0-9]+$/i)?.[0] ?? ".pdf";
+    return `${tenantId}/companies/${customerId}/customer-quotations/${quotationId}/signed/v${version}${ext}`;
+  }
+
+  /**
+   * Upload signed customer copy for ISSUED/SIGNED quotations.
+   * Never overwrites generated pdfKey. Replaces prior signed copy with version bump + audit.
+   */
+  async uploadSignedDocument(
+    tenantId: string,
+    customerId: string,
+    id: string,
+    file: Express.Multer.File,
+    actorUserId: string | null,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException("file is required");
+    }
+    const originalName = String(file.originalname ?? "signed-quotation.pdf");
+    const mime = String(file.mimetype ?? "").toLowerCase();
+    const isPdf =
+      originalName.toLowerCase().endsWith(".pdf") || mime === "application/pdf";
+    if (!isPdf) {
+      throw new BadRequestException("Signed quotation must be a PDF file");
+    }
+
+    const quotation = await this.getById(tenantId, customerId, id);
+    if (
+      quotation.status !== CustomerQuotationStatus.ISSUED &&
+      quotation.status !== CustomerQuotationStatus.SIGNED
+    ) {
+      throw new BadRequestException(
+        "Signed quotation can only be uploaded when status is ISSUED or SIGNED",
+      );
+    }
+
+    const nextVersion = (quotation.signedDocumentVersion ?? 0) + 1;
+    const storageKey = this.buildSignedDocumentStorageKey(
+      tenantId,
+      customerId,
+      quotation.id,
+      nextVersion,
+      originalName,
+    );
+
+    const supabase = this.supabaseService.getClient();
+    const { error: uploadError } = await supabase.storage
+      .from(QUOTATION_PDF_BUCKET)
+      .upload(storageKey, file.buffer, {
+        contentType: file.mimetype || "application/pdf",
+        upsert: false,
+      });
+    if (uploadError) {
+      throw new BadRequestException(
+        `Failed to store signed quotation: ${uploadError.message}`,
+      );
+    }
+
+    const now = new Date();
+    const previousKey = quotation.signedDocumentKey;
+    const updated = await this.prisma.customerQuotation.update({
+      where: { id: quotation.id },
+      data: {
+        // Keep generated PDF untouched.
+        signedDocumentKey: storageKey,
+        signedDocumentOriginalName: originalName,
+        signedDocumentUploadedAt: now,
+        signedDocumentUploadedByUserId: actorUserId,
+        signedDocumentVersion: nextVersion,
+        acceptanceEvidenceStorageKey: storageKey,
+        status: CustomerQuotationStatus.SIGNED,
+        updatedByUserId: actorUserId,
+      },
+      include: {
+        lines: { orderBy: [{ sortOrder: "asc" }, { id: "asc" }] },
+      },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "UPDATE",
+      "CustomerQuotation",
+      quotation.id,
+      {
+        action: "UPLOAD_SIGNED_DOCUMENT",
+        fromStatus: quotation.status,
+        toStatus: CustomerQuotationStatus.SIGNED,
+        version: nextVersion,
+        originalName,
+        storageKey,
+        previousKey,
+        pdfKeyUnchanged: quotation.pdfKey,
+      },
+      actorUserId,
+    );
+
+    return updated;
+  }
+
+  async getSignedDocumentUrl(
+    tenantId: string,
+    customerId: string,
+    id: string,
+  ) {
+    const quotation = await this.getById(tenantId, customerId, id);
+    const key =
+      quotation.signedDocumentKey || quotation.acceptanceEvidenceStorageKey;
+    if (!key) {
+      throw new NotFoundException("Signed quotation document not uploaded yet");
+    }
+    const supabase = this.supabaseService.getClient();
+    const { data, error } = await supabase.storage
+      .from(QUOTATION_PDF_BUCKET)
+      .createSignedUrl(key, PDF_SIGNED_URL_TTL_SECONDS);
+    if (error || !data?.signedUrl) {
+      throw new BadRequestException("Failed to create signed document URL");
+    }
+    return {
+      quotationId: quotation.id,
+      quotationNo: quotation.quotationNo,
+      signedDocumentKey: key,
+      signedDocumentOriginalName: quotation.signedDocumentOriginalName,
+      signedDocumentVersion: quotation.signedDocumentVersion,
+      signedDocumentUploadedAt: quotation.signedDocumentUploadedAt,
       url: data.signedUrl,
       expiresInSeconds: PDF_SIGNED_URL_TTL_SECONDS,
     };

@@ -136,6 +136,7 @@ export class CustomersService {
       id: string;
       name: string;
       isActive: boolean;
+      commercialStatus?: string;
         picName: string | null;
       picMobile: string | null;
       createdAt: Date;
@@ -161,6 +162,7 @@ export class CustomersService {
       id: true,
       name: true,
       isActive: true,
+      commercialStatus: true,
       picName: true,
       picMobile: true,
       createdAt: true,
@@ -182,6 +184,7 @@ export class CustomersService {
       id: c.id,
       name: c.name,
       isActive: c.isActive,
+      commercialStatus: c.commercialStatus,
       picName: c.picName,
       picMobile: c.picMobile,
       createdAt: c.createdAt,
@@ -241,6 +244,11 @@ export class CustomersService {
 
     const normalizedName = this.normalizeCompanyName(companyName);
     const billingSameAs = !!dto.billingSameAsAddress;
+    const commercialStatus = dto.commercialStatus ?? "PROSPECT";
+    const isActive =
+      dto.isActive !== undefined
+        ? !!dto.isActive
+        : commercialStatus !== "SUSPENDED";
 
     const existingCompany = await this.prisma.customer_companies.findUnique({
       where: { tenantId_normalizedName: { tenantId, normalizedName } },
@@ -279,7 +287,8 @@ export class CustomersService {
 
         uen: dto.uen ?? null,
         notes: dto.notes ?? null,
-        isActive: dto.isActive ?? true,
+        isActive,
+        commercialStatus,
       },
       create: {
         tenantId,
@@ -314,7 +323,8 @@ export class CustomersService {
 
         uen: dto.uen ?? null,
         notes: dto.notes ?? null,
-        isActive: dto.isActive ?? true,
+        isActive,
+        commercialStatus,
       },
       select: {
         id: true,
@@ -336,6 +346,7 @@ export class CustomersService {
         uen: true,
         notes: true,
         isActive: true,
+        commercialStatus: true,
         _count: { select: { contacts: true, users: true } },
       },
     });
@@ -508,6 +519,7 @@ export class CustomersService {
         uen: true,
         notes: true,
         isActive: true,
+        commercialStatus: true,
         _count: { select: { contacts: true, users: true } },
       },
     });
@@ -586,6 +598,14 @@ export class CustomersService {
         ...(dto.uen !== undefined ? { uen: dto.uen ?? null } : {}),
         ...(dto.notes !== undefined ? { notes: dto.notes ?? null } : {}),
         ...(dto.isActive !== undefined ? { isActive: !!dto.isActive } : {}),
+        ...(dto.commercialStatus !== undefined
+          ? {
+              commercialStatus: dto.commercialStatus,
+              ...(dto.isActive === undefined
+                ? { isActive: dto.commercialStatus !== "SUSPENDED" }
+                : {}),
+            }
+          : {}),
       },
       select: {
         id: true,
@@ -607,6 +627,7 @@ export class CustomersService {
         uen: true,
         notes: true,
         isActive: true,
+        commercialStatus: true,
         _count: { select: { contacts: true, users: true } },
       },
     });
@@ -631,8 +652,11 @@ export class CustomersService {
   
     const updated = await this.prisma.customer_companies.update({
       where: { id: companyId },
-      data: { isActive },
-      select: { id: true, isActive: true },
+      data: {
+        isActive,
+        commercialStatus: isActive ? "ACTIVE" : "SUSPENDED",
+      },
+      select: { id: true, isActive: true, commercialStatus: true },
     });
   
     // Get all users linked to this company

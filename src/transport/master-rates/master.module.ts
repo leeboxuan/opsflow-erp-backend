@@ -1,11 +1,12 @@
 import { Module } from "@nestjs/common";
 import { PrismaModule } from "../../shared/prisma/prisma.module";
 import { AuthModule } from "../../shared/auth/auth.module";
+import { AuditModule } from "../../shared/audit/audit.module";
 import { MasterDataController } from "./master.controller";
 import { MasterDataService } from "./master.service";
 
 @Module({
-  imports: [PrismaModule, AuthModule],
+  imports: [PrismaModule, AuthModule, AuditModule],
   controllers: [MasterDataController],
   providers: [MasterDataService],
   exports: [MasterDataService],

@@ -18,7 +18,7 @@ describe("MasterDataService getActiveMasterItems", () => {
   it("rejects deprecated CUSTOMER_QUOTATION master uploads", async () => {
     const prisma: any = {};
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
 
     await expect(
       svc.uploadAndParseMasterFile(
@@ -39,7 +39,7 @@ describe("MasterDataService getActiveMasterItems", () => {
   it("rejects non-excel QUOTATION master uploads", async () => {
     const prisma: any = {};
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
 
     await expect(
       (svc as any).parseQuotationItemsFromFile({
@@ -69,7 +69,7 @@ describe("MasterDataService getActiveMasterItems", () => {
       customerQuotationItem: { findMany: jest.fn() },
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
 
     const result = await svc.getActiveMasterItems("t1", MasterFileType.DRIVER_PAYOUT, null);
     expect(masterFileFindFirst).toHaveBeenCalledWith({
@@ -109,7 +109,7 @@ describe("MasterDataService getActiveMasterItems", () => {
       customerQuotationItem: { findMany: jest.fn() },
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
 
     const result = await svc.getActiveMasterItems("t1", MasterFileType.DHC_REFERENCE, null);
     expect(masterFileFindFirst).toHaveBeenCalledWith({
@@ -140,7 +140,7 @@ describe("MasterDataService getActiveMasterItems", () => {
       customerQuotationItem: { findMany: jest.fn() },
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
 
     const result = await svc.getActiveMasterItems("t1", MasterFileType.DHC_REFERENCE, null);
     expect(result).toEqual({ masterFile: null, items: [] });
@@ -173,7 +173,7 @@ describe("MasterDataService getActiveMasterItems", () => {
 
     const prisma: any = {};
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
     const parsed = (svc as any).parseDriverPayoutItems(Buffer.from(buf));
 
     expect(parsed.items.map((i: any) => i.code)).toEqual([
@@ -207,7 +207,7 @@ describe("MasterDataService getActiveMasterItems", () => {
 
     const prisma: any = {};
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
     const parsed = (svc as any).parseDriverPayoutItems(Buffer.from(buf));
 
     const fixedMonthlyItems = parsed.items.filter((i: any) =>
@@ -260,7 +260,7 @@ describe("MasterDataService getActiveMasterItems", () => {
 
     const prisma: any = {};
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
 
     const parsed = await (svc as any).parseDhcItems({
       originalname: "dhc.xlsx",
@@ -315,7 +315,7 @@ describe("MasterDataService getActiveMasterItems", () => {
       ),
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
     jest.spyOn(svc as any, "uploadMasterObject").mockResolvedValue(undefined);
     jest.spyOn(svc as any, "parseDhcItems").mockResolvedValue({
       items: [],
@@ -378,7 +378,7 @@ describe("MasterDataService getActiveMasterItems", () => {
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
 
     const result = await svc.replaceQuotationMasterFileItems("t1", "mf-q", [
       { code: "A1", label: "Haulage", rateCents: 10000 },
@@ -414,19 +414,31 @@ describe("MasterDataService getActiveMasterItems", () => {
     XLSX.utils.book_append_sheet(wb, ws, "Annex A");
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
-    const masterRateDatasetCreate = jest.fn().mockResolvedValue({ id: "ds1", versionNo: 1 });
+    const masterRateDatasetCreate = jest
+      .fn()
+      .mockResolvedValue({ id: "ds1", versionNo: 1, isCurrent: true });
     const masterRateDatasetUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
     const masterRateDatasetRowDeleteMany = jest.fn().mockResolvedValue({ count: 0 });
     const masterRateDatasetRowCreateMany = jest.fn().mockResolvedValue({ count: 2 });
     const masterFileUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
     const masterFileCreate = jest.fn().mockResolvedValue({ id: "mf1" });
 
+    let findFirstCalls = 0;
     const prisma: any = {
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
       masterRateDataset: {
         findFirst: jest.fn().mockImplementation(async (args: any) => {
+          findFirstCalls += 1;
+          // First three calls are findPreferredDataset (no current yet)
+          if (findFirstCalls <= 3) return null;
           if (args?.select?.versionNo === true) return null;
-          return { id: "ds1", versionNo: 1, type: "QUOTATION", status: "ACTIVE" };
+          return {
+            id: "ds1",
+            versionNo: 1,
+            type: "QUOTATION",
+            status: "ACTIVE",
+            isCurrent: true,
+          };
         }),
         updateMany: masterRateDatasetUpdateMany,
         create: masterRateDatasetCreate,
@@ -435,7 +447,11 @@ describe("MasterDataService getActiveMasterItems", () => {
       masterRateDatasetRow: {
         deleteMany: masterRateDatasetRowDeleteMany,
         createMany: masterRateDatasetRowCreateMany,
-        findMany: jest.fn().mockResolvedValue([{ id: "r1", code: "A_1", label: "Item A1", rateCents: 100 }]),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            { id: "r1", code: "A_1", label: "Item A1", rateCents: 100, isActive: true },
+          ]),
       },
       masterFile: {
         updateMany: masterFileUpdateMany,
@@ -443,7 +459,7 @@ describe("MasterDataService getActiveMasterItems", () => {
       },
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
     const uploadSpy = jest.spyOn(svc as any, "uploadMasterObject");
 
     const result = await svc.importQuotationDataset("t1", {
@@ -454,13 +470,18 @@ describe("MasterDataService getActiveMasterItems", () => {
 
     expect(uploadSpy).toHaveBeenCalled();
     expect(masterRateDatasetRowCreateMany).toHaveBeenCalled();
+    expect(masterRateDatasetCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ isCurrent: true }),
+      }),
+    );
     expect(result.importedCount).toBeGreaterThan(0);
   });
 
   it("importQuotationDataset rejects non-excel files", async () => {
     const prisma: any = {};
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
 
     await expect(
       svc.importQuotationDataset("t1", {
@@ -482,12 +503,22 @@ describe("MasterDataService getActiveMasterItems", () => {
     XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
+    let findFirstCalls = 0;
     const prisma: any = {
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
       masterRateDataset: {
         findFirst: jest.fn().mockImplementation(async (args: any) => {
+          findFirstCalls += 1;
+          // findPreferredDataset: no current yet (3 lookups)
+          if (findFirstCalls <= 3) return null;
           if (args?.select?.versionNo === true) return null;
-          return { id: "ds-trucking", versionNo: 1, type: "TRUCKING_RATES", status: "ACTIVE" };
+          return {
+            id: "ds-trucking",
+            versionNo: 1,
+            type: "TRUCKING_RATES",
+            status: "ACTIVE",
+            isCurrent: true,
+          };
         }),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         create: jest.fn().mockResolvedValue({ id: "ds-trucking", versionNo: 1 }),
@@ -516,7 +547,8 @@ describe("MasterDataService getActiveMasterItems", () => {
       },
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
+    jest.spyOn(svc as any, "uploadMasterObject").mockResolvedValue(undefined);
 
     const result = await svc.importTruckingRatesDataset(
       "t1",
@@ -546,17 +578,48 @@ describe("MasterDataService getActiveMasterItems", () => {
   });
 
   it("replaceDriverTripRateMasters keeps null amount and manual flags", async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const create = jest.fn().mockResolvedValue({
+      id: "ds-trucking-2",
+      versionNo: 2,
+      isCurrent: true,
+    });
+    const createMany = jest.fn().mockResolvedValue({ count: 1 });
     const prisma: any = {
-      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          masterRateDataset: {
+            findFirst: jest.fn().mockResolvedValue({ versionNo: 1 }),
+            updateMany,
+            create,
+          },
+          masterRateDatasetRow: { createMany },
+        }),
+      ),
       masterRateDataset: {
-        findFirst: jest.fn().mockResolvedValue({ id: "ds-trucking" }),
-        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
-        create: jest.fn(),
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: "ds-trucking",
+            versionNo: 1,
+            isCurrent: true,
+            sourceFileName: "trucking.xlsx",
+            type: "TRUCKING_RATES",
+            status: "ACTIVE",
+          })
+          .mockResolvedValue({
+            id: "ds-trucking-2",
+            versionNo: 2,
+            isCurrent: true,
+            type: "TRUCKING_RATES",
+            status: "ACTIVE",
+          }),
+        updateMany,
+        create,
         update: jest.fn().mockResolvedValue({}),
       },
       masterRateDatasetRow: {
-        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
-        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        createMany,
         findMany: jest.fn().mockResolvedValue([
           {
             id: "d1",
@@ -571,18 +634,23 @@ describe("MasterDataService getActiveMasterItems", () => {
       },
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
 
-    const rows = await svc.replaceDriverTripRateMasters("t1", [
-      {
-        code: "MANUAL-ROW",
-        label: "Manual row",
-        amountCents: null,
-        requiresManualAmount: true,
-      },
-    ]);
+    const result = await svc.replaceDriverTripRateMasters(
+      "t1",
+      [
+        {
+          code: "MANUAL-ROW",
+          label: "Manual row",
+          amountCents: null,
+          requiresManualAmount: true,
+        },
+      ],
+      "u1",
+      1,
+    );
 
-    expect(prisma.masterRateDatasetRow.createMany).toHaveBeenCalledWith({
+    expect(createMany).toHaveBeenCalledWith({
       data: [
         expect.objectContaining({
           code: "MANUAL-ROW",
@@ -591,7 +659,12 @@ describe("MasterDataService getActiveMasterItems", () => {
         }),
       ],
     });
-    expect(rows[0]).toMatchObject({
+    expect(result.dataset).toMatchObject({
+      id: "ds-trucking-2",
+      versionNo: 2,
+      isCurrent: true,
+    });
+    expect(result.items[0]).toMatchObject({
       code: "MANUAL-ROW",
       rateCents: null,
       requiresManualAmount: true,
@@ -609,16 +682,23 @@ describe("MasterDataService getActiveMasterItems", () => {
     XLSX.utils.book_append_sheet(wb, ws, "Table 1");
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
+    let findFirstCalls = 0;
     const prisma: any = {
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
       masterRateDataset: {
-        findFirst: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockImplementation(async (args: any) => {
+          findFirstCalls += 1;
+          if (findFirstCalls <= 3) return null;
+          if (args?.select?.versionNo === true) return null;
+          return { id: "ds-dhc", versionNo: 1, type: "DHC_RATES", status: "ACTIVE", isCurrent: true };
+        }),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         create: jest.fn().mockResolvedValue({ id: "ds-dhc", versionNo: 1 }),
       },
       masterRateDatasetRow: {
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
         createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       masterFile: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -626,7 +706,8 @@ describe("MasterDataService getActiveMasterItems", () => {
       },
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
+    jest.spyOn(svc as any, "uploadMasterObject").mockResolvedValue(undefined);
 
     const result = await svc.importDhcRatesDataset("t1", {
       originalname: "dhc.xlsx",
@@ -649,16 +730,23 @@ describe("MasterDataService getActiveMasterItems", () => {
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
     const createMany = jest.fn().mockResolvedValue({ count: 1 });
+    let findFirstCalls = 0;
     const prisma: any = {
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
       masterRateDataset: {
-        findFirst: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockImplementation(async (args: any) => {
+          findFirstCalls += 1;
+          if (findFirstCalls <= 3) return null;
+          if (args?.select?.versionNo === true) return null;
+          return { id: "ds-dhc", versionNo: 1, type: "DHC_RATES", status: "ACTIVE", isCurrent: true };
+        }),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         create: jest.fn().mockResolvedValue({ id: "ds-dhc", versionNo: 1 }),
       },
       masterRateDatasetRow: {
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
         createMany,
+        findMany: jest.fn().mockResolvedValue([]),
       },
       masterFile: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -666,7 +754,8 @@ describe("MasterDataService getActiveMasterItems", () => {
       },
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
+    jest.spyOn(svc as any, "uploadMasterObject").mockResolvedValue(undefined);
 
     await svc.importDhcRatesDataset("t1", {
       originalname: "dhc.xlsx",
@@ -685,15 +774,48 @@ describe("MasterDataService getActiveMasterItems", () => {
   });
 
   it("replaceDhcRatesDataset keeps null amount and manual flags", async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const create = jest.fn().mockResolvedValue({
+      id: "ds-dhc-2",
+      versionNo: 2,
+      isCurrent: true,
+    });
+    const createMany = jest.fn().mockResolvedValue({ count: 1 });
     const prisma: any = {
-      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          masterRateDataset: {
+            findFirst: jest.fn().mockResolvedValue({ versionNo: 1 }),
+            updateMany,
+            create,
+          },
+          masterRateDatasetRow: { createMany },
+        }),
+      ),
       masterRateDataset: {
-        findFirst: jest.fn().mockResolvedValue({ id: "ds-dhc" }),
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: "ds-dhc",
+            versionNo: 1,
+            isCurrent: true,
+            sourceFileName: "dhc.xlsx",
+            type: "DHC_RATES",
+            status: "ACTIVE",
+          })
+          .mockResolvedValue({
+            id: "ds-dhc-2",
+            versionNo: 2,
+            isCurrent: true,
+            type: "DHC_RATES",
+            status: "ACTIVE",
+          }),
+        updateMany,
+        create,
         update: jest.fn().mockResolvedValue({}),
       },
       masterRateDatasetRow: {
-        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
-        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        createMany,
         findMany: jest.fn().mockResolvedValue([
           {
             id: "d1",
@@ -702,23 +824,29 @@ describe("MasterDataService getActiveMasterItems", () => {
             rateCents: null,
             requiresManualAmount: true,
             hasMultipleRates: false,
+            isActive: true,
           },
         ]),
       },
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
 
-    const rows = await svc.replaceDhcRatesDataset("t1", [
-      {
-        code: "DHC-MANUAL",
-        label: "Manual DHC",
-        amountCents: null,
-        requiresManualAmount: true,
-      },
-    ]);
+    const result = await svc.replaceDhcRatesDataset(
+      "t1",
+      [
+        {
+          code: "DHC-MANUAL",
+          label: "Manual DHC",
+          amountCents: null,
+          requiresManualAmount: true,
+        },
+      ],
+      "u1",
+      1,
+    );
 
-    expect(prisma.masterRateDatasetRow.createMany).toHaveBeenCalledWith({
+    expect(createMany).toHaveBeenCalledWith({
       data: [
         expect.objectContaining({
           code: "DHC-MANUAL",
@@ -727,7 +855,12 @@ describe("MasterDataService getActiveMasterItems", () => {
         }),
       ],
     });
-    expect(rows[0]).toMatchObject({
+    expect(result.dataset).toMatchObject({
+      id: "ds-dhc-2",
+      versionNo: 2,
+      isCurrent: true,
+    });
+    expect(result.items[0]).toMatchObject({
       code: "DHC-MANUAL",
       rateCents: null,
       requiresManualAmount: true,
@@ -748,7 +881,7 @@ describe("MasterDataService getActiveMasterItems", () => {
       $transaction: jest.fn(),
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
 
     await expect(svc.activateMasterFile("t1", "mf-failed")).rejects.toThrow(
       "Cannot activate a DHC reference file that has no parsed rows.",
@@ -773,7 +906,7 @@ describe("MasterDataService getActiveMasterItems", () => {
       $transaction: jest.fn(),
     };
     const supabase: any = createSupabaseClientMock();
-    const svc = new MasterDataService(prisma, supabase);
+    const svc = new MasterDataService(prisma, supabase, { log: jest.fn() } as any);
 
     await expect(svc.activateMasterFile("t1", "mf-empty")).rejects.toThrow(
       "Cannot activate a DHC reference file that has no parsed rows.",

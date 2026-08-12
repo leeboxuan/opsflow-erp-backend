@@ -74,4 +74,13 @@ export class SaveDhcRatesDatasetDto {
   @ValidateNested({ each: true })
   @Type(() => DhcRateItemDto)
   items: DhcRateItemDto[];
+
+  @ApiPropertyOptional({
+    description:
+      "Optimistic concurrency: current dataset versionNo expected by the client",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  expectedVersionNo?: number;
 }
