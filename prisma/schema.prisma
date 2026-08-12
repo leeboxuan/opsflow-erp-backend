@@ -987,6 +987,135 @@ model JobItem {
   @@map("job_items")
 }
 
+enum JobMessageImportBatchStatus {
+  IN_REVIEW
+  CONFIRMED
+  CANCELLED
+}
+
+enum JobMessageImportSourceChannel {
+  WHATSAPP
+}
+
+enum JobMessageImportParserErrorSeverity {
+  INFO
+  WARNING
+}
+
+enum JobMessageImportDraftValidationStatus {
+  READY
+  NEEDS_REVIEW
+  POSSIBLE_DUPLICATE
+}
+
+enum JobMessageImportDraftInclusionState {
+  INCLUDED
+  EXCLUDED
+}
+
+enum JobMessageImportMovementType {
+  COLLECTION
+  IMPORT
+  EXPORT
+  LCL
+  UNKNOWN
+}
+
+model JobMessageImportBatch {
+  id              String                      @id @default(cuid())
+  tenantId        String
+  createdByUserId String?
+  status          JobMessageImportBatchStatus @default(IN_REVIEW)
+
+  sourceChannel JobMessageImportSourceChannel
+  serviceDate   DateTime
+  timezone      String
+
+  /// Server-side fingerprint for idempotent batch creation.
+  /// Must not store secrets; derived from access-controlled source text + metadata.
+  sourceFingerprint String @db.Text
+
+  parserVersion   String
+  modelName       String?
+  parserVersionNo Int? // reserved for future migration-friendly versioning
+
+  /// Parser warnings that may apply to the whole batch.
+  batchWarningsJson Json?
+
+  /// Safe parse metadata only (token usage, provider request id). Never raw payloads.
+  parseMetadataJson Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  confirmedAt       DateTime?
+  confirmedByUserId String?
+  /// Monotonic version for optimistic concurrency on review/resume/edit operations.
+  version           Int       @default(1)
+
+  drafts JobMessageImportDraft[]
+
+  /// Non-unique lookup index. Concurrent IN_REVIEW uniqueness is a partial unique
+  /// index in SQL: (tenantId, sourceFingerprint) WHERE status = 'IN_REVIEW'.
+  /// Prisma cannot express partial unique indexes; do not restore a permanent
+  /// @@unique([tenantId, sourceFingerprint]).
+  @@index([tenantId, sourceFingerprint])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@map("job_message_import_batches")
+}
+
+model JobMessageImportDraft {
+  id       String @id @default(cuid())
+  tenantId String
+  batchId  String
+
+  /// Stable client-side draft identifier for review/edit operations.
+  clientDraftId String
+
+  movementType JobMessageImportMovementType
+
+  /// Tenant-scoped source fragment to show in controller UI.
+  sourceFragment String @db.Text
+
+  /// Strong-ish fingerprint to prevent duplicates, also used for duplicate candidate lookups.
+  duplicateFingerprint String @db.Text
+
+  /// Classification / eligibility state for review UI.
+  validationStatus JobMessageImportDraftValidationStatus @default(NEEDS_REVIEW)
+  inclusionState   JobMessageImportDraftInclusionState   @default(INCLUDED)
+
+  /// Stored parsing + controller-edited payloads (untrusted, validated server-side).
+  parsedJson     Json
+  controllerJson Json?
+
+  fieldEvidenceJson Json?
+  draftWarningsJson Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  version           Int       @default(1)
+  confirmedAt       DateTime?
+  confirmedByUserId String?
+
+  /// Link to the canonical Job created when confirmed (null until confirmed).
+  canonicalJobId String?
+
+  /// When a POSSIBLE_DUPLICATE draft is confirmed with override, record the override.
+  duplicateOverrideReason      String?
+  duplicateOverrideActorUserId String?
+  duplicateOverrideAt          DateTime?
+
+  batch JobMessageImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, batchId, clientDraftId])
+  @@index([tenantId, batchId, validationStatus])
+  @@index([tenantId, batchId, inclusionState])
+  @@index([tenantId, duplicateFingerprint])
+  @@map("job_message_import_drafts")
+}
+
 /// Canonical trip ↔ job-item (container) M:N link. Sole source of truth for cargo scope,
 /// documentation, completion, and publish validation. Every row is an explicit verified link.
 model TripJobItem {

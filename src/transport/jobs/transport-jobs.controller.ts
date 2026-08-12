@@ -48,6 +48,15 @@ import { LclImportConfirmRequestDto } from "./dto/lcl-import.dto";
 import { JobBatchImportConfirmRequestDto } from "./dto/job-batch-import.dto";
 import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
 import {
+  JobMessageImportPreviewRequestDto,
+} from "./dto/job-message-import-preview.dto";
+import {
+  JobMessageImportConfirmRequestDto,
+} from "./dto/job-message-import-confirm.dto";
+import { JobMessageImportPatchDraftDto } from "./dto/job-message-import-patch-draft.dto";
+import { JobMessageImportService } from "./message-import/job-message-import.service";
+import { readCorrelationId } from "../../shared/auth/request-context";
+import {
   AppendJobTripDto,
   AssignJobTripDto,
   PatchTripPayoutDto,
@@ -83,6 +92,7 @@ export class TransportJobsController {
   constructor(
     private readonly jobs: TransportJobsService,
     private readonly invoices: InvoicesService,
+    private readonly messageImports: JobMessageImportService,
   ) {}
 
   @Get(":jobId/documents/:documentId/signed-url")
@@ -205,6 +215,83 @@ export class TransportJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.importConfirm(tenantId, dto.rows, accessUser);
+  }
+
+  // -----------------------------
+  // Job message import (AI parser)
+  // -----------------------------
+
+  @Post("message-imports/preview")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
+  @ApiOperation({
+    summary: "Preview job message import: parse + validate, no canonical Jobs/Trips writes",
+  })
+  async messageImportPreview(@Req() req: any, @Body() dto: JobMessageImportPreviewRequestDto) {
+    const tenantId = req.tenant.tenantId as string;
+    const actorUserId: string | null = req.user?.userId ?? null;
+    const correlationId = readCorrelationId(req.headers);
+
+    return this.messageImports.createPreviewBatch({
+      tenantId,
+      actorUserId,
+      serviceDate: dto.serviceDate,
+      timezone: dto.timezone,
+      sourceChannel: dto.sourceChannel,
+      sourceText: dto.sourceText,
+      correlationId,
+    });
+  }
+
+  @Get("message-imports/:batchId")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
+  @ApiOperation({ summary: "Get an authorized job-message import batch for review/resume" })
+  async messageImportGetBatch(@Req() req: any, @Param("batchId") batchId: string) {
+    const tenantId = req.tenant.tenantId as string;
+    return this.messageImports.getBatchPreview({ tenantId, batchId });
+  }
+
+  @Patch("message-imports/:batchId/drafts/:draftId")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
+  @ApiOperation({
+    summary: "Apply controller edits to a job-message import draft and revalidate",
+  })
+  async messageImportPatchDraft(
+    @Req() req: any,
+    @Param("batchId") batchId: string,
+    @Param("draftId") draftId: string,
+    @Body() dto: JobMessageImportPatchDraftDto,
+  ) {
+    const tenantId = req.tenant.tenantId as string;
+    const actorUserId: string | null = req.user?.userId ?? null;
+    return this.messageImports.patchDraft({
+      tenantId,
+      actorUserId,
+      batchId,
+      draftId,
+      patch: dto,
+    });
+  }
+
+  @Post("message-imports/:batchId/confirm")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
+  @ApiOperation({
+    summary: "Confirm job-message import: create canonical Jobs/JobItems transactionally, no Trips",
+  })
+  async messageImportConfirm(
+    @Req() req: any,
+    @Param("batchId") batchId: string,
+    @Body() dto: JobMessageImportConfirmRequestDto,
+  ) {
+    const tenantId = req.tenant.tenantId as string;
+    const actorUserId: string | null = req.user?.userId ?? null;
+
+    return this.messageImports.confirmBatch({
+      tenantId,
+      actorUserId,
+      batchId,
+      expectedBatchVersion: dto.expectedBatchVersion,
+      selection: dto.selectedDrafts,
+    });
   }
 
   @Post("import/batch/preview")
