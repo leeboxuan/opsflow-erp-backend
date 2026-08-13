@@ -140,12 +140,14 @@ describe("PlatformBootstrapService", () => {
     await expect(unsetEmail.service.getStatus()).resolves.toEqual({
       available: false,
     });
+    expect(unsetEmail.prisma.platformAdmin.count).not.toHaveBeenCalled();
 
     const unsetToken = makeService({ bootstrapToken: "" });
     unsetToken.prisma.platformAdmin.count.mockResolvedValue(0);
     await expect(unsetToken.service.getStatus()).resolves.toEqual({
       available: false,
     });
+    expect(unsetToken.prisma.platformAdmin.count).not.toHaveBeenCalled();
   });
 
   it("setup creates Auth+User+PlatformAdmin with no TenantMembership", async () => {

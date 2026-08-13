@@ -264,6 +264,70 @@ describe('AuthController.login', () => {
     expect(prisma.user.findMany).not.toHaveBeenCalled();
   });
 
+  it('lets a bootstrap-created PlatformAdmin login immediately with zero memberships', async () => {
+    mockSignIn.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'access',
+          refresh_token: 'refresh',
+          expires_at: 123,
+        },
+      },
+      error: null,
+    });
+    authService.verifyToken.mockResolvedValue({
+      userId: 'cms-user-1',
+      authUserId: '11ed325c-8b25-4fd0-a040-6b4a4a238753',
+      email: 'owner@example.com',
+      role: 'SUPERADMIN',
+      isSuperadmin: true,
+      isPlatformAdmin: true,
+      platformAdminId: 'pa-boot',
+      platformAdminStatus: 'ACTIVE',
+    });
+    prisma.platformAdmin.findUnique.mockResolvedValue({
+      id: 'pa-boot',
+      status: 'ACTIVE',
+    });
+    prisma.tenantMembership.findMany.mockResolvedValue([]);
+    prisma.user.findUnique.mockResolvedValue({
+      email: 'owner@example.com',
+      username: null,
+    });
+
+    const result = await controller.login({
+      email: 'owner@example.com',
+      password: 'secret123',
+    });
+
+    expect(authService.verifyToken).toHaveBeenCalledWith('access');
+    expect(result.platformAdmin).toEqual({ id: 'pa-boot', status: 'ACTIVE' });
+    expect(result.tenantMemberships).toEqual([]);
+    expect(result.activeTenantId).toBeNull();
+    expect(result.user.role).toBeNull();
+  });
+
+  it('returns mapping failure when verifyToken cannot resolve an internal user', async () => {
+    mockSignIn.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'access',
+          refresh_token: 'refresh',
+          expires_at: 123,
+        },
+      },
+      error: null,
+    });
+    authService.verifyToken.mockResolvedValue(null);
+
+    await expect(
+      controller.login({
+        email: 'missing@example.com',
+        password: 'secret123',
+      }),
+    ).rejects.toThrow(/could not find or create internal user/);
+  });
+
   it('allows platform-only admin email login with zero memberships', async () => {
     mockSignIn.mockResolvedValue({
       data: {

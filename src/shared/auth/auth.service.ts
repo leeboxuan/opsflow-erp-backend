@@ -3,6 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { jwtVerify, createRemoteJWKSet, decodeProtectedHeader } from 'jose';
 import * as jwt from 'jsonwebtoken';
+import { resolveSupabaseJwtIssuer } from './supabase-jwt-issuer';
+import {
+  jwtEmailFromPayload,
+  mapSupabaseSubjectToInternalUser,
+} from './map-internal-user';
 
 export interface JwtPayload {
   sub: string;
@@ -47,35 +52,13 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
   ) {
-    // Get project URL or ref
-    const projectUrl =
-      this.configService.get<string>('SUPABASE_PROJECT_URL') ||
-      this.configService.get<string>('SUPABASE_URL');
-    const projectRef = this.configService.get<string>('SUPABASE_PROJECT_REF');
-
-    if (projectRef) {
-      // Use project ref to build URLs
-      this.issuer = `https://${projectRef}.supabase.co/auth/v1`;
-      this.jwksUrl = `${this.issuer}/.well-known/jwks.json`;
-    } else if (projectUrl) {
-      // Extract project ref from URL if full URL provided
-      const urlMatch = projectUrl.match(/https?:\/\/([^.]+)\.supabase\.co/);
-      if (urlMatch) {
-        const ref = urlMatch[1];
-        this.issuer = `https://${ref}.supabase.co/auth/v1`;
-        this.jwksUrl = `${this.issuer}/.well-known/jwks.json`;
-      } else {
-        throw new Error(
-          'Invalid SUPABASE_PROJECT_URL format. Expected: https://<ref>.supabase.co',
-        );
-      }
-    } else {
-      throw new Error(
-        'SUPABASE_PROJECT_URL or SUPABASE_PROJECT_REF must be configured',
-      );
-    }
-
-    // Create JWKS set
+    const resolved = resolveSupabaseJwtIssuer({
+      SUPABASE_PROJECT_URL: this.configService.get<string>('SUPABASE_PROJECT_URL'),
+      SUPABASE_URL: this.configService.get<string>('SUPABASE_URL'),
+      SUPABASE_PROJECT_REF: this.configService.get<string>('SUPABASE_PROJECT_REF'),
+    });
+    this.issuer = resolved.issuer;
+    this.jwksUrl = resolved.jwksUrl;
     this.jwks = createRemoteJWKSet(new URL(this.jwksUrl));
   }
 
@@ -87,10 +70,7 @@ export class AuthService {
       return null;
     }
 
-    // Temporary debug: Supabase may issue HS256 (legacy) or RS256 (JWKS); HS256 requires SUPABASE_JWT_SECRET
-    console.log('JWT alg:', header.alg);
-
-    // HS256 tokens are verified with symmetric key (verifyTokenLegacy); RS256 uses JWKS
+    // HS256 tokens are verified with symmetric key (verifyTokenLegacy); ES256/RS256 use JWKS
     if (header.alg === 'HS256') {
       return this.verifyTokenLegacy(token);
     }
@@ -101,72 +81,10 @@ export class AuthService {
         audience: 'authenticated',
       });
 
-      const authUserId = payload.sub as string | undefined;
-      const email = payload.email as string | undefined;
-
-      if (!authUserId) {
-        this.logger.error('JWT sub (authUserId) missing – cannot map Supabase Auth user to internal user');
-        return null;
-      }
-      if (!email) {
-        this.logger.error('JWT email missing – cannot map or create internal user');
-        return null;
-      }
-
-      // Map Supabase Auth user (JWT sub, UUID) to public.users via authUserId; id remains cuid
-      let user = await this.prisma.user.findFirst({
-        where: { authUserId },
+      return this.mapVerifiedSubject({
+        authUserId: payload.sub as string | undefined,
+        email: jwtEmailFromPayload(payload),
       });
-
-      // Fallback for legacy rows that have no authUserId yet: match by email then backfill
-      if (!user) {
-        user = await this.prisma.user.findFirst({
-          where: { email },
-        });
-      }
-
-      if (!user) {
-        // First login: auto-create internal user linked to this Supabase Auth user
-        user = await this.prisma.user.create({
-          data: {
-            authUserId,
-            email,
-            name: email, // temporary default until profile is set
-            role: 'USER',
-          },
-        });
-      } else {
-        // Backfill authUserId if missing (legacy row)
-        const updates: { authUserId?: string; role?: string } = {};
-        if (!user.authUserId) {
-          updates.authUserId = authUserId;
-        }
-        if (!user.role) {
-          updates.role = 'USER';
-        }
-        if (Object.keys(updates).length > 0) {
-          user = await this.prisma.user.update({
-            where: { id: user.id },
-            data: updates,
-          });
-        }
-      }
-
-      const role = user.role ?? 'USER';
-      const platformAdmin = await this.loadPlatformAdmin(user.id);
-      const isPlatformAdmin = platformAdmin?.status === 'ACTIVE';
-      const isSuperadmin = isPlatformAdmin || role === 'SUPERADMIN';
-
-      return {
-        userId: user.id,
-        authUserId,
-        email: user.email,
-        role,
-        isSuperadmin,
-        platformAdminId: isPlatformAdmin ? platformAdmin!.id : null,
-        platformAdminStatus: platformAdmin?.status ?? null,
-        isPlatformAdmin,
-      };
     } catch (err) {
       this.logger.warn('User mapping failed: token verification or DB lookup/create failed', (err as Error)?.message ?? err);
       return null;
@@ -203,73 +121,48 @@ export class AuthService {
 
     try {
       const decoded = jwt.verify(token, jwtSecret) as JwtPayload;
-
-      const authUserId = decoded.sub;
-      const email = decoded.email;
-
-      if (!authUserId) {
-        this.logger.error('JWT sub (authUserId) missing – cannot map Supabase Auth user to internal user');
-        return null;
-      }
-      if (!email) {
-        this.logger.error('JWT email missing – cannot map or create internal user');
-        return null;
-      }
-
-      // Map by authUserId first (JWT sub); fallback to email for legacy rows
-      let user = await this.prisma.user.findFirst({
-        where: { authUserId },
+      return this.mapVerifiedSubject({
+        authUserId: decoded.sub,
+        email: jwtEmailFromPayload(decoded),
       });
-
-      if (!user) {
-        user = await this.prisma.user.findFirst({
-          where: { email },
-        });
-      }
-
-      if (!user) {
-        user = await this.prisma.user.create({
-          data: {
-            authUserId,
-            email,
-            name: email, // temporary default until profile is set
-            role: 'USER',
-          },
-        });
-      } else {
-        const updates: { authUserId?: string; role?: string } = {};
-        if (!user.authUserId) {
-          updates.authUserId = authUserId;
-        }
-        if (!user.role) {
-          updates.role = 'USER';
-        }
-        if (Object.keys(updates).length > 0) {
-          user = await this.prisma.user.update({
-            where: { id: user.id },
-            data: updates,
-          });
-        }
-      }
-
-      const role = user.role ?? 'USER';
-      const platformAdmin = await this.loadPlatformAdmin(user.id);
-      const isPlatformAdmin = platformAdmin?.status === 'ACTIVE';
-      const isSuperadmin = isPlatformAdmin || role === 'SUPERADMIN';
-
-      return {
-        userId: user.id,
-        authUserId,
-        email: user.email,
-        role,
-        isSuperadmin,
-        platformAdminId: isPlatformAdmin ? platformAdmin!.id : null,
-        platformAdminStatus: platformAdmin?.status ?? null,
-        isPlatformAdmin,
-      };
     } catch (error) {
       this.logger.warn('User mapping failed (legacy HS256): verification or DB failed', (error as Error)?.message ?? error);
       return null;
     }
+  }
+
+  private async mapVerifiedSubject(params: {
+    authUserId?: string;
+    email?: string | null;
+  }): Promise<AuthUser | null> {
+    const authUserId = params.authUserId?.trim();
+    if (!authUserId) {
+      this.logger.error('JWT sub (authUserId) missing – cannot map Supabase Auth user to internal user');
+      return null;
+    }
+
+    const user = await mapSupabaseSubjectToInternalUser(this.prisma as any, {
+      authUserId,
+      email: params.email,
+    });
+    if (!user) {
+      return null;
+    }
+
+    const role = user.role ?? 'USER';
+    const platformAdmin = await this.loadPlatformAdmin(user.id);
+    const isPlatformAdmin = platformAdmin?.status === 'ACTIVE';
+    const isSuperadmin = isPlatformAdmin || role === 'SUPERADMIN';
+
+    return {
+      userId: user.id,
+      authUserId,
+      email: user.email,
+      role,
+      isSuperadmin,
+      platformAdminId: isPlatformAdmin ? platformAdmin!.id : null,
+      platformAdminStatus: platformAdmin?.status ?? null,
+      isPlatformAdmin,
+    };
   }
 }
