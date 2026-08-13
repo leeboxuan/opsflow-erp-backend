@@ -1,14 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  IsArray,
   IsIn,
   IsOptional,
   IsString,
   IsEmail,
   IsBoolean,
   MinLength,
+  ValidateNested,
 } from "class-validator";
 import { Type } from "class-transformer";
 import { ListQueryBaseDto } from "../../shared/common/dto";
+import { RateTemplateRowInputDto } from "../rate-templates/rate-templates.dto";
 
 export class ListCompaniesQueryDto extends ListQueryBaseDto {
   @ApiPropertyOptional({ description: "Search by company name" })
@@ -299,6 +302,17 @@ export class CreateCustomerCompanyDto {
     | "PENDING_COMMERCIAL_APPROVAL"
     | "ACTIVE"
     | "SUSPENDED";
+
+  @ApiPropertyOptional({
+    type: [RateTemplateRowInputDto],
+    description:
+      "Optional customized default-rate rows seeded atomically with the customer. When omitted, the current quotation base is copied in full.",
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RateTemplateRowInputDto)
+  defaultRateRows?: RateTemplateRowInputDto[];
 }
 
 export class UpdateCustomerCompanyDto {

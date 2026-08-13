@@ -444,4 +444,68 @@ describe("RateTemplatesService", () => {
     expect(res.rows[0].id).toBe("tr1");
     expect(res.rows[0].id).not.toBe("mr1");
   });
+
+  it("seedFromCurrentQuotationBase uses customized rows instead of the full master copy", async () => {
+    const createMany = jest.fn().mockResolvedValue({ count: 1 });
+    const tx: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      masterRateDataset: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "ds1",
+          versionNo: 3,
+          rows: [
+            { id: "mr1", code: "A", label: "Keep", rateCents: 10000 },
+            { id: "mr2", code: "B", label: "Drop", rateCents: 20000 },
+          ],
+        }),
+      },
+      customerRateTemplate: {
+        create: jest.fn().mockResolvedValue({ id: "tpl-custom" }),
+        findFirst: jest.fn().mockResolvedValue({
+          id: "tpl-custom",
+          sourceMasterDatasetId: "ds1",
+          sourceMasterDatasetVersionNo: 3,
+          rows: [{ code: "A", rateCents: 9000, sourceMasterRowId: "mr1" }],
+        }),
+      },
+      customerRateTemplateRow: { createMany },
+    };
+    const prisma: any = { $transaction: jest.fn() };
+    const audit = { log: jest.fn() };
+    const svc = makeService(prisma, audit);
+
+    const res = await svc.seedFromCurrentQuotationBase(
+      "t1",
+      "c1",
+      "u1",
+      "Acme",
+      {
+        client: tx,
+        rows: [
+          {
+            code: "A",
+            label: "Keep",
+            rateCents: 9000,
+            sourceMasterRowId: "mr1",
+          },
+        ],
+      },
+    );
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
+    expect(createMany.mock.calls[0][0].data).toHaveLength(1);
+    expect(createMany.mock.calls[0][0].data[0]).toMatchObject({
+      code: "A",
+      rateCents: 9000,
+      sourceMasterRowId: "mr1",
+    });
+    expect(tx.customerRateTemplate.create.mock.calls[0][0].data).toMatchObject({
+      sourceMasterDatasetId: "ds1",
+      sourceMasterDatasetVersionNo: 3,
+    });
+    expect(res.id).toBe("tpl-custom");
+  });
 });

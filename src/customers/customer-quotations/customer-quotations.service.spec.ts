@@ -780,6 +780,7 @@ describe("CustomerQuotationsService", () => {
             in: [
               CustomerQuotationStatus.DRAFT,
               CustomerQuotationStatus.ISSUED,
+              CustomerQuotationStatus.SIGNED,
             ],
           },
         }),
@@ -1266,5 +1267,251 @@ describe("CustomerQuotationsService", () => {
       /require a manual unit price/i,
     );
     expect(prisma.customerQuotation.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("uploadSignedDocumentAndAccept marks only that ISSUED quotation ACCEPTED after storage succeeds", async () => {
+    const upload = jest.fn().mockResolvedValue({ error: null });
+    const issued = draftQuotation({
+      status: CustomerQuotationStatus.ISSUED,
+      pdfKey: "t1/companies/c1/customer-quotations/q1/QT-202608-0001.pdf",
+      signedDocumentVersion: 0,
+    });
+    const accepted = {
+      ...issued,
+      status: CustomerQuotationStatus.ACCEPTED,
+      signedDocumentKey:
+        "t1/companies/c1/customer-quotations/q1/signed/v1.pdf",
+      acceptedByUserId: "admin-1",
+    };
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(issued)
+          .mockResolvedValueOnce(accepted),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const { svc, audit } = makeService(prisma, {
+      supabaseService: {
+        getClient: () => ({ storage: { from: () => ({ upload }) } }),
+      },
+    });
+
+    const res = await svc.uploadSignedDocumentAndAccept(
+      "t1",
+      "c1",
+      "q1",
+      {
+        buffer: Buffer.from("%PDF"),
+        originalname: "qt-001-signed.pdf",
+        mimetype: "application/pdf",
+      } as any,
+      "admin-1",
+    );
+
+    expect(upload).toHaveBeenCalled();
+    expect(prisma.customerQuotation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: "q1",
+          tenantId: "t1",
+          customerCompanyId: "c1",
+        }),
+        data: expect.objectContaining({
+          status: CustomerQuotationStatus.ACCEPTED,
+          acceptedByUserId: "admin-1",
+          signedDocumentKey:
+            "t1/companies/c1/customer-quotations/q1/signed/v1.pdf",
+        }),
+      }),
+    );
+    expect(res.status).toBe(CustomerQuotationStatus.ACCEPTED);
+    expect(audit.log).toHaveBeenCalledWith(
+      "t1",
+      "STATUS_CHANGE",
+      "CustomerQuotation",
+      "q1",
+      expect.objectContaining({
+        action: "UPLOAD_SIGNED_DOCUMENT_AND_ACCEPT",
+        to: CustomerQuotationStatus.ACCEPTED,
+      }),
+      "admin-1",
+    );
+  });
+
+  it("uploadSignedDocumentAndAccept does not mark ACCEPTED when storage upload fails", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findFirst: jest.fn().mockResolvedValue(
+          draftQuotation({ status: CustomerQuotationStatus.ISSUED }),
+        ),
+        updateMany: jest.fn(),
+      },
+    };
+    const { svc } = makeService(prisma, {
+      supabaseService: {
+        getClient: () => ({
+          storage: {
+            from: () => ({
+              upload: jest.fn().mockResolvedValue({
+                error: { message: "bucket missing" },
+              }),
+            }),
+          },
+        }),
+      },
+    });
+    await expect(
+      svc.uploadSignedDocumentAndAccept(
+        "t1",
+        "c1",
+        "q1",
+        {
+          buffer: Buffer.from("%PDF"),
+          originalname: "signed.pdf",
+          mimetype: "application/pdf",
+        } as any,
+        "admin-1",
+      ),
+    ).rejects.toThrow(/Failed to store signed quotation/);
+    expect(prisma.customerQuotation.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("uploadSignedDocumentAndAccept rejects DRAFT and another customer's quotation", async () => {
+    const prismaDraft: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findFirst: jest.fn().mockResolvedValue(draftQuotation()),
+        updateMany: jest.fn(),
+      },
+    };
+    const { svc: draftSvc } = makeService(prismaDraft);
+    await expect(
+      draftSvc.uploadSignedDocumentAndAccept(
+        "t1",
+        "c1",
+        "q1",
+        {
+          buffer: Buffer.from("%PDF"),
+          originalname: "signed.pdf",
+          mimetype: "application/pdf",
+        } as any,
+        "u1",
+      ),
+    ).rejects.toThrow(/ISSUED or SIGNED/);
+
+    const prismaOther: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findFirst: jest.fn().mockResolvedValue(
+          draftQuotation({
+            status: CustomerQuotationStatus.ISSUED,
+            customerCompanyId: "c-other",
+          }),
+        ),
+      },
+    };
+    const { svc: otherSvc } = makeService(prismaOther);
+    await expect(
+      otherSvc.uploadSignedDocumentAndAccept(
+        "t1",
+        "c1",
+        "q1",
+        {
+          buffer: Buffer.from("%PDF"),
+          originalname: "signed.pdf",
+          mimetype: "application/pdf",
+        } as any,
+        "u1",
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it("replaceLines updates only that DRAFT quotation and never writes customer rate templates", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findFirst: jest.fn().mockResolvedValue(draftQuotation({ lines: [] })),
+        update: jest.fn().mockResolvedValue(
+          draftQuotation({
+            subtotalCents: 9000,
+            taxCents: 810,
+            totalCents: 9810,
+            lines: [{ code: "A", unitPriceCents: 9000 }],
+          }),
+        ),
+      },
+      customerQuotationLine: {
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
+      },
+      customerRateTemplate: { update: jest.fn(), findFirst: jest.fn() },
+      $transaction: jest.fn(async (fn: any) =>
+        fn({
+          customerQuotationLine: {
+            deleteMany: jest.fn(),
+            createMany: jest.fn(),
+          },
+          customerQuotation: {
+            update: jest.fn().mockResolvedValue(
+              draftQuotation({
+                subtotalCents: 9000,
+                taxCents: 810,
+                totalCents: 9810,
+                lines: [{ code: "A", unitPriceCents: 9000 }],
+              }),
+            ),
+          },
+        }),
+      ),
+    };
+    const { svc } = makeService(prisma);
+    await svc.replaceLines(
+      "t1",
+      "c1",
+      "q1",
+      [{ code: "A", label: "Haul", qty: 1, unitPriceCents: 9000 }],
+      "u1",
+    );
+    expect(prisma.customerRateTemplate.update).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  it("replaceLines rejects ISSUED quotations so issued snapshots stay frozen", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findFirst: jest.fn().mockResolvedValue(
+          draftQuotation({ status: CustomerQuotationStatus.ISSUED }),
+        ),
+      },
+      $transaction: jest.fn(),
+    };
+    const { svc } = makeService(prisma);
+    await expect(
+      svc.replaceLines(
+        "t1",
+        "c1",
+        "q1",
+        [{ code: "A", label: "Haul", qty: 1, unitPriceCents: 9000 }],
+        "u1",
+      ),
+    ).rejects.toThrow(/Only DRAFT/);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });

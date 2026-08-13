@@ -397,7 +397,12 @@ export class CustomersService {
               created.id,
               actorUserId,
               created.name,
-              { client: tx },
+              {
+                client: tx,
+                ...(dto.defaultRateRows !== undefined
+                  ? { rows: dto.defaultRateRows }
+                  : {}),
+              },
             )
           : null;
         return { company: created, seeded: seededTemplate, wasCreate: true };

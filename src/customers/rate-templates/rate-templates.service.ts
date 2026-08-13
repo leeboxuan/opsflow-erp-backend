@@ -30,6 +30,12 @@ export type CreateFromMasterOptions = {
    * `$transaction`. Audit is left to the caller so it cannot commit independently.
    */
   client?: RateTemplateDbClient;
+  /**
+   * When set (including `[]`), seed these customized rows instead of copying
+   * every current quotation-base row. Provenance still points at the current
+   * master dataset when one exists.
+   */
+  rows?: RateTemplateRowInputDto[];
 };
 
 @Injectable()
@@ -197,6 +203,120 @@ export class RateTemplatesService {
     };
   }
 
+  private templateRowCreateData(
+    tenantId: string,
+    templateId: string,
+    r: Record<string, any>,
+    index: number,
+    opts: { actorUserId: string | null; sourceMasterRowId?: string | null },
+  ) {
+    return {
+      tenantId,
+      templateId,
+      code: r.code,
+      label: r.label,
+      section: r.section ?? null,
+      description: r.description ?? null,
+      category: r.category ?? null,
+      unit: r.unit ?? null,
+      containerSize: r.containerSize ?? null,
+      tripMode: r.tripMode ?? null,
+      areaScope: r.areaScope ?? null,
+      currency: r.currency || "SGD",
+      rateCents: r.rateCents ?? null,
+      rawRateText: r.rawRateText ?? null,
+      requiresManualAmount: !!r.requiresManualAmount,
+      hasMultipleRates: !!r.hasMultipleRates,
+      rateOptionsJson:
+        r.rateOptionsJson == null
+          ? undefined
+          : (r.rateOptionsJson as Prisma.InputJsonValue),
+      defaultRateOptionIndex: r.defaultRateOptionIndex ?? null,
+      notes: r.notes ?? null,
+      sortOrder: r.sortOrder ?? index,
+      isActive: r.isActive !== false,
+      metadataJson:
+        r.metadataJson == null
+          ? undefined
+          : (r.metadataJson as Prisma.InputJsonValue),
+      sourceMasterRowId: opts.sourceMasterRowId ?? null,
+      createdByUserId: opts.actorUserId,
+      updatedByUserId: opts.actorUserId,
+    };
+  }
+
+  private async seedCustomizedDefaultRates(
+    db: RateTemplateDbClient,
+    params: {
+      tenantId: string;
+      customerId: string;
+      name: string;
+      notes: string;
+      actorUserId: string | null;
+      dataset: { id: string; versionNo: number } | null;
+      rows: RateTemplateRowInputDto[];
+      joinsOuterTx: boolean;
+    },
+  ) {
+    await this.assertCustomerCompany(params.tenantId, params.customerId, db);
+    const copy = async (tx: RateTemplateDbClient) => {
+      const template = await tx.customerRateTemplate.create({
+        data: {
+          tenantId: params.tenantId,
+          customerCompanyId: params.customerId,
+          name: params.name,
+          status: CustomerRateTemplateStatus.DRAFT,
+          currency: "SGD",
+          notes: params.notes,
+          sourceMasterDatasetId: params.dataset?.id ?? null,
+          sourceMasterDatasetVersionNo: params.dataset?.versionNo ?? null,
+          createdByUserId: params.actorUserId,
+          updatedByUserId: params.actorUserId,
+        },
+      });
+      if (params.rows.length > 0) {
+        await tx.customerRateTemplateRow.createMany({
+          data: params.rows.map((r, index) =>
+            this.templateRowCreateData(params.tenantId, template.id, r, index, {
+              actorUserId: params.actorUserId,
+              sourceMasterRowId: r.sourceMasterRowId ?? null,
+            }),
+          ),
+        });
+      }
+      return tx.customerRateTemplate.findFirst({
+        where: { tenantId: params.tenantId, id: template.id },
+        include: {
+          rows: {
+            orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+          },
+        },
+      });
+    };
+
+    const created = params.joinsOuterTx
+      ? await copy(db)
+      : await this.prisma.$transaction(async (tx) => copy(tx));
+
+    if (!params.joinsOuterTx) {
+      await this.audit.log(
+        params.tenantId,
+        "CREATE",
+        "CustomerRateTemplate",
+        created!.id,
+        {
+          customerCompanyId: params.customerId,
+          fromMasterDatasetId: params.dataset?.id ?? null,
+          versionNo: params.dataset?.versionNo ?? null,
+          rowCount: params.rows.length,
+          customizedOnCustomerCreate: true,
+        },
+        params.actorUserId,
+      );
+    }
+    return created!;
+  }
+
   private async findPreferredQuotationDataset(
     tenantId: string,
     client: RateTemplateDbClient = this.prisma,
@@ -255,39 +375,13 @@ export class RateTemplatesService {
 
     if (params.dataset.rows.length > 0) {
       await tx.customerRateTemplateRow.createMany({
-        data: params.dataset.rows.map((r, index) => ({
-          tenantId: params.tenantId,
-          templateId: template.id,
-          code: r.code,
-          label: r.label,
-          section: r.section,
-          description: r.description,
-          category: r.category,
-          unit: r.unit,
-          containerSize: r.containerSize,
-          tripMode: r.tripMode,
-          areaScope: r.areaScope,
-          currency: r.currency || "SGD",
-          rateCents: r.rateCents,
-          rawRateText: r.rawRateText,
-          requiresManualAmount: r.requiresManualAmount,
-          hasMultipleRates: r.hasMultipleRates,
-          rateOptionsJson:
-            r.rateOptionsJson == null
-              ? undefined
-              : (r.rateOptionsJson as Prisma.InputJsonValue),
-          defaultRateOptionIndex: r.defaultRateOptionIndex,
-          notes: r.notes,
-          sortOrder: r.sortOrder ?? index,
-          isActive: r.isActive,
-          metadataJson:
-            r.metadataJson == null
-              ? undefined
-              : (r.metadataJson as Prisma.InputJsonValue),
-          sourceMasterRowId: r.id,
-          createdByUserId: params.actorUserId,
-          updatedByUserId: params.actorUserId,
-        })),
+        data: params.dataset.rows.map((r, index) =>
+          this.templateRowCreateData(params.tenantId, template.id, r, index, {
+            actorUserId: params.actorUserId,
+            sourceMasterRowId:
+              r.sourceMasterRowId !== undefined ? r.sourceMasterRowId : r.id,
+          }),
+        ),
       });
     }
 
@@ -364,20 +458,34 @@ export class RateTemplatesService {
   ) {
     const db = opts?.client ?? this.prisma;
     const dataset = await this.findPreferredQuotationDataset(tenantId, db);
-    if (!dataset) return null;
+    const customized = opts?.rows;
+    if (!dataset && customized === undefined) return null;
 
     const name = companyName?.trim()
       ? `${companyName.trim()} — ${SEEDED_CUSTOMER_RATE_TEMPLATE_NAME}`
       : SEEDED_CUSTOMER_RATE_TEMPLATE_NAME;
+    const notes =
+      "Independent copy of the quotation base template at customer creation. Later base-template edits do not rewrite this copy.";
+
+    if (customized !== undefined) {
+      return this.seedCustomizedDefaultRates(db, {
+        tenantId,
+        customerId,
+        name,
+        notes,
+        actorUserId,
+        dataset,
+        rows: customized,
+        joinsOuterTx: !!opts?.client,
+      });
+    }
+
+    if (!dataset) return null;
 
     return this.createFromMaster(
       tenantId,
       customerId,
-      {
-        name,
-        notes:
-          "Independent copy of the quotation base template at customer creation. Later base-template edits do not rewrite this copy.",
-      },
+      { name, notes },
       actorUserId,
       opts,
     );

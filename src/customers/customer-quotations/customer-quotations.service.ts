@@ -1593,6 +1593,123 @@ export class CustomerQuotationsService {
     return updated;
   }
 
+  /**
+   * Persist the signed copy for this quotation and mark it ACCEPTED.
+   * Storage first: a failed DB write leaves an orphan object, never an
+   * ACCEPTED quotation without a signed file pointer.
+   */
+  async uploadSignedDocumentAndAccept(
+    tenantId: string,
+    customerId: string,
+    id: string,
+    file: Express.Multer.File,
+    actorUserId: string | null,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException("file is required");
+    }
+    const originalName = String(file.originalname ?? "signed-quotation.pdf");
+    const mime = String(file.mimetype ?? "").toLowerCase();
+    const isPdf =
+      originalName.toLowerCase().endsWith(".pdf") || mime === "application/pdf";
+    if (!isPdf) {
+      throw new BadRequestException("Signed quotation must be a PDF file");
+    }
+
+    const quotation = await this.getById(tenantId, customerId, id);
+    if (
+      quotation.status !== CustomerQuotationStatus.ISSUED &&
+      quotation.status !== CustomerQuotationStatus.SIGNED
+    ) {
+      throw new BadRequestException(
+        "Signed quotation can only be uploaded when status is ISSUED or SIGNED",
+      );
+    }
+
+    const nextVersion = (quotation.signedDocumentVersion ?? 0) + 1;
+    const storageKey = this.buildSignedDocumentStorageKey(
+      tenantId,
+      customerId,
+      quotation.id,
+      nextVersion,
+      originalName,
+    );
+
+    const supabase = this.supabaseService.getClient();
+    const { error: uploadError } = await supabase.storage
+      .from(QUOTATION_PDF_BUCKET)
+      .upload(storageKey, file.buffer, {
+        contentType: file.mimetype || "application/pdf",
+        upsert: false,
+      });
+    if (uploadError) {
+      throw new BadRequestException(
+        `Failed to store signed quotation: ${uploadError.message}`,
+      );
+    }
+
+    const now = new Date();
+    const fromStatus = quotation.status;
+    const previousKey = quotation.signedDocumentKey;
+    const result = await this.prisma.customerQuotation.updateMany({
+      where: {
+        id: quotation.id,
+        tenantId,
+        customerCompanyId: customerId,
+        status: {
+          in: [CustomerQuotationStatus.ISSUED, CustomerQuotationStatus.SIGNED],
+        },
+      },
+      data: {
+        signedDocumentKey: storageKey,
+        signedDocumentOriginalName: originalName,
+        signedDocumentUploadedAt: now,
+        signedDocumentUploadedByUserId: actorUserId,
+        signedDocumentVersion: nextVersion,
+        acceptanceEvidenceStorageKey: storageKey,
+        acceptanceMethod: CustomerQuotationAcceptanceMethod.SIGNED_DOCUMENT,
+        acceptanceEvidenceNote: `Signed quotation uploaded: ${originalName}`,
+        acceptedAt: now,
+        acceptedByUserId: actorUserId,
+        status: CustomerQuotationStatus.ACCEPTED,
+        updatedByUserId: actorUserId,
+      },
+    });
+    if (result.count === 0) {
+      throw new BadRequestException(
+        "Quotation could not be accepted (status changed after upload)",
+      );
+    }
+
+    const updated = await this.prisma.customerQuotation.findFirst({
+      where: { id: quotation.id, tenantId, customerCompanyId: customerId },
+      include: {
+        lines: { orderBy: [{ sortOrder: "asc" }, { id: "asc" }] },
+      },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "STATUS_CHANGE",
+      "CustomerQuotation",
+      quotation.id,
+      {
+        action: "UPLOAD_SIGNED_DOCUMENT_AND_ACCEPT",
+        from: fromStatus,
+        to: CustomerQuotationStatus.ACCEPTED,
+        version: nextVersion,
+        originalName,
+        storageKey,
+        previousKey,
+        pdfKeyUnchanged: quotation.pdfKey,
+        acceptanceMethod: CustomerQuotationAcceptanceMethod.SIGNED_DOCUMENT,
+      },
+      actorUserId,
+    );
+
+    return updated!;
+  }
+
   async getSignedDocumentUrl(
     tenantId: string,
     customerId: string,

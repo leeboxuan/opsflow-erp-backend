@@ -527,4 +527,31 @@ describe("CustomersService createCompany quotation base seed", () => {
     expect(prisma.customer_companies.upsert).toHaveBeenCalled();
     expect(res.seededCustomerRateTemplate).toBeNull();
   });
+
+  it("passes customized defaultRateRows into the same seed transaction and does not create a quotation", async () => {
+    const rows = [
+      { code: "A", label: "Keep", rateCents: 9000, sourceMasterRowId: "mr1" },
+    ];
+    const { svc, seedFromCurrentQuotationBase, tx } = makeNewCompanyService({
+      seedImpl: async () => ({
+        ...seededTemplate,
+        rows: [{ id: "tr1", code: "A", sourceMasterRowId: "mr1" }],
+      }),
+    });
+
+    await svc.createCompany(
+      "t1",
+      { name: "Acme", defaultRateRows: rows as any },
+      "u1",
+    );
+
+    expect(seedFromCurrentQuotationBase).toHaveBeenCalledWith(
+      "t1",
+      "c-new",
+      "u1",
+      "Acme",
+      { client: tx, rows },
+    );
+    expect("customerQuotation" in tx).toBe(false);
+  });
 });

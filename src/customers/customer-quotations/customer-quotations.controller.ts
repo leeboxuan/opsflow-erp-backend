@@ -291,6 +291,38 @@ export class CustomerQuotationsController {
     );
   }
 
+  @Post(":id/signed-document/accept")
+  @ApiOperation({
+    summary:
+      "Upload the customer's signed quotation and mark this quotation ACCEPTED",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["file"],
+      properties: {
+        file: { type: "string", format: "binary" },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  uploadSignedDocumentAndAccept(
+    @Request() req: any,
+    @Param("customerId") customerId: string,
+    @Param("id") id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException("file is required");
+    return this.quotations.uploadSignedDocumentAndAccept(
+      req.tenant.tenantId,
+      customerId,
+      id,
+      file,
+      req.user?.userId ?? null,
+    );
+  }
+
   @Post(":id/signed-document")
   @ApiOperation({
     summary:
