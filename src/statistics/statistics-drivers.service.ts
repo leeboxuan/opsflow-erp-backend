@@ -19,6 +19,8 @@ import {
   StatisticsDriverSortField,
 } from "./statistics.constants";
 import { resolveStatisticsDateRange } from "./statistics-date-range";
+import { calendarDateKey } from "./statistics-references";
+import { buildContainerMovementWhere } from "./statistics-scope";
 import { evaluateRequiredDocumentCompletion } from "./statistics.predicates";
 
 type DriverAggregateRawRow = {
@@ -100,6 +102,23 @@ function driverAggregateFilters(
       Prisma.sql`(
         t."vehicleId" = ${query.vehicleId}
         OR t."fleetVehicleId" = ${query.vehicleId}
+      )`,
+    );
+  }
+  if (query.containerNo) {
+    filters.push(
+      Prisma.sql`EXISTS (
+        SELECT 1
+        FROM "trip_job_items" tji
+        JOIN "job_items" ji
+          ON ji."id" = tji."jobItemId"
+         AND ji."tenantId" = ${tenantId}
+        WHERE tji."tripId" = t."id"
+          AND tji."tenantId" = ${tenantId}
+          AND (
+            LOWER(ji."itemCode") = LOWER(${query.containerNo})
+            OR LOWER(COALESCE(tji."containerNumberSnapshot", '')) = LOWER(${query.containerNo})
+          )
       )`,
     );
   }
@@ -419,6 +438,12 @@ export class StatisticsDriversService {
       resolvableTrips,
       documents,
     );
+    const truckingStats = await this.loadDriverTruckingStats(
+      tenantId,
+      query,
+      range,
+      driverUserIds,
+    );
 
     const data: StatisticsDriverRowDto[] = pageRows.map((row) => {
       const invalidDurationCount = safeInteger(
@@ -446,6 +471,13 @@ export class StatisticsDriversService {
         driverName: names.get(row.driverUserId) ?? null,
         completedTrips: safeInteger(row.completedTrips),
         completedJobs: safeInteger(row.completedJobs),
+        uniqueContainers:
+          truckingStats.get(row.driverUserId)?.uniqueContainers ?? 0,
+        containerMovements:
+          truckingStats.get(row.driverUserId)?.containerMovements ?? 0,
+        activeDays: truckingStats.get(row.driverUserId)?.activeDays ?? 0,
+        avgTripsPerActiveDay:
+          truckingStats.get(row.driverUserId)?.avgTripsPerActiveDay ?? null,
         totalValidDurationMs: safeInteger(row.totalValidDurationMs),
         avgDurationMs: nullableSafeInteger(row.avgDurationMs),
         cancelledTrips: cancelledByDriver.get(row.driverUserId) ?? 0,
@@ -488,6 +520,34 @@ export class StatisticsDriversService {
             ],
           }
         : {}),
+      ...(query.containerNo
+        ? {
+            tripJobItems: {
+              some: {
+                tenantId,
+                OR: [
+                  {
+                    containerNumberSnapshot: {
+                      equals: query.containerNo,
+                      mode: "insensitive",
+                    },
+                  },
+                  {
+                    jobItem: {
+                      is: {
+                        tenantId,
+                        itemCode: {
+                          equals: query.containerNo,
+                          mode: "insensitive",
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          }
+        : {}),
       job: {
         is: {
           tenantId,
@@ -498,6 +558,109 @@ export class StatisticsDriversService {
       },
       ...metricWhere,
     };
+  }
+
+  private async loadDriverTruckingStats(
+    tenantId: string,
+    query: StatisticsDriversQueryDto,
+    range: { gte: Date; lt: Date; timeZone: string },
+    driverUserIds: string[],
+  ): Promise<
+    Map<
+      string,
+      {
+        uniqueContainers: number;
+        containerMovements: number;
+        activeDays: number;
+        avgTripsPerActiveDay: number | null;
+      }
+    >
+  > {
+    const stats = new Map(
+      driverUserIds.map((id) => [
+        id,
+        {
+          uniqueContainers: 0,
+          containerMovements: 0,
+          activeDays: 0,
+          avgTripsPerActiveDay: null as number | null,
+        },
+      ]),
+    );
+    if (driverUserIds.length === 0) return stats;
+
+    const movementWhere = buildContainerMovementWhere(tenantId, query, range);
+    const movementTripFilter =
+      movementWhere.trip && "is" in movementWhere.trip
+        ? (movementWhere.trip.is as Prisma.TripWhereInput)
+        : {};
+    const [movements, completedTrips] = await Promise.all([
+      this.prisma.tripJobItem.findMany({
+        where: {
+          ...movementWhere,
+          trip: {
+            is: {
+              ...movementTripFilter,
+              assignedDriverUserId: { in: driverUserIds },
+            },
+          },
+        },
+        select: {
+          jobItemId: true,
+          trip: { select: { assignedDriverUserId: true } },
+        },
+      }),
+      this.prisma.trip.findMany({
+        where: this.buildTripScope(tenantId, query, driverUserIds, {
+          status: { in: [...COMPLETED_TRIP_STATUSES] },
+          closedAt: { gte: range.gte, lt: range.lt },
+        }),
+        select: {
+          assignedDriverUserId: true,
+          closedAt: true,
+        },
+      }),
+    ]);
+
+    const containers = new Map<string, Set<string>>();
+    const days = new Map<string, Set<string>>();
+    const tripCounts = new Map<string, number>();
+    for (const movement of movements as Array<{
+      jobItemId: string;
+      trip: { assignedDriverUserId: string | null };
+    }>) {
+      const driverId = movement.trip.assignedDriverUserId;
+      if (!driverId || !stats.has(driverId)) continue;
+      const current = stats.get(driverId)!;
+      current.containerMovements += 1;
+      const set = containers.get(driverId) ?? new Set<string>();
+      set.add(movement.jobItemId);
+      containers.set(driverId, set);
+    }
+    for (const trip of completedTrips as Array<{
+      assignedDriverUserId: string | null;
+      closedAt: Date | null;
+    }>) {
+      const driverId = trip.assignedDriverUserId;
+      if (!driverId || !stats.has(driverId)) continue;
+      tripCounts.set(driverId, (tripCounts.get(driverId) ?? 0) + 1);
+      if (!trip.closedAt) continue;
+      const set = days.get(driverId) ?? new Set<string>();
+      set.add(calendarDateKey(trip.closedAt, range.timeZone));
+      days.set(driverId, set);
+    }
+    for (const driverId of driverUserIds) {
+      const current = stats.get(driverId)!;
+      current.uniqueContainers = containers.get(driverId)?.size ?? 0;
+      current.activeDays = days.get(driverId)?.size ?? 0;
+      current.avgTripsPerActiveDay =
+        current.activeDays > 0
+          ? Math.round(
+              ((tripCounts.get(driverId) ?? 0) / current.activeDays) * 100,
+            ) / 100
+          : null;
+    }
+    return stats;
   }
 
   private hasResolvableCompletionRule(raw: Prisma.JsonValue | null): boolean {

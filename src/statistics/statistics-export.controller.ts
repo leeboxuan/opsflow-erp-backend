@@ -17,11 +17,12 @@ import { TenantGuard } from "../shared/auth/guards/tenant.guard";
 import {
   StatisticsDriversExportQueryDto,
   StatisticsExceptionsExportQueryDto,
+  StatisticsFiltersQueryDto,
   StatisticsFinanceExportQueryDto,
 } from "./dto";
 import {
   StatisticsExportService,
-  type StatisticsCsvExport,
+  type StatisticsFileExport,
 } from "./statistics-export.service";
 import { StatisticsTenantRequest } from "./statistics.controller";
 
@@ -35,8 +36,8 @@ export class StatisticsExportController {
 
   @Get("drivers/export")
   @RequiresTenantModule(TenantModule.TRANSPORT)
-  @ApiOperation({ summary: "Export complete filtered Driver Statistics CSV" })
-  @ApiProduces("text/csv")
+  @ApiOperation({ summary: "Export Driver Statistics Excel" })
+  @ApiProduces("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
   async exportDrivers(
     @Req() req: StatisticsTenantRequest,
     @Query() query: StatisticsDriversExportQueryDto,
@@ -50,8 +51,8 @@ export class StatisticsExportController {
 
   @Get("finance/export")
   @RequiresTenantModule(TenantModule.FINANCE)
-  @ApiOperation({ summary: "Export Finance Statistics CSV" })
-  @ApiProduces("text/csv")
+  @ApiOperation({ summary: "Export Finance Statistics Excel" })
+  @ApiProduces("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
   async exportFinance(
     @Req() req: StatisticsTenantRequest,
     @Query() query: StatisticsFinanceExportQueryDto,
@@ -65,8 +66,8 @@ export class StatisticsExportController {
 
   @Get("exceptions/export")
   @RequiresTenantModule(TenantModule.TRANSPORT, TenantModule.FINANCE)
-  @ApiOperation({ summary: "Export complete filtered Exceptions CSV" })
-  @ApiProduces("text/csv")
+  @ApiOperation({ summary: "Export Exceptions Statistics Excel" })
+  @ApiProduces("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
   async exportExceptions(
     @Req() req: StatisticsTenantRequest,
     @Query() query: StatisticsExceptionsExportQueryDto,
@@ -78,8 +79,57 @@ export class StatisticsExportController {
     );
   }
 
-  private send(response: Response, result: StatisticsCsvExport): Response {
-    response.setHeader("Content-Type", "text/csv; charset=utf-8");
+  @Get("trucking/export")
+  @RequiresTenantModule(TenantModule.TRANSPORT)
+  @ApiOperation({ summary: "Export Trucking Statistics Excel" })
+  @ApiProduces("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+  async exportTrucking(
+    @Req() req: StatisticsTenantRequest,
+    @Query() query: StatisticsFiltersQueryDto,
+    @Res() response: Response,
+  ): Promise<Response> {
+    return this.send(
+      response,
+      await this.exports.exportTrucking(req.tenant.tenantId, query),
+    );
+  }
+
+  @Get("customers/export")
+  @RequiresTenantModule(TenantModule.TRANSPORT)
+  @ApiOperation({ summary: "Export Customer Statistics Excel" })
+  @ApiProduces("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+  async exportCustomers(
+    @Req() req: StatisticsTenantRequest,
+    @Query() query: StatisticsFiltersQueryDto,
+    @Res() response: Response,
+  ): Promise<Response> {
+    return this.send(
+      response,
+      await this.exports.exportCustomers(req.tenant.tenantId, query),
+    );
+  }
+
+  @Get("export")
+  @RequiresTenantModule(TenantModule.TRANSPORT)
+  @ApiOperation({ summary: "Export full management Statistics workbook" })
+  @ApiProduces("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+  async exportManagement(
+    @Req() req: StatisticsTenantRequest,
+    @Query() query: StatisticsFiltersQueryDto,
+    @Res() response: Response,
+  ): Promise<Response> {
+    return this.send(
+      response,
+      await this.exports.exportManagement(req.tenant.tenantId, query),
+    );
+  }
+
+  private send(response: Response, result: StatisticsFileExport): Response {
+    response.setHeader(
+      "Content-Type",
+      result.contentType ||
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
     response.setHeader(
       "Content-Disposition",
       `attachment; filename="${result.filename}"`,

@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../shared/auth/auth.module";
 import { PrismaModule } from "../shared/prisma/prisma.module";
+import { StatisticsCustomersService } from "./statistics-customers.service";
 import { StatisticsDriversController } from "./statistics-drivers.controller";
 import { StatisticsDriversService } from "./statistics-drivers.service";
 import { StatisticsExceptionsController } from "./statistics-exceptions.controller";
@@ -9,8 +10,11 @@ import { StatisticsExportController } from "./statistics-export.controller";
 import { StatisticsExportService } from "./statistics-export.service";
 import { StatisticsFinanceController } from "./statistics-finance.controller";
 import { StatisticsFinanceService } from "./statistics-finance.service";
+import { StatisticsLookupsService } from "./statistics-lookups.service";
 import { StatisticsOverviewController } from "./statistics-overview.controller";
 import { StatisticsOverviewService } from "./statistics-overview.service";
+import { StatisticsTruckingController } from "./statistics-trucking.controller";
+import { StatisticsTruckingService } from "./statistics-trucking.service";
 
 /**
  * Dedicated Statistics V1 module boundary.
@@ -26,6 +30,7 @@ import { StatisticsOverviewService } from "./statistics-overview.service";
     StatisticsDriversController,
     StatisticsFinanceController,
     StatisticsExceptionsController,
+    StatisticsTruckingController,
     StatisticsExportController,
   ],
   providers: [
@@ -33,6 +38,9 @@ import { StatisticsOverviewService } from "./statistics-overview.service";
     StatisticsDriversService,
     StatisticsFinanceService,
     StatisticsExceptionsService,
+    StatisticsTruckingService,
+    StatisticsCustomersService,
+    StatisticsLookupsService,
     StatisticsExportService,
   ],
 })

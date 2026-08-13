@@ -5,147 +5,50 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../shared/prisma/prisma.service";
 import {
-  StatisticsDriverRowDto,
   StatisticsDriversExportQueryDto,
-  StatisticsExceptionItemDto,
   StatisticsExceptionsExportQueryDto,
-  StatisticsFinanceCurrencyGroupDto,
-  StatisticsFinanceDto,
+  StatisticsFiltersQueryDto,
   StatisticsFinanceExportQueryDto,
 } from "./dto";
 import {
-  buildStatisticsExportFilename,
-  joinStatisticsLimitations,
-  serializeStatisticsCsv,
-  type StatisticsCsvColumn,
-} from "./statistics-csv";
+  buildStatisticsExcelFilename,
+  buildStatisticsExcelWorkbook,
+} from "./statistics-excel";
+import {
+  containersSheet,
+  customersSheet,
+  driversSheet,
+  exceptionsSheet,
+  financeSheet,
+  fleetSheet,
+  lanesSheet,
+  movementsSheet,
+  overviewSummarySheet,
+  truckingSummarySheet,
+  workbookInput,
+} from "./statistics-excel-reports";
 import { resolveStatisticsDateRange } from "./statistics-date-range";
+import { StatisticsCustomersService } from "./statistics-customers.service";
 import { StatisticsDriversService } from "./statistics-drivers.service";
 import { StatisticsExceptionsService } from "./statistics-exceptions.service";
 import { StatisticsFinanceService } from "./statistics-finance.service";
+import { StatisticsOverviewService } from "./statistics-overview.service";
+import { StatisticsTruckingService } from "./statistics-trucking.service";
 
 export const MAX_STATISTICS_EXPORT_ROWS = 10_000;
 const EXPORT_PAGE_SIZE = 100;
+const XLSX_CONTENT_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-export type StatisticsCsvExport = {
+export type StatisticsFileExport = {
   body: Buffer;
   filename: string;
   rowCount: number;
+  contentType: string;
 };
 
-const DRIVER_COLUMNS: readonly StatisticsCsvColumn<
-  StatisticsDriverRowDto & { responseLimitations: string }
->[] = [
-  { header: "Driver ID", value: (row) => row.driverUserId },
-  { header: "Driver Name", value: (row) => row.driverName },
-  { header: "Completed Trips", value: (row) => row.completedTrips },
-  { header: "Completed Jobs", value: (row) => row.completedJobs },
-  {
-    header: "Total Valid Duration Ms",
-    value: (row) => row.totalValidDurationMs,
-  },
-  { header: "Average Duration Ms", value: (row) => row.avgDurationMs },
-  { header: "Cancelled Trips", value: (row) => row.cancelledTrips },
-  { header: "Reassignment Count", value: (row) => row.reassignmentCount },
-  {
-    header: "Required Document Completion Rate Basis Points",
-    value: (row) => row.requiredDocumentCompletionRateBasisPoints,
-  },
-  {
-    header: "Row Limitations",
-    value: (row) => joinStatisticsLimitations(row.limitations),
-  },
-  {
-    header: "Response Limitations",
-    value: (row) => row.responseLimitations,
-  },
-];
-
-type FinanceExportRow = {
-  group: StatisticsFinanceCurrencyGroupDto | null;
-  response: StatisticsFinanceDto;
-  responseLimitations: string;
-};
-
-const FINANCE_COLUMNS: readonly StatisticsCsvColumn<FinanceExportRow>[] = [
-  { header: "Currency", value: (row) => row.group?.currency },
-  {
-    header: "Job Charges Cents",
-    value: (row) => row.group?.jobChargesCents,
-  },
-  {
-    header: "Issued Invoice Value Cents",
-    value: (row) => row.group?.issuedInvoiceValueCents,
-  },
-  {
-    header: "Paid Invoice Value Cents",
-    value: (row) => row.group?.paidInvoiceValueCents,
-  },
-  {
-    header: "Uninvoiced Ready Value Cents",
-    value: (row) => row.group?.uninvoicedReadyValueCents,
-  },
-  {
-    header: "Recorded Trip Payout Cents",
-    value: (row) => row.group?.recordedTripPayoutCents,
-  },
-  {
-    header: "Attributable Job Payout Cents",
-    value: (row) => row.group?.attributableJobPayoutCents,
-  },
-  {
-    header: "Gross Profit Cents",
-    value: (row) => row.group?.grossProfitCents,
-  },
-  {
-    header: "Gross Margin Basis Points",
-    value: (row) => row.group?.grossMarginBasisPoints,
-  },
-  {
-    header: "Completed Jobs Missing Charges",
-    value: (row) => row.response.exceptionCounts.completedJobsMissingCharges,
-  },
-  {
-    header: "Completed Trips Missing Payouts",
-    value: (row) => row.response.exceptionCounts.completedTripsMissingPayouts,
-  },
-  {
-    header: "Excluded From Profit",
-    value: (row) => row.response.exceptionCounts.excludedFromProfit,
-  },
-  {
-    header: "Response Limitations",
-    value: (row) => row.responseLimitations,
-  },
-];
-
-type ExceptionExportRow = StatisticsExceptionItemDto & {
-  responseLimitations: string;
-};
-
-const EXCEPTION_COLUMNS: readonly StatisticsCsvColumn<ExceptionExportRow>[] = [
-  { header: "Key", value: (row) => row.key },
-  { header: "Severity", value: (row) => row.severity },
-  { header: "Entity Type", value: (row) => row.entityType },
-  { header: "Entity ID", value: (row) => row.entityId },
-  { header: "Job ID", value: (row) => row.jobId },
-  { header: "Trip ID", value: (row) => row.tripId },
-  { header: "Invoice ID", value: (row) => row.invoiceId },
-  {
-    header: "Reporting Timestamp",
-    value: (row) => row.reportingTimestamp,
-  },
-  { header: "Explanation", value: (row) => row.explanation },
-  { header: "Href", value: (row) => row.href },
-  {
-    header: "Resolvable In OpsFlow",
-    value: (row) => row.resolvableInOpsFlow,
-  },
-  {
-    header: "Response Limitations",
-    value: (row) => row.responseLimitations,
-  },
-];
+/** @deprecated alias kept for existing controller/tests during the Excel cutover */
+export type StatisticsCsvExport = StatisticsFileExport;
 
 @Injectable()
 export class StatisticsExportService {
@@ -154,30 +57,31 @@ export class StatisticsExportService {
     private readonly drivers: StatisticsDriversService,
     private readonly finance: StatisticsFinanceService,
     private readonly exceptions: StatisticsExceptionsService,
+    private readonly trucking: StatisticsTruckingService,
+    private readonly customers: StatisticsCustomersService,
+    private readonly overview: StatisticsOverviewService,
   ) {}
 
   async exportDrivers(
     tenantId: string,
     query: StatisticsDriversExportQueryDto,
-  ): Promise<StatisticsCsvExport> {
+  ): Promise<StatisticsFileExport> {
     const first = await this.drivers.getDrivers(tenantId, {
       ...query,
       page: 1,
       pageSize: EXPORT_PAGE_SIZE,
     });
     this.assertWithinLimit(first.meta.total);
-
-    const expectedTotal = first.meta.total;
     const rows = [...first.data];
     const seen = new Set(rows.map((row) => row.driverUserId));
-    const pageCount = Math.ceil(expectedTotal / EXPORT_PAGE_SIZE);
+    const pageCount = Math.ceil(first.meta.total / EXPORT_PAGE_SIZE);
     for (let page = 2; page <= pageCount; page += 1) {
       const next = await this.drivers.getDrivers(tenantId, {
         ...query,
         page,
         pageSize: EXPORT_PAGE_SIZE,
       });
-      this.assertStableTotal(expectedTotal, next.meta.total);
+      this.assertStableTotal(first.meta.total, next.meta.total);
       for (const row of next.data) {
         if (seen.has(row.driverUserId)) {
           throw new ConflictException(
@@ -188,65 +92,219 @@ export class StatisticsExportService {
         rows.push(row);
       }
     }
-    if (rows.length !== expectedTotal) {
-      throw new ConflictException(
-        "Statistics changed during export. Please retry.",
-      );
-    }
-
-    const range = await this.resolveRange(tenantId, query);
-    const responseLimitations = joinStatisticsLimitations(first.limitations);
-    return this.toExport(
-      "drivers",
-      range.from,
-      range.to,
-      DRIVER_COLUMNS,
-      rows.map((row) => ({ ...row, responseLimitations })),
+    const meta = await this.workbookMeta(tenantId, query, "OpsFlow — Drivers Report");
+    const body = await buildStatisticsExcelWorkbook(
+      workbookInput({
+        ...meta,
+        limitations: first.limitations,
+        sheets: [driversSheet(rows)],
+      }),
     );
+    return {
+      body,
+      filename: buildStatisticsExcelFilename("Drivers", meta.periodFrom, meta.periodTo),
+      rowCount: rows.length,
+      contentType: XLSX_CONTENT_TYPE,
+    };
   }
 
   async exportFinance(
     tenantId: string,
     query: StatisticsFinanceExportQueryDto,
-  ): Promise<StatisticsCsvExport> {
+  ): Promise<StatisticsFileExport> {
     const response = await this.finance.getFinance(tenantId, query);
-    const responseLimitations = joinStatisticsLimitations(response.limitations);
-    const groups =
-      response.currencyGroups.length > 0 ? response.currencyGroups : [null];
-    const rows = groups.map((group) => ({
-      group,
-      response,
-      responseLimitations,
-    }));
-    const range = await this.resolveRange(tenantId, query);
-    return this.toExport(
-      "finance",
-      range.from,
-      range.to,
-      FINANCE_COLUMNS,
-      rows,
+    const meta = await this.workbookMeta(tenantId, query, "OpsFlow — Finance Report");
+    const body = await buildStatisticsExcelWorkbook(
+      workbookInput({
+        ...meta,
+        limitations: response.limitations,
+        sheets: [financeSheet(response.currencyGroups)],
+      }),
     );
+    return {
+      body,
+      filename: buildStatisticsExcelFilename("Finance", meta.periodFrom, meta.periodTo),
+      rowCount: response.currencyGroups.length,
+      contentType: XLSX_CONTENT_TYPE,
+    };
   }
 
   async exportExceptions(
     tenantId: string,
     query: StatisticsExceptionsExportQueryDto,
-  ): Promise<StatisticsCsvExport> {
+  ): Promise<StatisticsFileExport> {
     const response = await this.exceptions.getExceptionsForExport(
       tenantId,
       query,
       MAX_STATISTICS_EXPORT_ROWS,
     );
     this.assertWithinLimit(response.meta.total);
-    const range = await this.resolveRange(tenantId, query);
-    const responseLimitations = joinStatisticsLimitations(response.limitations);
-    return this.toExport(
-      "exceptions",
-      range.from,
-      range.to,
-      EXCEPTION_COLUMNS,
-      response.data.map((row) => ({ ...row, responseLimitations })),
+    const meta = await this.workbookMeta(tenantId, query, "OpsFlow — Exceptions Report");
+    const body = await buildStatisticsExcelWorkbook(
+      workbookInput({
+        ...meta,
+        limitations: response.limitations,
+        sheets: [exceptionsSheet(response.data)],
+      }),
     );
+    return {
+      body,
+      filename: buildStatisticsExcelFilename(
+        "Exceptions",
+        meta.periodFrom,
+        meta.periodTo,
+      ),
+      rowCount: response.data.length,
+      contentType: XLSX_CONTENT_TYPE,
+    };
+  }
+
+  async exportTrucking(
+    tenantId: string,
+    query: StatisticsFiltersQueryDto,
+  ): Promise<StatisticsFileExport> {
+    const [summary, movements, containers, lanes, fleet] = await Promise.all([
+      this.trucking.getSummary(tenantId, query),
+      this.trucking.getAllMovements(tenantId, query),
+      this.trucking.getAllContainers(tenantId, query),
+      this.trucking.getAllLanes(tenantId, query),
+      this.trucking.getAllFleet(tenantId, query),
+    ]);
+    this.assertWithinLimit(movements.length);
+    const meta = await this.workbookMeta(tenantId, query, "OpsFlow — Trucking Report");
+    const body = await buildStatisticsExcelWorkbook(
+      workbookInput({
+        ...meta,
+        limitations: summary.limitations,
+        sheets: [
+          truckingSummarySheet(summary),
+          movementsSheet(movements),
+          containersSheet(containers),
+          lanesSheet(lanes),
+          fleetSheet(fleet.vehicles),
+        ],
+      }),
+    );
+    return {
+      body,
+      filename: buildStatisticsExcelFilename(
+        "Trucking",
+        meta.periodFrom,
+        meta.periodTo,
+      ),
+      rowCount: movements.length,
+      contentType: XLSX_CONTENT_TYPE,
+    };
+  }
+
+  async exportCustomers(
+    tenantId: string,
+    query: StatisticsFiltersQueryDto,
+  ): Promise<StatisticsFileExport> {
+    const rows = await this.customers.getAllCustomers(tenantId, query);
+    this.assertWithinLimit(rows.length);
+    const meta = await this.workbookMeta(tenantId, query, "OpsFlow — Customers Report");
+    const body = await buildStatisticsExcelWorkbook(
+      workbookInput({
+        ...meta,
+        limitations: [...new Set(rows.flatMap(() => []))],
+        sheets: [customersSheet(rows)],
+      }),
+    );
+    return {
+      body,
+      filename: buildStatisticsExcelFilename(
+        "Customers",
+        meta.periodFrom,
+        meta.periodTo,
+      ),
+      rowCount: rows.length,
+      contentType: XLSX_CONTENT_TYPE,
+    };
+  }
+
+  async exportManagement(
+    tenantId: string,
+    query: StatisticsFiltersQueryDto,
+    options?: { includeFinance?: boolean; includeExceptions?: boolean },
+  ): Promise<StatisticsFileExport> {
+    const includeFinance = options?.includeFinance !== false;
+    const includeExceptions = options?.includeExceptions !== false;
+    const [overview, summary, movements, containers, driverPage, fleet] =
+      await Promise.all([
+        this.overview.getOverview(tenantId, query),
+        this.trucking.getSummary(tenantId, query),
+        this.trucking.getAllMovements(tenantId, query),
+        this.trucking.getAllContainers(tenantId, query),
+        this.drivers.getDrivers(tenantId, {
+          ...query,
+          page: 1,
+          pageSize: EXPORT_PAGE_SIZE,
+          sortBy: "completedTrips",
+          sortDir: "desc",
+        }),
+        this.trucking.getAllFleet(tenantId, query),
+      ]);
+    this.assertWithinLimit(movements.length);
+    const driverRows = [...driverPage.data];
+    const driverPages = Math.ceil(driverPage.meta.total / EXPORT_PAGE_SIZE);
+    for (let page = 2; page <= driverPages; page += 1) {
+      const next = await this.drivers.getDrivers(tenantId, {
+        ...query,
+        page,
+        pageSize: EXPORT_PAGE_SIZE,
+        sortBy: "completedTrips",
+        sortDir: "desc",
+      });
+      driverRows.push(...next.data);
+    }
+    const customerRows = await this.customers.getAllCustomers(tenantId, query);
+    const sheets: Array<{ name: string; columns: readonly unknown[]; rows: readonly unknown[] }> = [
+      overviewSummarySheet(overview),
+      truckingSummarySheet(summary),
+      movementsSheet(movements),
+      containersSheet(containers),
+      driversSheet(driverRows),
+      customersSheet(customerRows),
+      fleetSheet(fleet.vehicles),
+    ];
+    const limitations = [...overview.limitations, ...summary.limitations];
+    if (includeFinance) {
+      const finance = await this.finance.getFinance(tenantId, query);
+      sheets.push(financeSheet(finance.currencyGroups));
+      limitations.push(...finance.limitations);
+    }
+    if (includeExceptions) {
+      const exceptions = await this.exceptions.getExceptionsForExport(
+        tenantId,
+        query,
+        MAX_STATISTICS_EXPORT_ROWS,
+      );
+      sheets.push(exceptionsSheet(exceptions.data));
+      limitations.push(...exceptions.limitations);
+    }
+    const meta = await this.workbookMeta(
+      tenantId,
+      query,
+      "OpsFlow — Management Report",
+    );
+    const body = await buildStatisticsExcelWorkbook(
+      workbookInput({
+        ...meta,
+        limitations: Array.from(new Set(limitations)),
+        sheets: sheets as never,
+      }),
+    );
+    return {
+      body,
+      filename: buildStatisticsExcelFilename(
+        "Management-Report",
+        meta.periodFrom,
+        meta.periodTo,
+      ),
+      rowCount: movements.length,
+      contentType: XLSX_CONTENT_TYPE,
+    };
   }
 
   private assertWithinLimit(total: number): void {
@@ -266,28 +324,30 @@ export class StatisticsExportService {
     }
   }
 
-  private async resolveRange(
+  private async workbookMeta(
     tenantId: string,
-    query: { from?: string; to?: string },
+    query: { from?: string; to?: string; customerId?: string; jobId?: string; driverId?: string; vehicleId?: string; containerNo?: string },
+    title: string,
   ) {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { timezone: true },
+      select: { timezone: true, name: true },
     });
-    return resolveStatisticsDateRange(query, tenant?.timezone);
-  }
-
-  private toExport<Row>(
-    view: "drivers" | "finance" | "exceptions",
-    from: string,
-    to: string,
-    columns: readonly StatisticsCsvColumn<Row>[],
-    rows: readonly Row[],
-  ): StatisticsCsvExport {
+    const range = resolveStatisticsDateRange(query, tenant?.timezone);
+    const filters: string[] = [];
+    if (query.customerId) filters.push("Customer filter applied");
+    if (query.jobId) filters.push("Job filter applied");
+    if (query.driverId) filters.push("Driver filter applied");
+    if (query.vehicleId) filters.push("Vehicle filter applied");
+    if (query.containerNo) filters.push(`Container ${query.containerNo}`);
     return {
-      body: Buffer.from(serializeStatisticsCsv(columns, rows), "utf8"),
-      filename: buildStatisticsExportFilename(view, from, to),
-      rowCount: rows.length,
+      title,
+      companyName: tenant?.name ?? "OpsFlow",
+      periodFrom: range.from,
+      periodTo: range.to,
+      generatedAt: new Date(),
+      timeZone: range.timeZone,
+      filters,
     };
   }
 }

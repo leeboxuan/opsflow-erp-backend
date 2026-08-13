@@ -63,6 +63,9 @@ function createPrismaMock(rows = [rawRow()]) {
       findMany: jest.fn().mockResolvedValue([]),
       groupBy: jest.fn().mockResolvedValue([]),
     },
+    tripJobItem: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
     tripDocument: {
       findMany: jest.fn().mockResolvedValue([]),
     },

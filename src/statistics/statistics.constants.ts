@@ -223,3 +223,38 @@ export const STATISTICS_EXCEPTION_SORT_FIELDS = [
 
 export type StatisticsExceptionSortField =
   (typeof STATISTICS_EXCEPTION_SORT_FIELDS)[number];
+
+export const STATISTICS_TRUCKING_LIMITATIONS = [
+  "container_movement_uses_trip_job_item",
+  "trip_container_number_cache_is_not_authoritative",
+  "cancelled_trips_are_not_container_movements",
+  "cancelled_trip_date_uses_updated_at",
+  "container_size_inferred_from_job_item_description",
+  "lane_names_use_trip_origin_destination_labels",
+  "active_assignments_are_current_snapshot",
+  "gps_distance_not_reported",
+] as const;
+
+export const STATISTICS_CUSTOMER_LIMITATIONS = [
+  "customer_commercial_uses_canonical_finance_predicates",
+  "quotation_totals_are_not_revenue",
+  "currencies_are_not_converted",
+  "payout_currency_assumed_sgd",
+  "job_charges_are_mutable",
+  "published_trip_payouts_are_frozen",
+] as const;
+
+export const STATISTICS_FLEET_LIMITATIONS = [
+  "fleet_uses_trip_vehicle_or_fleet_vehicle",
+  "trailer_numbers_are_free_text_trip_fields",
+  "gps_distance_not_reported",
+  "cancelled_trip_date_uses_updated_at",
+] as const;
+
+export const STATISTICS_TRUCKING_MOVEMENT_SORT_FIELDS = [
+  "movementDate",
+  "containerNo",
+] as const;
+
+export type StatisticsTruckingMovementSortField =
+  (typeof STATISTICS_TRUCKING_MOVEMENT_SORT_FIELDS)[number];

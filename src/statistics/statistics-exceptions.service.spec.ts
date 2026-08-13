@@ -63,6 +63,7 @@ function createPrismaMock() {
     jobCharge: { groupBy: jest.fn().mockResolvedValue([]) },
     invoice: { findMany: jest.fn().mockResolvedValue([]) },
     invoiceLineItem: { findMany: jest.fn().mockResolvedValue([]) },
+    drivers: { findMany: jest.fn().mockResolvedValue([]) },
   };
 }
 
@@ -88,6 +89,12 @@ function exceptionRow(
     explanation: "test",
     href: "/test",
     resolvableInOpsFlow: true,
+    jobNo: null,
+    tripRef: null,
+    containerNo: null,
+    customerName: null,
+    driverName: null,
+    invoiceNo: null,
   };
 }
 
@@ -113,11 +120,14 @@ describe("StatisticsExceptionsService categories", () => {
 
     expect(result.data).toHaveLength(101);
     expect(result.meta.total).toBe(101);
-    expect(prisma.trip.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.trip.findMany.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(
       prisma.trip.findMany.mock.calls.every(
-        ([args]) => args.where.tenantId === "tenant-1" && args.take === 200,
+        ([args]) => args.where.tenantId === "tenant-1",
       ),
+    ).toBe(true);
+    expect(
+      prisma.trip.findMany.mock.calls.some(([args]) => args.take === 200),
     ).toBe(true);
   });
 

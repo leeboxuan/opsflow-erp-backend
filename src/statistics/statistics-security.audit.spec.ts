@@ -31,6 +31,7 @@ import { StatisticsExportController } from "./statistics-export.controller";
 import { StatisticsFinanceController } from "./statistics-finance.controller";
 import { StatisticsModule } from "./statistics.module";
 import { StatisticsOverviewController } from "./statistics-overview.controller";
+import { StatisticsTruckingController } from "./statistics-trucking.controller";
 import { buildDriverAggregateSql } from "./statistics-drivers.service";
 import { StatisticsDriversQueryDto } from "./dto";
 import { STATISTICS_DRIVER_SORT_FIELDS } from "./statistics.constants";
@@ -62,6 +63,7 @@ describe("Statistics V1 security and integration audit", () => {
         StatisticsDriversController,
         StatisticsFinanceController,
         StatisticsExceptionsController,
+        StatisticsTruckingController,
         StatisticsExportController,
       ]);
       expect(registered).not.toContain(StatisticsController);
@@ -126,6 +128,7 @@ describe("Statistics V1 security and integration audit", () => {
         "statistics-drivers.controller.ts",
         "statistics-finance.controller.ts",
         "statistics-exceptions.controller.ts",
+        "statistics-trucking.controller.ts",
       ]) {
         const source = readStatisticsSource(file);
         expect(source).toMatch(/req\.tenant\.tenantId/);
@@ -198,6 +201,7 @@ describe("Statistics V1 security and integration audit", () => {
         "statistics-overview.service.ts",
         "statistics-finance.service.ts",
         "statistics-exceptions.service.ts",
+        "statistics-trucking.service.ts",
       ]) {
         const source = readStatisticsSource(file);
         expect(source).not.toContain("$queryRaw");
@@ -240,6 +244,8 @@ describe("Statistics V1 security and integration audit", () => {
       "statistics-drivers.service.ts",
       "statistics-finance.service.ts",
       "statistics-exceptions.service.ts",
+      "statistics-trucking.service.ts",
+      "statistics-customers.service.ts",
     ])("keeps tenantId on every primary query builder in %s", (file) => {
       const source = readStatisticsSource(file);
       expect(source).toContain("tenantId");

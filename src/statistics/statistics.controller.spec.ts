@@ -39,6 +39,7 @@ import { StatisticsExportController } from "./statistics-export.controller";
 import { StatisticsFinanceController } from "./statistics-finance.controller";
 import { StatisticsModule } from "./statistics.module";
 import { StatisticsOverviewController } from "./statistics-overview.controller";
+import { StatisticsTruckingController } from "./statistics-trucking.controller";
 
 type StatisticsHandlerName =
   | "getOverview"
@@ -124,6 +125,7 @@ describe("StatisticsModule", () => {
       StatisticsDriversController,
       StatisticsFinanceController,
       StatisticsExceptionsController,
+      StatisticsTruckingController,
       StatisticsExportController,
     ]);
   });
@@ -363,6 +365,7 @@ describe("StatisticsController authorization behavior", () => {
       StatisticsDriversController,
       StatisticsFinanceController,
       StatisticsExceptionsController,
+      StatisticsTruckingController,
       StatisticsExportController,
     ]);
   });

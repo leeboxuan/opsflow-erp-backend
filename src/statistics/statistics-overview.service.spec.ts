@@ -85,6 +85,20 @@ function createPrismaMock(options?: {
   };
 }
 
+function truckingStub(input: { uniqueContainers?: number; containerMovements?: number } = {}) {
+  return {
+    getSummary: jest.fn().mockResolvedValue({
+      uniqueContainers: input.uniqueContainers ?? 0,
+      containerMovements: input.containerMovements ?? 0,
+      limitations: [],
+    }),
+  };
+}
+
+function createService(prisma: ReturnType<typeof createPrismaMock>, trucking = truckingStub()) {
+  return new StatisticsOverviewService(prisma as any, trucking as any);
+}
+
 function query(input: Partial<StatisticsFiltersQueryDto> = {}) {
   return Object.assign(new StatisticsFiltersQueryDto(), {
     from: "2026-08-01",
@@ -118,7 +132,7 @@ describe("StatisticsOverviewService", () => {
         completedTrip("trip-1", "job-1", "2026-08-01T12:00:00.000Z"),
       ],
     });
-    const service = new StatisticsOverviewService(prisma as any);
+    const service = createService(prisma);
 
     const result = await service.getOverview("tenant-1", query());
 
@@ -128,7 +142,12 @@ describe("StatisticsOverviewService", () => {
       operationallyCompletedJobs: 1,
       activePendingTrips: 3,
       cancelledTrips: 2,
-      limitations: [...STATISTICS_OVERVIEW_LIMITATIONS],
+      uniqueContainers: 0,
+      containerMovements: 0,
+      limitations: [
+        ...STATISTICS_OVERVIEW_LIMITATIONS,
+        "container_movement_uses_trip_job_item",
+      ],
     });
     expect(result.generatedAt).toBeInstanceOf(Date);
     expect(result).not.toHaveProperty("currencyGroups");
@@ -137,7 +156,7 @@ describe("StatisticsOverviewService", () => {
 
   it("uses canonical statuses, timestamps, and exact UTC boundaries", async () => {
     const prisma = createPrismaMock();
-    const service = new StatisticsOverviewService(prisma as any);
+    const service = createService(prisma);
     await service.getOverview("tenant-1", query());
 
     const completedCall = prisma.trip.count.mock.calls.find(
@@ -174,7 +193,7 @@ describe("StatisticsOverviewService", () => {
 
   it("applies every approved filter without weakening tenant scope", async () => {
     const prisma = createPrismaMock();
-    const service = new StatisticsOverviewService(prisma as any);
+    const service = createService(prisma);
     await service.getOverview(
       "tenant-1",
       query({
@@ -253,7 +272,7 @@ describe("StatisticsOverviewService", () => {
     "keeps a cross-tenant %s filter inside tenant-scoped queries",
     async (field, value) => {
       const prisma = createPrismaMock();
-      const service = new StatisticsOverviewService(prisma as any);
+      const service = createService(prisma);
       const result = await service.getOverview(
         "tenant-1",
         query({ [field]: value }),
@@ -343,7 +362,7 @@ describe("StatisticsOverviewService", () => {
       candidateJobs: [{ id: "j1" }],
       candidateTrips: rows as TripRow[],
     });
-    const service = new StatisticsOverviewService(prisma as any);
+    const service = createService(prisma);
     const result = await service.getOverview("tenant-1", query());
     expect(result.operationallyCompletedJobs).toBe(expected);
   });
@@ -357,7 +376,7 @@ describe("StatisticsOverviewService", () => {
         completedTrip("t3", "j2", "2026-08-01T08:00:00.000Z", TripStatus.DONE),
       ],
     });
-    const service = new StatisticsOverviewService(prisma as any);
+    const service = createService(prisma);
     const result = await service.getOverview("tenant-1", query());
 
     expect(result.operationallyCompletedJobs).toBe(2);
@@ -371,7 +390,7 @@ describe("StatisticsOverviewService", () => {
   describe("bounded job and trip batching", () => {
     it("terminates when the first job batch is empty", async () => {
       const prisma = createPrismaMock({ candidateJobs: [], candidateTrips: [] });
-      const service = new StatisticsOverviewService(prisma as any);
+      const service = createService(prisma);
       const result = await service.getOverview("tenant-1", query());
 
       expect(result.operationallyCompletedJobs).toBe(0);
@@ -389,7 +408,7 @@ describe("StatisticsOverviewService", () => {
           completedTrip("t1", "j1", "2026-08-01T12:00:00.000Z"),
         ],
       });
-      const service = new StatisticsOverviewService(prisma as any);
+      const service = createService(prisma);
       const result = await service.getOverview("tenant-1", query());
 
       expect(result.operationallyCompletedJobs).toBe(1);
@@ -409,7 +428,7 @@ describe("StatisticsOverviewService", () => {
         ),
       );
       const prisma = createPrismaMock({ candidateJobs, candidateTrips });
-      const service = new StatisticsOverviewService(prisma as any);
+      const service = createService(prisma);
       const result = await service.getOverview("tenant-1", query());
 
       expect(result.operationallyCompletedJobs).toBe(201);
@@ -452,7 +471,7 @@ describe("StatisticsOverviewService", () => {
         candidateJobs: [{ id: "j1" }],
         candidateTrips: tripRows,
       });
-      const service = new StatisticsOverviewService(prisma as any);
+      const service = createService(prisma);
       const result = await service.getOverview("tenant-1", query());
 
       expect(result.operationallyCompletedJobs).toBe(1);
@@ -491,7 +510,7 @@ describe("StatisticsOverviewService", () => {
         ),
       );
       const prisma = createPrismaMock({ candidateJobs, candidateTrips });
-      const service = new StatisticsOverviewService(prisma as any);
+      const service = createService(prisma);
       const result = await service.getOverview("tenant-1", query());
       expect(result.operationallyCompletedJobs).toBe(201);
     });
@@ -509,7 +528,7 @@ describe("StatisticsOverviewService", () => {
           },
         ],
       });
-      const service = new StatisticsOverviewService(prisma as any);
+      const service = createService(prisma);
       const result = await service.getOverview("tenant-1", query());
 
       expect(result.operationallyCompletedJobs).toBe(1);
@@ -531,7 +550,7 @@ describe("StatisticsOverviewService", () => {
         ),
       );
       const prisma = createPrismaMock({ candidateJobs, candidateTrips });
-      const service = new StatisticsOverviewService(prisma as any);
+      const service = createService(prisma);
       await service.getOverview("tenant-1", query());
 
       for (const [args] of prisma.job.findMany.mock.calls) {

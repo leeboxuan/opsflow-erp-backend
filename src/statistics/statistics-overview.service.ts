@@ -12,6 +12,8 @@ import {
   isOperationallyCompletedJob,
 } from "./statistics.predicates";
 import { resolveStatisticsDateRange } from "./statistics-date-range";
+import { buildStatisticsTripScope } from "./statistics-scope";
+import { StatisticsTruckingService } from "./statistics-trucking.service";
 
 /** Matches Finance/Exceptions bounded traversal. */
 export const OVERVIEW_JOB_BATCH_SIZE = 200;
@@ -26,7 +28,10 @@ type OperationalJobTripRow = {
 
 @Injectable()
 export class StatisticsOverviewService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly trucking: StatisticsTruckingService,
+  ) {}
 
   async getOverview(
     tenantId: string,
@@ -40,13 +45,14 @@ export class StatisticsOverviewService {
       { from: query.from, to: query.to },
       tenant?.timezone,
     );
-    const tripScope = this.buildTripScope(tenantId, query);
+    const tripScope = buildStatisticsTripScope(tenantId, query);
 
     const [
       completedTrips,
       activePendingTrips,
       cancelledTrips,
       operationallyCompletedJobs,
+      truckingSummary,
     ] = await Promise.all([
       this.prisma.trip.count({
         where: {
@@ -69,50 +75,22 @@ export class StatisticsOverviewService {
         },
       }),
       this.countOperationallyCompletedJobsBatched(tenantId, query, range),
+      this.trucking.getSummary(tenantId, query),
     ]);
 
     return {
       timeZone: range.timeZone,
       generatedAt: new Date(),
-      limitations: [...STATISTICS_OVERVIEW_LIMITATIONS],
+      limitations: [
+        ...STATISTICS_OVERVIEW_LIMITATIONS,
+        "container_movement_uses_trip_job_item",
+      ],
       completedTrips,
       operationallyCompletedJobs,
       activePendingTrips,
       cancelledTrips,
-    };
-  }
-
-  /**
-   * Trip-grain filters apply directly to trip metrics. Every scope remains
-   * tenant constrained and excludes legacy TransportOrder-only trips.
-   */
-  private buildTripScope(
-    tenantId: string,
-    query: StatisticsFiltersQueryDto,
-  ): Prisma.TripWhereInput {
-    return {
-      tenantId,
-      jobId: query.jobId ?? { not: null },
-      ...(query.tripId ? { id: query.tripId } : {}),
-      ...(query.driverId
-        ? { assignedDriverUserId: query.driverId }
-        : {}),
-      ...(query.vehicleId
-        ? {
-            OR: [
-              { vehicleId: query.vehicleId },
-              { fleetVehicleId: query.vehicleId },
-            ],
-          }
-        : {}),
-      job: {
-        is: {
-          tenantId,
-          ...(query.customerId
-            ? { customerCompanyId: query.customerId }
-            : {}),
-        },
-      },
+      uniqueContainers: truckingSummary.uniqueContainers,
+      containerMovements: truckingSummary.containerMovements,
     };
   }
 
@@ -151,7 +129,14 @@ export class StatisticsOverviewService {
     tenantId: string,
     query: StatisticsFiltersQueryDto,
   ): Prisma.TripWhereInput | null {
-    if (!query.tripId && !query.driverId && !query.vehicleId) return null;
+    if (
+      !query.tripId &&
+      !query.driverId &&
+      !query.vehicleId &&
+      !query.containerNo
+    ) {
+      return null;
+    }
     return {
       tenantId,
       ...(query.tripId ? { id: query.tripId } : {}),
@@ -164,6 +149,34 @@ export class StatisticsOverviewService {
               { vehicleId: query.vehicleId },
               { fleetVehicleId: query.vehicleId },
             ],
+          }
+        : {}),
+      ...(query.containerNo
+        ? {
+            tripJobItems: {
+              some: {
+                tenantId,
+                OR: [
+                  {
+                    containerNumberSnapshot: {
+                      equals: query.containerNo,
+                      mode: "insensitive",
+                    },
+                  },
+                  {
+                    jobItem: {
+                      is: {
+                        tenantId,
+                        itemCode: {
+                          equals: query.containerNo,
+                          mode: "insensitive",
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
           }
         : {}),
     };

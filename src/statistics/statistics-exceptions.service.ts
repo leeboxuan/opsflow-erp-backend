@@ -229,6 +229,7 @@ export class StatisticsExceptionsService {
     await this.scanOrphanInvoices(tenantId, query, range, collector);
 
     const result = collector.result(skip, take);
+    await this.hydrateExceptionReferences(tenantId, result.data);
     return {
       data: result.data,
       meta: buildPaginationMeta(page, pageSize, result.total),
@@ -1043,6 +1044,135 @@ export class StatisticsExceptionsService {
       explanation: definition.explanation,
       href: input.href,
       resolvableInOpsFlow: definition.resolvableInOpsFlow,
+      jobNo: null,
+      tripRef: null,
+      containerNo: null,
+      customerName: null,
+      driverName: null,
+      invoiceNo: null,
     };
+  }
+
+  private async hydrateExceptionReferences(
+    tenantId: string,
+    rows: StatisticsExceptionItemDto[],
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const jobIds = Array.from(
+      new Set(rows.map((row) => row.jobId).filter((id): id is string => !!id)),
+    );
+    const tripIds = Array.from(
+      new Set(rows.map((row) => row.tripId).filter((id): id is string => !!id)),
+    );
+    const invoiceIds = Array.from(
+      new Set(
+        rows.map((row) => row.invoiceId).filter((id): id is string => !!id),
+      ),
+    );
+    const [jobs, trips, invoices] = await Promise.all([
+      jobIds.length
+        ? this.prisma.job.findMany({
+            where: { tenantId, id: { in: jobIds } },
+            select: {
+              id: true,
+              internalRef: true,
+              customerCompany: { select: { name: true } },
+              items: { select: { itemCode: true }, take: 3 },
+            },
+          })
+        : Promise.resolve([]),
+      tripIds.length
+        ? this.prisma.trip.findMany({
+            where: { tenantId, id: { in: tripIds } },
+            select: {
+              id: true,
+              jobSequence: true,
+              tripSequence: true,
+              assignedDriverUserId: true,
+              job: { select: { internalRef: true } },
+              tripJobItems: {
+                select: { jobItem: { select: { itemCode: true } } },
+                take: 3,
+              },
+            },
+          })
+        : Promise.resolve([]),
+      invoiceIds.length
+        ? this.prisma.invoice.findMany({
+            where: { tenantId, id: { in: invoiceIds } },
+            select: { id: true, invoiceNo: true, customerName: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const jobById = new Map(
+      (jobs as Array<{
+        id: string;
+        internalRef: string;
+        customerCompany: { name: string };
+        items: Array<{ itemCode: string }>;
+      }>).map((job) => [job.id, job] as const),
+    );
+    const tripById = new Map(
+      (trips as Array<{
+        id: string;
+        jobSequence: number | null;
+        tripSequence: number | null;
+        assignedDriverUserId: string | null;
+        job: { internalRef: string } | null;
+        tripJobItems: Array<{ jobItem: { itemCode: string } }>;
+      }>).map((trip) => [trip.id, trip] as const),
+    );
+    const invoiceById = new Map(
+      (invoices as Array<{
+        id: string;
+        invoiceNo: string;
+        customerName: string;
+      }>).map((invoice) => [invoice.id, invoice] as const),
+    );
+    const driverIds = Array.from(
+      new Set(
+        Array.from(tripById.values())
+          .map((trip) => trip.assignedDriverUserId)
+          .filter((id): id is string => !!id),
+      ),
+    );
+    const drivers =
+      driverIds.length > 0
+        ? ((await this.prisma.drivers.findMany({
+            where: { tenantId, userId: { in: driverIds } },
+            select: { userId: true, name: true },
+          })) as Array<{ userId: string | null; name: string | null }>)
+        : [];
+    const driverNames = new Map(
+      drivers
+        .filter((row): row is { userId: string; name: string | null } => !!row.userId)
+        .map((row) => [row.userId, row.name?.trim() || "Unnamed driver"] as const),
+    );
+
+    for (const row of rows) {
+      const job = row.jobId ? jobById.get(row.jobId) : undefined;
+      const trip = row.tripId ? tripById.get(row.tripId) : undefined;
+      const invoice = row.invoiceId ? invoiceById.get(row.invoiceId) : undefined;
+      row.jobNo = job?.internalRef ?? trip?.job?.internalRef ?? null;
+      row.customerName =
+        job?.customerCompany?.name ?? invoice?.customerName ?? null;
+      row.invoiceNo = invoice?.invoiceNo ?? null;
+      if (trip) {
+        row.tripRef = `${row.jobNo ?? "Job"} · Trip ${trip.jobSequence ?? trip.tripSequence ?? ""}`.trim();
+        row.driverName = trip.assignedDriverUserId
+          ? driverNames.get(trip.assignedDriverUserId) ?? "Unnamed driver"
+          : null;
+        const containerNos = (trip.tripJobItems ?? [])
+          .map((link) => link.jobItem?.itemCode)
+          .filter(Boolean);
+        row.containerNo = containerNos.join(", ") || null;
+      } else if (job) {
+        row.containerNo =
+          (job.items ?? [])
+            .map((item) => item.itemCode)
+            .filter(Boolean)
+            .join(", ") || null;
+      }
+    }
   }
 }

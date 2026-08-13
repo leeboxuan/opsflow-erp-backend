@@ -3,4 +3,7 @@ export * from "./statistics-exceptions.query.dto";
 export * from "./statistics-export.query.dto";
 export * from "./statistics-filters.query.dto";
 export * from "./statistics-finance.query.dto";
+export * from "./statistics-lookups.query.dto";
 export * from "./statistics-response.dto";
+export * from "./statistics-trucking.dto";
+export * from "./statistics-trucking.query.dto";

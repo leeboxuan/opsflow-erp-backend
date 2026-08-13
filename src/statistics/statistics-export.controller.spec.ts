@@ -67,11 +67,13 @@ describe("StatisticsExportController", () => {
     },
   );
 
-  it("uses only request tenant context and writes safe CSV headers", async () => {
+  it("uses only request tenant context and writes safe Excel headers", async () => {
     exportsService.exportDrivers.mockResolvedValue({
-      body: Buffer.from("\uFEFFa"),
-      filename: "opsflow-statistics-drivers-2026-08-01-to-2026-08-31.csv",
+      body: Buffer.from("PK"),
+      filename: "OpsFlow-Drivers-2026-08-01-to-2026-08-31.xlsx",
       rowCount: 0,
+      contentType:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
     const response = {
       setHeader: jest.fn(),
@@ -89,11 +91,11 @@ describe("StatisticsExportController", () => {
     );
     expect(response.setHeader).toHaveBeenCalledWith(
       "Content-Type",
-      "text/csv; charset=utf-8",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
     expect(response.setHeader).toHaveBeenCalledWith(
       "Content-Disposition",
-      'attachment; filename="opsflow-statistics-drivers-2026-08-01-to-2026-08-31.csv"',
+      'attachment; filename="OpsFlow-Drivers-2026-08-01-to-2026-08-31.xlsx"',
     );
     expect(response.setHeader).toHaveBeenCalledWith(
       "X-Content-Type-Options",
@@ -103,7 +105,7 @@ describe("StatisticsExportController", () => {
       "Cache-Control",
       "private, no-store",
     );
-    expect(response.send).toHaveBeenCalledWith(Buffer.from("\uFEFFa"));
+    expect(response.send).toHaveBeenCalledWith(Buffer.from("PK"));
     expect(result).toBe(response);
   });
 

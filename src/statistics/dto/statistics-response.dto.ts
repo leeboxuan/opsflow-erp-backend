@@ -87,6 +87,16 @@ export class StatisticsOverviewDto extends StatisticsResponseBaseDto {
   @IsInt()
   @Min(0)
   cancelledTrips!: number;
+
+  @ApiProperty()
+  @IsInt()
+  @Min(0)
+  uniqueContainers!: number;
+
+  @ApiProperty()
+  @IsInt()
+  @Min(0)
+  containerMovements!: number;
 }
 
 export class StatisticsDriverRowDto {
@@ -108,6 +118,25 @@ export class StatisticsDriverRowDto {
   @IsInt()
   @Min(0)
   completedJobs!: number;
+
+  @ApiProperty()
+  @IsInt()
+  @Min(0)
+  uniqueContainers!: number;
+
+  @ApiProperty()
+  @IsInt()
+  @Min(0)
+  containerMovements!: number;
+
+  @ApiProperty()
+  @IsInt()
+  @Min(0)
+  activeDays!: number;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  avgTripsPerActiveDay!: number | null;
 
   @ApiProperty()
   @IsInt()
@@ -273,6 +302,36 @@ export class StatisticsExceptionItemDto {
   @IsOptional()
   @IsString()
   invoiceId!: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  jobNo!: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  tripRef!: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  containerNo!: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  customerName!: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  driverName!: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  invoiceNo!: string | null;
 
   @ApiPropertyOptional({
     nullable: true,

@@ -35,6 +35,7 @@ import { StatisticsFinanceService } from "./statistics-finance.service";
 import { StatisticsModule } from "./statistics.module";
 import { StatisticsOverviewController } from "./statistics-overview.controller";
 import { StatisticsOverviewService } from "./statistics-overview.service";
+import { StatisticsTruckingController } from "./statistics-trucking.controller";
 
 describe("StatisticsOverviewController", () => {
   const routeHandler = StatisticsOverviewController.prototype.getOverview;
@@ -47,6 +48,7 @@ describe("StatisticsOverviewController", () => {
       StatisticsDriversController,
       StatisticsFinanceController,
       StatisticsExceptionsController,
+      StatisticsTruckingController,
       StatisticsExportController,
     ]);
     expect(controllers).not.toContain(StatisticsController);
@@ -114,6 +116,8 @@ describe("StatisticsOverviewController", () => {
       operationallyCompletedJobs: 1,
       activePendingTrips: 0,
       cancelledTrips: 0,
+      uniqueContainers: 0,
+      containerMovements: 0,
     };
     const overviewService = {
       getOverview: jest.fn().mockResolvedValue(result),
@@ -160,6 +164,8 @@ describe("Statistics WP6 HTTP reachability", () => {
       operationallyCompletedJobs: 1,
       activePendingTrips: 2,
       cancelledTrips: 0,
+      uniqueContainers: 0,
+      containerMovements: 0,
     };
     const driversResult: StatisticsDriversDto = {
       data: [],
@@ -300,7 +306,10 @@ describe("Statistics WP6 HTTP reachability", () => {
       await request(app.getHttpServer())
         .get(`/api/statistics/${view}/export`)
         .expect(200)
-        .expect("Content-Type", /text\/csv/);
+        .expect(
+          "Content-Type",
+          /application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet/,
+        );
     }
   });
 });

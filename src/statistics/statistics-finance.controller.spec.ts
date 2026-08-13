@@ -23,6 +23,7 @@ import { StatisticsFinanceController } from "./statistics-finance.controller";
 import { StatisticsFinanceService } from "./statistics-finance.service";
 import { StatisticsModule } from "./statistics.module";
 import { StatisticsOverviewController } from "./statistics-overview.controller";
+import { StatisticsTruckingController } from "./statistics-trucking.controller";
 
 describe("StatisticsFinanceController", () => {
   const routeHandler = StatisticsFinanceController.prototype.getFinance;
@@ -35,6 +36,7 @@ describe("StatisticsFinanceController", () => {
       StatisticsDriversController,
       StatisticsFinanceController,
       StatisticsExceptionsController,
+      StatisticsTruckingController,
       StatisticsExportController,
     ]);
     expect(controllers).not.toContain(StatisticsController);

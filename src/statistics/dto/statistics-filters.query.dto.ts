@@ -111,6 +111,20 @@ export class StatisticsFiltersQueryDto {
   @MaxLength(128)
   @Matches(FILTER_ID_PATTERN, { message: "vehicleId is malformed" })
   vehicleId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Canonical container number (JobItem.itemCode / TripJobItem snapshot). Not a database id.",
+    example: "TCLU1234567",
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(32)
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/, {
+    message: "containerNo is malformed",
+  })
+  containerNo?: string;
 }
 
 export abstract class StatisticsPaginatedFiltersQueryDto extends StatisticsFiltersQueryDto {
