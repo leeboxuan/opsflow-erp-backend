@@ -88,6 +88,10 @@ Mixed-version window: additive schema should tolerate old backend reads; avoid e
 
 ## E. First Platform Admin bootstrap
 
+Product path (application, not SQL): set `PLATFORM_OWNER_EMAIL` and `PLATFORM_BOOTSTRAP_TOKEN`, then use web `/setup` (empty platform) or `/setup/claim` after login. Verify with authenticated `GET /platform/me`.
+
+Break-glass CLI remains available when env/UI cannot be used:
+
 Script: `scripts/provision-platform-admin.ts`
 
 ```text

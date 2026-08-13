@@ -1,6 +1,7 @@
 import {
   IsArray,
   IsBoolean,
+  IsEmail,
   IsEnum,
   IsOptional,
   IsString,
@@ -8,7 +9,9 @@ import {
   MaxLength,
   MinLength,
   ValidateIf,
+  ValidateNested,
 } from "class-validator";
+import { Type } from "class-transformer";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   MembershipStatus,
@@ -16,6 +19,35 @@ import {
   TenantModule,
   TenantStatus,
 } from "@prisma/client";
+
+export class CreatePlatformTenantInitialAdminDto {
+  @ApiProperty()
+  @IsEmail()
+  email!: string;
+
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+
+  @ApiProperty({ minLength: 8 })
+  @IsString()
+  @MinLength(8, { message: "Password must be at least 8 characters" })
+  password!: string;
+
+  @ApiPropertyOptional({
+    enum: Role,
+    default: Role.ADMIN,
+    description: "Tenant membership role. Defaults to ADMIN.",
+  })
+  @IsOptional()
+  @IsEnum(Role, {
+    message:
+      "role must be ADMIN, TRANSPORT_STAFF, FINANCE, WAREHOUSE, or CUSTOMER",
+  })
+  role?: Role;
+}
 
 export class CreatePlatformTenantDto {
   @ApiProperty()
@@ -52,6 +84,12 @@ export class CreatePlatformTenantDto {
   @IsArray()
   @IsEnum(TenantModule, { each: true })
   modules?: TenantModule[];
+
+  @ApiPropertyOptional({ type: () => CreatePlatformTenantInitialAdminDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreatePlatformTenantInitialAdminDto)
+  initialAdmin?: CreatePlatformTenantInitialAdminDto;
 }
 
 export class UpdatePlatformTenantDto {

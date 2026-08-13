@@ -27,6 +27,7 @@ describe("PlatformService", () => {
         findFirst: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
+        delete: jest.fn(),
       },
       tenantMembership: { count: jest.fn() },
       tenantModuleEntitlement: {
@@ -103,6 +104,154 @@ describe("PlatformService", () => {
       prisma,
       expect.objectContaining({ action: "TENANT_CREATE", targetTenantId: "t1" }),
     );
+  });
+
+  it("creates tenant with initial ADMIN and does not invent a platform membership", async () => {
+    const createdTenant = {
+      id: "t1",
+      name: "Acme",
+      slug: "acme",
+      timezone: null,
+      status: TenantStatus.SETUP,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      moduleEntitlements: [
+        { module: TenantModule.TRANSPORT, enabled: true },
+      ],
+      _count: { memberships: 0 },
+    };
+    prisma.tenant.findUnique.mockImplementation(async (args: any) => {
+      if (args?.where?.slug) return null;
+      if (args?.where?.id === "t1") {
+        return {
+          ...createdTenant,
+          _count: { memberships: 1 },
+        };
+      }
+      return null;
+    });
+    prisma.tenant.create.mockResolvedValue(createdTenant);
+    const tenantUsers = (service as any).tenantUsers;
+    tenantUsers.createTenantUser.mockResolvedValue({
+      id: "u-admin",
+      membershipId: "m1",
+      role: "ADMIN",
+      status: "Active",
+    });
+
+    const result = await service.createTenant(
+      {
+        name: "Acme",
+        slug: "acme",
+        initialAdmin: {
+          email: "admin@acme.com",
+          name: "Acme Admin",
+          password: "password12",
+        },
+      },
+      actor,
+    );
+
+    expect(tenantUsers.createTenantUser).toHaveBeenCalledWith(
+      "t1",
+      expect.objectContaining({
+        email: "admin@acme.com",
+        role: "ADMIN",
+        password: "password12",
+      }),
+      { mode: "platform-admin" },
+    );
+    expect(result.membershipCount).toBe(1);
+    expect(prisma.tenant.delete).not.toHaveBeenCalled();
+    expect(prisma.platformAdmin.create).not.toHaveBeenCalled();
+  });
+
+  it("forces initial tenant user role ADMIN even if the client sends another role", async () => {
+    const createdTenant = {
+      id: "t1",
+      name: "Acme",
+      slug: "acme",
+      timezone: null,
+      status: TenantStatus.SETUP,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      moduleEntitlements: [],
+      _count: { memberships: 1 },
+    };
+    prisma.tenant.findUnique.mockImplementation(async (args: any) => {
+      if (args?.where?.slug) return null;
+      if (args?.where?.id === "t1") return createdTenant;
+      return null;
+    });
+    prisma.tenant.create.mockResolvedValue(createdTenant);
+    const tenantUsers = (service as any).tenantUsers;
+    tenantUsers.createTenantUser.mockResolvedValue({
+      id: "u-admin",
+      membershipId: "m1",
+      role: "ADMIN",
+      status: "Active",
+    });
+
+    await service.createTenant(
+      {
+        name: "Acme",
+        slug: "acme",
+        initialAdmin: {
+          email: "admin@acme.com",
+          name: "Acme Admin",
+          password: "password12",
+          role: "TRANSPORT_STAFF" as any,
+        },
+      },
+      actor,
+    );
+
+    expect(tenantUsers.createTenantUser).toHaveBeenCalledWith(
+      "t1",
+      expect.objectContaining({ role: "ADMIN" }),
+      { mode: "platform-admin" },
+    );
+    expect(prisma.platformAdmin.create).not.toHaveBeenCalled();
+  });
+
+  it("compensates by deleting empty SETUP tenant when initial admin provisioning fails", async () => {
+    const createdTenant = {
+      id: "t1",
+      name: "Acme",
+      slug: "acme",
+      timezone: null,
+      status: TenantStatus.SETUP,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      moduleEntitlements: [],
+      _count: { memberships: 0 },
+    };
+    prisma.tenant.findUnique.mockImplementation(async (args: any) => {
+      if (args?.where?.slug) return null;
+      if (args?.where?.id === "t1") return createdTenant;
+      return null;
+    });
+    prisma.tenant.create.mockResolvedValue(createdTenant);
+    prisma.tenantMembership.count.mockResolvedValue(0);
+    const tenantUsers = (service as any).tenantUsers;
+    tenantUsers.createTenantUser.mockRejectedValue(new Error("auth failed"));
+
+    await expect(
+      service.createTenant(
+        {
+          name: "Acme",
+          slug: "acme",
+          initialAdmin: {
+            email: "admin@acme.com",
+            name: "Acme Admin",
+            password: "password12",
+          },
+        },
+        actor,
+      ),
+    ).rejects.toThrow("auth failed");
+
+    expect(prisma.tenant.delete).toHaveBeenCalledWith({ where: { id: "t1" } });
   });
 
   it("rejects slug change when memberships exist", async () => {

@@ -293,6 +293,32 @@ export class PlatformService {
       return created;
     });
 
+    if (dto.initialAdmin) {
+      try {
+        // Wizard initial user is always tenant ADMIN. Other roles are assigned
+        // later via tenant user management — never a PlatformAdmin row.
+        await this.createTenantUser(
+          tenant.id,
+          {
+            email: dto.initialAdmin.email,
+            name: dto.initialAdmin.name,
+            password: dto.initialAdmin.password,
+            role: Role.ADMIN,
+          },
+          actor,
+        );
+      } catch (err) {
+        const memberships = await this.prisma.tenantMembership.count({
+          where: { tenantId: tenant.id },
+        });
+        if (memberships === 0) {
+          await this.prisma.tenant.delete({ where: { id: tenant.id } });
+        }
+        throw err;
+      }
+      return this.getTenant(tenant.id);
+    }
+
     return this.mapTenant(tenant);
   }
 

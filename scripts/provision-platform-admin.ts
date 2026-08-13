@@ -1,5 +1,6 @@
 /**
  * Break-glass: provision the first PlatformAdmin from an existing User email.
+ * Product path is in-app bootstrap (GET/POST /api/platform/bootstrap*).
  *
  * Usage (local / operator runbook — NOT a public API; never run against prod
  * from agent workflows):

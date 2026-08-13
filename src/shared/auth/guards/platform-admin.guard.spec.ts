@@ -49,7 +49,7 @@ describe("PlatformAdminGuard (Phase 1)", () => {
     expect(req.requestContext.isPlatformAdmin).toBe(true);
   });
 
-  it("denies ordinary ADMIN (tenant role is irrelevant)", async () => {
+  it("denies tenant users access to platform routes", async () => {
     const prisma = {
       platformAdmin: {
         findUnique: jest.fn().mockResolvedValue(null),
