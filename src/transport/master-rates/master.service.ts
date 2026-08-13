@@ -1751,6 +1751,8 @@ export class MasterDataService {
             : null;
       const rawRateText =
         r.rawRateText == null ? null : String(r.rawRateText).trim() || null;
+      const currencyRaw =
+        r.currency == null ? "SGD" : String(r.currency).trim().toUpperCase();
       return {
         tenantId,
         section: r.section ?? null,
@@ -1762,6 +1764,7 @@ export class MasterDataService {
         tripMode: r.tripMode ?? null,
         areaScope: r.areaScope ?? null,
         unit: r.unit ?? null,
+        currency: currencyRaw || "SGD",
         rateCents,
         requiresManualAmount:
           r.requiresManualAmount === true ||
@@ -1783,6 +1786,9 @@ export class MasterDataService {
       }
       if (row.rateCents !== null && row.rateCents < 0) {
         throw new BadRequestException(`Invalid negative rateCents for item ${row.code}`);
+      }
+      if (!/^[A-Z]{3}$/.test(row.currency)) {
+        throw new BadRequestException(`Invalid currency for item ${row.code}`);
       }
     }
 
@@ -1846,6 +1852,89 @@ export class MasterDataService {
         isCurrent: true,
       },
     };
+  }
+
+  /**
+   * Add one line item. Creates a new current version (does not mutate prior rows
+   * or any customer snapshots).
+   */
+  async createQuotationDatasetItem(
+    tenantId: string,
+    item: Record<string, any>,
+    actorUserId: string | null = null,
+    expectedVersionNo?: number | null,
+  ) {
+    const currentItems = await this.listQuotationDatasetItems(tenantId);
+    const nextSort =
+      currentItems.reduce((max, r: any) => {
+        const n = Number(r.sortOrder);
+        return Number.isInteger(n) && n > max ? n : max;
+      }, -1) + 1;
+    return this.replaceQuotationDatasetItems(
+      tenantId,
+      [
+        ...currentItems,
+        {
+          ...item,
+          sortOrder: Number.isInteger(Number(item.sortOrder))
+            ? Number(item.sortOrder)
+            : nextSort,
+        },
+      ],
+      actorUserId,
+      expectedVersionNo,
+    );
+  }
+
+  /**
+   * Update one line item on the current template. Creates a new current version.
+   * Existing customer rate templates / quotations are not rewritten.
+   */
+  async updateQuotationDatasetItem(
+    tenantId: string,
+    itemId: string,
+    item: Record<string, any>,
+    actorUserId: string | null = null,
+    expectedVersionNo?: number | null,
+  ) {
+    const id = String(itemId ?? "").trim();
+    if (!id) throw new BadRequestException("item id is required");
+    const currentItems = await this.listQuotationDatasetItems(tenantId);
+    const index = currentItems.findIndex((r: any) => String(r.id) === id);
+    if (index < 0) throw new NotFoundException("Line item not found");
+    const next = currentItems.map((r: any, i: number) =>
+      i === index ? { ...r, ...item, id } : r,
+    );
+    return this.replaceQuotationDatasetItems(
+      tenantId,
+      next,
+      actorUserId,
+      expectedVersionNo,
+    );
+  }
+
+  /**
+   * Delete one line item from the current template. Creates a new current version.
+   * Copied customer rows are not deleted.
+   */
+  async deleteQuotationDatasetItem(
+    tenantId: string,
+    itemId: string,
+    actorUserId: string | null = null,
+    expectedVersionNo?: number | null,
+  ) {
+    const id = String(itemId ?? "").trim();
+    if (!id) throw new BadRequestException("item id is required");
+    const currentItems = await this.listQuotationDatasetItems(tenantId);
+    if (!currentItems.some((r: any) => String(r.id) === id)) {
+      throw new NotFoundException("Line item not found");
+    }
+    return this.replaceQuotationDatasetItems(
+      tenantId,
+      currentItems.filter((r: any) => String(r.id) !== id),
+      actorUserId,
+      expectedVersionNo,
+    );
   }
 
   /** Create an empty current base quotation template when none exists. */

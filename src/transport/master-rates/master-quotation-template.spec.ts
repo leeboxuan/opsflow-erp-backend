@@ -475,3 +475,232 @@ describe("MasterDataService base quotation template versioning", () => {
     );
   });
 });
+
+describe("MasterDataService quotation line-item mutations", () => {
+  const currentRow = {
+    id: "row-1",
+    tenantId: "t1",
+    datasetId: "ds1",
+    code: "TRK-01",
+    label: "Trucking",
+    section: "ANNEX A",
+    description: "Haulage",
+    category: "Transport",
+    unit: "trip",
+    containerSize: "20",
+    tripMode: "IMPORT",
+    areaScope: null,
+    currency: "SGD",
+    rateCents: 10000,
+    rawRateText: null,
+    requiresManualAmount: false,
+    notes: null,
+    sortOrder: 0,
+    isActive: true,
+    metadataJson: { annex: "A" },
+  };
+
+  function makePrismaForItemMutation(opts?: { currentRows?: any[] }) {
+    const currentRows = opts?.currentRows ?? [currentRow];
+    let versionCreated = false;
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const create = jest.fn().mockImplementation(async () => {
+      versionCreated = true;
+      return { id: "ds2", versionNo: 2, isCurrent: true };
+    });
+    const createMany = jest.fn().mockResolvedValue({ count: 1 });
+    const prisma: any = {
+      masterRateDataset: {
+        findFirst: jest.fn().mockImplementation(async (args: any) => {
+          if (args?.select?.versionNo === true) {
+            return { versionNo: 1 };
+          }
+          if (args?.where?.tenantId && args.where.tenantId !== "t1") {
+            return null;
+          }
+          const id = versionCreated ? "ds2" : "ds1";
+          return {
+            id,
+            versionNo: versionCreated ? 2 : 1,
+            isCurrent: true,
+            sourceFileName: "base.xlsx",
+            type: MasterRateDatasetType.QUOTATION,
+            status: MasterRateDatasetStatus.ACTIVE,
+          };
+        }),
+        updateMany,
+        create,
+      },
+      masterRateDatasetRow: {
+        findMany: jest.fn().mockImplementation(async (args: any) => {
+          if (args?.where?.tenantId && args.where.tenantId !== "t1") {
+            return [];
+          }
+          if (args?.select?.code) {
+            return currentRows.map((r) => ({
+              code: r.code,
+              label: r.label,
+              sortOrder: r.sortOrder,
+            }));
+          }
+          if (versionCreated) {
+            return [
+              ...currentRows.map((r) => ({ ...r, datasetId: "ds2" })),
+              {
+                id: "row-new",
+                code: "NEW-01",
+                label: "New line",
+                rateCents: 2500,
+                isActive: true,
+                sortOrder: 1,
+                metadataJson: null,
+              },
+            ];
+          }
+          return currentRows;
+        }),
+        createMany,
+      },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+      customerRateTemplate: { update: jest.fn(), delete: jest.fn() },
+      customerRateTemplateRow: { update: jest.fn(), deleteMany: jest.fn() },
+      customerQuotation: { update: jest.fn() },
+      customerQuotationLine: { update: jest.fn(), deleteMany: jest.fn() },
+    };
+    return { prisma, updateMany, create, createMany };
+  }
+
+  it("lists current quotation base rows for the tenant", async () => {
+    const { prisma } = makePrismaForItemMutation();
+    const svc = new MasterDataService(prisma, {} as any, { log: jest.fn() } as any);
+    const rows = await svc.listQuotationDatasetItems("t1");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].code).toBe("TRK-01");
+    expect(prisma.masterRateDataset.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: "t1",
+          type: MasterRateDatasetType.QUOTATION,
+          isCurrent: true,
+        }),
+      }),
+    );
+    expect(prisma.masterRateDatasetRow.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenantId: "t1", datasetId: "ds1" },
+      }),
+    );
+  });
+
+  it("does not list another tenant's quotation rows", async () => {
+    const { prisma } = makePrismaForItemMutation();
+    const svc = new MasterDataService(prisma, {} as any, { log: jest.fn() } as any);
+    const rows = await svc.listQuotationDatasetItems("t-other");
+    expect(rows).toEqual([]);
+    expect(prisma.masterRateDataset.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: "t-other" }),
+      }),
+    );
+  });
+
+  it("creates a line item as a new version", async () => {
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const { prisma, create, createMany } = makePrismaForItemMutation();
+    const svc = new MasterDataService(prisma, {} as any, audit as any);
+    const ok = await svc.createQuotationDatasetItem(
+      "t1",
+      { code: "NEW-01", label: "New line", rateCents: 2500 },
+      "u1",
+      1,
+    );
+    expect(ok.dataset?.versionNo).toBe(2);
+    expect(ok.dataset?.id).toBe("ds2");
+    expect(create).toHaveBeenCalled();
+    expect(createMany).toHaveBeenCalled();
+    const saved = createMany.mock.calls[0][0].data;
+    expect(saved.some((r: any) => r.code === "TRK-01")).toBe(true);
+    expect(saved.some((r: any) => r.code === "NEW-01")).toBe(true);
+  });
+
+  it("updates a line item as a new version without touching customer snapshots", async () => {
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const { prisma, createMany } = makePrismaForItemMutation();
+    const svc = new MasterDataService(prisma, {} as any, audit as any);
+    await svc.updateQuotationDatasetItem(
+      "t1",
+      "row-1",
+      { code: "TRK-01", label: "Trucking updated", rateCents: 12000 },
+      "u1",
+      1,
+    );
+    const saved = createMany.mock.calls[0][0].data;
+    expect(saved[0].label).toBe("Trucking updated");
+    expect(saved[0].rateCents).toBe(12000);
+    expect(prisma.customerRateTemplate.update).not.toHaveBeenCalled();
+    expect(prisma.customerRateTemplateRow.update).not.toHaveBeenCalled();
+    expect(prisma.customerQuotation.update).not.toHaveBeenCalled();
+    expect(prisma.customerQuotationLine.update).not.toHaveBeenCalled();
+  });
+
+  it("deletes a line item as a new version without deleting customer copied rows", async () => {
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const { prisma, create, createMany } = makePrismaForItemMutation();
+    const svc = new MasterDataService(prisma, {} as any, audit as any);
+    const ok = await svc.deleteQuotationDatasetItem("t1", "row-1", "u1", 1);
+    expect(ok.dataset?.id).toBe("ds2");
+    expect(create).toHaveBeenCalled();
+    // Sole remaining row was removed, so the new version has zero rows.
+    expect(createMany).not.toHaveBeenCalled();
+    expect(prisma.customerRateTemplateRow.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.customerQuotationLine.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("rejects update/delete of a missing line item", async () => {
+    const { prisma } = makePrismaForItemMutation();
+    const svc = new MasterDataService(prisma, {} as any, { log: jest.fn() } as any);
+    await expect(
+      svc.updateQuotationDatasetItem(
+        "t1",
+        "row-missing",
+        { code: "X", label: "X" },
+        "u1",
+        1,
+      ),
+    ).rejects.toThrow("Line item not found");
+    await expect(
+      svc.deleteQuotationDatasetItem("t1", "row-missing", "u1", 1),
+    ).rejects.toThrow("Line item not found");
+  });
+
+  it("rejects validation failures on create", async () => {
+    const { prisma } = makePrismaForItemMutation();
+    const svc = new MasterDataService(prisma, {} as any, { log: jest.fn() } as any);
+    await expect(
+      svc.createQuotationDatasetItem("t1", { code: "", label: "X" }, "u1", 1),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      svc.createQuotationDatasetItem(
+        "t1",
+        { code: "X", label: "X", rateCents: -1 },
+        "u1",
+        1,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("Excel replacement returns the new current rows", async () => {
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const { prisma } = makePrismaForItemMutation();
+    const svc = new MasterDataService(prisma, {} as any, audit as any);
+    const ok = await svc.replaceQuotationDatasetItems(
+      "t1",
+      [{ code: "NEW-01", label: "New line", rateCents: 2500 }],
+      "u1",
+      1,
+    );
+    expect(ok.dataset?.isCurrent).toBe(true);
+    expect(ok.dataset?.versionNo).toBe(2);
+    expect(ok.items.some((r: any) => r.code === "NEW-01")).toBe(true);
+  });
+});

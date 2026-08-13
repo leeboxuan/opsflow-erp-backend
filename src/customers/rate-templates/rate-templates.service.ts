@@ -19,6 +19,19 @@ import {
   UpdateRateTemplateDto,
 } from "./rate-templates.dto";
 
+export const SEEDED_CUSTOMER_RATE_TEMPLATE_NAME = "Default rate template";
+
+/** Root Prisma client or an interactive-transaction client. Do not nest `$transaction`. */
+export type RateTemplateDbClient = PrismaService | Prisma.TransactionClient;
+
+export type CreateFromMasterOptions = {
+  /**
+   * When set, copy work joins this transaction and does not open a nested
+   * `$transaction`. Audit is left to the caller so it cannot commit independently.
+   */
+  client?: RateTemplateDbClient;
+};
+
 @Injectable()
 export class RateTemplatesService {
   constructor(
@@ -29,8 +42,9 @@ export class RateTemplatesService {
   private async assertCustomerCompany(
     tenantId: string,
     customerCompanyId: string,
+    client: RateTemplateDbClient = this.prisma,
   ) {
-    const company = await this.prisma.customer_companies.findFirst({
+    const company = await client.customer_companies.findFirst({
       where: { id: customerCompanyId, tenantId },
       select: { id: true, name: true },
     });
@@ -177,118 +191,196 @@ export class RateTemplatesService {
     return created;
   }
 
-  async createFromMaster(
-    tenantId: string,
-    customerId: string,
-    dto: CreateRateTemplateFromMasterDto,
-    actorUserId: string | null,
-  ) {
-    await this.assertCustomerCompany(tenantId, customerId);
-    const name = String(dto.name ?? "").trim();
-    if (!name) throw new BadRequestException("name is required");
+  private quotationDatasetInclude() {
+    return {
+      rows: { orderBy: [{ sortOrder: "asc" as const }, { code: "asc" as const }, { id: "asc" as const }] },
+    };
+  }
 
-    const dataset =
-      (await this.prisma.masterRateDataset.findFirst({
+  private async findPreferredQuotationDataset(
+    tenantId: string,
+    client: RateTemplateDbClient = this.prisma,
+  ) {
+    return (
+      (await client.masterRateDataset.findFirst({
         where: {
           tenantId,
           type: MasterRateDatasetType.QUOTATION,
           isCurrent: true,
         },
-        include: {
-          rows: { orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }] },
-        },
+        include: this.quotationDatasetInclude(),
       })) ??
-      (await this.prisma.masterRateDataset.findFirst({
+      (await client.masterRateDataset.findFirst({
         where: {
           tenantId,
           type: MasterRateDatasetType.QUOTATION,
           status: MasterRateDatasetStatus.ACTIVE,
         },
         orderBy: { versionNo: "desc" },
-        include: {
-          rows: { orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }] },
-        },
-      }));
+        include: this.quotationDatasetInclude(),
+      }))
+    );
+  }
+
+  private async copyQuotationDatasetToCustomerTemplate(
+    tx: RateTemplateDbClient,
+    params: {
+      tenantId: string;
+      customerId: string;
+      name: string;
+      notes: string | null;
+      currency: string;
+      actorUserId: string | null;
+      dataset: {
+        id: string;
+        versionNo: number;
+        rows: Array<Record<string, any>>;
+      };
+    },
+  ) {
+    const template = await tx.customerRateTemplate.create({
+      data: {
+        tenantId: params.tenantId,
+        customerCompanyId: params.customerId,
+        name: params.name,
+        status: CustomerRateTemplateStatus.DRAFT,
+        currency: params.currency,
+        notes: params.notes,
+        sourceMasterDatasetId: params.dataset.id,
+        sourceMasterDatasetVersionNo: params.dataset.versionNo,
+        createdByUserId: params.actorUserId,
+        updatedByUserId: params.actorUserId,
+      },
+    });
+
+    if (params.dataset.rows.length > 0) {
+      await tx.customerRateTemplateRow.createMany({
+        data: params.dataset.rows.map((r, index) => ({
+          tenantId: params.tenantId,
+          templateId: template.id,
+          code: r.code,
+          label: r.label,
+          section: r.section,
+          description: r.description,
+          category: r.category,
+          unit: r.unit,
+          containerSize: r.containerSize,
+          tripMode: r.tripMode,
+          areaScope: r.areaScope,
+          currency: r.currency || "SGD",
+          rateCents: r.rateCents,
+          rawRateText: r.rawRateText,
+          requiresManualAmount: r.requiresManualAmount,
+          hasMultipleRates: r.hasMultipleRates,
+          rateOptionsJson:
+            r.rateOptionsJson == null
+              ? undefined
+              : (r.rateOptionsJson as Prisma.InputJsonValue),
+          defaultRateOptionIndex: r.defaultRateOptionIndex,
+          notes: r.notes,
+          sortOrder: r.sortOrder ?? index,
+          isActive: r.isActive,
+          metadataJson:
+            r.metadataJson == null
+              ? undefined
+              : (r.metadataJson as Prisma.InputJsonValue),
+          sourceMasterRowId: r.id,
+          createdByUserId: params.actorUserId,
+          updatedByUserId: params.actorUserId,
+        })),
+      });
+    }
+
+    return tx.customerRateTemplate.findFirst({
+      where: { tenantId: params.tenantId, id: template.id },
+      include: {
+        rows: { orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }] },
+      },
+    });
+  }
+
+  async createFromMaster(
+    tenantId: string,
+    customerId: string,
+    dto: CreateRateTemplateFromMasterDto,
+    actorUserId: string | null,
+    opts?: CreateFromMasterOptions,
+  ) {
+    const db = opts?.client ?? this.prisma;
+    const joinsOuterTx = !!opts?.client;
+    await this.assertCustomerCompany(tenantId, customerId, db);
+    const name = String(dto.name ?? "").trim();
+    if (!name) throw new BadRequestException("name is required");
+
+    const dataset = await this.findPreferredQuotationDataset(tenantId, db);
     if (!dataset) {
       throw new BadRequestException("No ACTIVE master QUOTATION dataset found");
     }
 
-    const created = await this.prisma.$transaction(async (tx) => {
-      const template = await tx.customerRateTemplate.create({
-        data: {
-          tenantId,
+    const copy = (tx: RateTemplateDbClient) =>
+      this.copyQuotationDatasetToCustomerTemplate(tx, {
+        tenantId,
+        customerId,
+        name,
+        notes: dto.notes ?? null,
+        currency: dto.currency?.trim() || "SGD",
+        actorUserId,
+        dataset,
+      });
+
+    const created = joinsOuterTx
+      ? await copy(db)
+      : await this.prisma.$transaction(async (tx) => copy(tx));
+
+    if (!joinsOuterTx) {
+      await this.audit.log(
+        tenantId,
+        "CREATE",
+        "CustomerRateTemplate",
+        created!.id,
+        {
           customerCompanyId: customerId,
-          name,
-          status: CustomerRateTemplateStatus.DRAFT,
-          currency: dto.currency?.trim() || "SGD",
-          notes: dto.notes ?? null,
-          sourceMasterDatasetId: dataset.id,
-          sourceMasterDatasetVersionNo: dataset.versionNo,
-          createdByUserId: actorUserId,
-          updatedByUserId: actorUserId,
+          fromMasterDatasetId: dataset.id,
+          versionNo: dataset.versionNo,
+          rowCount: dataset.rows.length,
         },
-      });
+        actorUserId,
+      );
+    }
+    return created!;
+  }
 
-      if (dataset.rows.length > 0) {
-        await tx.customerRateTemplateRow.createMany({
-          data: dataset.rows.map((r, index) => ({
-            tenantId,
-            templateId: template.id,
-            code: r.code,
-            label: r.label,
-            section: r.section,
-            description: r.description,
-            category: r.category,
-            unit: r.unit,
-            containerSize: r.containerSize,
-            tripMode: r.tripMode,
-            areaScope: r.areaScope,
-            currency: r.currency || "SGD",
-            rateCents: r.rateCents,
-            rawRateText: r.rawRateText,
-            requiresManualAmount: r.requiresManualAmount,
-            hasMultipleRates: r.hasMultipleRates,
-            rateOptionsJson:
-              r.rateOptionsJson == null
-                ? undefined
-                : (r.rateOptionsJson as Prisma.InputJsonValue),
-            defaultRateOptionIndex: r.defaultRateOptionIndex,
-            notes: r.notes,
-            sortOrder: r.sortOrder ?? index,
-            isActive: r.isActive,
-            metadataJson:
-              r.metadataJson == null
-                ? undefined
-                : (r.metadataJson as Prisma.InputJsonValue),
-            sourceMasterRowId: r.id,
-            createdByUserId: actorUserId,
-            updatedByUserId: actorUserId,
-          })),
-        });
-      }
+  /**
+   * Deep-copy the current quotation base template into a new customer rate
+   * template. Returns null when no current/ACTIVE quotation base exists so
+   * customer create can proceed without commercial setup.
+   */
+  async seedFromCurrentQuotationBase(
+    tenantId: string,
+    customerId: string,
+    actorUserId: string | null,
+    companyName?: string | null,
+    opts?: CreateFromMasterOptions,
+  ) {
+    const db = opts?.client ?? this.prisma;
+    const dataset = await this.findPreferredQuotationDataset(tenantId, db);
+    if (!dataset) return null;
 
-      return tx.customerRateTemplate.findFirst({
-        where: { tenantId, id: template.id },
-        include: {
-          rows: { orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }] },
-        },
-      });
-    });
+    const name = companyName?.trim()
+      ? `${companyName.trim()} — ${SEEDED_CUSTOMER_RATE_TEMPLATE_NAME}`
+      : SEEDED_CUSTOMER_RATE_TEMPLATE_NAME;
 
-    await this.audit.log(
+    return this.createFromMaster(
       tenantId,
-      "CREATE",
-      "CustomerRateTemplate",
-      created!.id,
+      customerId,
       {
-        customerCompanyId: customerId,
-        fromMasterDatasetId: dataset.id,
-        versionNo: dataset.versionNo,
-        rowCount: dataset.rows.length,
+        name,
+        notes:
+          "Independent copy of the quotation base template at customer creation. Later base-template edits do not rewrite this copy.",
       },
       actorUserId,
+      opts,
     );
-    return created!;
   }
 
   async duplicate(

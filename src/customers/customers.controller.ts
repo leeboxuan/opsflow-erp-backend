@@ -69,7 +69,11 @@ export class CustomersController {
     @Body() dto: CreateCustomerCompanyDto,
   ): Promise<CustomerCompanyDto> {
     const tenantId = req.tenant.tenantId;
-    return this.customersService.createCompany(tenantId, dto);
+    return this.customersService.createCompany(
+      tenantId,
+      dto,
+      req.user?.userId ?? null,
+    );
   }
 
   @Get("companies/:companyId/contacts")

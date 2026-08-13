@@ -322,3 +322,209 @@ describe("CustomersService customer-company documents listing", () => {
     );
   });
 });
+
+describe("CustomersService createCompany quotation base seed", () => {
+  const companyRow = {
+    id: "c-new",
+    name: "Acme",
+    email: null,
+    phone: null,
+    addressLine1: null,
+    addressLine2: null,
+    postalCode: null,
+    country: "SG",
+    billingSameAsAddress: false,
+    billingAddressLine1: null,
+    billingAddressLine2: null,
+    billingPostalCode: null,
+    billingCountry: "SG",
+    picName: null,
+    picMobile: null,
+    picEmail: null,
+    uen: null,
+    notes: null,
+    isActive: true,
+    commercialStatus: "PROSPECT",
+    _count: { contacts: 0, users: 0 },
+  };
+
+  const seededTemplate = {
+    id: "tpl-seed",
+    name: "Acme — Default rate template",
+    sourceMasterDatasetId: "ds1",
+    sourceMasterDatasetVersionNo: 4,
+    rows: [
+      { id: "tr1", code: "TRK-01", sourceMasterRowId: "mr1" },
+      { id: "tr2", code: "TRK-02", sourceMasterRowId: "mr2" },
+    ],
+  };
+
+  function infra() {
+    const supabaseService: any = {
+      getClient: jest.fn().mockReturnValue({ storage: { from: jest.fn() } }),
+    };
+    const configService: any = {
+      get: jest.fn((k: string) => {
+        if (k === "SUPABASE_PROJECT_URL" || k === "SUPABASE_URL")
+          return "https://supabase.example";
+        if (k === "SUPABASE_SERVICE_ROLE_KEY") return "service-role-key";
+        return null;
+      }),
+    };
+    return { supabaseService, configService };
+  }
+
+  function makeNewCompanyService(opts: {
+    seedImpl: (...args: any[]) => Promise<any>;
+    racedExisting?: { id: string } | null;
+  }) {
+    const committed: { company: boolean } = { company: false };
+    const txCreate = jest.fn().mockImplementation(async () => {
+      committed.company = true;
+      return companyRow;
+    });
+    const tx = {
+      customer_companies: {
+        findUnique: jest.fn().mockResolvedValue(opts.racedExisting ?? null),
+        create: txCreate,
+        update: jest.fn().mockResolvedValue({ ...companyRow, id: "c-raced" }),
+      },
+    };
+    const prisma: any = {
+      customer_companies: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn(),
+      },
+      $transaction: jest.fn(async (fn: any) => {
+        try {
+          return await fn(tx);
+        } catch (err) {
+          committed.company = false;
+          throw err;
+        }
+      }),
+    };
+    const seedFromCurrentQuotationBase = jest.fn(opts.seedImpl);
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const realtime = {
+      publish: jest.fn(),
+      publishDispatchAndDashboard: jest.fn(),
+    };
+    const { supabaseService, configService } = infra();
+    const svc = new CustomersService(
+      prisma,
+      supabaseService,
+      configService,
+      audit as any,
+      realtime as any,
+      { seedFromCurrentQuotationBase } as any,
+    );
+    return {
+      svc,
+      prisma,
+      tx,
+      txCreate,
+      seedFromCurrentQuotationBase,
+      audit,
+      realtime,
+      committed,
+    };
+  }
+
+  it("deep-copies the current quotation base template for a new customer in one transaction", async () => {
+    const { svc, prisma, seedFromCurrentQuotationBase, audit, realtime, tx } =
+      makeNewCompanyService({
+        seedImpl: async () => seededTemplate,
+      });
+
+    const res = await svc.createCompany("t1", { name: "Acme" }, "u1");
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(tx.customer_companies.create).toHaveBeenCalled();
+    expect(seedFromCurrentQuotationBase).toHaveBeenCalledWith(
+      "t1",
+      "c-new",
+      "u1",
+      "Acme",
+      { client: tx },
+    );
+    expect(res.seededCustomerRateTemplate).toEqual({
+      id: "tpl-seed",
+      name: "Acme — Default rate template",
+      rowCount: 2,
+      sourceMasterDatasetVersionNo: 4,
+      sourceMasterDatasetId: "ds1",
+    });
+    expect(audit.log).toHaveBeenCalledWith(
+      "t1",
+      "CREATE",
+      "CustomerRateTemplate",
+      "tpl-seed",
+      expect.objectContaining({ seededOnCustomerCreate: true, rowCount: 2 }),
+      "u1",
+    );
+    expect(realtime.publish).toHaveBeenCalled();
+  });
+
+  it("skips seed when no quotation base template exists", async () => {
+    const { svc, seedFromCurrentQuotationBase, audit } = makeNewCompanyService({
+      seedImpl: async () => null,
+    });
+    const res = await svc.createCompany("t1", { name: "Acme" }, "u1");
+    expect(seedFromCurrentQuotationBase).toHaveBeenCalled();
+    expect(res.id).toBe("c-new");
+    expect(res.seededCustomerRateTemplate).toBeNull();
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it("rolls back the new customer when rate-template row copy fails", async () => {
+    const {
+      svc,
+      prisma,
+      seedFromCurrentQuotationBase,
+      audit,
+      realtime,
+      committed,
+    } = makeNewCompanyService({
+      seedImpl: async () => {
+        throw new Error("row copy failed");
+      },
+    });
+
+    await expect(svc.createCompany("t1", { name: "Acme" }, "u1")).rejects.toThrow(
+      "row copy failed",
+    );
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(seedFromCurrentQuotationBase).toHaveBeenCalled();
+    expect(committed.company).toBe(false);
+    expect(prisma.customer_companies.upsert).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
+    expect(realtime.publish).not.toHaveBeenCalled();
+  });
+
+  it("does not re-seed when updating an existing company name match", async () => {
+    const { supabaseService, configService } = infra();
+    const seedFromCurrentQuotationBase = jest.fn();
+    const prisma: any = {
+      customer_companies: {
+        findUnique: jest.fn().mockResolvedValue({ id: "c-existing" }),
+        upsert: jest.fn().mockResolvedValue({ ...companyRow, id: "c-existing" }),
+      },
+      $transaction: jest.fn(),
+    };
+    const svc = new CustomersService(
+      prisma,
+      supabaseService,
+      configService,
+      { log: jest.fn() } as any,
+      undefined,
+      { seedFromCurrentQuotationBase } as any,
+    );
+
+    const res = await svc.createCompany("t1", { name: "Acme" }, "u1");
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(seedFromCurrentQuotationBase).not.toHaveBeenCalled();
+    expect(prisma.customer_companies.upsert).toHaveBeenCalled();
+    expect(res.seededCustomerRateTemplate).toBeNull();
+  });
+});

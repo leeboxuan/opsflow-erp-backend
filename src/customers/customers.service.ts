@@ -31,6 +31,7 @@ import { buildOrderBy } from "../shared/common/listing/listing.sort";
 import { applyQSearch } from "../shared/common/listing/listing.search";
 import { RealtimeEventsService } from "../shared/realtime/realtime-events.service";
 import * as rt from "../shared/realtime/realtime-publish";
+import { RateTemplatesService } from "./rate-templates/rate-templates.service";
 
 const COMPANY_DOCS_BUCKET = "job-documents";
 const INVOICE_DOCUMENTS_BUCKET = "invoice-documents";
@@ -47,6 +48,7 @@ export class CustomersService {
     private readonly configService: ConfigService,
     private readonly audit: AuditService,
     @Optional() private readonly realtime?: RealtimeEventsService,
+    @Optional() private readonly rateTemplates?: RateTemplatesService,
   ) {
     const supabaseUrl =
       this.configService.get<string>("SUPABASE_PROJECT_URL") ||
@@ -238,122 +240,190 @@ export class CustomersService {
     return { data: rows, meta: buildPaginationMeta(page, pageSize, total) };
   }
 
-  async createCompany(tenantId: string, dto: CreateCustomerCompanyDto) {
-    const companyName = String(dto.name ?? "").trim();
-    if (!companyName) throw new BadRequestException("name is required");
+  private companyWriteSelect() {
+    return {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      addressLine1: true,
+      addressLine2: true,
+      postalCode: true,
+      country: true,
+      billingSameAsAddress: true,
+      billingAddressLine1: true,
+      billingAddressLine2: true,
+      billingPostalCode: true,
+      billingCountry: true,
+      picName: true,
+      picMobile: true,
+      picEmail: true,
+      uen: true,
+      notes: true,
+      isActive: true,
+      commercialStatus: true,
+      _count: { select: { contacts: true, users: true } },
+    } as const;
+  }
 
-    const normalizedName = this.normalizeCompanyName(companyName);
+  private companyWritePayload(
+    tenantId: string,
+    dto: CreateCustomerCompanyDto,
+    companyName: string,
+    normalizedName: string,
+  ) {
     const billingSameAs = !!dto.billingSameAsAddress;
     const commercialStatus = dto.commercialStatus ?? "PROSPECT";
     const isActive =
       dto.isActive !== undefined
         ? !!dto.isActive
         : commercialStatus !== "SUSPENDED";
+    const shared = {
+      name: companyName,
+      email: dto.email ?? null,
+      phone: dto.phone ?? null,
+      addressLine1: dto.addressLine1 ?? null,
+      addressLine2: dto.addressLine2 ?? null,
+      postalCode: dto.postalCode ?? null,
+      country: dto.country ?? "SG",
+      billingSameAsAddress: billingSameAs,
+      billingAddressLine1: billingSameAs
+        ? (dto.addressLine1 ?? null)
+        : (dto.billingAddressLine1 ?? null),
+      billingAddressLine2: billingSameAs
+        ? (dto.addressLine2 ?? null)
+        : (dto.billingAddressLine2 ?? null),
+      billingPostalCode: billingSameAs
+        ? (dto.postalCode ?? null)
+        : (dto.billingPostalCode ?? null),
+      billingCountry: billingSameAs
+        ? (dto.country ?? "SG")
+        : (dto.billingCountry ?? "SG"),
+      picName: dto.picName ?? null,
+      picMobile: dto.picMobile ?? null,
+      picEmail: dto.picEmail ?? null,
+      uen: dto.uen ?? null,
+      notes: dto.notes ?? null,
+      isActive,
+      commercialStatus,
+    };
+    return {
+      update: shared,
+      create: { tenantId, normalizedName, ...shared },
+    };
+  }
+
+  private mapSeededRateTemplate(seeded: {
+    id: string;
+    name: string;
+    rows?: unknown[] | null;
+    sourceMasterDatasetId?: string | null;
+    sourceMasterDatasetVersionNo?: number | null;
+  }) {
+    return {
+      id: seeded.id,
+      name: seeded.name,
+      rowCount: seeded.rows?.length ?? 0,
+      sourceMasterDatasetVersionNo: seeded.sourceMasterDatasetVersionNo ?? null,
+      sourceMasterDatasetId: seeded.sourceMasterDatasetId ?? null,
+    };
+  }
+
+  async createCompany(
+    tenantId: string,
+    dto: CreateCustomerCompanyDto,
+    actorUserId: string | null = null,
+  ) {
+    const companyName = String(dto.name ?? "").trim();
+    if (!companyName) throw new BadRequestException("name is required");
+
+    const normalizedName = this.normalizeCompanyName(companyName);
+    const payload = this.companyWritePayload(
+      tenantId,
+      dto,
+      companyName,
+      normalizedName,
+    );
+    const select = this.companyWriteSelect();
 
     const existingCompany = await this.prisma.customer_companies.findUnique({
       where: { tenantId_normalizedName: { tenantId, normalizedName } },
       select: { id: true },
     });
 
-    const company = await this.prisma.customer_companies.upsert({
-      where: { tenantId_normalizedName: { tenantId, normalizedName } },
-      update: {
-        name: companyName,
-        email: dto.email ?? null,
-        phone: dto.phone ?? null,
-
-        addressLine1: dto.addressLine1 ?? null,
-        addressLine2: dto.addressLine2 ?? null,
-        postalCode: dto.postalCode ?? null,
-        country: dto.country ?? "SG",
-
-        billingSameAsAddress: billingSameAs,
-        billingAddressLine1: billingSameAs
-          ? (dto.addressLine1 ?? null)
-          : (dto.billingAddressLine1 ?? null),
-        billingAddressLine2: billingSameAs
-          ? (dto.addressLine2 ?? null)
-          : (dto.billingAddressLine2 ?? null),
-        billingPostalCode: billingSameAs
-          ? (dto.postalCode ?? null)
-          : (dto.billingPostalCode ?? null),
-        billingCountry: billingSameAs
-          ? (dto.country ?? "SG")
-          : (dto.billingCountry ?? "SG"),
-
-        picName: dto.picName ?? null,
-        picMobile: dto.picMobile ?? null,
-        picEmail: dto.picEmail ?? null,
-
-        uen: dto.uen ?? null,
-        notes: dto.notes ?? null,
-        isActive,
-        commercialStatus,
-      },
-      create: {
+    if (existingCompany) {
+      const company = await this.prisma.customer_companies.upsert({
+        where: { tenantId_normalizedName: { tenantId, normalizedName } },
+        update: payload.update,
+        create: payload.create,
+        select,
+      });
+      rt.publishCustomerEvent(
+        this.realtime,
+        "customer.updated",
         tenantId,
-        name: companyName,
-        normalizedName,
+        company.id,
+      );
+      return {
+        ...company,
+        contactCount: company._count.contacts,
+        userCount: company._count.users,
+        seededCustomerRateTemplate: null,
+      };
+    }
 
-        email: dto.email ?? null,
-        phone: dto.phone ?? null,
+    const { company, seeded, wasCreate } = await this.prisma.$transaction(
+      async (tx) => {
+        const raced = await tx.customer_companies.findUnique({
+          where: { tenantId_normalizedName: { tenantId, normalizedName } },
+          select: { id: true },
+        });
+        if (raced) {
+          const updated = await tx.customer_companies.update({
+            where: { id: raced.id },
+            data: payload.update,
+            select,
+          });
+          return { company: updated, seeded: null as null, wasCreate: false };
+        }
 
-        addressLine1: dto.addressLine1 ?? null,
-        addressLine2: dto.addressLine2 ?? null,
-        postalCode: dto.postalCode ?? null,
-        country: dto.country ?? "SG",
-
-        billingSameAsAddress: billingSameAs,
-        billingAddressLine1: billingSameAs
-          ? (dto.addressLine1 ?? null)
-          : (dto.billingAddressLine1 ?? null),
-        billingAddressLine2: billingSameAs
-          ? (dto.addressLine2 ?? null)
-          : (dto.billingAddressLine2 ?? null),
-        billingPostalCode: billingSameAs
-          ? (dto.postalCode ?? null)
-          : (dto.billingPostalCode ?? null),
-        billingCountry: billingSameAs
-          ? (dto.country ?? "SG")
-          : (dto.billingCountry ?? "SG"),
-
-        picName: dto.picName ?? null,
-        picMobile: dto.picMobile ?? null,
-        picEmail: dto.picEmail ?? null,
-
-        uen: dto.uen ?? null,
-        notes: dto.notes ?? null,
-        isActive,
-        commercialStatus,
+        const created = await tx.customer_companies.create({
+          data: payload.create,
+          select,
+        });
+        const seededTemplate = this.rateTemplates
+          ? await this.rateTemplates.seedFromCurrentQuotationBase(
+              tenantId,
+              created.id,
+              actorUserId,
+              created.name,
+              { client: tx },
+            )
+          : null;
+        return { company: created, seeded: seededTemplate, wasCreate: true };
       },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        addressLine1: true,
-        addressLine2: true,
-        postalCode: true,
-        country: true,
-        billingSameAsAddress: true,
-        billingAddressLine1: true,
-        billingAddressLine2: true,
-        billingPostalCode: true,
-        billingCountry: true,
-        picName: true,
-        picMobile: true,
-        picEmail: true,
-        uen: true,
-        notes: true,
-        isActive: true,
-        commercialStatus: true,
-        _count: { select: { contacts: true, users: true } },
-      },
-    });
+    );
+
+    if (seeded) {
+      await this.audit.log(
+        tenantId,
+        "CREATE",
+        "CustomerRateTemplate",
+        seeded.id,
+        {
+          customerCompanyId: company.id,
+          fromMasterDatasetId: seeded.sourceMasterDatasetId,
+          versionNo: seeded.sourceMasterDatasetVersionNo,
+          rowCount: seeded.rows?.length ?? 0,
+          seededOnCustomerCreate: true,
+        },
+        actorUserId,
+      );
+    }
 
     rt.publishCustomerEvent(
       this.realtime,
-      existingCompany ? "customer.updated" : "customer.created",
+      wasCreate ? "customer.created" : "customer.updated",
       tenantId,
       company.id,
     );
@@ -362,6 +432,9 @@ export class CustomersService {
       ...company,
       contactCount: company._count.contacts,
       userCount: company._count.users,
+      seededCustomerRateTemplate: seeded
+        ? this.mapSeededRateTemplate(seeded)
+        : null,
     };
   }
 

@@ -110,6 +110,23 @@ export class QuotationDatasetItemDto {
   @Type(() => Number)
   @IsInt()
   rate40ftCents?: number | null;
+
+  @ApiPropertyOptional({ default: "SGD" })
+  @IsOptional()
+  @IsString()
+  currency?: string | null;
+}
+
+export class MutateQuotationDatasetItemDto extends QuotationDatasetItemDto {
+  @ApiPropertyOptional({
+    description:
+      "Optimistic concurrency: current dataset versionNo expected by the client",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  expectedVersionNo?: number;
 }
 
 export class SaveQuotationDatasetDto {

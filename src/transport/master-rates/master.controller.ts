@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -42,7 +43,10 @@ import {
   UpdateDriverTripRateMasterDto,
 } from "./dto/driver-trip-rate-master.dto";
 import { SaveMasterQuotationItemsDto } from "./dto/master-file-items.dto";
-import { SaveQuotationDatasetDto } from "./dto/quotation-dataset.dto";
+import {
+  MutateQuotationDatasetItemDto,
+  SaveQuotationDatasetDto,
+} from "./dto/quotation-dataset.dto";
 import { SaveTruckingRatesDatasetDto } from "./dto/trucking-rate-dataset.dto";
 import { SaveDhcRatesDatasetDto } from "./dto/dhc-rate-dataset.dto";
 import { SingaporeLocationDto } from "./dto/singapore-location.dto";
@@ -630,6 +634,66 @@ export class MasterDataController {
       dto.items ?? [],
       req.user?.userId ?? null,
       dto.expectedVersionNo,
+    );
+  }
+
+  @Post("quotation/items")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Add one line item to the current quotation base template (creates a new version)",
+  })
+  createQuotationItem(@Req() req: any, @Body() dto: MutateQuotationDatasetItemDto) {
+    const { expectedVersionNo, ...item } = dto;
+    return this.master.createQuotationDatasetItem(
+      req.tenant.tenantId,
+      item,
+      req.user?.userId ?? null,
+      expectedVersionNo,
+    );
+  }
+
+  @Patch("quotation/items/:id")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Update one line item on the current quotation base template (creates a new version)",
+  })
+  updateQuotationItem(
+    @Req() req: any,
+    @Param("id") id: string,
+    @Body() dto: MutateQuotationDatasetItemDto,
+  ) {
+    const { expectedVersionNo, ...item } = dto;
+    return this.master.updateQuotationDatasetItem(
+      req.tenant.tenantId,
+      id,
+      item,
+      req.user?.userId ?? null,
+      expectedVersionNo,
+    );
+  }
+
+  @Delete("quotation/items/:id")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @ApiOperation({
+    summary:
+      "Delete one line item from the current quotation base template (creates a new version)",
+  })
+  deleteQuotationItem(
+    @Req() req: any,
+    @Param("id") id: string,
+    @Query("expectedVersionNo") expectedVersionNo?: string,
+  ) {
+    const parsed =
+      expectedVersionNo === undefined || expectedVersionNo === ""
+        ? null
+        : Number(expectedVersionNo);
+    return this.master.deleteQuotationDatasetItem(
+      req.tenant.tenantId,
+      id,
+      req.user?.userId ?? null,
+      Number.isFinite(parsed as number) ? (parsed as number) : null,
     );
   }
 

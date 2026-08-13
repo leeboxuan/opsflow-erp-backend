@@ -156,6 +156,18 @@ export class CustomerCompanyDto {
 
   @ApiPropertyOptional({ description: "Number of portal users linked to this company" })
   userCount?: number;
+
+  @ApiPropertyOptional({
+    description:
+      "Present on create when the current quotation base template was deep-copied into a customer rate template",
+  })
+  seededCustomerRateTemplate?: {
+    id: string;
+    name: string;
+    rowCount: number;
+    sourceMasterDatasetVersionNo: number | null;
+    sourceMasterDatasetId?: string | null;
+  } | null;
 }
 
 export class CustomerContactDto {
