@@ -24,6 +24,14 @@ export class SaveJobChargeLineDto {
   @IsString()
   sourceRefId?: string | null;
 
+  @ApiPropertyOptional({
+    description:
+      "Required for new CUSTOMER_QUOTATION charges. Must belong to the job's bound accepted quotation. Omit for historical master-sourced CUSTOMER_QUOTATION snapshots.",
+  })
+  @IsOptional()
+  @IsString()
+  sourceCustomerQuotationLineId?: string | null;
+
   @ApiProperty()
   @IsString()
   code!: string;

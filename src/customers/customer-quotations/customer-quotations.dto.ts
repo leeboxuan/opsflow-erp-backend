@@ -37,6 +37,13 @@ export type CustomerQuotationStatusDto =
 export type CustomerQuotationAcceptanceMethodDto =
   (typeof CUSTOMER_QUOTATION_ACCEPTANCE_METHODS)[number];
 
+export class ListCustomerQuotationsQueryDto {
+  @ApiPropertyOptional({ enum: CUSTOMER_QUOTATION_STATUSES })
+  @IsOptional()
+  @IsIn(CUSTOMER_QUOTATION_STATUSES)
+  status?: CustomerQuotationStatusDto;
+}
+
 export class CreateBlankCustomerQuotationDto {
   @ApiPropertyOptional()
   @IsOptional()

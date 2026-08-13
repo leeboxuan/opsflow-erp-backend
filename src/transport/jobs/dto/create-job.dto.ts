@@ -297,6 +297,16 @@ export class CreateJobDto {
   @IsString()
   customerCompanyId: string;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      "Optional accepted CustomerQuotation id that governs this job. Must belong to the same customer.",
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value != null && value !== "")
+  @IsString()
+  sourceCustomerQuotationId?: string | null;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsDateString()

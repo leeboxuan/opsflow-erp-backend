@@ -450,6 +450,49 @@ describe("StatisticsFinanceService", () => {
     expect(source).not.toContain("invoiceLineItem");
     expect(source).not.toContain("TransportOrder");
     expect(source).not.toContain("Stop");
+    expect(source).not.toContain("customerQuotation");
+    expect(source).not.toContain("CustomerQuotation");
+    expect(source).not.toContain("sourceCustomerQuotationId");
+  });
+
+  it("treats quotation totals and quotation-to-job binding as zero revenue until JobCharges exist", async () => {
+    const prisma = createPrismaMock();
+    prisma.job.findMany
+      .mockResolvedValueOnce([{ id: "job-bound" }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([{ id: "job-bound" }]);
+    prisma.trip.findMany.mockResolvedValue([]);
+    prisma.tripPayoutLine.findMany.mockResolvedValue([]);
+    prisma.jobCharge.groupBy.mockResolvedValue([]);
+    prisma.invoice.groupBy.mockResolvedValue([]);
+    prisma.invoice.findMany.mockResolvedValue([]);
+
+    const result = await new StatisticsFinanceService(prisma as any).getFinance(
+      "tenant-1",
+      query(),
+    );
+
+    expect(prisma.jobCharge.groupBy).toHaveBeenCalled();
+    expect(
+      result.currencyGroups.every((group) => group.jobChargesCents === 0),
+    ).toBe(true);
+    expect(result.currencyGroups.reduce((sum, group) => sum + group.jobChargesCents, 0)).toBe(0);
+  });
+
+  it("does not query customer quotations when aggregating job-charge revenue", async () => {
+    const prisma = createPrismaMock() as ReturnType<typeof createPrismaMock> & {
+      customerQuotation?: { findMany: jest.Mock };
+    };
+    setEmptyResults(prisma);
+    prisma.jobCharge.groupBy.mockResolvedValue([]);
+    prisma.invoice.findMany.mockResolvedValue([]);
+    await new StatisticsFinanceService(prisma as any).getFinance(
+      "tenant-1",
+      query(),
+    );
+    expect(prisma.customerQuotation).toBeUndefined();
+    expect(Object.keys(prisma)).not.toContain("customerQuotation");
+    expect(Object.keys(prisma)).not.toContain("customerQuotationLine");
   });
 
   it("does not accept unsupported finance filter properties", () => {

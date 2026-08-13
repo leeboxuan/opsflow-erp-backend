@@ -404,11 +404,19 @@ export class CustomerQuotationsService {
     return Boolean(quotation.sourceTemplateId) || lineCount > 0;
   }
 
-  async list(tenantId: string, customerId: string) {
+  async list(
+    tenantId: string,
+    customerId: string,
+    status?: CustomerQuotationStatus,
+  ) {
     await this.assertCustomerCompany(tenantId, customerId);
     await this.materializeExpiredForCustomer(tenantId, customerId);
     const rows = await this.prisma.customerQuotation.findMany({
-      where: { tenantId, customerCompanyId: customerId },
+      where: {
+        tenantId,
+        customerCompanyId: customerId,
+        ...(status ? { status } : {}),
+      },
       orderBy: [{ updatedAt: "desc" }],
       include: { _count: { select: { lines: true } } },
     });

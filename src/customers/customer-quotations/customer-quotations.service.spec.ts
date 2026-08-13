@@ -84,6 +84,30 @@ describe("CustomerQuotationsService", () => {
     taxCents: 900,
   };
 
+  it("lists only ACCEPTED quotations when status is requested", async () => {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findMany,
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const { svc } = makeService(prisma);
+    await svc.list("t1", "c1", CustomerQuotationStatus.ACCEPTED);
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: "t1",
+          customerCompanyId: "c1",
+          status: CustomerQuotationStatus.ACCEPTED,
+        }),
+      }),
+    );
+  });
+
   it("rejects missing customer company (cross-tenant isolation)", async () => {
     const prisma: any = {
       customer_companies: { findFirst: jest.fn().mockResolvedValue(null) },

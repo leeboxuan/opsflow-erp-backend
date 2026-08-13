@@ -20,6 +20,8 @@ import {
   MasterFileType,
   MasterRateDatasetStatus,
   MasterRateDatasetType,
+  CustomerQuotationStatus,
+  CustomerRateTemplateStatus,
   MembershipStatus,
   Prisma,
   Role,
@@ -158,6 +160,16 @@ import {
   assertPrismaInteractiveTransactionAvailable,
 } from "./create-job-interactive-tx";
 import {
+  type ActiveCustomerRateTemplateRow,
+  type BoundCustomerQuotationLine,
+  buildCustomerQuotationChargeSnapshot,
+  jobChargeProvenanceLabel,
+  jobChargeQtyFromQuotationQty,
+  mapCustomerQuotationLinesToChargeOptions,
+  mapCustomerRateTemplateRowsToChargeOptions,
+  normalizeOptionalId,
+} from "./job-commercial-provenance";
+import {
   buildContainerDocumentationRequirements,
 } from "../driver-app/container-documentation.helpers";
 import type {
@@ -276,6 +288,14 @@ const TRIP_DOC_ALLOWED_TYPES = new Set<string>([
   TripDocumentType.OTHER,
 ]);
 
+const sourceCustomerQuotationSelect = {
+  id: true,
+  quotationNo: true,
+  title: true,
+  status: true,
+  customerCompanyId: true,
+} as const;
+
 function normalizeExternalRef(value: unknown): string | null {
   if (value == null) return null;
   const trimmed = String(value).trim();
@@ -337,6 +357,9 @@ function toJobDto(j: any): JobDto {
     tenantId: j.tenantId,
     customerCompanyId: j.customerCompanyId,
     companyName: j.customerCompany?.name ?? null,
+    sourceCustomerQuotationId: j.sourceCustomerQuotationId ?? null,
+    sourceCustomerQuotationNo: j.sourceCustomerQuotation?.quotationNo ?? null,
+    sourceCustomerQuotationTitle: j.sourceCustomerQuotation?.title ?? null,
 
     internalRef: j.internalRef,
     externalRef: j.externalRef ?? null,
@@ -542,6 +565,12 @@ function toJobDto(j: any): JobDto {
         sourceType: c.sourceType,
         sourceRefId: c.sourceRefId ?? null,
         sourceCustomerQuotationItemId: c.sourceCustomerQuotationItemId ?? null,
+        sourceCustomerQuotationLineId: c.sourceCustomerQuotationLineId ?? null,
+        provenanceLabel: jobChargeProvenanceLabel({
+          sourceType: c.sourceType,
+          sourceCustomerQuotationLineId: c.sourceCustomerQuotationLineId ?? null,
+          metadataJson: c.metadataJson,
+        }),
         code: c.code,
         label: c.label,
         description: c.description ?? null,
@@ -1222,38 +1251,33 @@ export class TransportJobsService {
     }
   }
 
-  private async resolveQuotationChargeLinesForCustomer(
+  private async assertAcceptedSourceQuotation(
     tenantId: string,
-    _customerCompanyId: string,
-  ): Promise<{ quotationLines: any[]; masterRateLines: any[] }> {
-    const dataset =
-      (await this.prisma.masterRateDataset.findFirst({
-        where: {
-          tenantId,
-          type: MasterRateDatasetType.QUOTATION,
-          isCurrent: true,
-        },
-        select: { id: true },
-      })) ??
-      (await this.prisma.masterRateDataset.findFirst({
-        where: {
-          tenantId,
-          type: MasterRateDatasetType.QUOTATION,
-          status: MasterRateDatasetStatus.ACTIVE,
-        },
-        orderBy: { versionNo: "desc" },
-        select: { id: true },
-      }));
-    if (!dataset) return { quotationLines: [], masterRateLines: [] };
-
-    const rows = await this.prisma.masterRateDatasetRow.findMany({
-      where: { tenantId, datasetId: dataset.id, isActive: true },
-      orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+    customerCompanyId: string,
+    quotationId: string,
+  ) {
+    const quotation = await this.prisma.customerQuotation.findFirst({
+      where: { id: quotationId, tenantId },
+      select: {
+        id: true,
+        customerCompanyId: true,
+        status: true,
+      },
     });
-    return {
-      quotationLines: rows.map((r) => ({ ...r, source: "TENANT_QUOTATION_DATASET" })),
-      masterRateLines: [],
-    };
+    if (!quotation) {
+      throw new BadRequestException("Customer quotation not found");
+    }
+    if (quotation.customerCompanyId !== customerCompanyId) {
+      throw new BadRequestException(
+        "Customer quotation does not belong to this customer",
+      );
+    }
+    if (quotation.status !== CustomerQuotationStatus.ACCEPTED) {
+      throw new BadRequestException(
+        "Job commercial agreement must be an ACCEPTED customer quotation",
+      );
+    }
+    return quotation;
   }
 
   private async persistJobCharges(
@@ -1263,109 +1287,210 @@ export class TransportJobsService {
     selectedByUserId: string | null,
   ): Promise<void> {
     const now = new Date();
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, tenantId },
+      select: {
+        id: true,
+        customerCompanyId: true,
+        sourceCustomerQuotationId: true,
+      },
+    });
+    if (!job) throw new NotFoundException("Job not found");
+
     await this.prisma.$transaction(async (tx) => {
       await tx.jobCharge.deleteMany({ where: { tenantId, jobId } });
       if (!dto.charges.length) return;
 
-      const quotationRefIds = dto.charges
-        .filter(
-          (c) =>
-            c.sourceType === JobChargeSourceType.CUSTOMER_QUOTATION &&
-            typeof c.sourceRefId === "string" &&
-            c.sourceRefId.trim().length > 0,
-        )
-        .map((c) => c.sourceRefId!.trim());
+      const quotationLineIds = dto.charges
+        .filter((c) => c.sourceType === JobChargeSourceType.CUSTOMER_QUOTATION)
+        .map((c) => normalizeOptionalId(c.sourceCustomerQuotationLineId));
+      if (quotationLineIds.some((id) => id) && !job.sourceCustomerQuotationId) {
+        throw new BadRequestException(
+          "Job has no bound accepted quotation for CUSTOMER_QUOTATION charges",
+        );
+      }
 
-      const quotationItems: any[] = quotationRefIds.length
-        ? await tx.masterRateDatasetRow.findMany({
+      const uniqueLineIds = [
+        ...new Set(quotationLineIds.filter((id): id is string => !!id)),
+      ];
+      const quotationLines = uniqueLineIds.length
+        ? await tx.customerQuotationLine.findMany({
             where: {
               tenantId,
-              id: { in: [...new Set(quotationRefIds)] },
-              isActive: true,
-              dataset: {
-                type: MasterRateDatasetType.QUOTATION,
-                status: MasterRateDatasetStatus.ACTIVE,
+              id: { in: uniqueLineIds },
+              quotationId: job.sourceCustomerQuotationId ?? undefined,
+            },
+            include: {
+              quotation: {
+                select: {
+                  id: true,
+                  quotationNo: true,
+                  title: true,
+                  status: true,
+                  customerCompanyId: true,
+                },
               },
             },
           })
         : [];
-      const quotationItemById = new Map<string, any>(
-        quotationItems.map((q: any) => [q.id, q]),
+      const quotationLineById = new Map<string, BoundCustomerQuotationLine>(
+        quotationLines.map((line) => [line.id, line as BoundCustomerQuotationLine]),
       );
 
-      for (const c of dto.charges) {
-        if (
-          c.sourceType !== JobChargeSourceType.CUSTOMER_QUOTATION ||
-          !c.sourceRefId ||
-          !quotationItemById.has(c.sourceRefId)
-        ) {
-          continue;
+      if (uniqueLineIds.length > 0) {
+        for (const lineId of uniqueLineIds) {
+          if (!quotationLineById.has(lineId)) {
+            throw new BadRequestException(
+              "Quotation line does not belong to the job's bound quotation",
+            );
+          }
         }
-        const item = quotationItemById.get(c.sourceRefId)!;
+        const boundQuotation = quotationLines[0]?.quotation;
         if (
-          item.requiresManualAmount &&
-          (!Number.isInteger(c.unitPriceCents) || c.unitPriceCents <= 0)
+          !boundQuotation ||
+          boundQuotation.id !== job.sourceCustomerQuotationId ||
+          boundQuotation.customerCompanyId !== job.customerCompanyId ||
+          boundQuotation.status !== CustomerQuotationStatus.ACCEPTED
         ) {
           throw new BadRequestException(
-            `Manual amount is required for quotation item "${item.label}" before saving charges`,
+            "Quotation lines must belong to this job's ACCEPTED commercial agreement",
           );
+        }
+        for (const c of dto.charges) {
+          if (c.sourceType !== JobChargeSourceType.CUSTOMER_QUOTATION) continue;
+          const lineId = normalizeOptionalId(c.sourceCustomerQuotationLineId);
+          if (!lineId) continue;
+          const line = quotationLineById.get(lineId)!;
+          if (
+            line.requiresManualAmount &&
+            (!Number.isInteger(c.unitPriceCents) || c.unitPriceCents <= 0)
+          ) {
+            throw new BadRequestException(
+              `Manual amount is required for quotation item "${line.label}" before saving charges`,
+            );
+          }
         }
       }
 
+      const templateRowIds = dto.charges
+        .filter(
+          (c) =>
+            c.sourceType === JobChargeSourceType.MANUAL &&
+            typeof c.sourceRefId === "string" &&
+            c.sourceRefId.trim().length > 0,
+        )
+        .map((c) => c.sourceRefId!.trim());
+      const templateRows = templateRowIds.length
+        ? await tx.customerRateTemplateRow.findMany({
+            where: {
+              tenantId,
+              id: { in: [...new Set(templateRowIds)] },
+              isActive: true,
+              template: {
+                tenantId,
+                customerCompanyId: job.customerCompanyId,
+                status: CustomerRateTemplateStatus.ACTIVE,
+              },
+            },
+            include: { template: { select: { id: true, name: true } } },
+          })
+        : [];
+      const templateRowById = new Map<string, ActiveCustomerRateTemplateRow>(
+        templateRows.map((row) => [row.id, row as ActiveCustomerRateTemplateRow]),
+      );
+
       await tx.jobCharge.createMany({
-        // unitPriceCents/amountCents are frozen snapshots; later template edits do not rewrite saved charges.
-        data: dto.charges.map((c, i) => ({
-          ...(c.sourceType === JobChargeSourceType.CUSTOMER_QUOTATION &&
-          c.sourceRefId &&
-          quotationItemById.has(c.sourceRefId)
-            ? (() => {
-                const item = quotationItemById.get(c.sourceRefId!)!;
-                return {
-                  sourceCustomerQuotationItemId: null,
-                  code: item.code,
-                  label: item.label,
-                  description: item.description ?? null,
-                  unitPriceCents: c.unitPriceCents,
-                  amountCents: c.qty * c.unitPriceCents,
-                  metadataJson: {
-                    quotationSnapshot: {
-                      sourceTenantQuotationItemId: item.id,
-                      section: item.section ?? null,
-                      code: item.code,
-                      label: item.label,
-                      description: item.description ?? null,
-                      unit: item.unit ?? null,
-                      selectedRateCents: c.unitPriceCents,
-                      selectedAmountCents: c.qty * c.unitPriceCents,
-                      notes: item.notes ?? null,
-                      capturedAt: now.toISOString(),
-                    },
-                  } as Prisma.InputJsonValue,
-                };
-              })()
-            : {
+        // unitPriceCents/amountCents are frozen snapshots; later quotation/template edits do not rewrite saved charges.
+        data: dto.charges.map((c, i) => {
+          const qty = jobChargeQtyFromQuotationQty(c.qty);
+          if (c.sourceType === JobChargeSourceType.CUSTOMER_QUOTATION) {
+            const lineId = normalizeOptionalId(c.sourceCustomerQuotationLineId);
+            if (!lineId) {
+              // Historical CUSTOMER_QUOTATION rows used master sourceRefId.
+              // Re-save them as frozen snapshots; do not treat sourceRefId as a CustomerQuotationLine id.
+              return {
+                tenantId,
+                jobId,
+                sourceType: JobChargeSourceType.CUSTOMER_QUOTATION,
+                sourceRefId: c.sourceRefId ?? null,
                 sourceCustomerQuotationItemId: null,
+                sourceCustomerQuotationLineId: null,
                 code: c.code,
                 label: c.label,
                 description: c.description ?? null,
+                qty,
                 unitPriceCents: c.unitPriceCents,
-                amountCents: c.qty * c.unitPriceCents,
+                amountCents: qty * c.unitPriceCents,
+                currency: c.currency ?? "SGD",
+                taxable: c.taxable ?? true,
+                taxCode: c.taxCode ?? null,
+                taxRateBasisPoints: c.taxRateBasisPoints ?? null,
                 metadataJson: null,
-              }),
-          tenantId,
-          jobId,
-          sourceType: c.sourceType,
-          sourceRefId: c.sourceRefId ?? null,
-          qty: c.qty,
-          currency: c.currency ?? "SGD",
-          taxable: c.taxable ?? true,
-          taxCode: c.taxCode ?? null,
-          taxRateBasisPoints: c.taxRateBasisPoints ?? null,
-          sortOrder: c.sortOrder ?? i,
-          selectedByUserId: selectedByUserId ?? null,
-          overrideReason: c.overrideReason ?? null,
-          updatedAt: now,
-        })),
+                sortOrder: c.sortOrder ?? i,
+                selectedByUserId: selectedByUserId ?? null,
+                overrideReason: c.overrideReason ?? null,
+                updatedAt: now,
+              };
+            }
+            const line = quotationLineById.get(lineId)!;
+            const snapshot = buildCustomerQuotationChargeSnapshot({
+              line,
+              quotation: line.quotation,
+              qty,
+              unitPriceCents: c.unitPriceCents,
+              capturedAt: now,
+            });
+            return {
+              tenantId,
+              jobId,
+              ...snapshot,
+              metadataJson: snapshot.metadataJson as Prisma.InputJsonValue,
+              sortOrder: c.sortOrder ?? i,
+              selectedByUserId: selectedByUserId ?? null,
+              overrideReason: c.overrideReason ?? null,
+              updatedAt: now,
+            };
+          }
+
+          const templateRow =
+            c.sourceType === JobChargeSourceType.MANUAL && c.sourceRefId
+              ? templateRowById.get(c.sourceRefId)
+              : null;
+          return {
+            tenantId,
+            jobId,
+            sourceType: c.sourceType,
+            sourceRefId: c.sourceRefId ?? null,
+            sourceCustomerQuotationItemId: null,
+            sourceCustomerQuotationLineId: null,
+            code: templateRow?.code ?? c.code,
+            label: templateRow?.label ?? c.label,
+            description: templateRow?.description ?? c.description ?? null,
+            qty,
+            unitPriceCents: c.unitPriceCents,
+            amountCents: qty * c.unitPriceCents,
+            currency: c.currency ?? "SGD",
+            taxable: c.taxable ?? true,
+            taxCode: c.taxCode ?? null,
+            taxRateBasisPoints: c.taxRateBasisPoints ?? null,
+            metadataJson: templateRow
+              ? ({
+                  customerRateTemplateSnapshot: {
+                    templateId: templateRow.template.id,
+                    templateName: templateRow.template.name,
+                    rowId: templateRow.id,
+                    code: templateRow.code,
+                    label: templateRow.label,
+                    capturedAt: now.toISOString(),
+                  },
+                } as Prisma.InputJsonValue)
+              : null,
+            sortOrder: c.sortOrder ?? i,
+            selectedByUserId: selectedByUserId ?? null,
+            overrideReason: c.overrideReason ?? null,
+            updatedAt: now,
+          };
+        }),
       });
     });
 
@@ -2067,6 +2192,17 @@ export class TransportJobsService {
       throw new BadRequestException("Customer company not found");
     }
 
+    const sourceCustomerQuotationId = normalizeOptionalId(
+      dto.sourceCustomerQuotationId,
+    );
+    if (sourceCustomerQuotationId) {
+      await this.assertAcceptedSourceQuotation(
+        tenantId,
+        dto.customerCompanyId,
+        sourceCustomerQuotationId,
+      );
+    }
+
     const rawItems = readCreateJobItemsInput(dto);
     const validItems = parseValidJobItemsFromInput(rawItems, dto.jobType);
     assertCreateJobItemsRequiredForJobType(dto.jobType, rawItems, validItems);
@@ -2318,6 +2454,7 @@ export class TransportJobsService {
         data: {
           tenantId,
           customerCompanyId: dto.customerCompanyId,
+          sourceCustomerQuotationId: sourceCustomerQuotationId ?? null,
           internalRef,
           externalRef: normalizeExternalRef(dto.externalRef),
           jobType: dto.jobType,
@@ -2515,6 +2652,9 @@ export class TransportJobsService {
         customerCompany: {
           select: { id: true, name: true },
         },
+        sourceCustomerQuotation: {
+          select: sourceCustomerQuotationSelect,
+        },
         assignedDriver: {
           select: { id: true, name: true, email: true },
         },
@@ -2571,6 +2711,9 @@ export class TransportJobsService {
       include: {
         customerCompany: {
           select: { id: true, name: true },
+        },
+        sourceCustomerQuotation: {
+          select: sourceCustomerQuotationSelect,
         },
         assignedDriver: {
           select: { id: true, name: true, email: true },
@@ -2644,6 +2787,9 @@ export class TransportJobsService {
       where: { id: jobId, tenantId },
       include: {
         customerCompany: { select: { id: true, name: true } },
+        sourceCustomerQuotation: {
+          select: sourceCustomerQuotationSelect,
+        },
         assignedDriver: { select: { id: true, name: true, email: true } },
         createdBy: { select: { id: true, name: true, email: true } },
         items: { orderBy: { createdAt: "asc" } },
@@ -2848,6 +2994,17 @@ export class TransportJobsService {
       }
     }
 
+    const nextCustomerCompanyId =
+      dto.customerCompanyId !== undefined
+        ? dto.customerCompanyId
+        : job.customerCompanyId;
+    const customerChanging =
+      dto.customerCompanyId !== undefined &&
+      dto.customerCompanyId !== job.customerCompanyId;
+    const requestedQuotationId = normalizeOptionalId(
+      dto.sourceCustomerQuotationId,
+    );
+
     const data: any = {};
 
     if (dto.jobType !== undefined) data.jobType = dto.jobType;
@@ -2871,6 +3028,20 @@ export class TransportJobsService {
     }
     if (dto.customerCompanyId !== undefined) {
       data.customerCompanyId = dto.customerCompanyId;
+    }
+    if (requestedQuotationId !== undefined) {
+      if (requestedQuotationId) {
+        await this.assertAcceptedSourceQuotation(
+          tenantId,
+          nextCustomerCompanyId,
+          requestedQuotationId,
+        );
+        data.sourceCustomerQuotationId = requestedQuotationId;
+      } else {
+        data.sourceCustomerQuotationId = null;
+      }
+    } else if (customerChanging) {
+      data.sourceCustomerQuotationId = null;
     }
     if (dto.notes !== undefined) data.notes = dto.notes;
     if (dto.pickupReference !== undefined) {
@@ -3787,6 +3958,13 @@ export class TransportJobsService {
     jobId: string,
     user: any,
   ): Promise<{
+    quotationSource: "CUSTOMER_QUOTATION" | "CUSTOMER_RATE_TEMPLATE" | "NONE";
+    boundQuotation: {
+      id: string;
+      quotationNo: string;
+      title: string | null;
+      status: string;
+    } | null;
     quotationLines: any[];
     dhcReferences: any[];
     existingSnapshot: any[];
@@ -3794,16 +3972,58 @@ export class TransportJobsService {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, tenantId },
       include: {
+        sourceCustomerQuotation: {
+          select: sourceCustomerQuotationSelect,
+        },
         charges: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       },
     });
     if (!job) throw new NotFoundException("Job not found");
     this.assertCanAccessJob(job, user);
 
-    const { quotationLines } = await this.resolveQuotationChargeLinesForCustomer(
-      tenantId,
-      job.customerCompanyId,
-    );
+    let quotationSource: "CUSTOMER_QUOTATION" | "CUSTOMER_RATE_TEMPLATE" | "NONE" =
+      "NONE";
+    let quotationLines: any[] = [];
+    const bound = job.sourceCustomerQuotation;
+    const boundQuotation = bound
+      ? {
+          id: bound.id,
+          quotationNo: bound.quotationNo,
+          title: bound.title ?? null,
+          status: bound.status,
+        }
+      : null;
+
+    if (bound?.status === CustomerQuotationStatus.ACCEPTED) {
+      const lines = await this.prisma.customerQuotationLine.findMany({
+        where: { tenantId, quotationId: bound.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+      quotationLines = mapCustomerQuotationLinesToChargeOptions(lines, bound);
+      quotationSource = "CUSTOMER_QUOTATION";
+    } else if (!job.sourceCustomerQuotationId) {
+      const template = await this.prisma.customerRateTemplate.findFirst({
+        where: {
+          tenantId,
+          customerCompanyId: job.customerCompanyId,
+          status: CustomerRateTemplateStatus.ACTIVE,
+        },
+        orderBy: [{ updatedAt: "desc" }],
+        include: {
+          rows: {
+            where: { isActive: true },
+            orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+          },
+        },
+      });
+      if (template) {
+        quotationLines = mapCustomerRateTemplateRowsToChargeOptions(
+          template.rows,
+          template,
+        );
+        quotationSource = "CUSTOMER_RATE_TEMPLATE";
+      }
+    }
 
     const dhcDataset =
       (await this.prisma.masterRateDataset.findFirst({
@@ -3823,18 +4043,30 @@ export class TransportJobsService {
         orderBy: { versionNo: "desc" },
         select: { id: true },
       }));
-    const dhcReferences = dhcDataset
+    const dhcRows = dhcDataset
       ? await this.prisma.masterRateDatasetRow.findMany({
           where: { tenantId, datasetId: dhcDataset.id, isActive: true },
           orderBy: { code: "asc" },
         })
       : [];
+    const dhcReferences = dhcRows.map((row) => ({
+      ...row,
+      source: "DHC_REFERENCE",
+    }));
 
     return {
+      quotationSource,
+      boundQuotation,
       quotationLines,
       dhcReferences,
-      // JobCharge.unitPriceCents/amountCents are frozen snapshots at save time.
-      existingSnapshot: job.charges ?? [],
+      existingSnapshot: (job.charges ?? []).map((c) => ({
+        ...c,
+        provenanceLabel: jobChargeProvenanceLabel({
+          sourceType: c.sourceType,
+          sourceCustomerQuotationLineId: c.sourceCustomerQuotationLineId,
+          metadataJson: c.metadataJson,
+        }),
+      })),
     };
   }
 
@@ -3842,11 +4074,7 @@ export class TransportJobsService {
     tenantId: string,
     jobId: string,
     user: any,
-  ): Promise<{
-    quotationLines: any[];
-    dhcReferences: any[];
-    existingSnapshot: any[];
-  }> {
+  ) {
     return this.getBillingChargeOptionsForJob(tenantId, jobId, user);
   }
 

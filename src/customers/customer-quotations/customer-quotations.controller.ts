@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   Request,
   UploadedFile,
   UseGuards,
@@ -36,6 +37,7 @@ import {
   CreateCustomerQuotationFromMasterDto,
   CreateCustomerQuotationFromRateExcelDto,
   CreateCustomerQuotationFromTemplateDto,
+  ListCustomerQuotationsQueryDto,
   ReplaceCustomerQuotationLinesDto,
   UpdateCustomerQuotationDto,
 } from "./customer-quotations.dto";
@@ -51,8 +53,12 @@ export class CustomerQuotationsController {
 
   @Get()
   @ApiOperation({ summary: "List customer quotations (runs expiry materialization)" })
-  list(@Request() req: any, @Param("customerId") customerId: string) {
-    return this.quotations.list(req.tenant.tenantId, customerId);
+  list(
+    @Request() req: any,
+    @Param("customerId") customerId: string,
+    @Query() query: ListCustomerQuotationsQueryDto,
+  ) {
+    return this.quotations.list(req.tenant.tenantId, customerId, query?.status);
   }
 
   @Post()

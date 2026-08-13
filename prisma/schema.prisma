@@ -875,6 +875,8 @@ model Job {
   id                 String    @id @default(cuid())
   tenantId           String
   customerCompanyId  String
+  /// Optional accepted CustomerQuotation that governs this job's commercial pricing.
+  sourceCustomerQuotationId String?
   internalRef        String
   externalRef        String?
   jobType            JobType
@@ -949,6 +951,7 @@ model Job {
 
   tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customerCompany customer_companies @relation("JobCustomerCompany", fields: [customerCompanyId], references: [id], onDelete: Restrict)
+  sourceCustomerQuotation CustomerQuotation? @relation("JobSourceCustomerQuotation", fields: [sourceCustomerQuotationId], references: [id], onDelete: SetNull)
   assignedDriver  User?              @relation("JobAssignedDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
   assignedFleetVehicle FleetVehicle? @relation(fields: [assignedFleetVehicleId], references: [id], onDelete: SetNull)
   createdBy       User?              @relation("JobCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
@@ -959,6 +962,7 @@ model Job {
 
   @@unique([tenantId, internalRef])
   @@index([tenantId, customerCompanyId])
+  @@index([tenantId, sourceCustomerQuotationId])
   @@index([tenantId, status])
   @@index([tenantId, pickupDate])
   @@index([tenantId, assignedDriverId])
@@ -1297,6 +1301,8 @@ model JobCharge {
   sourceType        JobChargeSourceType
   sourceRefId       String?
   sourceCustomerQuotationItemId String?
+  /// Provenance to a CustomerQuotationLine. Distinct from legacy sourceCustomerQuotationItemId.
+  sourceCustomerQuotationLineId String?
   code              String
   label             String
   description       String?
@@ -1316,10 +1322,12 @@ model JobCharge {
 
   tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   job          Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  sourceCustomerQuotationLine CustomerQuotationLine? @relation("JobChargeSourceCustomerQuotationLine", fields: [sourceCustomerQuotationLineId], references: [id], onDelete: SetNull)
   selectedBy   User?  @relation("JobChargeSelectedBy", fields: [selectedByUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, jobId])
   @@index([tenantId, sourceCustomerQuotationItemId])
+  @@index([tenantId, sourceCustomerQuotationLineId])
   @@map("job_charges")
 }
 
@@ -2707,6 +2715,7 @@ model CustomerQuotation {
   issuedBy        User?                  @relation("CustomerQuotationIssuedBy", fields: [issuedByUserId], references: [id], onDelete: SetNull)
   acceptedBy      User?                  @relation("CustomerQuotationAcceptedBy", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
   lines           CustomerQuotationLine[]
+  jobs            Job[]                  @relation("JobSourceCustomerQuotation")
 
   @@unique([tenantId, quotationNo])
   @@index([tenantId, customerCompanyId])
@@ -2740,6 +2749,7 @@ model CustomerQuotationLine {
 
   quotation CustomerQuotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
   tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  jobCharges JobCharge[]      @relation("JobChargeSourceCustomerQuotationLine")
 
   @@index([tenantId, quotationId])
   @@index([tenantId, code])

@@ -282,6 +282,8 @@ export class JobChargeResponseDto {
   sourceType!: JobChargeSourceType;
   sourceRefId!: string | null;
   sourceCustomerQuotationItemId?: string | null;
+  sourceCustomerQuotationLineId?: string | null;
+  provenanceLabel?: string | null;
   code!: string;
   label!: string;
   description!: string | null;
@@ -330,6 +332,9 @@ export class JobDto {
   tenantId: string;
   customerCompanyId: string;
   companyName?: string | null;
+  sourceCustomerQuotationId?: string | null;
+  sourceCustomerQuotationNo?: string | null;
+  sourceCustomerQuotationTitle?: string | null;
 
   internalRef: string;
   externalRef?: string | null;

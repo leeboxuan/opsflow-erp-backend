@@ -7,6 +7,7 @@ import {
   MinLength,
   IsNumber,
   IsBoolean,
+  ValidateIf,
 } from "class-validator";
 import { CollectionType, JobType } from "@prisma/client";
 import { Type } from "class-transformer";
@@ -82,6 +83,16 @@ export class UpdateJobDto {
   @IsOptional()
   @IsString()
   customerCompanyId?: string;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      "Accepted CustomerQuotation id for this job, or null to unbind. Must belong to the job's customer.",
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value != null && value !== "")
+  @IsString()
+  sourceCustomerQuotationId?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()

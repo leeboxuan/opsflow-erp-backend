@@ -423,30 +423,24 @@ describe("job charge workflow hardening", () => {
     expect(prisma.masterRateDatasetRow.findMany).toHaveBeenCalled();
   });
 
-  it("billing charge options resolve quotation rows from tenant quotation dataset", async () => {
+  it("billing charge options do not fall back to the tenant quotation base", async () => {
     const prisma: any = {
       job: {
         findFirst: jest.fn().mockResolvedValue({
           id: "job1",
           tenantId: "t1",
           customerCompanyId: "comp1",
+          sourceCustomerQuotationId: null,
           status: "ONGOING",
           charges: [],
         }),
       },
+      customerRateTemplate: { findFirst: jest.fn().mockResolvedValue(null) },
       masterRateDataset: {
-        findFirst: jest
-          .fn()
-          .mockResolvedValueOnce({ id: "ds-quote" })
-          .mockResolvedValueOnce(null),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       masterRateDatasetRow: {
-        findMany: jest
-          .fn()
-          .mockResolvedValueOnce([
-            { id: "qi1", code: "Q-1", label: "Haulage", isActive: true, sortOrder: 0 },
-          ])
-          .mockResolvedValueOnce([]),
+        findMany: jest.fn(),
       },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
@@ -458,17 +452,13 @@ describe("job charge workflow hardening", () => {
       role: Role.TRANSPORT_STAFF,
     });
 
-    expect(prisma.masterRateDatasetRow.findMany).toHaveBeenCalledWith({
-      where: { tenantId: "t1", datasetId: "ds-quote", isActive: true },
-      orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
-    });
-    expect(result.quotationLines).toEqual([
+    expect(result.quotationSource).toBe("NONE");
+    expect(result.quotationLines).toEqual([]);
+    expect(prisma.masterRateDataset.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "qi1",
-        code: "Q-1",
-        source: "TENANT_QUOTATION_DATASET",
+        where: expect.objectContaining({ type: "DHC_RATES" }),
       }),
-    ]);
+    );
   });
 
   it("billing charge options resolve DHC refs from tenant DHC dataset with fixed/multiple/manual states", async () => {
@@ -478,21 +468,17 @@ describe("job charge workflow hardening", () => {
           id: "job1",
           tenantId: "t1",
           customerCompanyId: "comp1",
+          sourceCustomerQuotationId: null,
           status: "ONGOING",
           charges: [],
         }),
       },
+      customerRateTemplate: { findFirst: jest.fn().mockResolvedValue(null) },
       masterRateDataset: {
-        findFirst: jest
-          .fn()
-          .mockResolvedValueOnce({ id: "ds-quote" })
-          .mockResolvedValueOnce({ id: "ds-dhc" }),
+        findFirst: jest.fn().mockResolvedValue({ id: "ds-dhc" }),
       },
       masterRateDatasetRow: {
-        findMany: jest
-          .fn()
-          .mockResolvedValueOnce([])
-          .mockResolvedValueOnce([
+        findMany: jest.fn().mockResolvedValue([
             {
               id: "d-fixed",
               code: "D1",
@@ -1642,7 +1628,7 @@ describe("job charge workflow hardening", () => {
     );
   });
 
-  it("requires manual amount when quotation source row is marked requiresManualAmount", async () => {
+  it("requires manual amount when quotation line is marked requiresManualAmount", async () => {
     const jobChargeDeleteMany = jest.fn().mockResolvedValue({});
     const jobChargeCreateMany = jest.fn().mockResolvedValue({ count: 1 });
     const prisma: any = {
@@ -1651,21 +1637,30 @@ describe("job charge workflow hardening", () => {
           id: "job1",
           tenantId: "t1",
           customerCompanyId: "comp1",
+          sourceCustomerQuotationId: "q-accepted",
           status: "ONGOING",
         }),
       },
       $transaction: jest.fn(async (input: any) => {
         if (typeof input === "function") {
           return input({
-            masterRateDatasetRow: {
+            customerQuotationLine: {
               findMany: jest.fn().mockResolvedValue([
                 {
                   id: "ql-manual",
                   label: "Season Parking",
                   requiresManualAmount: true,
+                  quotation: {
+                    id: "q-accepted",
+                    quotationNo: "QT-1",
+                    title: null,
+                    status: "ACCEPTED",
+                    customerCompanyId: "comp1",
+                  },
                 },
               ]),
             },
+            customerRateTemplateRow: { findMany: jest.fn().mockResolvedValue([]) },
             jobCharge: {
               deleteMany: jobChargeDeleteMany,
               createMany: jobChargeCreateMany,
@@ -1687,6 +1682,7 @@ describe("job charge workflow hardening", () => {
           charges: [
             {
               sourceType: "CUSTOMER_QUOTATION",
+              sourceCustomerQuotationLineId: "ql-manual",
               sourceRefId: "ql-manual",
               code: "E-1",
               label: "Season Parking",
