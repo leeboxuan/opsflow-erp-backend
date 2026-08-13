@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -351,6 +352,24 @@ export class CustomerQuotationsController {
       customerId,
       id,
       file,
+      req.user?.userId ?? null,
+    );
+  }
+
+  @Delete(":id/signed-document")
+  @ApiOperation({
+    summary:
+      "Remove the current signed quotation pointer for this quotation (retains historical storage objects)",
+  })
+  deleteSignedDocument(
+    @Request() req: any,
+    @Param("customerId") customerId: string,
+    @Param("id") id: string,
+  ) {
+    return this.quotations.deleteSignedDocument(
+      req.tenant.tenantId,
+      customerId,
+      id,
       req.user?.userId ?? null,
     );
   }

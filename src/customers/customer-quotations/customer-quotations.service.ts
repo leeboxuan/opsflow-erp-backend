@@ -96,6 +96,116 @@ export class CustomerQuotationsService {
     }
   }
 
+  private actorDisplayName(user: {
+    displayName?: string | null;
+    name?: string | null;
+    email?: string | null;
+    id: string;
+  }) {
+    return user.displayName?.trim() || user.name?.trim() || user.email || null;
+  }
+
+  private generatedPdfFileName(quotationNo: string, pdfKey?: string | null) {
+    if (!pdfKey) return null;
+    const safeNo = quotationNo.replace(/[\\/:*?"<>|]+/g, "-");
+    return `${safeNo}.pdf`;
+  }
+
+  /**
+   * Batch-resolve tenant-scoped display names. Missing memberships stay unnamed
+   * rather than leaking raw user ids into the UI.
+   */
+  private async attachActorNames<T extends Record<string, any>>(
+    tenantId: string,
+    quotation: T,
+  ): Promise<
+    T & {
+      createdByName: string | null;
+      issuedByName: string | null;
+      signedDocumentUploadedByName: string | null;
+      acceptedByName: string | null;
+      pdfFileName: string | null;
+    }
+  > {
+    const ids = [
+      quotation.createdByUserId,
+      quotation.issuedByUserId,
+      quotation.signedDocumentUploadedByUserId,
+      quotation.acceptedByUserId,
+    ].filter((id): id is string => typeof id === "string" && id.length > 0);
+    const unique = [...new Set(ids)];
+    const nameById = new Map<string, string>();
+    if (unique.length > 0 && this.prisma.user?.findMany) {
+      const users = await this.prisma.user.findMany({
+        where: {
+          id: { in: unique },
+          memberships: { some: { tenantId } },
+        },
+        select: { id: true, displayName: true, name: true, email: true },
+      });
+      for (const user of users) {
+        const name = this.actorDisplayName(user);
+        if (name) nameById.set(user.id, name);
+      }
+    }
+    return {
+      ...quotation,
+      createdByName: nameById.get(quotation.createdByUserId) ?? null,
+      issuedByName: nameById.get(quotation.issuedByUserId) ?? null,
+      signedDocumentUploadedByName:
+        nameById.get(quotation.signedDocumentUploadedByUserId) ?? null,
+      acceptedByName: nameById.get(quotation.acceptedByUserId) ?? null,
+      pdfFileName: this.generatedPdfFileName(
+        String(quotation.quotationNo ?? ""),
+        quotation.pdfKey,
+      ),
+    };
+  }
+
+  private async attachActorNamesMany<T extends Record<string, any>>(
+    tenantId: string,
+    quotations: T[],
+  ) {
+    if (!quotations.length) return quotations;
+    const ids = new Set<string>();
+    for (const q of quotations) {
+      for (const id of [
+        q.createdByUserId,
+        q.issuedByUserId,
+        q.signedDocumentUploadedByUserId,
+        q.acceptedByUserId,
+      ]) {
+        if (typeof id === "string" && id.length > 0) ids.add(id);
+      }
+    }
+    const nameById = new Map<string, string>();
+    if (ids.size > 0 && this.prisma.user?.findMany) {
+      const users = await this.prisma.user.findMany({
+        where: {
+          id: { in: [...ids] },
+          memberships: { some: { tenantId } },
+        },
+        select: { id: true, displayName: true, name: true, email: true },
+      });
+      for (const user of users) {
+        const name = this.actorDisplayName(user);
+        if (name) nameById.set(user.id, name);
+      }
+    }
+    return quotations.map((quotation) => ({
+      ...quotation,
+      createdByName: nameById.get(quotation.createdByUserId) ?? null,
+      issuedByName: nameById.get(quotation.issuedByUserId) ?? null,
+      signedDocumentUploadedByName:
+        nameById.get(quotation.signedDocumentUploadedByUserId) ?? null,
+      acceptedByName: nameById.get(quotation.acceptedByUserId) ?? null,
+      pdfFileName: this.generatedPdfFileName(
+        String(quotation.quotationNo ?? ""),
+        quotation.pdfKey,
+      ),
+    }));
+  }
+
   private parseOptionalDate(value?: string | null): Date | null | undefined {
     if (value === undefined) return undefined;
     if (value === null || value === "") return null;
@@ -297,11 +407,12 @@ export class CustomerQuotationsService {
   async list(tenantId: string, customerId: string) {
     await this.assertCustomerCompany(tenantId, customerId);
     await this.materializeExpiredForCustomer(tenantId, customerId);
-    return this.prisma.customerQuotation.findMany({
+    const rows = await this.prisma.customerQuotation.findMany({
       where: { tenantId, customerCompanyId: customerId },
       orderBy: [{ updatedAt: "desc" }],
       include: { _count: { select: { lines: true } } },
     });
+    return this.attachActorNamesMany(tenantId, rows);
   }
 
   async getById(tenantId: string, customerId: string, id: string) {
@@ -314,7 +425,8 @@ export class CustomerQuotationsService {
     });
     if (!quotation) throw new NotFoundException("Customer quotation not found");
     this.assertSameCustomer(quotation.customerCompanyId, customerId);
-    return this.materializeExpiry(quotation);
+    const current = await this.materializeExpiry(quotation);
+    return this.attachActorNames(tenantId, current);
   }
 
   async createBlank(
@@ -1707,7 +1819,104 @@ export class CustomerQuotationsService {
       actorUserId,
     );
 
-    return updated!;
+    return this.attachActorNames(tenantId, updated!);
+  }
+
+  /**
+   * Remove the current signed-copy pointer for this quotation.
+   * Historical storage objects (vN.pdf) are retained for audit.
+   * SIGNED_DOCUMENT acceptance is revoked back to ISSUED; other acceptance
+   * methods stay ACCEPTED.
+   */
+  async deleteSignedDocument(
+    tenantId: string,
+    customerId: string,
+    id: string,
+    actorUserId: string | null,
+  ) {
+    const quotation = await this.getById(tenantId, customerId, id);
+    if (!quotation.signedDocumentKey) {
+      throw new BadRequestException("No signed quotation to delete");
+    }
+
+    const revokeSignedAcceptance =
+      quotation.status === CustomerQuotationStatus.ACCEPTED &&
+      quotation.acceptanceMethod ===
+        CustomerQuotationAcceptanceMethod.SIGNED_DOCUMENT;
+    const revertSignedStatus =
+      quotation.status === CustomerQuotationStatus.SIGNED;
+    const nextStatus =
+      revokeSignedAcceptance || revertSignedStatus
+        ? CustomerQuotationStatus.ISSUED
+        : quotation.status;
+    const evidencePointsAtSignedFile =
+      !!quotation.acceptanceEvidenceStorageKey &&
+      quotation.acceptanceEvidenceStorageKey === quotation.signedDocumentKey;
+
+    const result = await this.prisma.customerQuotation.updateMany({
+      where: {
+        id: quotation.id,
+        tenantId,
+        customerCompanyId: customerId,
+        signedDocumentKey: quotation.signedDocumentKey,
+      },
+      data: {
+        signedDocumentKey: null,
+        signedDocumentOriginalName: null,
+        signedDocumentUploadedAt: null,
+        signedDocumentUploadedByUserId: null,
+        ...(revokeSignedAcceptance
+          ? {
+              status: CustomerQuotationStatus.ISSUED,
+              acceptedAt: null,
+              acceptedByUserId: null,
+              acceptanceMethod: null,
+              acceptanceEvidenceNote: null,
+              acceptanceEvidenceStorageKey: null,
+            }
+          : {
+              ...(revertSignedStatus
+                ? { status: CustomerQuotationStatus.ISSUED }
+                : {}),
+              ...(evidencePointsAtSignedFile
+                ? { acceptanceEvidenceStorageKey: null }
+                : {}),
+            }),
+        updatedByUserId: actorUserId,
+      },
+    });
+    if (result.count === 0) {
+      throw new BadRequestException(
+        "Signed quotation could not be deleted (it changed after load)",
+      );
+    }
+
+    const updated = await this.prisma.customerQuotation.findFirst({
+      where: { id: quotation.id, tenantId, customerCompanyId: customerId },
+      include: {
+        lines: { orderBy: [{ sortOrder: "asc" }, { id: "asc" }] },
+      },
+    });
+
+    await this.audit.log(
+      tenantId,
+      "UPDATE",
+      "CustomerQuotation",
+      quotation.id,
+      {
+        action: "DELETE_SIGNED_DOCUMENT",
+        from: quotation.status,
+        to: nextStatus,
+        revokedSignedAcceptance: revokeSignedAcceptance,
+        retainedStorageKey: quotation.signedDocumentKey,
+        previousVersion: quotation.signedDocumentVersion,
+        previousOriginalName: quotation.signedDocumentOriginalName,
+        pdfKeyUnchanged: quotation.pdfKey,
+      },
+      actorUserId,
+    );
+
+    return this.attachActorNames(tenantId, updated!);
   }
 
   async getSignedDocumentUrl(

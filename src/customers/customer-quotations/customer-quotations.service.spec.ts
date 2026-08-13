@@ -23,6 +23,7 @@ describe("CustomerQuotationsService", () => {
           storage: {
             from: () => ({
               upload: jest.fn().mockResolvedValue({ error: null }),
+              remove: jest.fn().mockResolvedValue({ error: null }),
               createSignedUrl: jest.fn().mockResolvedValue({
                 data: { signedUrl: "https://signed/qt.pdf" },
                 error: null,
@@ -31,9 +32,18 @@ describe("CustomerQuotationsService", () => {
           },
         }),
       } as any);
+    const prismaWithUsers = {
+      ...prisma,
+      user:
+        prisma.user ??
+        ({
+          findMany: jest.fn().mockResolvedValue([]),
+        } as any),
+    };
     return {
-      svc: new CustomerQuotationsService(prisma, audit, supabaseService),
+      svc: new CustomerQuotationsService(prismaWithUsers, audit, supabaseService),
       audit,
+      prisma: prismaWithUsers,
     };
   }
 
@@ -1513,5 +1523,227 @@ describe("CustomerQuotationsService", () => {
       ),
     ).rejects.toThrow(/Only DRAFT/);
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("list resolves tenant-scoped actor display names and generated PDF filename", async () => {
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findMany: jest.fn().mockResolvedValue([
+          draftQuotation({
+            status: CustomerQuotationStatus.ACCEPTED,
+            createdByUserId: "u-create",
+            issuedByUserId: "u-issue",
+            issuedAt: new Date("2026-08-13T14:18:00.000Z"),
+            pdfKey: "t1/companies/c1/customer-quotations/q1/QT-202608-0001.pdf",
+            pdfGeneratedAt: new Date("2026-08-13T14:18:00.000Z"),
+            signedDocumentKey: "t1/companies/c1/customer-quotations/q1/signed/v1.pdf",
+            signedDocumentOriginalName: "CustomerSignedQuotation.pdf",
+            signedDocumentUploadedByUserId: "u-sign",
+            signedDocumentUploadedAt: new Date("2026-08-13T14:42:00.000Z"),
+            signedDocumentVersion: 1,
+            acceptedAt: new Date("2026-08-13T14:42:00.000Z"),
+            acceptedByUserId: "u-sign",
+            acceptanceMethod: "SIGNED_DOCUMENT",
+          }),
+        ]),
+        findFirst: jest.fn(),
+      },
+      user: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "u-create", displayName: "Pat Creator", name: "Pat", email: "p@x.com" },
+          { id: "u-issue", displayName: "Nathalie Admin", name: "Nathalie", email: "n@x.com" },
+          { id: "u-sign", displayName: "Nathalie Admin", name: "Nathalie", email: "n@x.com" },
+        ]),
+      },
+    };
+    const { svc } = makeService(prisma);
+    const [row] = await svc.list("t1", "c1");
+    expect(row.createdByName).toBe("Pat Creator");
+    expect(row.issuedByName).toBe("Nathalie Admin");
+    expect(row.signedDocumentUploadedByName).toBe("Nathalie Admin");
+    expect(row.acceptedByName).toBe("Nathalie Admin");
+    expect(row.pdfFileName).toBe("QT-202608-0001.pdf");
+    expect(prisma.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          memberships: { some: { tenantId: "t1" } },
+        }),
+      }),
+    );
+  });
+
+  it("deleteSignedDocument revokes SIGNED_DOCUMENT acceptance back to ISSUED and keeps the generated PDF", async () => {
+    const signedKey =
+      "t1/companies/c1/customer-quotations/q1/signed/v1.pdf";
+    const pdfKey =
+      "t1/companies/c1/customer-quotations/q1/QT-202608-0001.pdf";
+    const accepted = draftQuotation({
+      status: CustomerQuotationStatus.ACCEPTED,
+      pdfKey,
+      pdfGeneratedAt: new Date("2026-08-13T14:18:00.000Z"),
+      issuedAt: new Date("2026-08-13T14:18:00.000Z"),
+      issuedByUserId: "u-issue",
+      subtotalCents: 748000,
+      taxCents: 67320,
+      totalCents: 815320,
+      quotationNo: "QT-202608-0001",
+      signedDocumentKey: signedKey,
+      signedDocumentOriginalName: "CustomerSignedQuotation.pdf",
+      signedDocumentUploadedAt: new Date(),
+      signedDocumentUploadedByUserId: "admin-1",
+      signedDocumentVersion: 1,
+      acceptedAt: new Date(),
+      acceptedByUserId: "admin-1",
+      acceptanceMethod: "SIGNED_DOCUMENT",
+      acceptanceEvidenceNote: "Signed quotation uploaded: CustomerSignedQuotation.pdf",
+      acceptanceEvidenceStorageKey: signedKey,
+      lines: [{ code: "A", unitPriceCents: 748000 }],
+    });
+    const after = {
+      ...accepted,
+      status: CustomerQuotationStatus.ISSUED,
+      signedDocumentKey: null,
+      signedDocumentOriginalName: null,
+      signedDocumentUploadedAt: null,
+      signedDocumentUploadedByUserId: null,
+      acceptedAt: null,
+      acceptedByUserId: null,
+      acceptanceMethod: null,
+      acceptanceEvidenceNote: null,
+      acceptanceEvidenceStorageKey: null,
+    };
+    const remove = jest.fn();
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(accepted)
+          .mockResolvedValueOnce(after),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const { svc, audit } = makeService(prisma, {
+      supabaseService: {
+        getClient: () => ({ storage: { from: () => ({ remove }) } }),
+      },
+    });
+
+    const res = await svc.deleteSignedDocument("t1", "c1", "q1", "admin-1");
+    expect(prisma.customerQuotation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: "q1",
+          tenantId: "t1",
+          customerCompanyId: "c1",
+          signedDocumentKey: signedKey,
+        }),
+        data: expect.objectContaining({
+          status: CustomerQuotationStatus.ISSUED,
+          signedDocumentKey: null,
+          acceptedAt: null,
+          acceptedByUserId: null,
+          acceptanceMethod: null,
+        }),
+      }),
+    );
+    expect(res.status).toBe(CustomerQuotationStatus.ISSUED);
+    expect(res.pdfKey).toBe(pdfKey);
+    expect(res.quotationNo).toBe("QT-202608-0001");
+    expect(res.totalCents).toBe(815320);
+    expect(remove).not.toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(
+      "t1",
+      "UPDATE",
+      "CustomerQuotation",
+      "q1",
+      expect.objectContaining({
+        action: "DELETE_SIGNED_DOCUMENT",
+        revokedSignedAcceptance: true,
+        retainedStorageKey: signedKey,
+        pdfKeyUnchanged: pdfKey,
+      }),
+      "admin-1",
+    );
+  });
+
+  it("deleteSignedDocument does not revoke EMAIL acceptance", async () => {
+    const accepted = draftQuotation({
+      status: CustomerQuotationStatus.ACCEPTED,
+      pdfKey: "pdf-key",
+      signedDocumentKey: "t1/companies/c1/customer-quotations/q1/signed/v1.pdf",
+      signedDocumentVersion: 1,
+      acceptedAt: new Date("2026-08-13T14:00:00.000Z"),
+      acceptedByUserId: "admin-1",
+      acceptanceMethod: "EMAIL",
+      acceptanceEvidenceNote: "PIC emailed confirmation",
+    });
+    const after = {
+      ...accepted,
+      signedDocumentKey: null,
+      signedDocumentOriginalName: null,
+      signedDocumentUploadedAt: null,
+      signedDocumentUploadedByUserId: null,
+    };
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(accepted)
+          .mockResolvedValueOnce(after),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const { svc } = makeService(prisma);
+    await svc.deleteSignedDocument("t1", "c1", "q1", "admin-1");
+    const data = prisma.customerQuotation.updateMany.mock.calls[0][0].data;
+    expect(data.status).toBeUndefined();
+    expect(data.acceptedAt).toBeUndefined();
+    expect(data.acceptanceMethod).toBeUndefined();
+    expect(data.signedDocumentKey).toBeNull();
+  });
+
+  it("deleteSignedDocument rejects missing file, other customers, and does not touch another quotation", async () => {
+    const prismaNone: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findFirst: jest.fn().mockResolvedValue(draftQuotation({ status: CustomerQuotationStatus.ISSUED })),
+        updateMany: jest.fn(),
+      },
+    };
+    const { svc: noneSvc } = makeService(prismaNone);
+    await expect(
+      noneSvc.deleteSignedDocument("t1", "c1", "q1", "u1"),
+    ).rejects.toThrow(/No signed quotation/);
+    expect(prismaNone.customerQuotation.updateMany).not.toHaveBeenCalled();
+
+    const prismaOther: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
+      },
+      customerQuotation: {
+        findFirst: jest.fn().mockResolvedValue(
+          draftQuotation({
+            status: CustomerQuotationStatus.ACCEPTED,
+            customerCompanyId: "c-other",
+            signedDocumentKey: "other-key",
+          }),
+        ),
+      },
+    };
+    const { svc: otherSvc } = makeService(prismaOther);
+    await expect(
+      otherSvc.deleteSignedDocument("t1", "c1", "q1", "u1"),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });
