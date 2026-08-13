@@ -51,6 +51,11 @@ export class CreateInvoiceLineItemDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  jobChargeId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
   sourceJobId?: string | null;
 
   @ApiPropertyOptional()
@@ -97,6 +102,13 @@ export class CreateInvoiceDto {
   @IsOptional()
   @IsString()
   sourceJobId?: string;
+
+  @ApiPropertyOptional({
+    description: "Accepted CustomerQuotation id governing this invoice",
+  })
+  @IsOptional()
+  @IsString()
+  sourceCustomerQuotationId?: string | null;
 
   @ApiPropertyOptional({ example: 'SGD' })
   @IsOptional()
@@ -156,6 +168,7 @@ export class InvoiceLineItemDto {
   @ApiProperty() taxRate: number;
   @ApiProperty() taxCents: number;
   @ApiPropertyOptional() sourceType?: string | null;
+  @ApiPropertyOptional() jobChargeId?: string | null;
   @ApiPropertyOptional() sourceJobId?: string | null;
   @ApiPropertyOptional() sourceMasterItemId?: string | null;
   @ApiPropertyOptional() sourceTripId?: string | null;
@@ -169,6 +182,9 @@ export class InvoiceDto {
   @ApiProperty() customerName: string;
   @ApiPropertyOptional() customerCompanyId?: string | null;
   @ApiPropertyOptional() sourceJobId?: string | null;
+  @ApiPropertyOptional() sourceCustomerQuotationId?: string | null;
+  @ApiPropertyOptional() paidAt?: Date | null;
+  @ApiPropertyOptional() paidByUserId?: string | null;
   @ApiPropertyOptional() templateCode?: string;
   @ApiProperty() currency: string;
   @ApiProperty() status: string;
@@ -241,6 +257,7 @@ export class InvoicePrefillResponseDto {
     jobType: string;
     billableTripCount: number;
   };
+  @ApiPropertyOptional() sourceCustomerQuotationId?: string | null;
   @ApiPropertyOptional({ type: [Object] }) quotationOptions?: Array<{
     id: string;
     code: string;

@@ -30,6 +30,7 @@ import {
   resolveDocumentUploadedByFields,
 } from "../documents/document-uploader.utils";
 import { buildTripDisplayRef } from "../trips/trip-display-ref";
+import { CANONICAL_TRIP_PAYOUT_LINE_SELECT } from "../trips/trip-payout.helpers";
 import {
   createDriverTripDocUploadPerfTimer,
   withDriverEndpointPerf,
@@ -347,8 +348,8 @@ function toJobDto(j: any): JobDto {
         closedAt: t.closedAt ?? null,
         trailerNumber: t.trailerNumber ?? null,
         trailerLastLocationCode: t.trailerLastLocationCode ?? null,
-        driverEarningCents: t.driverEarningCents ?? null,
-        hasDriverPayout: Number.isInteger(t.driverEarningCents),
+        driverEarningCents: resolveDriverTripEarningCents(t),
+        hasDriverPayout: resolveDriverTripEarningCents(t) != null,
         earningLabelSnapshot: t.earningLabelSnapshot ?? null,
         earningRateMasterId: t.earningRateMasterId ?? null,
         completionRuleJson: t.completionRuleJson ?? null,
@@ -616,7 +617,7 @@ export class DriverJobsService {
         },
         include: {
           payoutLines: {
-            select: { totalCents: true },
+            select: CANONICAL_TRIP_PAYOUT_LINE_SELECT,
           },
           job: {
             select: {
@@ -1330,7 +1331,7 @@ export class DriverJobsService {
 
   private readonly driverHomeTripInclude = {
     payoutLines: {
-      select: { totalCents: true },
+      select: CANONICAL_TRIP_PAYOUT_LINE_SELECT,
     },
     job: {
       select: {

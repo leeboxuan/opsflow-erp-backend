@@ -25,25 +25,47 @@ describe("DriverTripEarningsService (canonical mobile wallet SoT)", () => {
     return { prisma, svc: new DriverTripEarningsService(prisma) };
   }
 
-  it("resolveDriverTripEarningCents prefers cached cents over payout lines", () => {
+  it("resolveDriverTripEarningCents prefers payout lines over a stale cache", () => {
     expect(
       resolveDriverTripEarningCents({
         driverEarningCents: 5000,
-        payoutLines: [{ totalCents: 6000 }],
+        payoutLines: [{ totalCents: 6000, isSelectableForTripEarning: true }],
       }),
-    ).toBe(5000);
+    ).toBe(6000);
     expect(
       resolveDriverTripEarningCents({
         driverEarningCents: null,
-        payoutLines: [{ totalCents: 7000 }, { totalCents: 500 }],
+        payoutLines: [
+          { totalCents: 7000, isSelectableForTripEarning: true },
+          { totalCents: 500, isSelectableForTripEarning: true },
+        ],
       }),
     ).toBe(7500);
     expect(
       resolveDriverTripEarningCents({
+        driverEarningCents: 9999,
+        payoutLines: [
+          { amountCents: 80, quantity: 1, isSelectableForTripEarning: true },
+          { amountCents: 20, quantity: 2, isSelectableForTripEarning: true },
+          { amountCents: 999, quantity: 1, isSelectableForTripEarning: false },
+        ],
+      }),
+    ).toBe(120);
+    expect(
+      resolveDriverTripEarningCents({
         driverEarningCents: null,
-        payoutLines: [{ totalCents: 0 }],
+        payoutLines: [{ totalCents: 0, isSelectableForTripEarning: true }],
       }),
     ).toBeNull();
+  });
+
+  it("falls back to driverEarningCents only when no payout lines exist", () => {
+    expect(
+      resolveDriverTripEarningCents({
+        driverEarningCents: 5000,
+        payoutLines: [],
+      }),
+    ).toBe(5000);
   });
 
   it("returns monthly wallet summary matching mobile COMPLETED/DONE rules", async () => {
@@ -81,9 +103,9 @@ describe("DriverTripEarningsService (canonical mobile wallet SoT)", () => {
     const res = await svc.getWalletSummaryByMonth("tenant-1", "driver-1", "2026-05");
     expect(res.month).toBe("2026-05");
     expect(res.completedTripCount).toBe(2);
-    expect(res.totalCents).toBe(12500);
+    expect(res.totalCents).toBe(13500);
     expect(res.trips[0].tripId).toBe("trip-1");
-    expect(res.trips[0].driverEarningCents).toBe(5000);
+    expect(res.trips[0].driverEarningCents).toBe(6000);
     expect(res.trips[1].tripId).toBe("trip-2");
     expect(res.trips[1].driverEarningCents).toBe(7500);
     const where = prisma.trip.findMany.mock.calls[0][0].where;
@@ -128,19 +150,22 @@ describe("DriverTripEarningsService (canonical mobile wallet SoT)", () => {
           },
           {
             driverEarningCents: null,
-            payoutLines: [{ totalCents: 200 }, { totalCents: -50 }],
+            payoutLines: [
+              { totalCents: 200, isSelectableForTripEarning: true },
+              { totalCents: 50, isSelectableForTripEarning: true },
+            ],
           },
           {
             driverEarningCents: -300,
-            payoutLines: [{ totalCents: 9999 }],
+            payoutLines: [{ totalCents: 9999, isSelectableForTripEarning: true }],
           },
         ]),
       },
     });
 
     const res = await svc.getLifetimeTotals("tenant-1", "driver-1");
-    // 1001 + 150 + (-300) = 851
-    expect(res.lifetimeCents).toBe(851);
+    // cache-only 1001 + lines 250 + lines 9999 (cache ignored) = 11250
+    expect(res.lifetimeCents).toBe(11250);
     expect(res.completedTripCount).toBe(3);
     expect(res.currency).toBe("SGD");
   });

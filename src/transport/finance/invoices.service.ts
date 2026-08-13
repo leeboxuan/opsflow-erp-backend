@@ -16,7 +16,14 @@ import { applyQSearch } from "../../shared/common/listing/listing.search";
 import { CreateInvoiceDto, InvoiceDto } from "./dto/invoice.dto";
 import { InvoicePrefillResponseDto } from "./dto/invoice.dto";
 import { PortalInvoiceDto } from "./dto/portal-invoice.dto";
-import { JobStatus, OrderStatus, Role, TripStatus } from "@prisma/client";
+import {
+  CustomerQuotationStatus,
+  JobStatus,
+  OrderStatus,
+  Prisma,
+  Role,
+  TripStatus,
+} from "@prisma/client";
 import { SupabaseService } from "../../shared/auth/supabase.service";
 import { AuditService } from "../../shared/audit/audit.service";
 import { loadInvoiceAssetBuffer, renderInvoiceHtml } from "./invoice-render";
@@ -25,6 +32,21 @@ import { evaluateJobInvoiceReadiness } from "../jobs/job-invoice-readiness";
 import { buildTripDisplayRef } from "../trips/trip-display-ref";
 import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
 import * as rt from "../../shared/realtime/realtime-publish";
+import {
+  canMarkInvoicePaid,
+  canRevertInvoiceToDraft,
+  canVoidInvoice,
+  INVOICE_STATUS,
+  isInvoiceDraft,
+  isInvoicePaid,
+  isInvoiceRecognized,
+  isInvoiceReserving,
+  jobChargeAlreadyBilledMessage,
+  mixedQuotationMessage,
+  quotationMismatchMessage,
+  resolveInvoiceSourceJobIds,
+  uniqueNonEmptyIds,
+} from "./invoice-integrity";
 
 const INVOICE_DOCUMENTS_BUCKET = "invoice-documents";
 
@@ -133,6 +155,342 @@ export class InvoicesService {
     const taxCents = normalized.reduce((s, l) => s + l.taxCents, 0);
     const totalCents = subtotalCents + taxCents;
     return { normalized, subtotalCents, taxCents, totalCents };
+  }
+
+  private invoiceLineCreateData(tenantId: string, l: any) {
+    return {
+      tenantId,
+      description: l.description,
+      qty: l.qty,
+      unitPriceCents: l.unitPriceCents,
+      amountCents: l.amountCents,
+      taxCode: l.taxCode,
+      taxRate: l.taxRate,
+      taxCents: l.taxCents,
+      sourceType: l.sourceType ?? "MANUAL",
+      jobChargeId: l.jobChargeId ?? null,
+      sourceMasterItemId: l.sourceMasterItemId ?? null,
+      sourceTripId: l.sourceTripId ?? null,
+      tripDisplayRefSnapshot: l.tripDisplayRef ?? null,
+      requiresManualAmount: Boolean(l.requiresManualAmount),
+    };
+  }
+
+  private isUniqueConstraint(error: unknown): boolean {
+    return (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    );
+  }
+
+  private async lockJobChargesForUpdate(
+    tx: any,
+    tenantId: string,
+    jobChargeIds: string[],
+  ): Promise<
+    Array<{
+      id: string;
+      jobId: string;
+      label: string;
+      job: {
+        id: string;
+        internalRef: string;
+        status: JobStatus;
+        invoiceReadyAt: Date | null;
+        customerCompanyId: string;
+        sourceCustomerQuotationId: string | null;
+      };
+    }>
+  > {
+    const ids = uniqueNonEmptyIds(jobChargeIds);
+    if (!ids.length) return [];
+    if (typeof tx.$executeRaw === "function") {
+      await tx.$executeRaw`
+        SELECT id FROM job_charges
+        WHERE "tenantId" = ${tenantId}
+          AND id IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}`))})
+        FOR UPDATE
+      `;
+    }
+    return tx.jobCharge.findMany({
+      where: { tenantId, id: { in: ids } },
+      select: {
+        id: true,
+        jobId: true,
+        label: true,
+        job: {
+          select: {
+            id: true,
+            internalRef: true,
+            status: true,
+            invoiceReadyAt: true,
+            customerCompanyId: true,
+            sourceCustomerQuotationId: true,
+          },
+        },
+      },
+    });
+  }
+
+  private async assertJobChargesFreeForInvoice(
+    tx: any,
+    tenantId: string,
+    jobChargeIds: string[],
+    excludeInvoiceId?: string | null,
+  ): Promise<void> {
+    const ids = uniqueNonEmptyIds(jobChargeIds);
+    if (!ids.length) return;
+    const charges = await this.lockJobChargesForUpdate(tx, tenantId, ids);
+    if (charges.length !== ids.length) {
+      throw new BadRequestException("Some JobCharges were not found under this tenant");
+    }
+    const reservations = await tx.invoiceChargeReservation.findMany({
+      where: {
+        tenantId,
+        jobChargeId: { in: ids },
+        ...(excludeInvoiceId ? { invoiceId: { not: excludeInvoiceId } } : {}),
+      },
+      select: { jobChargeId: true },
+    });
+    if (reservations.length) {
+      throw new BadRequestException(
+        jobChargeAlreadyBilledMessage(
+          uniqueNonEmptyIds(reservations.map((row: any) => row.jobChargeId)),
+        ),
+      );
+    }
+    const lines = await tx.invoiceLineItem.findMany({
+      where: {
+        tenantId,
+        jobChargeId: { in: ids },
+        ...(excludeInvoiceId ? { invoiceId: { not: excludeInvoiceId } } : {}),
+      },
+      select: {
+        jobChargeId: true,
+        invoice: { select: { id: true, status: true } },
+      },
+    });
+    const billed = lines.filter(
+      (line: any) =>
+        line.jobChargeId && isInvoiceReserving(line.invoice?.status),
+    );
+    if (billed.length) {
+      throw new BadRequestException(
+        jobChargeAlreadyBilledMessage(
+          uniqueNonEmptyIds(billed.map((line: any) => line.jobChargeId)),
+        ),
+      );
+    }
+  }
+
+  private async assertQuotationBoundaryForCharges(
+    tenantId: string,
+    customerCompanyId: string | null,
+    sourceCustomerQuotationId: string | null,
+    charges: Array<{
+      job: {
+        customerCompanyId: string;
+        sourceCustomerQuotationId: string | null;
+        status: JobStatus;
+      };
+    }>,
+  ): Promise<string | null> {
+    if (!charges.length) return sourceCustomerQuotationId;
+    const quotationIds = uniqueNonEmptyIds(
+      charges.map((c) => c.job.sourceCustomerQuotationId),
+    );
+    const hasUnbound = charges.some((c) => !c.job.sourceCustomerQuotationId);
+    if (quotationIds.length > 1 || (quotationIds.length === 1 && hasUnbound)) {
+      throw new BadRequestException(mixedQuotationMessage());
+    }
+    const derived = quotationIds[0] ?? null;
+    const bound = sourceCustomerQuotationId || derived;
+    if (sourceCustomerQuotationId && derived && sourceCustomerQuotationId !== derived) {
+      throw new BadRequestException(quotationMismatchMessage());
+    }
+    if (sourceCustomerQuotationId && hasUnbound) {
+      throw new BadRequestException(quotationMismatchMessage());
+    }
+    if (bound) {
+      const quotation = await this.prisma.customerQuotation.findFirst({
+        where: { id: bound, tenantId },
+        select: { id: true, customerCompanyId: true, status: true },
+      });
+      if (!quotation) {
+        throw new BadRequestException("Commercial quotation not found under this tenant");
+      }
+      if (customerCompanyId && quotation.customerCompanyId !== customerCompanyId) {
+        throw new BadRequestException(
+          "Commercial quotation must belong to the invoice customer",
+        );
+      }
+      for (const charge of charges) {
+        if (charge.job.customerCompanyId !== quotation.customerCompanyId) {
+          throw new BadRequestException(
+            "JobCharges must belong to the same customer as the commercial quotation",
+          );
+        }
+      }
+    }
+    return bound;
+  }
+
+  private async syncInvoiceChargeReservations(
+    tx: any,
+    tenantId: string,
+    invoiceId: string,
+    jobChargeIds: string[],
+  ): Promise<void> {
+    await tx.invoiceChargeReservation.deleteMany({
+      where: { tenantId, invoiceId },
+    });
+    const ids = uniqueNonEmptyIds(jobChargeIds);
+    if (!ids.length) return;
+    try {
+      await tx.invoiceChargeReservation.createMany({
+        data: ids.map((jobChargeId) => ({ tenantId, invoiceId, jobChargeId })),
+      });
+    } catch (error) {
+      if (this.isUniqueConstraint(error)) {
+        throw new BadRequestException(
+          "One or more JobCharges are already billed on an active invoice",
+        );
+      }
+      throw error;
+    }
+  }
+
+  private async releaseInvoiceChargeReservations(
+    tx: any,
+    tenantId: string,
+    invoiceId: string,
+  ): Promise<void> {
+    await tx.invoiceChargeReservation.deleteMany({
+      where: { tenantId, invoiceId },
+    });
+  }
+
+  private async syncJobsAfterChargeReservationChange(
+    tx: any,
+    tenantId: string,
+    jobIds: string[],
+  ): Promise<void> {
+    const ids = uniqueNonEmptyIds(jobIds);
+    if (!ids.length) return;
+    const jobs = await tx.job.findMany({
+      where: { tenantId, id: { in: ids } },
+      select: {
+        id: true,
+        status: true,
+        invoiceReadyAt: true,
+        charges: { select: { id: true } },
+      },
+    });
+    const chargeIds = jobs.flatMap((job: any) =>
+      (job.charges ?? []).map((c: any) => c.id),
+    );
+    const reservations = chargeIds.length
+      ? await tx.invoiceChargeReservation.findMany({
+          where: { tenantId, jobChargeId: { in: chargeIds } },
+          include: { invoice: { select: { status: true } } },
+        })
+      : [];
+    const recognizedReserved = new Set(
+      reservations
+        .filter((row: any) => isInvoiceRecognized(row.invoice?.status))
+        .map((row: any) => row.jobChargeId),
+    );
+    const anyReserved = new Set(
+      reservations
+        .filter((row: any) => isInvoiceReserving(row.invoice?.status))
+        .map((row: any) => row.jobChargeId),
+    );
+    for (const job of jobs) {
+      if (job.status === JobStatus.CANCELLED) continue;
+      const jobChargeIds = (job.charges ?? []).map((c: any) => c.id);
+      if (!jobChargeIds.length) continue;
+      const remaining = jobChargeIds.filter((id: string) => !anyReserved.has(id));
+      const allRecognized =
+        remaining.length === 0 &&
+        jobChargeIds.every((id: string) => recognizedReserved.has(id));
+      if (
+        allRecognized &&
+        (job.status === JobStatus.READY_FOR_INVOICE || job.invoiceReadyAt)
+      ) {
+        await tx.job.update({
+          where: { id: job.id },
+          data: { status: JobStatus.COMPLETED, completedAt: new Date() },
+        });
+      } else if (
+        job.status === JobStatus.COMPLETED &&
+        job.invoiceReadyAt &&
+        remaining.length > 0
+      ) {
+        await tx.job.update({
+          where: { id: job.id },
+          data: { status: JobStatus.READY_FOR_INVOICE, completedAt: null },
+        });
+      }
+    }
+  }
+
+  private async prepareInvoiceChargeBinding(
+    tx: any,
+    tenantId: string,
+    dto: {
+      customerCompanyId?: string | null;
+      sourceCustomerQuotationId?: string | null;
+      sourceJobId?: string | null;
+      sourceJobIds?: string[] | null;
+    },
+    lines: Array<{ jobChargeId?: string | null }>,
+    excludeInvoiceId?: string | null,
+  ): Promise<{
+    jobChargeIds: string[];
+    boundQuotationId: string | null;
+    sourceJobIds: string[];
+  }> {
+    const jobChargeIds = uniqueNonEmptyIds(lines.map((l) => l.jobChargeId));
+    await this.assertJobChargesFreeForInvoice(
+      tx,
+      tenantId,
+      jobChargeIds,
+      excludeInvoiceId,
+    );
+    let boundQuotationId = dto.sourceCustomerQuotationId ?? null;
+    let sourceJobIds = resolveInvoiceSourceJobIds({
+      sourceJobId: dto.sourceJobId,
+      sourceJobIds: dto.sourceJobIds,
+    });
+    if (jobChargeIds.length) {
+      const charges = await this.lockJobChargesForUpdate(tx, tenantId, jobChargeIds);
+      for (const charge of charges) {
+        if (charge.job.status === JobStatus.CANCELLED) {
+          throw new BadRequestException(
+            `Cancelled jobs cannot be invoiced (${charge.job.internalRef})`,
+          );
+        }
+        if (
+          dto.customerCompanyId &&
+          charge.job.customerCompanyId !== dto.customerCompanyId
+        ) {
+          throw new BadRequestException(
+            "JobCharges must belong to the invoice customer",
+          );
+        }
+      }
+      boundQuotationId = await this.assertQuotationBoundaryForCharges(
+        tenantId,
+        dto.customerCompanyId ?? null,
+        boundQuotationId,
+        charges,
+      );
+      sourceJobIds = uniqueNonEmptyIds([
+        ...sourceJobIds,
+        ...charges.map((c) => c.jobId),
+      ]);
+    }
+    return { jobChargeIds, boundQuotationId, sourceJobIds };
   }
 
   private isBillableTripStatus(status: TripStatus): boolean {
@@ -307,6 +665,8 @@ export class InvoicesService {
     });
 
     const jobIds = jobs.map((j) => j.id);
+    const reservedChargeIds = new Set<string>();
+    const chargeIdsByJobId = new Map<string, string[]>();
     const latestInvoiceByJobId = new Map<
       string,
       { id: string; status: string; sourceJobId: string | null }
@@ -322,6 +682,21 @@ export class InvoicesService {
         if (!sourceJobId || latestInvoiceByJobId.has(sourceJobId)) continue;
         latestInvoiceByJobId.set(sourceJobId, inv);
       }
+      const charges = await this.prisma.jobCharge.findMany({
+        where: { tenantId, jobId: { in: jobIds } },
+        select: { id: true, jobId: true },
+      });
+      for (const c of charges) {
+        chargeIdsByJobId.set(c.jobId, [...(chargeIdsByJobId.get(c.jobId) ?? []), c.id]);
+      }
+      const chargeIds = charges.map((c) => c.id);
+      if (chargeIds.length && this.prisma.invoiceChargeReservation) {
+        const reservations = await this.prisma.invoiceChargeReservation.findMany({
+          where: { tenantId, jobChargeId: { in: chargeIds } },
+          select: { jobChargeId: true },
+        });
+        for (const row of reservations) reservedChargeIds.add(row.jobChargeId);
+      }
     }
 
     const items: any[] = [];
@@ -332,7 +707,9 @@ export class InvoicesService {
       if (!readiness.readyForInvoice) continue;
 
       const existingInvoice = latestInvoiceByJobId.get(job.id) ?? null;
-      if (existingInvoice && !["Draft"].includes(existingInvoice.status)) {
+      const jobChargeIds = chargeIdsByJobId.get(job.id) ?? [];
+      const remainingCharges = jobChargeIds.filter((id) => !reservedChargeIds.has(id));
+      if (jobChargeIds.length > 0 && remainingCharges.length === 0) {
         continue;
       }
 
@@ -356,6 +733,113 @@ export class InvoicesService {
       });
     }
     return { items };
+  }
+
+  async listCommercialAgreementsByCompany(
+    tenantId: string,
+    companyId: string,
+    user: any,
+  ) {
+    this.assertCustomerCanOnlyRead(user);
+    const company = await this.prisma.customer_companies.findFirst({
+      where: { id: companyId, tenantId },
+      select: { id: true },
+    });
+    if (!company) throw new BadRequestException("Customer company not found");
+    const items = await this.prisma.customerQuotation.findMany({
+      where: {
+        tenantId,
+        customerCompanyId: companyId,
+        status: CustomerQuotationStatus.ACCEPTED,
+      },
+      select: {
+        id: true,
+        quotationNo: true,
+        title: true,
+        status: true,
+        currency: true,
+        acceptedAt: true,
+      },
+      orderBy: [{ acceptedAt: "desc" }, { quotationNo: "desc" }],
+    });
+    return { items };
+  }
+
+  async listInvoiceableChargesByCompany(
+    tenantId: string,
+    companyId: string,
+    user: any,
+    quotationId?: string | null,
+  ) {
+    this.assertCustomerCanOnlyRead(user);
+    const company = await this.prisma.customer_companies.findFirst({
+      where: { id: companyId, tenantId },
+      select: { id: true, name: true },
+    });
+    if (!company) throw new BadRequestException("Customer company not found");
+    const jobs = await this.prisma.job.findMany({
+      where: {
+        tenantId,
+        customerCompanyId: companyId,
+        status: { not: JobStatus.CANCELLED },
+        ...(quotationId
+          ? { sourceCustomerQuotationId: quotationId }
+          : {}),
+      },
+      include: {
+        trips: { select: { id: true, status: true } },
+        sourceCustomerQuotation: {
+          select: { id: true, quotationNo: true, title: true, status: true },
+        },
+        charges: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+      },
+      orderBy: [{ updatedAt: "desc" }],
+    });
+    const chargeIds = jobs.flatMap((j) => (j.charges ?? []).map((c) => c.id));
+    const reserved = new Set<string>();
+    if (chargeIds.length && this.prisma.invoiceChargeReservation) {
+      const rows = await this.prisma.invoiceChargeReservation.findMany({
+        where: { tenantId, jobChargeId: { in: chargeIds } },
+        select: { jobChargeId: true },
+      });
+      for (const row of rows) reserved.add(row.jobChargeId);
+    }
+    const items: any[] = [];
+    for (const job of jobs) {
+      const readiness = evaluateJobInvoiceReadiness(
+        (job.trips ?? []).map((t: any) => ({ id: t.id, status: t.status as TripStatus })),
+      );
+      if (!readiness.readyForInvoice && job.status !== JobStatus.READY_FOR_INVOICE && !job.invoiceReadyAt) {
+        continue;
+      }
+      for (const charge of job.charges ?? []) {
+        if (reserved.has(charge.id)) continue;
+        items.push({
+          jobChargeId: charge.id,
+          jobId: job.id,
+          jobInternalRef: job.internalRef,
+          jobExternalRef: job.externalRef ?? null,
+          jobStatus: job.status,
+          sourceCustomerQuotationId: job.sourceCustomerQuotationId ?? null,
+          quotationNo: job.sourceCustomerQuotation?.quotationNo ?? null,
+          sourceType: charge.sourceType,
+          code: charge.code,
+          label: charge.label,
+          description: charge.description ?? null,
+          qty: charge.qty,
+          unitPriceCents: charge.unitPriceCents,
+          amountCents: charge.amountCents,
+          taxCode: charge.taxable ? charge.taxCode || "SR" : "ZR",
+          taxRate: charge.taxRateBasisPoints ?? (charge.taxable ? 900 : 0),
+          tripId: null,
+        });
+      }
+    }
+    return {
+      customerCompanyId: company.id,
+      customerName: company.name,
+      items,
+    };
   }
 
   private async validateInvoiceLineSources(
@@ -462,6 +946,7 @@ export class InvoicesService {
       where: { tenantId, id: jobId },
       include: {
         customerCompany: true,
+        charges: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
         trips: {
           select: {
             id: true,
@@ -484,18 +969,6 @@ export class InvoicesService {
       !job.invoiceReadyAt
     ) {
       throw new BadRequestException("Job is not ready for invoice");
-    }
-
-    const existingGenerated = await this.prisma.invoice.findFirst({
-      where: {
-        tenantId,
-        sourceJobId: jobId,
-        status: { in: ["Sent", "Issued", "Paid"] },
-      },
-      select: { id: true },
-    });
-    if (existingGenerated) {
-      throw new BadRequestException("Invoice already generated for this job");
     }
 
     const existingDraft = await this.prisma.invoice.findFirst({
@@ -548,6 +1021,7 @@ export class InvoicesService {
         taxRate: taxRate / 10000,
         lineItems: existingDraft.lineItems.map((li: any) => ({
           sourceJobId: (existingDraft as any).sourceJobId ?? job.id,
+          jobChargeId: li.jobChargeId ?? null,
           description: li.description,
           qty: li.qty,
           unitPriceCents: li.unitPriceCents,
@@ -570,6 +1044,67 @@ export class InvoicesService {
     }
 
     const templateCode = "WISDOM_FORCE";
+    const chargeIds = (job.charges ?? []).map((c: any) => c.id);
+    const reservedChargeIds = new Set<string>();
+    if (chargeIds.length && this.prisma.invoiceChargeReservation) {
+      const reserved = await this.prisma.invoiceChargeReservation.findMany({
+        where: { tenantId, jobChargeId: { in: chargeIds } },
+        select: { jobChargeId: true },
+      });
+      for (const row of reserved) reservedChargeIds.add(row.jobChargeId);
+    }
+    const eligibleCharges = (job.charges ?? []).filter(
+      (c: any) => !reservedChargeIds.has(c.id),
+    );
+    if (eligibleCharges.length > 0) {
+      const prefillFromCharges = eligibleCharges.map((c: any) => {
+        const taxCode = c.taxable ? c.taxCode || "SR" : "ZR";
+        const taxRateBp = c.taxRateBasisPoints ?? (c.taxable ? 900 : 0);
+        return {
+          sourceType: "JOB",
+          sourceJobId: job.id,
+          jobChargeId: c.id,
+          sourceMasterItemId: null,
+          sourceTripId: null,
+          description: `${job.internalRef} — ${c.label}`,
+          qty: c.qty,
+          unitPriceCents: c.unitPriceCents,
+          taxCode,
+          taxRate: taxRateBp,
+          requiresManualAmount: false,
+          isEditable: true,
+        };
+      });
+      const totals = this.computeInvoiceTotals(prefillFromCharges);
+      return {
+        job: {
+          id: job.id,
+          internalJobReference: job.internalRef,
+          customerReference: job.externalRef ?? null,
+          jobType: job.jobType,
+          billableTripCount: billableTrips.length,
+        },
+        jobId,
+        internalJobReference: job.internalRef,
+        customerCompanyId: job.customerCompanyId,
+        customerCompanyName: job.customerCompany?.name ?? "Customer",
+        invoiceTemplate: templateCode,
+        invoiceDate: this.toIsoDateOnly(today),
+        dueDate: this.toIsoDateOnly(due),
+        reference: `${job.internalRef}${job.externalRef ? ` // ${job.externalRef}` : ""}`,
+        currency: "SGD",
+        taxRate: taxRate / 10000,
+        lineItems: prefillFromCharges,
+        subtotalCents: totals.subtotalCents,
+        taxCents: totals.taxCents,
+        totalCents: totals.totalCents,
+        amountDueCents: totals.totalCents,
+        existingDraftInvoiceId: null,
+        billableTrips: billableTripSummaries,
+        quotationOptions,
+        sourceCustomerQuotationId: (job as any).sourceCustomerQuotationId ?? null,
+      };
+    }
     const prefillLineItems: Array<any> = billableTripSummaries.map((trip) => {
       return {
         sourceType: "TRIP",
@@ -808,44 +1343,48 @@ export class InvoicesService {
     const invoiceNo = await this.nextInvoiceNo(tenantId, issueDate);
 
     const created = await this.prisma.$transaction(async (tx) => {
+      const binding = await this.prepareInvoiceChargeBinding(
+        tx,
+        tenantId,
+        dto,
+        normalized,
+      );
       const inv = await tx.invoice.create({
         data: {
           tenantId,
           invoiceNo,
           customerName: dto.customerName,
           customerCompanyId: dto.customerCompanyId ?? null,
-          sourceJobId: dto.sourceJobId ?? null,
+          sourceJobId: dto.sourceJobId ?? binding.sourceJobIds[0] ?? null,
+          sourceCustomerQuotationId: binding.boundQuotationId,
           templateCode: dto.templateCode ?? "DB_WISDOM",
           currency: dto.currency ?? "SGD",
           issueDate,
           dueDate,
           notes: dto.notes ?? null,
-          status: "Draft",
+          status: INVOICE_STATUS.DRAFT,
           subtotalCents,
           taxCents,
           totalCents,
           lineItems: {
-            create: normalized.map((l) => ({
-              tenantId,
-              description: l.description,
-              qty: l.qty,
-              unitPriceCents: l.unitPriceCents,
-              amountCents: l.amountCents,
-              taxCode: l.taxCode,
-              taxRate: l.taxRate,
-              taxCents: l.taxCents,
-              sourceType: (l as any).sourceType ?? "MANUAL",
-              sourceMasterItemId: (l as any).sourceMasterItemId ?? null,
-              sourceTripId: (l as any).sourceTripId ?? null,
-              tripDisplayRefSnapshot: (l as any).tripDisplayRef ?? null,
-              requiresManualAmount: Boolean((l as any).requiresManualAmount),
-            })),
+            create: normalized.map((l) => this.invoiceLineCreateData(tenantId, l)),
           },
         },
         include: {
           lineItems: true,
         },
       });
+      await this.syncInvoiceChargeReservations(
+        tx,
+        tenantId,
+        inv.id,
+        binding.jobChargeIds,
+      );
+      await this.syncJobsAfterChargeReservationChange(
+        tx,
+        tenantId,
+        binding.sourceJobIds,
+      );
 
       // Tag orders
       await tx.transportOrder.updateMany({
@@ -863,6 +1402,18 @@ export class InvoicesService {
       return invWithOrders;
     });
 
+    await this.audit.log(
+      tenantId,
+      "INVOICE_CREATED",
+      "INVOICE",
+      created.id,
+      {
+        invoiceNo: created.invoiceNo,
+        path: "legacy_orders",
+        sourceJobId: dto.sourceJobId ?? null,
+      },
+      user?.userId ?? null,
+    );
     rt.publishInvoiceEvent(this.realtime, "invoice.created", tenantId, created.id, {
       jobId: dto.sourceJobId ?? null,
     });
@@ -958,6 +1509,9 @@ export class InvoicesService {
       customerName: inv.customerName,
       customerCompanyId: (inv as any).customerCompanyId ?? null,
       sourceJobId: (inv as any).sourceJobId ?? null,
+      sourceCustomerQuotationId: (inv as any).sourceCustomerQuotationId ?? null,
+      paidAt: inv.paidAt ?? null,
+      paidByUserId: inv.paidByUserId ?? null,
       templateCode: (inv as any).templateCode ?? "DB_WISDOM",
       currency: inv.currency,
       status: inv.status,
@@ -977,6 +1531,7 @@ export class InvoicesService {
         taxRate: l.taxRate,
         taxCents: l.taxCents,
         sourceType: l.sourceType ?? null,
+        jobChargeId: l.jobChargeId ?? null,
         sourceJobId: (inv as any).sourceJobId ?? null,
         sourceMasterItemId: l.sourceMasterItemId ?? null,
         sourceTripId: l.sourceTripId ?? null,
@@ -1011,12 +1566,16 @@ export class InvoicesService {
     customerName: string;
     currency: string;
     sourceJobIds: string[];
+    sourceCustomerQuotationId?: string | null;
     suggestedLineItems: Array<{
       description: string;
       qty: number;
       unitPriceCents: number;
       taxCode: string;
       taxRate: number;
+      jobChargeId?: string;
+      sourceJobId?: string;
+      sourceType?: string;
     }>;
   }> {
     this.assertCustomerCanOnlyRead(user);
@@ -1042,6 +1601,13 @@ export class InvoicesService {
         "All jobs must belong to the same customer company for one invoice draft",
       );
     }
+    const quotationIds = uniqueNonEmptyIds(
+      jobs.map((j) => j.sourceCustomerQuotationId),
+    );
+    const hasUnbound = jobs.some((j) => !j.sourceCustomerQuotationId);
+    if (quotationIds.length > 1 || (quotationIds.length === 1 && hasUnbound)) {
+      throw new BadRequestException(mixedQuotationMessage());
+    }
 
     const company = jobs[0].customerCompany;
     const suggestedLineItems: Array<{
@@ -1050,6 +1616,9 @@ export class InvoicesService {
       unitPriceCents: number;
       taxCode: string;
       taxRate: number;
+      jobChargeId?: string;
+      sourceJobId?: string;
+      sourceType?: string;
     }> = [];
 
     const jobsNotInvoiceReady = jobs
@@ -1074,8 +1643,19 @@ export class InvoicesService {
       );
     }
 
+    const allChargeIds = jobs.flatMap((j) => (j.charges ?? []).map((c) => c.id));
+    const reservedChargeIds = new Set<string>();
+    if (allChargeIds.length && this.prisma.invoiceChargeReservation) {
+      const reserved = await this.prisma.invoiceChargeReservation.findMany({
+        where: { tenantId, jobChargeId: { in: allChargeIds } },
+        select: { jobChargeId: true },
+      });
+      for (const row of reserved) reservedChargeIds.add(row.jobChargeId);
+    }
+
     for (const job of jobs) {
       for (const c of job.charges ?? []) {
+        if (reservedChargeIds.has(c.id)) continue;
         const taxCode = c.taxable ? c.taxCode || "SR" : "ZR";
         const taxRate = c.taxRateBasisPoints ?? (c.taxable ? 900 : 0);
         suggestedLineItems.push({
@@ -1084,6 +1664,9 @@ export class InvoicesService {
           unitPriceCents: c.unitPriceCents,
           taxCode,
           taxRate,
+          jobChargeId: c.id,
+          sourceJobId: job.id,
+          sourceType: "JOB",
         });
       }
     }
@@ -1101,6 +1684,7 @@ export class InvoicesService {
       customerName: company?.name ?? jobs[0].receiverName ?? "Customer",
       currency: "SGD",
       sourceJobIds: jobIds,
+      sourceCustomerQuotationId: quotationIds[0] ?? null,
       suggestedLineItems,
     };
   }
@@ -1179,52 +1763,79 @@ export class InvoicesService {
 
     const invoiceNo = await this.nextInvoiceNo(tenantId, issueDate);
 
-    const created = await this.prisma.invoice.create({
-      data: {
+    const created = await this.prisma.$transaction(async (tx) => {
+      const binding = await this.prepareInvoiceChargeBinding(
+        tx,
         tenantId,
-        invoiceNo,
-        customerName: dto.customerName,
-        customerCompanyId: dto.customerCompanyId ?? null,
-        sourceJobId: dto.sourceJobId ?? null,
-        templateCode: dto.templateCode ?? "DB_WISDOM",
-        currency: dto.currency ?? "SGD",
-        issueDate,
-        dueDate,
-        notes: dto.notes ?? null,
-        status: "Draft",
-        subtotalCents,
-        taxCents,
-        totalCents,
-        lineItems: {
-          create: normalized.map((l) => ({
-            tenantId,
-            description: l.description,
-            qty: l.qty,
-            unitPriceCents: l.unitPriceCents,
-            amountCents: l.amountCents,
-            taxCode: l.taxCode,
-            taxRate: l.taxRate,
-            taxCents: l.taxCents,
-            sourceType: (l as any).sourceType ?? "MANUAL",
-            sourceMasterItemId: (l as any).sourceMasterItemId ?? null,
-            sourceTripId: (l as any).sourceTripId ?? null,
-            tripDisplayRefSnapshot: (l as any).tripDisplayRef ?? null,
-            requiresManualAmount: Boolean((l as any).requiresManualAmount),
-          })),
+        dto,
+        normalized,
+      );
+      const inv = await tx.invoice.create({
+        data: {
+          tenantId,
+          invoiceNo,
+          customerName: dto.customerName,
+          customerCompanyId: dto.customerCompanyId ?? null,
+          sourceJobId: dto.sourceJobId ?? binding.sourceJobIds[0] ?? null,
+          sourceCustomerQuotationId: binding.boundQuotationId,
+          templateCode: dto.templateCode ?? "DB_WISDOM",
+          currency: dto.currency ?? "SGD",
+          issueDate,
+          dueDate,
+          notes: dto.notes ?? null,
+          status: INVOICE_STATUS.DRAFT,
+          subtotalCents,
+          taxCents,
+          totalCents,
+          lineItems: {
+            create: normalized.map((l) => this.invoiceLineCreateData(tenantId, l)),
+          },
+          snapshot: {
+            stage: INVOICE_STATUS.DRAFT,
+            orderIds,
+            sourceJobIds: binding.sourceJobIds,
+            sourceCustomerQuotationId: binding.boundQuotationId,
+            confirmedAt: new Date().toISOString(),
+            confirmedByUserId: confirmedByUserId ?? null,
+          },
         },
-        snapshot: {
-          stage: "Draft",
-          orderIds,
-          sourceJobIds: dto.sourceJobIds ?? [],
-          confirmedAt: new Date().toISOString(),
-          confirmedByUserId: confirmedByUserId ?? null,
+        include: {
+          lineItems: true,
+          orders: { select: { id: true } },
         },
-      },
-      include: {
-        lineItems: true,
-        orders: { select: { id: true } }, // empty until "Sent"
-      },
+      });
+      await this.syncInvoiceChargeReservations(
+        tx,
+        tenantId,
+        inv.id,
+        binding.jobChargeIds,
+      );
+      await this.syncJobsAfterChargeReservationChange(
+        tx,
+        tenantId,
+        binding.sourceJobIds,
+      );
+      return inv;
     });
+    await this.audit.log(
+      tenantId,
+      "INVOICE_CREATED",
+      "INVOICE",
+      created.id,
+      {
+        invoiceNo: created.invoiceNo,
+        sourceJobIds: resolveInvoiceSourceJobIds({
+          sourceJobId: created.sourceJobId,
+          snapshot: created.snapshot,
+        }),
+        jobChargeIds: uniqueNonEmptyIds(
+          (created.lineItems ?? []).map((l: any) => l.jobChargeId),
+        ),
+        sourceCustomerQuotationId:
+          (created as any).sourceCustomerQuotationId ?? null,
+      },
+      user?.userId ?? null,
+    );
 
     // Return orderIds from dto since orders aren't linked yet.
     // PDF: generated on the client and uploaded via POST .../pdf.
@@ -1243,7 +1854,7 @@ export class InvoicesService {
       });
 
       if (!inv) throw new BadRequestException("Invoice not found");
-      if (inv.status !== "Draft")
+      if (!isInvoiceDraft(inv.status))
         throw new BadRequestException("Invoice is not Draft");
 
       const rawOrderIds = (inv.snapshot as any)?.orderIds;
@@ -1299,22 +1910,25 @@ export class InvoicesService {
         orders = found;
       }
 
-      const sourceJobIds: string[] = Array.isArray((inv.snapshot as any)?.sourceJobIds)
-        ? ((inv.snapshot as any).sourceJobIds as string[])
-        : [];
-      if (sourceJobIds.length > 0) {
-        await tx.job.updateMany({
-          where: {
-            tenantId,
-            id: { in: sourceJobIds },
-            status: JobStatus.READY_FOR_INVOICE,
-          },
-          data: {
-            status: JobStatus.COMPLETED,
-            completedAt: new Date(),
-          },
-        });
-      }
+      const sourceJobIds = resolveInvoiceSourceJobIds({
+        sourceJobId: (inv as any).sourceJobId,
+        snapshot: inv.snapshot,
+      });
+      const jobChargeIds = uniqueNonEmptyIds(
+        (inv.lineItems ?? []).map((l: any) => l.jobChargeId),
+      );
+      await this.assertJobChargesFreeForInvoice(
+        tx,
+        tenantId,
+        jobChargeIds,
+        inv.id,
+      );
+      await this.syncInvoiceChargeReservations(
+        tx,
+        tenantId,
+        inv.id,
+        jobChargeIds,
+      );
 
       const finalSnapshot = {
         stage: "Sent",
@@ -1354,9 +1968,23 @@ export class InvoicesService {
         },
         include: { lineItems: true, orders: { select: { id: true } } },
       });
+      await this.syncJobsAfterChargeReservationChange(tx, tenantId, sourceJobIds);
 
       return locked;
     });
+
+    await this.audit.log(
+      tenantId,
+      "INVOICE_ISSUED",
+      "INVOICE",
+      invoiceId,
+      {
+        invoiceNo: result.invoiceNo,
+        previousStatus: INVOICE_STATUS.DRAFT,
+        status: INVOICE_STATUS.SENT,
+      },
+      user?.userId ?? null,
+    );
 
     // Invoice PDF is generated on the frontend and uploaded via POST .../pdf.
     return this.toDtoWithNames(result);
@@ -1374,8 +2002,12 @@ export class InvoicesService {
       });
 
       if (!inv) throw new BadRequestException("Invoice not found");
-      if (inv.status !== "Sent")
-        throw new BadRequestException("Only Sent invoices can be reverted");
+      if (isInvoicePaid(inv.status)) {
+        throw new BadRequestException("Paid invoices cannot be reverted to Draft");
+      }
+      if (!canRevertInvoiceToDraft(inv.status)) {
+        throw new BadRequestException("Only Sent/Issued invoices can be reverted");
+      }
 
       const linkedOrderIds = inv.orders.map((o) => o.id);
 
@@ -1415,13 +2047,148 @@ export class InvoicesService {
         include: { lineItems: true, orders: { select: { id: true } } }, // now empty
       });
 
+      const jobChargeIds = uniqueNonEmptyIds(
+        (inv.lineItems ?? []).map((l: any) => l.jobChargeId),
+      );
+      await this.syncInvoiceChargeReservations(
+        tx,
+        tenantId,
+        inv.id,
+        jobChargeIds,
+      );
+      await this.syncJobsAfterChargeReservationChange(
+        tx,
+        tenantId,
+        resolveInvoiceSourceJobIds({
+          sourceJobId: (inv as any).sourceJobId,
+          snapshot: nextSnapshot,
+        }),
+      );
       return inv2;
     });
+
+    await this.audit.log(
+      tenantId,
+      "INVOICE_REVERTED",
+      "INVOICE",
+      invoiceId,
+      {
+        invoiceNo: updated.invoiceNo,
+        previousStatus: INVOICE_STATUS.SENT,
+        status: INVOICE_STATUS.DRAFT,
+      },
+      user?.userId ?? null,
+    );
 
     // invoice has no linked orders now; return with snapshot orderIds for UI continuity
     const snap = updated.snapshot as any;
     const snapshotOrderIds = Array.isArray(snap?.orderIds) ? snap.orderIds : [];
     return await this.toDtoWithNames(updated, snapshotOrderIds);
+  }
+
+  async voidInvoice(tenantId: string, invoiceId: string, user: any) {
+    this.assertCustomerCanOnlyRead(user);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const inv = await tx.invoice.findFirst({
+        where: { tenantId, id: invoiceId },
+        include: { lineItems: true },
+      });
+      if (!inv) throw new BadRequestException("Invoice not found");
+      if (isInvoicePaid(inv.status)) {
+        throw new BadRequestException("Paid invoices cannot be voided in this phase");
+      }
+      if (!canVoidInvoice(inv.status)) {
+        throw new BadRequestException("Only Draft or Sent/Issued invoices can be voided");
+      }
+      const previousStatus = inv.status;
+      const jobIds = resolveInvoiceSourceJobIds({
+        sourceJobId: (inv as any).sourceJobId,
+        snapshot: inv.snapshot,
+        sourceJobIds: uniqueNonEmptyIds(
+          (inv.lineItems ?? []).map((l: any) => l.sourceJobId),
+        ),
+      });
+      await this.releaseInvoiceChargeReservations(tx, tenantId, inv.id);
+      const voided = await tx.invoice.update({
+        where: { id: inv.id },
+        data: {
+          status: INVOICE_STATUS.VOID,
+          lockedAt: new Date(),
+          snapshot: {
+            ...((inv.snapshot as any) ?? {}),
+            stage: INVOICE_STATUS.VOID,
+            voidedAt: new Date().toISOString(),
+            voidedByUserId: user?.userId ?? null,
+          },
+        },
+        include: { lineItems: true, orders: { select: { id: true } } },
+      });
+      await this.syncJobsAfterChargeReservationChange(tx, tenantId, jobIds);
+      return { voided, previousStatus };
+    });
+    await this.audit.log(
+      tenantId,
+      "INVOICE_VOIDED",
+      "INVOICE",
+      invoiceId,
+      {
+        invoiceNo: updated.voided.invoiceNo,
+        previousStatus: updated.previousStatus,
+        status: INVOICE_STATUS.VOID,
+      },
+      user?.userId ?? null,
+    );
+    return this.toDtoWithNames(updated.voided);
+  }
+
+  async markInvoicePaid(tenantId: string, invoiceId: string, user: any) {
+    this.assertCustomerCanOnlyRead(user);
+    if (user?.role === Role.TRANSPORT_STAFF) {
+      throw new ForbiddenException("Only Admin or Finance can mark invoices Paid");
+    }
+    const paidAt = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const inv = await tx.invoice.findFirst({
+        where: { tenantId, id: invoiceId },
+        include: { lineItems: true },
+      });
+      if (!inv) throw new BadRequestException("Invoice not found");
+      if (!canMarkInvoicePaid(inv.status)) {
+        throw new BadRequestException("Only Sent/Issued invoices can be marked Paid");
+      }
+      const previousStatus = inv.status;
+      const paid = await tx.invoice.update({
+        where: { id: inv.id },
+        data: {
+          status: INVOICE_STATUS.PAID,
+          paidAt,
+          paidByUserId: user?.userId ?? null,
+          snapshot: {
+            ...((inv.snapshot as any) ?? {}),
+            stage: INVOICE_STATUS.PAID,
+            paidAt: paidAt.toISOString(),
+            paidByUserId: user?.userId ?? null,
+          },
+        },
+        include: { lineItems: true, orders: { select: { id: true } } },
+      });
+      return { paid, previousStatus };
+    });
+    await this.audit.log(
+      tenantId,
+      "INVOICE_PAID",
+      "INVOICE",
+      invoiceId,
+      {
+        invoiceNo: updated.paid.invoiceNo,
+        previousStatus: updated.previousStatus,
+        status: INVOICE_STATUS.PAID,
+        paidAt: paidAt.toISOString(),
+        actorUserId: user?.userId ?? null,
+      },
+      user?.userId ?? null,
+    );
+    return this.toDtoWithNames(updated.paid);
   }
 
   // Update an existing Draft invoice: replaces line items; snapshot orderIds are
@@ -1563,12 +2330,32 @@ export class InvoicesService {
     };
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      const binding = await this.prepareInvoiceChargeBinding(
+        tx,
+        tenantId,
+        {
+          ...dto,
+          customerCompanyId,
+          sourceJobId,
+          sourceJobIds: uniqueSourceJobIds,
+        },
+        normalized,
+        inv.id,
+      );
+      const snapshot = {
+        ...nextSnapshot,
+        sourceJobIds: binding.sourceJobIds.length
+          ? binding.sourceJobIds
+          : normalizedSourceJobIds,
+        sourceCustomerQuotationId: binding.boundQuotationId,
+      };
       await tx.invoice.update({
         where: { id: inv.id },
         data: {
           customerName: dto.customerName,
           customerCompanyId,
-          sourceJobId,
+          sourceJobId: sourceJobId ?? binding.sourceJobIds[0] ?? null,
+          sourceCustomerQuotationId: binding.boundQuotationId,
           templateCode: dto.templateCode ?? (inv as any).templateCode ?? "DB_WISDOM",
           currency: dto.currency ?? inv.currency,
           issueDate,
@@ -1577,7 +2364,7 @@ export class InvoicesService {
           subtotalCents,
           taxCents,
           totalCents,
-          snapshot: nextSnapshot,
+          snapshot,
         },
       });
 
@@ -1588,23 +2375,23 @@ export class InvoicesService {
       if (normalized.length > 0) {
         await tx.invoiceLineItem.createMany({
           data: normalized.map((l) => ({
-            tenantId,
+            ...this.invoiceLineCreateData(tenantId, l),
             invoiceId: inv.id,
-            description: l.description,
-            qty: l.qty,
-            unitPriceCents: l.unitPriceCents,
-            amountCents: l.amountCents,
-            taxCode: l.taxCode,
-            taxRate: l.taxRate,
-            taxCents: l.taxCents,
-            sourceType: (l as any).sourceType ?? "MANUAL",
-            sourceMasterItemId: (l as any).sourceMasterItemId ?? null,
-            sourceTripId: (l as any).sourceTripId ?? null,
-            tripDisplayRefSnapshot: (l as any).tripDisplayRef ?? null,
-            requiresManualAmount: Boolean((l as any).requiresManualAmount),
           })),
         });
       }
+
+      await this.syncInvoiceChargeReservations(
+        tx,
+        tenantId,
+        inv.id,
+        binding.jobChargeIds,
+      );
+      await this.syncJobsAfterChargeReservationChange(
+        tx,
+        tenantId,
+        uniqueNonEmptyIds([...binding.sourceJobIds, ...normalizedSourceJobIds]),
+      );
 
       return tx.invoice.findFirst({
         where: { id: inv.id, tenantId },

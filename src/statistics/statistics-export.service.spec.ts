@@ -153,7 +153,7 @@ describe("StatisticsExportService", () => {
         completedTripsMissingPayouts: 2,
         excludedFromProfit: 3,
       },
-      limitations: ["paid_invoice_date_uses_updated_at"],
+      limitations: ["paid_invoice_date_uses_paid_at"],
     });
 
     const result = await service.exportFinance("tenant-a", {

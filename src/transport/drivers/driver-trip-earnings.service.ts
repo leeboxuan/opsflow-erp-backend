@@ -5,6 +5,7 @@ import {
   buildPaginationMeta,
   parsePaginationFromQuery,
 } from "../../shared/common/pagination";
+import { CANONICAL_TRIP_PAYOUT_LINE_SELECT } from "../trips/trip-payout.helpers";
 import {
   DEFAULT_DRIVER_EARNING_CURRENCY,
   DEFAULT_TENANT_TIMEZONE,
@@ -124,7 +125,7 @@ export class DriverTripEarningsService {
         driverEarningCents: true,
         earningLabelSnapshot: true,
         payoutLines: {
-          select: { totalCents: true },
+          select: CANONICAL_TRIP_PAYOUT_LINE_SELECT,
         },
         job: {
           select: {
@@ -165,7 +166,7 @@ export class DriverTripEarningsService {
       },
       select: {
         driverEarningCents: true,
-        payoutLines: { select: { totalCents: true } },
+        payoutLines: { select: CANONICAL_TRIP_PAYOUT_LINE_SELECT },
       },
     });
 
@@ -256,7 +257,7 @@ export class DriverTripEarningsService {
           updatedAt: true,
           driverEarningCents: true,
           earningLabelSnapshot: true,
-          payoutLines: { select: { totalCents: true } },
+          payoutLines: { select: CANONICAL_TRIP_PAYOUT_LINE_SELECT },
           job: { select: { internalRef: true } },
         },
       }),

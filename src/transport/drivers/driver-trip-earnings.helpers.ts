@@ -3,22 +3,23 @@ import {
   DEFAULT_TENANT_TIMEZONE,
   getSafeTenantTimezone,
 } from "../../shared/common/tenant-timezone";
+import {
+  resolveCanonicalTripPayoutCents,
+  type CanonicalTripPayoutInput,
+} from "../trips/trip-payout.helpers";
 
 export { DEFAULT_TENANT_TIMEZONE, getSafeTenantTimezone };
 export const DEFAULT_DRIVER_EARNING_CURRENCY = "SGD";
 
-/** Driver payout total for mobile cards: persisted cents, else sum of payout lines. */
-export function resolveDriverTripEarningCents(trip: {
-  driverEarningCents?: number | null;
-  payoutLines?: Array<{ totalCents?: number | null }> | null;
-}): number | null {
-  if (Number.isInteger(trip.driverEarningCents)) {
-    return trip.driverEarningCents as number;
-  }
-  const lines = trip.payoutLines ?? [];
-  if (!lines.length) return null;
-  const total = lines.reduce((sum, line) => sum + (line.totalCents ?? 0), 0);
-  return total > 0 ? total : null;
+/**
+ * Wallet/admin driver earning for a Trip.
+ * Delegates to the canonical TripPayoutLine resolver (lines first,
+ * driverEarningCents only when no lines exist).
+ */
+export function resolveDriverTripEarningCents(
+  trip: CanonicalTripPayoutInput,
+): number | null {
+  return resolveCanonicalTripPayoutCents(trip);
 }
 
 function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
@@ -131,7 +132,7 @@ export function mapTripsToWalletSummaryRows(
     updatedAt: Date;
     driverEarningCents: number | null;
     earningLabelSnapshot: string | null;
-    payoutLines: Array<{ totalCents?: number | null }> | null;
+    payoutLines: CanonicalTripPayoutInput["payoutLines"];
     job: { internalRef: string | null } | null;
   }>,
 ): DriverWalletSummaryTripRow[] {

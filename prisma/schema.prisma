@@ -41,6 +41,7 @@ model Tenant {
   InvoiceLineItem              InvoiceLineItem[]
   transportInternalRefCounters transport_internal_ref_counters[]
   jobs                         Job[]
+  invoiceChargeReservations    InvoiceChargeReservation[]
   jobDocuments                 JobDocument[]
   jobInternalRefCounters       job_internal_ref_counters[]
   auditLogs                    AuditLog[]
@@ -1324,6 +1325,8 @@ model JobCharge {
   job          Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
   sourceCustomerQuotationLine CustomerQuotationLine? @relation("JobChargeSourceCustomerQuotationLine", fields: [sourceCustomerQuotationLineId], references: [id], onDelete: SetNull)
   selectedBy   User?  @relation("JobChargeSelectedBy", fields: [selectedByUserId], references: [id], onDelete: SetNull)
+  invoiceLineItems InvoiceLineItem[] @relation("InvoiceLineItemJobCharge")
+  invoiceChargeReservations InvoiceChargeReservation[]
 
   @@index([tenantId, jobId])
   @@index([tenantId, sourceCustomerQuotationItemId])
@@ -2333,6 +2336,8 @@ model Invoice {
   customerName String
   customerCompanyId String?
   sourceJobId       String?
+  /// Optional ACCEPTED CustomerQuotation governing this invoice. Null for manual/legacy invoices.
+  sourceCustomerQuotationId String?
   templateCode      String @default("DB_WISDOM")
   currency     String @default("SGD")
 
@@ -2340,7 +2345,7 @@ model Invoice {
   dueDate   DateTime?
 
   notes  String?
-  status String  @default("Draft") // Draft | Issued | Paid | Void
+  status String  @default("Draft") // Draft | Sent | Issued (legacy) | Paid | Void
 
   subtotalCents Int
   taxCents      Int
@@ -2363,11 +2368,17 @@ model Invoice {
   tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sentAt         DateTime?
   sentByUserId   String?
+  paidAt         DateTime?
+  paidByUserId   String?
+  chargeReservations InvoiceChargeReservation[]
+  sourceCustomerQuotation CustomerQuotation? @relation("InvoiceSourceCustomerQuotation", fields: [sourceCustomerQuotationId], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, invoiceNo])
   @@index([tenantId, createdAt])
   @@index([tenantId, status])
   @@index([tenantId, sourceJobId])
+  @@index([tenantId, sourceCustomerQuotationId])
+  @@index([tenantId, paidAt])
   @@map("invoices")
 }
 
@@ -2385,6 +2396,8 @@ model InvoiceLineItem {
   taxRate  Int // store as integer percent*100? We'll store 900 = 9.00%, 0 = 0
   taxCents Int
   sourceType String? // JOB | QUOTATION_MASTER | MANUAL
+  /// Provenance to the JobCharge this line was snapshotted from. Null for manual/legacy lines.
+  jobChargeId String?
   sourceMasterItemId String?
   sourceTripId String?
   tripDisplayRefSnapshot String?
@@ -2394,9 +2407,28 @@ model InvoiceLineItem {
 
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  jobCharge JobCharge? @relation("InvoiceLineItemJobCharge", fields: [jobChargeId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, invoiceId])
+  @@index([tenantId, jobChargeId])
   @@map("invoice_line_items")
+}
+
+/// Active JobCharge reservation: one reserving invoice per charge. Released on Void or Draft line removal.
+model InvoiceChargeReservation {
+  id          String   @id @default(cuid())
+  tenantId    String
+  invoiceId   String
+  jobChargeId String
+  createdAt   DateTime @default(now())
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice   Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  jobCharge JobCharge @relation(fields: [jobChargeId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, jobChargeId])
+  @@index([tenantId, invoiceId])
+  @@map("invoice_charge_reservations")
 }
 
 model transport_internal_ref_counters {
@@ -2716,6 +2748,7 @@ model CustomerQuotation {
   acceptedBy      User?                  @relation("CustomerQuotationAcceptedBy", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
   lines           CustomerQuotationLine[]
   jobs            Job[]                  @relation("JobSourceCustomerQuotation")
+  invoices        Invoice[]              @relation("InvoiceSourceCustomerQuotation")
 
   @@unique([tenantId, quotationNo])
   @@index([tenantId, customerCompanyId])

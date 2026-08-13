@@ -475,8 +475,12 @@ describe("JobCharge quotation snapshots", () => {
       $transaction: jest.fn(async (fn: any) =>
         fn({
           jobCharge: {
+            findMany: jest.fn().mockResolvedValue([]),
             deleteMany: jobChargeDeleteMany,
             createMany: jobChargeCreateMany,
+          },
+          invoiceChargeReservation: {
+            findMany: jest.fn().mockResolvedValue([]),
           },
           customerQuotationLine: {
             findMany: jest.fn().mockResolvedValue([
@@ -713,5 +717,38 @@ describe("JobCharge quotation snapshots", () => {
         }),
       ],
     });
+  });
+
+  it("rejects deleting or editing a JobCharge reserved on an invoice", async () => {
+    const reserved = {
+      id: "jc-reserved",
+      label: "Trucking",
+      qty: 1,
+      unitPriceCents: 10000,
+      code: "TRK",
+    };
+    const { prisma } = savePrisma({
+      jobCharge: {
+        findMany: jest.fn().mockResolvedValue([reserved]),
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
+      },
+      invoiceChargeReservation: {
+        findMany: jest.fn().mockResolvedValue([{ jobChargeId: "jc-reserved" }]),
+      },
+    });
+    const svc = new TransportJobsService(
+      prisma,
+      { log: jest.fn().mockResolvedValue(undefined) } as any,
+      { getClient: jest.fn() } as any,
+    );
+    await expect(
+      svc.saveJobCharges(
+        "t1",
+        "job1",
+        { charges: [] } as any,
+        actor,
+      ),
+    ).rejects.toThrow("reserved on an invoice");
   });
 });

@@ -40,9 +40,9 @@ describe("DriverJobsService wallet summary and trip photos", () => {
     const res = await svc.getWalletSummaryByMonth("tenant-1", "driver-1", "2026-05");
     expect(res.month).toBe("2026-05");
     expect(res.completedTripCount).toBe(2);
-    expect(res.totalCents).toBe(12500);
+    expect(res.totalCents).toBe(13500);
     expect(res.trips[0].tripId).toBe("trip-1");
-    expect(res.trips[0].driverEarningCents).toBe(5000);
+    expect(res.trips[0].driverEarningCents).toBe(6000);
     expect(res.trips[1].tripId).toBe("trip-2");
     expect(res.trips[1].driverEarningCents).toBe(7500);
     const where = prisma.trip.findMany.mock.calls[0][0].where;

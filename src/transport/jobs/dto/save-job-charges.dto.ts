@@ -13,6 +13,13 @@ import { Type } from "class-transformer";
 import { JobChargeSourceType } from "@prisma/client";
 
 export class SaveJobChargeLineDto {
+  @ApiPropertyOptional({
+    description: "Existing JobCharge id. Required unchanged for invoiced/reserved charges.",
+  })
+  @IsOptional()
+  @IsString()
+  id?: string;
+
   @ApiProperty({ enum: JobChargeSourceType })
   @IsEnum(JobChargeSourceType)
   sourceType!: JobChargeSourceType;

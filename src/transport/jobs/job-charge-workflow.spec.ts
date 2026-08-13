@@ -165,6 +165,7 @@ describe("job charge workflow hardening", () => {
           }),
       },
       jobCharge: {
+        findMany: jest.fn().mockResolvedValue([]),
         deleteMany: jobChargeDeleteMany,
         createMany: jobChargeCreateMany,
       },
@@ -981,20 +982,24 @@ describe("job charge workflow hardening", () => {
     );
     expect(ok.sourceJobIds).toEqual(["j1", "j2"]);
     expect(ok.suggestedLineItems).toEqual([
-      {
+      expect.objectContaining({
         description: "JOB-1 — Haulage",
         qty: 1,
         unitPriceCents: 10000,
         taxCode: "SR",
         taxRate: 900,
-      },
-      {
+        sourceType: "JOB",
+        sourceJobId: "j1",
+      }),
+      expect.objectContaining({
         description: "JOB-2 — Surcharge",
         qty: 2,
         unitPriceCents: 5000,
         taxCode: "ZR",
         taxRate: 0,
-      },
+        sourceType: "JOB",
+        sourceJobId: "j2",
+      }),
     ]);
 
     await expect(
@@ -1563,8 +1568,9 @@ describe("job charge workflow hardening", () => {
     );
   });
 
-  it("issueInvoice promotes READY_FOR_INVOICE jobs to COMPLETED", async () => {
+  it("issueInvoice completes a job only when every JobCharge is on a recognized invoice", async () => {
     const tx: any = {
+      $executeRaw: jest.fn().mockResolvedValue(0),
       invoice: {
         findFirst: jest.fn().mockResolvedValue({
           id: "inv1",
@@ -1579,7 +1585,7 @@ describe("job charge workflow hardening", () => {
           totalCents: 1090,
           status: "Draft",
           snapshot: { orderIds: [], sourceJobIds: ["job1"] },
-          lineItems: [],
+          lineItems: [{ jobChargeId: "jc1" }],
         }),
         update: jest.fn().mockResolvedValue({
           id: "inv1",
@@ -1594,7 +1600,7 @@ describe("job charge workflow hardening", () => {
           totalCents: 1090,
           status: "Sent",
           snapshot: { orderIds: [], sourceJobIds: ["job1"] },
-          lineItems: [],
+          lineItems: [{ jobChargeId: "jc1" }],
           orders: [],
           issuedAt: new Date("2026-04-29T01:00:00.000Z"),
           issuedByUserId: null,
@@ -1606,7 +1612,42 @@ describe("job charge workflow hardening", () => {
         findMany: jest.fn().mockResolvedValue([]),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+      invoiceLineItem: { findMany: jest.fn().mockResolvedValue([]) },
+      invoiceChargeReservation: {
+        findMany: jest.fn().mockImplementation((args: any) => {
+          if (args?.where?.invoiceId?.not) return [];
+          return [{ jobChargeId: "jc1", invoice: { status: "Sent" } }];
+        }),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      jobCharge: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "jc1",
+            jobId: "job1",
+            label: "Haulage",
+            job: {
+              id: "job1",
+              internalRef: "JOB-1",
+              status: "READY_FOR_INVOICE",
+              invoiceReadyAt: new Date(),
+              customerCompanyId: "comp1",
+              sourceCustomerQuotationId: null,
+            },
+          },
+        ]),
+      },
       job: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "job1",
+            status: "READY_FOR_INVOICE",
+            invoiceReadyAt: new Date(),
+            charges: [{ id: "jc1" }],
+          },
+        ]),
+        update: jest.fn().mockResolvedValue({}),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
     };
@@ -1620,9 +1661,9 @@ describe("job charge workflow hardening", () => {
 
     await svc.issueInvoice("t1", "inv1", { userId: "u1", role: Role.TRANSPORT_STAFF });
 
-    expect(tx.job.updateMany).toHaveBeenCalledWith(
+    expect(tx.job.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ status: "READY_FOR_INVOICE" }),
+        where: { id: "job1" },
         data: expect.objectContaining({ status: "COMPLETED" }),
       }),
     );
@@ -1662,8 +1703,12 @@ describe("job charge workflow hardening", () => {
             },
             customerRateTemplateRow: { findMany: jest.fn().mockResolvedValue([]) },
             jobCharge: {
+              findMany: jest.fn().mockResolvedValue([]),
               deleteMany: jobChargeDeleteMany,
               createMany: jobChargeCreateMany,
+            },
+            invoiceChargeReservation: {
+              findMany: jest.fn().mockResolvedValue([]),
             },
           });
         }

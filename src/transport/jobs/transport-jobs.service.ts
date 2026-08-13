@@ -121,6 +121,11 @@ import {
   effectivePayoutLineTotalCents,
   tripPayoutTotalCents,
 } from "./job-details-summary";
+import {
+  assertTripPayoutMutable,
+  payoutCacheCentsToPersist,
+  resolveCanonicalTripPayoutCents,
+} from "../trips/trip-payout.helpers";
 import { SaveJobChargesDto } from "./dto/save-job-charges.dto";
 import {
   AppendJobTripDto,
@@ -169,6 +174,7 @@ import {
   mapCustomerRateTemplateRowsToChargeOptions,
   normalizeOptionalId,
 } from "./job-commercial-provenance";
+import { reservedJobChargeMutationMessage } from "../finance/invoice-integrity";
 import {
   buildContainerDocumentationRequirements,
 } from "../driver-app/container-documentation.helpers";
@@ -626,18 +632,7 @@ function payoutLineQuantity(line: any): number {
 }
 
 function computePublishPayoutTotal(payoutLines: Array<any>): number {
-  return payoutLines.reduce((sum, line) => {
-    const quantity = payoutLineQuantity(line);
-    const amount = Number(line?.amountCents);
-    const totalCents = Number(line?.totalCents);
-    if (Number.isFinite(totalCents) && totalCents > 0) {
-      return sum + totalCents;
-    }
-    if (Number.isFinite(amount) && amount > 0 && quantity > 0) {
-      return sum + amount * quantity;
-    }
-    return sum;
-  }, 0);
+  return tripPayoutTotalCents(payoutLines);
 }
 
 function evaluateTripPublishReadiness(input: TripPublishReadinessInput): TripPublishReadinessResult {
@@ -1298,8 +1293,54 @@ export class TransportJobsService {
     if (!job) throw new NotFoundException("Job not found");
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.jobCharge.deleteMany({ where: { tenantId, jobId } });
-      if (!dto.charges.length) return;
+      const existing = await tx.jobCharge.findMany({
+        where: { tenantId, jobId },
+      });
+      const reservedIds = new Set<string>();
+      if (existing.length && tx.invoiceChargeReservation) {
+        const reservations = await tx.invoiceChargeReservation.findMany({
+          where: {
+            tenantId,
+            jobChargeId: { in: existing.map((c) => c.id) },
+          },
+          select: { jobChargeId: true },
+        });
+        for (const row of reservations) reservedIds.add(row.jobChargeId);
+      }
+      const incomingById = new Map(
+        dto.charges
+          .filter((c) => typeof c.id === "string" && c.id.trim())
+          .map((c) => [c.id!.trim(), c]),
+      );
+      for (const reserved of existing.filter((c) => reservedIds.has(c.id))) {
+        const incoming = incomingById.get(reserved.id);
+        if (!incoming) {
+          throw new BadRequestException(
+            reservedJobChargeMutationMessage(reserved.label),
+          );
+        }
+        if (
+          incoming.qty !== reserved.qty ||
+          incoming.unitPriceCents !== reserved.unitPriceCents ||
+          incoming.label !== reserved.label ||
+          incoming.code !== reserved.code
+        ) {
+          throw new BadRequestException(
+            reservedJobChargeMutationMessage(reserved.label),
+          );
+        }
+      }
+      if (reservedIds.size === 0) {
+        await tx.jobCharge.deleteMany({ where: { tenantId, jobId } });
+      } else {
+        await tx.jobCharge.deleteMany({
+          where: { tenantId, jobId, id: { notIn: [...reservedIds] } },
+        });
+      }
+      const mutableCharges = dto.charges.filter(
+        (c) => !c.id || !reservedIds.has(c.id),
+      );
+      if (!mutableCharges.length) return;
 
       const quotationLineIds = dto.charges
         .filter((c) => c.sourceType === JobChargeSourceType.CUSTOMER_QUOTATION)
@@ -1401,7 +1442,7 @@ export class TransportJobsService {
 
       await tx.jobCharge.createMany({
         // unitPriceCents/amountCents are frozen snapshots; later quotation/template edits do not rewrite saved charges.
-        data: dto.charges.map((c, i) => {
+        data: mutableCharges.map((c, i) => {
           const qty = jobChargeQtyFromQuotationQty(c.qty);
           if (c.sourceType === JobChargeSourceType.CUSTOMER_QUOTATION) {
             const lineId = normalizeOptionalId(c.sourceCustomerQuotationLineId);
@@ -4054,6 +4095,16 @@ export class TransportJobsService {
       source: "DHC_REFERENCE",
     }));
 
+    const chargeIds = (job.charges ?? []).map((c) => c.id);
+    const reservedIds = new Set<string>();
+    if (chargeIds.length && this.prisma.invoiceChargeReservation) {
+      const reservations = await this.prisma.invoiceChargeReservation.findMany({
+        where: { tenantId, jobChargeId: { in: chargeIds } },
+        select: { jobChargeId: true },
+      });
+      for (const row of reservations) reservedIds.add(row.jobChargeId);
+    }
+
     return {
       quotationSource,
       boundQuotation,
@@ -4061,6 +4112,7 @@ export class TransportJobsService {
       dhcReferences,
       existingSnapshot: (job.charges ?? []).map((c) => ({
         ...c,
+        reservedOnInvoice: reservedIds.has(c.id),
         provenanceLabel: jobChargeProvenanceLabel({
           sourceType: c.sourceType,
           sourceCustomerQuotationLineId: c.sourceCustomerQuotationLineId,
@@ -4980,15 +5032,7 @@ export class TransportJobsService {
       await this.prisma.$transaction(async (tx) => {
         for (const tripId of readyTripIds) {
           const payoutLineCount = payoutLineCountByTrip.get(tripId) ?? 0;
-          if (payoutLineCount > 0) {
-            await tx.trip.update({
-              where: { id: tripId },
-              data: {
-                driverEarningCents: payoutTotalByTrip.get(tripId) ?? null,
-                earningLabelSnapshot: `${payoutLineCount} payout items`,
-              },
-            });
-          }
+          const totalPayoutCents = payoutTotalByTrip.get(tripId) ?? null;
           await tx.trip.update({
             where: { id: tripId },
             data: {
@@ -4996,6 +5040,13 @@ export class TransportJobsService {
               pendingState: TripPendingState.NONE,
               publishedAt: new Date(),
               publishedByUserId: actorUserId,
+              driverEarningCents:
+                totalPayoutCents != null && totalPayoutCents > 0
+                  ? totalPayoutCents
+                  : null,
+              ...(payoutLineCount > 0
+                ? { earningLabelSnapshot: `${payoutLineCount} payout items` }
+                : {}),
             },
           });
         }
@@ -5218,6 +5269,7 @@ export class TransportJobsService {
     }
 
     if (dto.earningRateMasterId !== undefined) {
+      assertTripPayoutMutable(trip.status);
       if (dto.earningRateMasterId === null) {
         data.earningRateMasterId = null;
         data.payoutItemId = null;
@@ -5646,16 +5698,6 @@ export class TransportJobsService {
       );
     }
 
-    if (payoutLines.length > 0) {
-      await this.prisma.trip.update({
-        where: { id: tripId },
-        data: {
-          driverEarningCents: readiness.totalPayoutCents,
-          earningLabelSnapshot: `${readiness.payoutLineCount} payout items`,
-        },
-      });
-    }
-
     await this.prisma.trip.update({
       where: { id: tripId },
       data: {
@@ -5663,6 +5705,11 @@ export class TransportJobsService {
         pendingState: TripPendingState.NONE,
         publishedAt: new Date(),
         publishedByUserId: actorUserId,
+        driverEarningCents:
+          readiness.totalPayoutCents > 0 ? readiness.totalPayoutCents : null,
+        ...(payoutLines.length > 0
+          ? { earningLabelSnapshot: `${readiness.payoutLineCount} payout items` }
+          : {}),
       },
     });
 
@@ -5671,7 +5718,12 @@ export class TransportJobsService {
       "TRIP_PUBLISH",
       "TRIP",
       tripId,
-      { jobId },
+      {
+        jobId,
+        payoutFrozen: true,
+        totalPayoutCents: readiness.totalPayoutCents,
+        payoutLineCount: readiness.payoutLineCount,
+      },
       actorUserId,
     );
 
@@ -6103,7 +6155,9 @@ export class TransportJobsService {
         id: line.id,
         label: line.label,
         code: line.code ?? null,
+        quantity: line.quantity ?? 1,
         amountCents: line.amountCents ?? null,
+        totalCents: line.totalCents ?? null,
         requiresManualAmount: line.requiresManualAmount,
         isSelectableForTripEarning: line.isSelectableForTripEarning,
         sortOrder: line.sortOrder ?? 0,
@@ -6122,11 +6176,10 @@ export class TransportJobsService {
         jobItemCount: job._count?.items ?? 0,
         linkedJobItemCount: t._count?.tripJobItems ?? 0,
       });
-      const driverEarningCentsTotal = payoutLines.length
-        ? payoutLines
-            .filter((line) => line.isSelectableForTripEarning)
-            .reduce((sum, line) => sum + (line.amountCents ?? 0), 0)
-        : (t.driverEarningCents ?? null);
+      const driverEarningCentsTotal = resolveCanonicalTripPayoutCents({
+        driverEarningCents: t.driverEarningCents ?? null,
+        payoutLines: t.payoutLines ?? [],
+      });
       const tripDocs = (t.documents ?? []).map((d) => this.toDocumentMetadataDto(d));
       return {
       ...route,
@@ -6181,7 +6234,7 @@ export class TransportJobsService {
       closedAt: t.closedAt ?? null,
       trailerNumber: t.trailerNumber ?? null,
       trailerLastLocationCode: t.trailerLastLocationCode ?? null,
-      driverEarningCents: t.driverEarningCents ?? null,
+      driverEarningCents: driverEarningCentsTotal,
       hasDriverPayout: Number.isInteger(driverEarningCentsTotal) && (driverEarningCentsTotal ?? 0) > 0,
       earningLabelSnapshot: t.earningLabelSnapshot ?? null,
       earningRateMasterId: t.payoutItemId ?? t.earningRateMasterId ?? null,
@@ -6789,6 +6842,7 @@ export class TransportJobsService {
           : null),
       notes: line.notes ?? null,
       isManual: line.isManual ?? false,
+      isSelectableForTripEarning: line.isSelectableForTripEarning !== false,
     }));
     const routeOriginLabel =
       firstNonEmptyText(
@@ -6968,7 +7022,10 @@ export class TransportJobsService {
       },
       payout: {
         earningRateMasterId: trip.payoutItemId ?? trip.earningRateMasterId ?? null,
-        driverEarningCents: trip.driverEarningCents ?? null,
+        driverEarningCents: resolveCanonicalTripPayoutCents({
+          driverEarningCents: trip.driverEarningCents ?? null,
+          payoutLines: trip.payoutLines ?? [],
+        }),
         lines: payoutLines,
       },
       payoutLines,
@@ -6982,7 +7039,10 @@ export class TransportJobsService {
         isTrackable: !!trip.assignedDriverUserId,
       },
       completionRuleJson: trip.completionRuleJson ?? null,
-      driverEarningCents: trip.driverEarningCents ?? null,
+      driverEarningCents: resolveCanonicalTripPayoutCents({
+        driverEarningCents: trip.driverEarningCents ?? null,
+        payoutLines: trip.payoutLines ?? [],
+      }),
       earningRateMasterId: trip.payoutItemId ?? trip.earningRateMasterId ?? null,
     };
   }
@@ -7010,6 +7070,7 @@ export class TransportJobsService {
     const actorUserId: string | null = user?.userId ?? null;
     const trip = await this.prisma.trip.findFirst({ where: { id: tripId, tenantId, jobId } });
     if (!trip) throw new NotFoundException("Trip not found");
+    assertTripPayoutMutable(trip.status);
     const normalized = (lines ?? []).map((line, idx) => {
       const qty = Math.max(0, Number(line.quantity ?? 1) || 1);
       const amountCents = line.amountCents ?? null;
@@ -7038,25 +7099,23 @@ export class TransportJobsService {
     await this.prisma.$transaction(async (tx) => {
       await tx.tripPayoutLine.deleteMany({ where: { tenantId, tripId } });
       if (normalized.length) await tx.tripPayoutLine.createMany({ data: normalized });
-      const selectable = normalized.filter((line) => line.isSelectableForTripEarning);
-      const total = selectable.reduce((sum, line) => sum + (line.totalCents ?? 0), 0);
+      const cacheCents = payoutCacheCentsToPersist(normalized);
       await tx.trip.update({
         where: { id: tripId },
         data: {
-          driverEarningCents: selectable.length ? total : null,
+          driverEarningCents: cacheCents,
           earningLabelSnapshot: normalized.length ? `${normalized.length} payout items` : null,
           updatedByUserId: actorUserId,
         },
       });
     });
     await this.audit.log(tenantId, "TRIP_PAYOUT_LINES_REPLACE", "TRIP", tripId, { lineCount: normalized.length }, actorUserId);
-    const selectable = normalized.filter((line) => line.isSelectableForTripEarning);
-    const total = selectable.reduce((sum, line) => sum + (line.totalCents ?? 0), 0);
+    const cacheCents = payoutCacheCentsToPersist(normalized);
     rt.publishTripEvent(this.realtime, "trip.updated", tenantId, jobId, tripId, {
       driverUserId: trip.assignedDriverUserId,
       tripStatus: trip.status as TripStatus,
       notificationKind: "EARNINGS_UPDATED",
-      earningsAmountCents: selectable.length ? total : undefined,
+      earningsAmountCents: cacheCents ?? undefined,
       ...this.notifyActorContext(user),
     });
     return this.listTripPayoutLines(tenantId, jobId, tripId, user);
@@ -7073,6 +7132,7 @@ export class TransportJobsService {
     const actorUserId: string | null = user?.userId ?? null;
     const trip = await this.prisma.trip.findFirst({ where: { id: tripId, tenantId, jobId } });
     if (!trip) throw new NotFoundException("Trip not found");
+    assertTripPayoutMutable(trip.status);
 
     let selectedMaster: any = null;
     if (dto.earningRateMasterId) {
@@ -7138,10 +7198,7 @@ export class TransportJobsService {
       }
     }
 
-    const totalDriverEarningCents = normalized.reduce(
-      (sum, line) => sum + (line.totalCents ?? 0),
-      0,
-    );
+    const totalDriverEarningCents = payoutCacheCentsToPersist(normalized);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.tripPayoutLine.deleteMany({ where: { tenantId, tripId } });
@@ -7201,7 +7258,7 @@ export class TransportJobsService {
       driverUserId: trip.assignedDriverUserId,
       tripStatus: trip.status as TripStatus,
       notificationKind: "EARNINGS_UPDATED",
-      earningsAmountCents: totalDriverEarningCents,
+      earningsAmountCents: totalDriverEarningCents ?? undefined,
       ...this.notifyActorContext(user),
     });
 

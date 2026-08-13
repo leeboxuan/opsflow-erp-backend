@@ -201,9 +201,9 @@ export const STATISTICS_DRIVER_ROW_LIMITATIONS = {
 
 export const STATISTICS_FINANCE_LIMITATIONS = [
   "job_charges_are_mutable",
-  "trip_payout_lines_are_mutable",
+  "published_trip_payouts_are_frozen",
   "payout_currency_assumed_sgd",
-  "paid_invoice_date_uses_updated_at",
+  "paid_invoice_date_uses_paid_at",
   "invoice_snapshot_job_links_not_scanned",
   "completed_trips_missing_closed_at_excluded",
 ] as const;

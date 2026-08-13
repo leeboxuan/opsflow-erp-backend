@@ -85,6 +85,46 @@ export class InvoicesController {
     return this.invoices.listQuotationOptionsByCompany(tenantId, companyId, accessUser);
   }
 
+  @Get("companies/:companyId/commercial-agreements")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  async listCommercialAgreements(
+    @Request() req: any,
+    @Param("companyId") companyId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.listCommercialAgreementsByCompany(
+      tenantId,
+      companyId,
+      accessUser,
+    );
+  }
+
+  @Get("companies/:companyId/invoiceable-charges")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  async listInvoiceableCharges(
+    @Request() req: any,
+    @Param("companyId") companyId: string,
+    @Query("quotationId") quotationId?: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.listInvoiceableChargesByCompany(
+      tenantId,
+      companyId,
+      accessUser,
+      quotationId || null,
+    );
+  }
+
   constructor(private readonly invoices: InvoicesService) {}
 
   @Get()
@@ -192,6 +232,35 @@ export class InvoicesController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.invoices.issueInvoice(tenantId, id, accessUser);
+  }
+
+  @Post(":id/void")
+  @DestructiveAction({ resource: "INVOICE", action: "VOID" })
+  async voidInvoice(@Request() req: any, @Param("id") id: string) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.voidInvoice(tenantId, id, accessUser);
+  }
+
+  @Post(":id/paid")
+  @Roles(Role.ADMIN, Role.FINANCE)
+  @DestructiveAction({
+    resource: "INVOICE",
+    action: "PAID",
+    requireReasonForPlatformAdmin: false,
+  })
+  async markPaid(@Request() req: any, @Param("id") id: string) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.invoices.markInvoicePaid(tenantId, id, accessUser);
   }
 
   @Post(":id/revert")

@@ -252,9 +252,9 @@ describe("DriverJobsService.getDriverHome", () => {
 
       const res = await svc.getDriverHome(tenantId, driver1, date);
 
-      expect(res.today.trips[0].driverEarningCents).toBe(45000);
+      expect(res.today.trips[0].driverEarningCents).toBe(50000);
       expect(res.today.trips[0].driverEarningCurrency).toBe("SGD");
-      expect(res.today.runSheet.trips[0].driverEarningCents).toBe(45000);
+      expect(res.today.runSheet.trips[0].driverEarningCents).toBe(50000);
       expect(res.today.runSheet.trips[0].driverEarningCurrency).toBe("SGD");
     });
 

@@ -22,8 +22,8 @@ import {
   isOperationallyCompletedJob,
   normalizeCurrency,
   resolveCompletedTripPayoutState,
-  selectableTripPayoutTotalCents,
 } from "./statistics.predicates";
+import { resolveCanonicalTripPayoutCents } from "../transport/trips/trip-payout.helpers";
 
 const FINANCE_JOB_BATCH_SIZE = 200;
 
@@ -39,6 +39,7 @@ type FinanceTrip = {
   jobId: string | null;
   status: TripStatus;
   closedAt: Date | null;
+  driverEarningCents: number | null;
   payoutLines: FinancePayoutLine[];
 };
 
@@ -209,6 +210,7 @@ export class StatisticsFinanceService {
             jobId: true,
             status: true,
             closedAt: true,
+            driverEarningCents: true,
           },
         }),
         this.prisma.jobCharge.groupBy({
@@ -339,7 +341,7 @@ export class StatisticsFinanceService {
             (total, trip) =>
               safeAdd(
                 total,
-                selectableTripPayoutTotalCents(trip.payoutLines),
+                resolveCanonicalTripPayoutCents(trip) ?? 0,
               ),
             0,
           );
@@ -435,7 +437,7 @@ export class StatisticsFinanceService {
           where: {
             tenantId,
             status: "Paid",
-            updatedAt: { gte: range.gte, lt: range.lt },
+            paidAt: { gte: range.gte, lt: range.lt },
             ...sourceJobWhere,
           },
           _sum: { totalCents: true },

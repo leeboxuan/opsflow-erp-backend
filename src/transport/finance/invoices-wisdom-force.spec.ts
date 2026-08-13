@@ -64,6 +64,14 @@ describe("InvoicesService Wisdom Force flow", () => {
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
         createMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+      jobCharge: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      invoiceChargeReservation: {
+        findMany: jest.fn().mockResolvedValue([]),
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       customerRateMasterLine: {
         findMany: jest.fn().mockResolvedValue([
           {
@@ -183,7 +191,7 @@ describe("InvoicesService Wisdom Force flow", () => {
     expect(result.job?.billableTripCount).toBe(1);
   });
 
-  it("lists invoiceable jobs for company and excludes cancelled/not-ready/generated", async () => {
+  it("lists invoiceable jobs for company and excludes cancelled/not-ready jobs", async () => {
     const { svc, prisma } = makeService({
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "c1" }),
@@ -229,7 +237,7 @@ describe("InvoicesService Wisdom Force flow", () => {
       userId: "u1",
       role: "OPS",
     });
-    expect(res.items).toEqual([]);
+    expect(res.items.map((item: any) => item.id)).toEqual(["job-ready"]);
     expect(prisma.invoice.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
@@ -243,7 +251,7 @@ describe("InvoicesService Wisdom Force flow", () => {
     expect(prisma.invoice.findFirst).not.toHaveBeenCalled();
   });
 
-  it("excludes invoiceable jobs that already have a non-draft invoice", async () => {
+  it("excludes jobs only when every JobCharge is already reserved", async () => {
     const { svc } = makeService({
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "c1" }),
@@ -260,6 +268,14 @@ describe("InvoicesService Wisdom Force flow", () => {
             trips: [{ id: "t1", status: "DONE" }],
           },
         ]),
+      },
+      jobCharge: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "jc-1", jobId: "job-sent" },
+        ]),
+      },
+      invoiceChargeReservation: {
+        findMany: jest.fn().mockResolvedValue([{ jobChargeId: "jc-1" }]),
       },
       invoice: {
         findMany: jest.fn().mockResolvedValue([

@@ -32,6 +32,7 @@ import { RealtimeEventsService } from "../../shared/realtime/realtime-events.ser
 import * as rt from "../../shared/realtime/realtime-publish";
 import { DriverTripEarningsService } from "./driver-trip-earnings.service";
 import { resolveDriverTripEarningCents } from "./driver-trip-earnings.helpers";
+import { CANONICAL_TRIP_PAYOUT_LINE_SELECT } from "../trips/trip-payout.helpers";
 
 function firstNonEmptyText(...values: Array<unknown>): string | null {
   for (const value of values) {
@@ -840,7 +841,7 @@ export class AdminDriversService {
           destinationAddressLine1: true,
           destinationAddressLine2: true,
           destinationPostalCode: true,
-          payoutLines: { select: { totalCents: true } },
+          payoutLines: { select: CANONICAL_TRIP_PAYOUT_LINE_SELECT },
           job: {
             select: {
               internalRef: true,

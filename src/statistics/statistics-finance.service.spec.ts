@@ -148,9 +148,9 @@ describe("StatisticsFinanceService", () => {
     expect(result.limitations).toEqual(
       expect.arrayContaining([
         "job_charges_are_mutable",
-        "trip_payout_lines_are_mutable",
+        "published_trip_payouts_are_frozen",
         "payout_currency_assumed_sgd",
-        "paid_invoice_date_uses_updated_at",
+        "paid_invoice_date_uses_paid_at",
       ]),
     );
 
@@ -217,7 +217,7 @@ describe("StatisticsFinanceService", () => {
     expect(paidWhere).toMatchObject({
       tenantId: "tenant-1",
       status: "Paid",
-      updatedAt: { gte, lt },
+      paidAt: { gte, lt },
     });
     const readyWhere = prisma.job.findMany.mock.calls[1][0].where;
     expect(readyWhere).toMatchObject({
@@ -439,14 +439,15 @@ describe("StatisticsFinanceService", () => {
     expect(prisma.tripPayoutLine.findMany).not.toHaveBeenCalled();
   });
 
-  it("introduces no raw SQL, legacy money, or denormalized payout source", () => {
+  it("introduces no raw SQL, legacy money, or live master-rate payout source", () => {
     const source = readFileSync(
       join(__dirname, "statistics-finance.service.ts"),
       "utf8",
     );
     expect(source).not.toContain("$queryRaw");
     expect(source).not.toContain("$queryRawUnsafe");
-    expect(source).not.toContain("driverEarningCents");
+    expect(source).toContain("resolveCanonicalTripPayoutCents");
+    expect(source).toContain("tripPayoutLine");
     expect(source).not.toContain("invoiceLineItem");
     expect(source).not.toContain("TransportOrder");
     expect(source).not.toContain("Stop");
@@ -477,6 +478,159 @@ describe("StatisticsFinanceService", () => {
       result.currencyGroups.every((group) => group.jobChargesCents === 0),
     ).toBe(true);
     expect(result.currencyGroups.reduce((sum, group) => sum + group.jobChargesCents, 0)).toBe(0);
+  });
+
+  it("keeps Gross Profit as eligible JobCharges minus frozen Trip payout snapshots", async () => {
+    const prisma = createPrismaMock();
+    prisma.job.findMany
+      .mockResolvedValueOnce([{ id: "job-1" }])
+      .mockResolvedValueOnce([]);
+    prisma.trip.findMany.mockResolvedValue([
+      {
+        id: "trip-a",
+        jobId: "job-1",
+        status: TripStatus.COMPLETED,
+        closedAt: new Date("2026-08-01T04:00:00.000Z"),
+        driverEarningCents: 9999,
+      },
+      {
+        id: "trip-b",
+        jobId: "job-1",
+        status: TripStatus.DONE,
+        closedAt: new Date("2026-08-01T05:00:00.000Z"),
+        driverEarningCents: 9999,
+      },
+      {
+        id: "trip-cancelled",
+        jobId: "job-1",
+        status: TripStatus.CANCELLED,
+        closedAt: new Date("2026-08-01T06:00:00.000Z"),
+        driverEarningCents: 80,
+      },
+    ]);
+    prisma.tripPayoutLine.findMany.mockResolvedValue([
+      {
+        tripId: "trip-a",
+        amountCents: 80,
+        quantity: 1,
+        totalCents: null,
+        isSelectableForTripEarning: true,
+      },
+      {
+        tripId: "trip-a",
+        amountCents: 20,
+        quantity: 2,
+        totalCents: null,
+        isSelectableForTripEarning: true,
+      },
+      {
+        tripId: "trip-a",
+        amountCents: 999,
+        quantity: 1,
+        totalCents: 999,
+        isSelectableForTripEarning: false,
+      },
+      {
+        tripId: "trip-b",
+        amountCents: 80,
+        quantity: 1,
+        totalCents: 80,
+        isSelectableForTripEarning: true,
+      },
+      {
+        tripId: "trip-cancelled",
+        amountCents: 80,
+        quantity: 1,
+        totalCents: 80,
+        isSelectableForTripEarning: true,
+      },
+    ]);
+    prisma.jobCharge.groupBy.mockResolvedValue([
+      {
+        jobId: "job-1",
+        currency: "SGD",
+        _sum: { amountCents: 500 },
+        _count: { _all: 1 },
+      },
+    ]);
+    prisma.invoice.groupBy.mockResolvedValue([]);
+    prisma.invoice.findMany.mockResolvedValue([]);
+
+    const result = await new StatisticsFinanceService(prisma as any).getFinance(
+      "tenant-1",
+      query(),
+    );
+
+    expect(result.currencyGroups).toEqual([
+      expect.objectContaining({
+        currency: "SGD",
+        jobChargesCents: 500,
+        recordedTripPayoutCents: 200,
+        attributableJobPayoutCents: 200,
+        grossProfitCents: 300,
+      }),
+    ]);
+  });
+
+  it("keeps JobCharges, issued invoices, paid invoices, and GP as separate metrics dated by paidAt", async () => {
+    const prisma = createPrismaMock();
+    prisma.job.findMany
+      .mockResolvedValueOnce([{ id: "job-1" }])
+      .mockResolvedValueOnce([]);
+    prisma.trip.findMany.mockResolvedValue([
+      {
+        id: "trip-1",
+        jobId: "job-1",
+        status: TripStatus.COMPLETED,
+        closedAt: new Date("2026-08-01T04:00:00.000Z"),
+      },
+    ]);
+    prisma.tripPayoutLine.findMany.mockResolvedValue([
+      {
+        tripId: "trip-1",
+        totalCents: 20_000,
+        amountCents: null,
+        quantity: 1,
+        isSelectableForTripEarning: true,
+      },
+    ]);
+    prisma.jobCharge.groupBy.mockResolvedValue([
+      {
+        jobId: "job-1",
+        currency: "SGD",
+        _sum: { amountCents: 50_000 },
+        _count: { _all: 1 },
+      },
+    ]);
+    prisma.invoice.groupBy
+      .mockResolvedValueOnce([
+        { currency: "SGD", _sum: { totalCents: 54_500 } },
+      ])
+      .mockResolvedValueOnce([
+        { currency: "SGD", _sum: { totalCents: 54_500 } },
+      ]);
+    prisma.invoice.findMany.mockResolvedValue([]);
+
+    const result = await new StatisticsFinanceService(
+      prisma as any,
+    ).getFinance("tenant-1", query());
+
+    expect(result.currencyGroups).toEqual([
+      expect.objectContaining({
+        currency: "SGD",
+        jobChargesCents: 50_000,
+        issuedInvoiceValueCents: 54_500,
+        paidInvoiceValueCents: 54_500,
+        recordedTripPayoutCents: 20_000,
+        grossProfitCents: 30_000,
+      }),
+    ]);
+    expect(prisma.invoice.groupBy.mock.calls[1][0].where.paidAt).toBeDefined();
+    expect(prisma.invoice.groupBy.mock.calls[1][0].where.updatedAt).toBeUndefined();
+    expect(result.limitations).toEqual(
+      expect.arrayContaining(["paid_invoice_date_uses_paid_at"]),
+    );
+    expect(result.limitations).not.toContain("paid_invoice_date_uses_updated_at");
   });
 
   it("does not query customer quotations when aggregating job-charge revenue", async () => {

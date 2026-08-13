@@ -4,6 +4,7 @@ import {
   JobDetailsPayoutLineInput,
   tripPayoutTotalCents,
 } from "../transport/jobs/job-details-summary";
+import { resolveCanonicalTripPayoutCents } from "../transport/trips/trip-payout.helpers";
 import { resolveTripCompletionRule } from "../transport/workflows/job-workflow.helpers";
 import {
   ACTIVE_TRIP_STATUSES,
@@ -99,16 +100,18 @@ export type TripPayoutState =
   | { kind: "missing"; totalCents: null };
 
 /**
- * Missing cost stays distinct from a genuine recorded value. This function
- * never reads Trip.driverEarningCents.
+ * Missing cost stays distinct from a genuine recorded value.
+ * Uses the canonical TripPayoutLine resolver (lines first; integer
+ * driverEarningCents only when no lines exist).
  */
 export function resolveCompletedTripPayoutState(input: {
   status: TripStatus;
   payoutLines?: JobDetailsPayoutLineInput[] | null;
+  driverEarningCents?: number | null;
 }): TripPayoutState | null {
   if (!isCompletedTripStatus(input.status)) return null;
-  const totalCents = selectableTripPayoutTotalCents(input.payoutLines);
-  return totalCents > 0
+  const totalCents = resolveCanonicalTripPayoutCents(input);
+  return totalCents != null && totalCents > 0
     ? { kind: "recorded", totalCents }
     : { kind: "missing", totalCents: null };
 }
@@ -116,6 +119,7 @@ export function resolveCompletedTripPayoutState(input: {
 export function isCompletedTripMissingPayout(input: {
   status: TripStatus;
   payoutLines?: JobDetailsPayoutLineInput[] | null;
+  driverEarningCents?: number | null;
 }): boolean {
   return resolveCompletedTripPayoutState(input)?.kind === "missing";
 }
@@ -288,6 +292,7 @@ export function evaluateGrossProfitEligibility(input: {
   trips: Array<
     StatisticsTripStatusInput & {
       payoutLines?: JobDetailsPayoutLineInput[] | null;
+      driverEarningCents?: number | null;
     }
   >;
   charges: CurrencyAmountInput[];

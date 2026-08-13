@@ -1,11 +1,12 @@
 import { DEFAULT_DRIVER_EARNING_CURRENCY } from "../drivers/driver-trip-earnings.helpers";
+import {
+  effectivePayoutLineTotalCents,
+  tripPayoutTotalCents,
+  type TripPayoutLineInput,
+} from "../trips/trip-payout.helpers";
 
-export type JobDetailsPayoutLineInput = {
-  amountCents?: number | null;
-  totalCents?: number | null;
-  quantity?: number | null;
-  isSelectableForTripEarning?: boolean | null;
-};
+export type JobDetailsPayoutLineInput = TripPayoutLineInput;
+export { effectivePayoutLineTotalCents, tripPayoutTotalCents };
 
 export type JobDetailsTripSummaryInput<
   TLine extends JobDetailsPayoutLineInput = JobDetailsPayoutLineInput,
@@ -28,28 +29,6 @@ export type JobDetailsItemSummaryInput = {
   qty?: number | null;
   pickupReference?: string | null;
 };
-
-export function effectivePayoutLineTotalCents(
-  line: JobDetailsPayoutLineInput,
-): number {
-  const storedTotal = Number(line.totalCents);
-  if (Number.isFinite(storedTotal) && storedTotal > 0) {
-    return Math.trunc(storedTotal);
-  }
-
-  const amount = Number(line.amountCents);
-  const quantity = Number(line.quantity ?? 1);
-  if (!Number.isFinite(amount) || !Number.isFinite(quantity)) return 0;
-  return Math.trunc(amount) * Math.max(0, Math.trunc(quantity));
-}
-
-export function tripPayoutTotalCents(
-  lines: JobDetailsPayoutLineInput[] | null | undefined,
-): number {
-  return (lines ?? [])
-    .filter((line) => line.isSelectableForTripEarning !== false)
-    .reduce((sum, line) => sum + effectivePayoutLineTotalCents(line), 0);
-}
 
 export function buildJobPayoutSummary(
   trips: JobDetailsTripSummaryInput[],

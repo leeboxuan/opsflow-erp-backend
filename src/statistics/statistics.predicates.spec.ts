@@ -154,6 +154,47 @@ describe("Statistics V1 canonical predicates", () => {
       expect(selectableTripPayoutTotalCents(payoutLines)).toBe(4_500);
     });
 
+    it("resolves the canonical 80 + 40 example as 120 and ignores a stale cache", () => {
+      const lines = [
+        {
+          amountCents: 80,
+          quantity: 1,
+          totalCents: null,
+          isSelectableForTripEarning: true,
+        },
+        {
+          amountCents: 20,
+          quantity: 2,
+          totalCents: null,
+          isSelectableForTripEarning: true,
+        },
+        {
+          amountCents: 999,
+          quantity: 1,
+          totalCents: 999,
+          isSelectableForTripEarning: false,
+        },
+      ];
+      expect(selectableTripPayoutTotalCents(lines)).toBe(120);
+      expect(
+        resolveCompletedTripPayoutState({
+          status: TripStatus.COMPLETED,
+          driverEarningCents: 1119,
+          payoutLines: lines,
+        }),
+      ).toEqual({ kind: "recorded", totalCents: 120 });
+    });
+
+    it("falls back to driverEarningCents only when a completed trip has no payout lines", () => {
+      expect(
+        resolveCompletedTripPayoutState({
+          status: TripStatus.COMPLETED,
+          driverEarningCents: 7500,
+          payoutLines: [],
+        }),
+      ).toEqual({ kind: "recorded", totalCents: 7500 });
+    });
+
     it("keeps missing payout distinct from a genuine numeric zero", () => {
       const state = resolveCompletedTripPayoutState({
         status: TripStatus.COMPLETED,
@@ -197,6 +238,60 @@ describe("Statistics V1 canonical predicates", () => {
       expect(() =>
         groupCurrencyAmounts([{ currency: "SGD", amountCents: 1.5 }]),
       ).toThrow("amountCents must be a safe integer");
+    });
+
+    it("keeps Gross Profit as JobCharges minus canonical Trip payout snapshots", () => {
+      expect(
+        evaluateGrossProfitEligibility({
+          trips: [
+            {
+              id: "trip-a",
+              status: TripStatus.COMPLETED,
+              payoutLines: [
+                {
+                  amountCents: 80,
+                  quantity: 1,
+                  isSelectableForTripEarning: true,
+                },
+                {
+                  amountCents: 20,
+                  quantity: 2,
+                  isSelectableForTripEarning: true,
+                },
+                {
+                  amountCents: 999,
+                  quantity: 1,
+                  isSelectableForTripEarning: false,
+                },
+              ],
+            },
+            {
+              id: "trip-b",
+              status: TripStatus.DONE,
+              payoutLines: [
+                {
+                  amountCents: 80,
+                  quantity: 1,
+                  totalCents: 80,
+                  isSelectableForTripEarning: true,
+                },
+              ],
+            },
+            {
+              id: "trip-cancelled",
+              status: TripStatus.CANCELLED,
+              payoutLines: [{ totalCents: 10_000 }],
+            },
+          ],
+          charges: [{ currency: "SGD", amountCents: 500 }],
+        }),
+      ).toEqual({
+        eligible: true,
+        currency: "SGD",
+        revenueCents: 500,
+        payoutCents: 200,
+        grossProfitCents: 300,
+      });
     });
 
     it("returns profit only for complete jobs with charges and known matching costs", () => {
