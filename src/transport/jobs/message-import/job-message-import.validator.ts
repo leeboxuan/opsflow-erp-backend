@@ -109,7 +109,12 @@ export function normalizeReviewedDraft(
 }
 
 export type ReviewedDraftPatch = Omit<Partial<ControllerReviewedDraft>, "items"> & {
-  items?: ControllerReviewedDraft["items"];
+  items?: Array<{
+    containerNumber?: string | null;
+    sealNumber?: string | null;
+    referenceNumber?: string | null;
+    quantity?: number | null;
+  }>;
 };
 
 export function mergeReviewedDraftPatch(
