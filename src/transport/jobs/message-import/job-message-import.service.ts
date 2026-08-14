@@ -12,10 +12,10 @@ import {
   JobMessageImportDraftValidationStatus,
   JobMessageImportMovementType,
   JobMessageImportSourceChannel,
-  JobType,
 } from "@prisma/client";
 import { PrismaService } from "../../../shared/prisma/prisma.service";
 import { AuditService } from "../../../shared/audit/audit.service";
+import { TransportJobsService } from "../transport-jobs.service";
 import {
   JobMessageParser,
   type JobMessageImportParsedDraft,
@@ -36,7 +36,7 @@ import {
   computeDraftFingerprint,
 } from "./job-message-import.fingerprint";
 import { findDuplicateCandidates } from "./job-message-import.duplicates";
-import { reviewedDraftToCanonicalJobCreate } from "./job-message-import.mapping";
+import { reviewedDraftToCreateJobDto } from "./job-message-import.mapping";
 import {
   classifyValidationStatus,
   mergeReviewedDraftPatch,
@@ -286,6 +286,7 @@ export class JobMessageImportService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     @Inject(JOB_MESSAGE_PARSER_TOKEN) private readonly parser: JobMessageParser,
+    private readonly jobs: TransportJobsService,
   ) {}
 
   async createPreviewBatch(params: {
@@ -709,6 +710,11 @@ export class JobMessageImportService {
           return {
             createdJobIds: confirmedDrafts.map((d: any) => String(d.canonicalJobId)),
             auditEvents: [] as Array<{ jobId: string; draftId: string; clientDraftId: string }>,
+            createdForFinalize: [] as Array<{
+              jobId: string;
+              internalRef: string | null;
+              dto: ReturnType<typeof reviewedDraftToCreateJobDto>;
+            }>,
           };
         }
         throw new ConflictException({
@@ -719,6 +725,13 @@ export class JobMessageImportService {
 
       const createdJobIds: string[] = [];
       const auditEvents: Array<{ jobId: string; draftId: string; clientDraftId: string }> = [];
+      const createdForFinalize: Array<{
+        jobId: string;
+        internalRef: string | null;
+        dto: ReturnType<typeof reviewedDraftToCreateJobDto>;
+      }> = [];
+
+      const actorUser = { userId: params.actorUserId };
 
       for (const item of prepared) {
         const live = await tx.jobMessageImportDraft.findFirst({
@@ -732,50 +745,16 @@ export class JobMessageImportService {
           throw new BadRequestException("Draft already confirmed");
         }
 
-        const canonical = reviewedDraftToCanonicalJobCreate({
+        const createDto = reviewedDraftToCreateJobDto({
           reviewed: item.reviewed,
           timezone: batch.timezone,
         });
-        const internalRef = await this.getNextInternalRef(tx, params.tenantId, canonical.jobType);
-        const createdJob = await tx.job.create({
-          data: {
-            tenantId: params.tenantId,
-            customerCompanyId: canonical.customerCompanyId,
-            internalRef,
-            externalRef: null,
-            jobType: canonical.jobType,
-            collectionType: canonical.collectionType,
-            status: canonical.status,
-            createdByUserId: params.actorUserId,
-            pickupDate: canonical.pickupDate,
-            pickupAddress1: canonical.pickupAddress1,
-            pickupAddress2: canonical.pickupAddress2,
-            pickupPostal: canonical.pickupPostal,
-            pickupContactName: canonical.pickupContactName,
-            pickupContactPhone: canonical.pickupContactPhone,
-            deliveryAddress1: canonical.deliveryAddress1,
-            deliveryAddress2: canonical.deliveryAddress2,
-            deliveryPostal: canonical.deliveryPostal,
-            receiverName: canonical.receiverName,
-            receiverPhone: canonical.receiverPhone,
-            description: canonical.description,
-            notes: canonical.notes,
-            carrierName: canonical.carrierName,
-            shipper: canonical.shipper,
-            vesselName: canonical.vesselName,
-            voyage: canonical.voyage,
-            items: {
-              create: canonical.items.map((it) => ({
-                tenantId: params.tenantId,
-                itemCode: it.itemCode,
-                description: it.description,
-                sealNo: it.sealNo,
-                pickupReference: it.pickupReference,
-                qty: it.qty,
-              })),
-            },
-          },
-        });
+        const createdJob = await this.jobs.createCanonicalJob(
+          params.tenantId,
+          createDto,
+          actorUser,
+          { tx },
+        );
 
         await tx.jobMessageImportDraft.update({
           where: { id: item.draft.id },
@@ -795,6 +774,11 @@ export class JobMessageImportService {
         });
 
         createdJobIds.push(createdJob.id);
+        createdForFinalize.push({
+          jobId: createdJob.id,
+          internalRef: createdJob.internalRef,
+          dto: createDto,
+        });
         auditEvents.push({
           jobId: createdJob.id,
           draftId: item.draft.id,
@@ -811,13 +795,22 @@ export class JobMessageImportService {
         },
       });
 
-      return { createdJobIds, auditEvents };
+      return { createdJobIds, auditEvents, createdForFinalize };
       },
       {
         maxWait: JOB_MESSAGE_IMPORT_CONFIRM_TX_MAX_WAIT_MS,
         timeout: JOB_MESSAGE_IMPORT_CONFIRM_TX_TIMEOUT_MS,
       },
     );
+
+    for (const created of result.createdForFinalize) {
+      await this.jobs.finalizeCanonicalJobCreate(
+        params.tenantId,
+        created.dto,
+        { userId: params.actorUserId },
+        { id: created.jobId, internalRef: created.internalRef },
+      );
+    }
 
     for (const event of result.auditEvents) {
       await this.audit.log(
@@ -977,39 +970,5 @@ export class JobMessageImportService {
         excluded: drafts.length - included.length,
       },
     };
-  }
-
-  private async getNextInternalRef(
-    tx: any,
-    tenantId: string,
-    jobType: JobType,
-  ): Promise<string> {
-    const now = new Date();
-    const yyyy = now.getUTCFullYear();
-    const mm = now.getUTCMonth() + 1;
-    const MM = String(mm).padStart(2, "0");
-    const yyyymm = `${yyyy}-${MM}`;
-    const row = await tx.job_internal_ref_counters.upsert({
-      where: { tenantId_yyyymm: { tenantId, yyyymm } },
-      create: { tenantId, yyyymm, nextSeq: 1 },
-      update: { nextSeq: { increment: 1 } },
-      select: { nextSeq: true },
-    });
-    const seq = String(row.nextSeq).padStart(4, "0");
-    const typeCode = (() => {
-      switch (jobType) {
-        case JobType.LCL:
-          return "LCL";
-        case JobType.IMPORT:
-          return "IMP";
-        case JobType.EXPORT:
-          return "EXP";
-        case JobType.COLLECTION:
-          return "COL";
-        default:
-          return "GEN";
-      }
-    })();
-    return `WFL-${yyyy}-${MM}-${seq}-${typeCode}`;
   }
 }

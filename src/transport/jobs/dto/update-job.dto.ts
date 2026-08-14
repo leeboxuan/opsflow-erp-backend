@@ -12,6 +12,10 @@ import {
 import { CollectionType, JobType } from "@prisma/client";
 import { Type } from "class-transformer";
 import { IsArray, ValidateNested } from "class-validator";
+import {
+  CreateJobExportDetailsDto,
+  CreateJobImportDetailsDto,
+} from "./create-job.dto";
 
 export class UpdateJobItemDto {
   @ApiPropertyOptional({
@@ -235,68 +239,96 @@ export class UpdateJobDto {
   @MinLength(1)
   notes?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    type: CreateJobImportDetailsDto,
+    description:
+      "IMPORT nested details. Partial merge: omitted nested keys are left unchanged; null clears nullable fields; false sets booleans.",
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreateJobImportDetailsDto)
+  importDetails?: CreateJobImportDetailsDto;
+
+  @ApiPropertyOptional({
+    type: CreateJobExportDetailsDto,
+    description:
+      "EXPORT nested details. Partial merge: omitted nested keys are left unchanged; null clears nullable fields.",
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreateJobExportDetailsDto)
+  exportDetails?: CreateJobExportDetailsDto;
+
+  @ApiPropertyOptional({
+    description: "Legacy flat field (prefer importDetails.pickupPortCode)",
+    nullable: true,
+    deprecated: true,
+  })
   @IsOptional()
   @IsString()
-  pickupPortCode?: string;
+  pickupPortCode?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true, deprecated: true })
   @IsOptional()
   @IsString()
-  portTerminalCode?: string;
+  portTerminalCode?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true, deprecated: true })
   @IsOptional()
   @IsString()
-  portName?: string;
+  portName?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true, deprecated: true })
   @IsOptional()
   @IsDateString()
-  psaStorageRentLastDay?: string;
+  psaStorageRentLastDay?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true })
   @IsOptional()
   @IsString()
-  vesselName?: string;
+  vesselName?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true })
   @IsOptional()
   @IsDateString()
-  vesselEta?: string;
+  vesselEta?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ deprecated: true })
   @IsOptional()
   @IsBoolean()
   portnetReady?: boolean;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ deprecated: true })
   @IsOptional()
   @IsBoolean()
   permitReady?: boolean;
 
   @ApiPropertyOptional({
     description:
-      "Optional IMPORT return depot code. Null/omit for jobs with no return location (one port → delivery trip).",
+      "Optional IMPORT return depot code. Null clears; omit to leave unchanged.",
+    nullable: true,
+    deprecated: true,
   })
   @IsOptional()
   @IsString()
-  returningDepotCode?: string;
+  returningDepotCode?: string | null;
 
   @ApiPropertyOptional({
-    description: "Optional container return due date. Does not require return depot.",
+    description: "Optional container return due date. Null clears; omit to leave unchanged.",
+    nullable: true,
+    deprecated: true,
   })
   @IsOptional()
   @IsDateString()
-  returnLastDay?: string;
+  returnLastDay?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true, deprecated: true })
   @IsOptional()
   @IsString()
-  exportOriginDepotCode?: string;
+  exportOriginDepotCode?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true, deprecated: true })
   @IsOptional()
   @IsString()
-  exportPortCode?: string;
+  exportPortCode?: string | null;
 }

@@ -172,6 +172,14 @@ import {
   assertPrismaInteractiveTransactionAvailable,
 } from "./create-job-interactive-tx";
 import {
+  applyExportDetailsPatch,
+  applyImportDetailsPatch,
+  applyOptionalDateNullable,
+  applyOptionalTrimmedNullable,
+  assertTypeSpecificDetailsMatchJobType,
+  clearIncompatibleTypeSpecificJobFields,
+} from "./job-type-specific-patch";
+import {
   type ActiveCustomerRateTemplateRow,
   type BoundCustomerQuotationLine,
   buildCustomerQuotationChargeSnapshot,
@@ -2230,6 +2238,21 @@ export class TransportJobsService {
     dto: CreateJobDto,
     user: any,
   ): Promise<JobDto> {
+    const created = await this.createCanonicalJob(tenantId, dto, user);
+    return this.finalizeCanonicalJobCreate(tenantId, dto, user, created);
+  }
+
+  /**
+   * Canonical Job creation (validation + Job/JobItems + automatic Trips + links).
+   * Manual Create Job and AI import confirm both use this. When `tx` is supplied,
+   * writes join the caller's interactive transaction; post-commit effects are skipped.
+   */
+  async createCanonicalJob(
+    tenantId: string,
+    dto: CreateJobDto,
+    user: any,
+    options?: { tx?: any },
+  ): Promise<{ id: string; internalRef: string | null }> {
     this.assertCustomerCanOnlyRead(user);
     const actorUserId: string | null = user?.userId ?? null;
     const company = await this.prisma.customer_companies.findFirst({
@@ -2493,7 +2516,11 @@ export class TransportJobsService {
 
     // Atomic: job + JobItems + auto trips + TripJobItem links (or full rollback).
     // Fail closed: never fall back to non-transactional or root-client writes.
-    assertPrismaInteractiveTransactionAvailable(this.prisma as any);
+    if (options?.tx) {
+      assertCreateJobInteractiveTxClient(options.tx);
+    } else {
+      assertPrismaInteractiveTransactionAvailable(this.prisma as any);
+    }
 
     const createJobWithTripsAndLinks = async (tx: any) => {
       assertCreateJobInteractiveTxClient(tx);
@@ -2641,10 +2668,24 @@ export class TransportJobsService {
       return createdJob;
     };
 
-    const job = await this.prisma.$transaction(createJobWithTripsAndLinks);
+    const job = options?.tx
+      ? await createJobWithTripsAndLinks(options.tx)
+      : await this.prisma.$transaction(createJobWithTripsAndLinks);
+
+    return { id: job.id, internalRef: job.internalRef ?? null };
+  }
+
+  async finalizeCanonicalJobCreate(
+    tenantId: string,
+    dto: CreateJobDto,
+    user: any,
+    created: { id: string; internalRef: string | null },
+  ): Promise<JobDto> {
+    const actorUserId: string | null = user?.userId ?? null;
+    const jobId = created.id;
 
     const createdTrips = await this.prisma.trip.findMany({
-      where: { tenantId, jobId: job.id },
+      where: { tenantId, jobId },
       orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
       select: { id: true, status: true, containerNumber: true },
     });
@@ -2659,17 +2700,17 @@ export class TransportJobsService {
       tenantId,
       "CREATE",
       "JOB",
-      job.id,
+      jobId,
       {
-        internalRef: job.internalRef,
-        externalRef: job.externalRef,
         createdByUserId: actorUserId,
+        internalRef: created.internalRef,
+        externalRef: normalizeExternalRef(dto.externalRef),
       },
       actorUserId,
     );
 
     if ((this.prisma as any).masterLogisticsLocation) {
-      await this.syncTripRouteSnapshotForJob(tenantId, job.id, {
+      await this.syncTripRouteSnapshotForJob(tenantId, jobId, {
         pickupLat: dto.pickupLat ?? null,
         pickupLng: dto.pickupLng ?? null,
         pickupPlaceId: dto.pickupPlaceId ?? null,
@@ -2679,7 +2720,7 @@ export class TransportJobsService {
       });
     }
 
-    await this.syncJobInvoiceReadinessForJob(tenantId, job.id);
+    await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
 
     // Best-effort: auto-generate trip-level DELIVERY_DO for each created trip.
     // We do not fail whole job creation when document generation/storage fails.
@@ -2687,21 +2728,21 @@ export class TransportJobsService {
       try {
         await this.generateTripDeliveryDoDocument(
           tenantId,
-          job.id,
+          jobId,
           trip.id,
           user,
           "AUTO_CREATE_JOB",
         );
       } catch (error: any) {
         console.error(
-          `[TransportJobsService] Auto-generate trip DELIVERY_DO failed for job ${job.id}, trip ${trip.id}:`,
+          `[TransportJobsService] Auto-generate trip DELIVERY_DO failed for job ${jobId}, trip ${trip.id}:`,
           error?.message ?? error,
         );
       }
     }
 
     const freshJob = await this.prisma.job.findFirst({
-      where: { id: job.id, tenantId },
+      where: { id: jobId, tenantId },
       include: {
         customerCompany: {
           select: { id: true, name: true },
@@ -3061,12 +3102,17 @@ export class TransportJobsService {
 
     const data: any = {};
 
+    const effectiveJobType = (dto.jobType ?? job.jobType) as JobType;
+    assertTypeSpecificDetailsMatchJobType(effectiveJobType, dto);
+
     if (dto.jobType !== undefined) data.jobType = dto.jobType;
+    if (dto.jobType !== undefined && dto.jobType !== job.jobType) {
+      clearIncompatibleTypeSpecificJobFields(data, dto.jobType);
+    }
     if (dto.jobType !== undefined && dto.jobType !== JobType.COLLECTION) {
       data.collectionType = null;
     }
     if (dto.collectionType !== undefined) {
-      const effectiveJobType = (dto.jobType ?? job.jobType) as JobType;
       if (effectiveJobType === JobType.COLLECTION) {
         data.collectionType = dto.collectionType;
       }
@@ -3141,44 +3187,42 @@ export class TransportJobsService {
       data.externalRef = normalizeExternalRef(dto.externalRef);
     }
 
-    if (dto.pickupPortCode !== undefined) {
-      data.pickupPortCode = dto.pickupPortCode?.trim() || null;
-    }
-    if (dto.portTerminalCode !== undefined) {
-      data.portTerminalCode = dto.portTerminalCode?.trim() || null;
-    }
-    if (dto.portName !== undefined) data.portName = dto.portName?.trim() || null;
-    if (dto.psaStorageRentLastDay !== undefined) {
-      data.psaStorageRentLastDay = dto.psaStorageRentLastDay
-        ? new Date(dto.psaStorageRentLastDay)
-        : null;
-    }
-    if (dto.vesselName !== undefined) {
-      data.vesselName = dto.vesselName?.trim() || null;
-    }
-    if (dto.vesselEta !== undefined) {
-      data.vesselEta = dto.vesselEta ? new Date(dto.vesselEta) : null;
-    }
+    applyOptionalTrimmedNullable(data, "pickupPortCode", dto.pickupPortCode);
+    applyOptionalTrimmedNullable(data, "portTerminalCode", dto.portTerminalCode);
+    applyOptionalTrimmedNullable(data, "portName", dto.portName);
+    applyOptionalDateNullable(
+      data,
+      "psaStorageRentLastDay",
+      dto.psaStorageRentLastDay,
+    );
+    applyOptionalTrimmedNullable(data, "vesselName", dto.vesselName);
+    applyOptionalDateNullable(data, "vesselEta", dto.vesselEta);
     if (dto.portnetReady !== undefined) data.portnetReady = dto.portnetReady;
     if (dto.permitReady !== undefined) data.permitReady = dto.permitReady;
-    if (dto.returningDepotCode !== undefined) {
-      data.returningDepotCode = dto.returningDepotCode?.trim() || null;
+    applyOptionalTrimmedNullable(
+      data,
+      "returningDepotCode",
+      dto.returningDepotCode,
+    );
+    applyOptionalDateNullable(data, "returnLastDay", dto.returnLastDay);
+    applyOptionalTrimmedNullable(
+      data,
+      "exportOriginDepotCode",
+      dto.exportOriginDepotCode,
+    );
+    applyOptionalTrimmedNullable(data, "exportPortCode", dto.exportPortCode);
+
+    if (dto.importDetails) {
+      applyImportDetailsPatch(data, dto.importDetails);
     }
-    if (dto.returnLastDay !== undefined) {
-      data.returnLastDay = dto.returnLastDay ? new Date(dto.returnLastDay) : null;
-    }
-    if (dto.exportOriginDepotCode !== undefined) {
-      data.exportOriginDepotCode = dto.exportOriginDepotCode?.trim() || null;
-    }
-    if (dto.exportPortCode !== undefined) {
-      data.exportPortCode = dto.exportPortCode?.trim() || null;
+    if (dto.exportDetails) {
+      applyExportDetailsPatch(data, dto.exportDetails);
     }
 
     const inputItems = readUpdateJobItemsInput(dto as {
       items?: unknown;
       cargoItems?: unknown;
     });
-    const effectiveJobType = (dto.jobType ?? job.jobType) as JobType;
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const updatedJob = await tx.job.update({

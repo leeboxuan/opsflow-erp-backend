@@ -10,7 +10,7 @@ import { TransportJobsService } from "./transport-jobs.service";
 
 describe("job create: EXPORT and COLLECTION", () => {
   function makeExportCreatePrisma() {
-    return {
+    const prisma: any = {
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
       },
@@ -55,12 +55,20 @@ describe("job create: EXPORT and COLLECTION", () => {
       },
       trip: {
         createMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findMany: jest.fn().mockResolvedValue([{ id: "trip1" }]),
+        findMany: jest.fn().mockResolvedValue([{ id: "trip1", status: "DRAFT" }]),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      jobItem: { findMany: jest.fn().mockResolvedValue([]) },
+      tripJobItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       masterLogisticsLocation: {
         findFirst: jest.fn().mockResolvedValue({ code: "DEPOT-A", name: "Depot A" }),
       },
     };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
+    return prisma;
   }
 
   function makeSvc(prisma: ReturnType<typeof makeExportCreatePrisma>) {
@@ -828,6 +836,23 @@ describe("getTripDetail COLLECTION cargo sealNo", () => {
       },
       tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
       driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+      tripJobItem: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "tji1",
+            jobItemId: "it1",
+            containerNumberSnapshot: "CONT-777",
+            jobItem: {
+              id: "it1",
+              itemCode: "CONT-777",
+              sealNo: "SEAL-42",
+              pickupReference: "PU-REF-9",
+              description: null,
+              qty: null,
+            },
+          },
+        ]),
+      },
     };
     const svc = new TransportJobsService(
       prisma,
@@ -911,6 +936,23 @@ describe("getTripDetailForDriver pickupReference", () => {
         }),
       },
       masterTrailerLocation: { findFirst: jest.fn().mockResolvedValue(null) },
+      tripJobItem: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "tji1",
+            jobItemId: "it1",
+            containerNumberSnapshot: "CONT-1",
+            jobItem: {
+              id: "it1",
+              itemCode: "CONT-1",
+              sealNo: "S1",
+              pickupReference: "REF-DRIVER",
+              description: null,
+              qty: null,
+            },
+          },
+        ]),
+      },
     };
     const svc = new DriverJobsService(
       prisma,

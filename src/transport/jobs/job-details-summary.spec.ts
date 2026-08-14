@@ -80,6 +80,15 @@ describe("job details summaries", () => {
     });
   });
 
+  it("returns a valid empty container result", () => {
+    expect(buildJobContainerSummary([], [], new Map())).toEqual({
+      totalContainers: 0,
+      tripsWithContainers: 0,
+      tripsWithoutContainers: 0,
+      containers: [],
+    });
+  });
+
   it("preserves canonical links, duplicates, seals, and unlinked items", () => {
     const items = [
       { id: "item-1", itemCode: "DUP", sealNo: "SEAL-1" },

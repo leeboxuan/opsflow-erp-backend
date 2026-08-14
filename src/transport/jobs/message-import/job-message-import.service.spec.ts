@@ -4,12 +4,18 @@ import {
   JobMessageImportDraftInclusionState,
   JobMessageImportDraftValidationStatus,
   JobMessageImportMovementType,
+  JobStatus,
+  JobType,
+  Role,
 } from "@prisma/client";
 import { FakeJobMessageParser } from "./fake-job-message-parser";
 import { JobMessageImportService } from "./job-message-import.service";
+import { TransportJobsService } from "../transport-jobs.service";
 import { JobMessageImportDraftValidationStatus as VS } from "@prisma/client";
 import type { JobMessageParser, ParseJobMessageInput, ParseJobMessageResult } from "./job-message-parser";
 import { FAKE_JOB_MESSAGE_PARSER_VERSION } from "./job-message-import.constants";
+import { reviewedDraftToCreateJobDto } from "./job-message-import.mapping";
+import { normalizeReviewedDraft } from "./job-message-import.validator";
 import { assertSourceFragmentsTraceable } from "./job-message-import.source-fidelity";
 
 const fixtureMessage = `03/08 JOB
@@ -31,6 +37,8 @@ function makePrismaMemory() {
   const drafts: any[] = [];
   const jobs: any[] = [];
   const jobItems: any[] = [];
+  const trips: any[] = [];
+  const tripJobItems: any[] = [];
   const companies = [{ id: "comp_1", tenantId: "t1", normalizedName: "acme", name: "Acme" }];
   let seq = 0;
 
@@ -153,6 +161,8 @@ function makePrismaMemory() {
         jobItems.filter((it) => {
           if (where?.tenantId && it.tenantId !== where.tenantId) return false;
           if (where?.itemCode?.in && !where.itemCode.in.includes(it.itemCode)) return false;
+          if (where?.id?.in && !where.id.in.includes(it.id)) return false;
+          if (where?.jobId && it.jobId !== where.jobId) return false;
           return true;
         }),
       ),
@@ -165,17 +175,126 @@ function makePrismaMemory() {
           return true;
         }),
       ),
+      findFirst: jest.fn(async ({ where }: any = {}) => {
+        const job = jobs.find((j) => {
+          if (where?.id && j.id !== where.id) return false;
+          if (where?.tenantId && j.tenantId !== where.tenantId) return false;
+          return true;
+        });
+        if (!job) return null;
+        return {
+          ...job,
+          items: jobItems.filter((it) => it.jobId === job.id),
+          trips: trips
+            .filter((t) => t.jobId === job.id)
+            .map((t) => ({
+              ...t,
+              payoutLines: [],
+              _count: { tripJobItems: tripJobItems.filter((l) => l.tripId === t.id).length },
+            })),
+          charges: [],
+          documents: [],
+          assignedDriver: null,
+          createdBy: null,
+          customerCompany: companies.find((c) => c.id === job.customerCompanyId) ?? null,
+          sourceCustomerQuotation: null,
+        };
+      }),
       create: jest.fn(async ({ data }: any) => {
         const id = `job_${++seq}`;
-        const job = { id, ...data, items: data.items?.create ?? [] };
+        const { items: itemsNested, ...jobFields } = data;
+        const items = (itemsNested?.create ?? []).map((it: any) => ({
+          id: `item_${++seq}`,
+          createdAt: new Date(),
+          ...it,
+          tenantId: data.tenantId,
+          jobId: id,
+        }));
+        const job = {
+          id,
+          ...jobFields,
+          items,
+          customerCompany: companies.find((c) => c.id === data.customerCompanyId) ?? null,
+          assignedDriver: null,
+          createdBy: null,
+          trips: [],
+          charges: [],
+          documents: [],
+        };
         jobs.push(job);
-        for (const it of data.items?.create ?? []) {
-          jobItems.push({ ...it, tenantId: data.tenantId, jobId: id, job });
+        for (const it of items) {
+          jobItems.push({ ...it, job });
         }
         return job;
       }),
     },
-    trip: { create: jest.fn() },
+    trip: {
+      create: jest.fn(),
+      createMany: jest.fn(async ({ data }: any) => {
+        const rows = Array.isArray(data) ? data : [];
+        for (const row of rows) {
+          trips.push({
+            id: `trip_${++seq}`,
+            status: row.status ?? "DRAFT",
+            ...row,
+          });
+        }
+        return { count: rows.length };
+      }),
+      findMany: jest.fn(async ({ where }: any = {}) =>
+        trips.filter((t) => {
+          if (where?.tenantId && t.tenantId !== where.tenantId) return false;
+          if (where?.jobId && t.jobId !== where.jobId) return false;
+          return true;
+        }),
+      ),
+      update: jest.fn(async ({ where, data }: any) => {
+        const row = trips.find((t) => t.id === where.id);
+        if (row) Object.assign(row, data);
+        return row;
+      }),
+    },
+    tripJobItem: {
+      findMany: jest.fn(async ({ where, include }: any = {}) =>
+        tripJobItems
+          .filter((l) => {
+            if (where?.tenantId && l.tenantId !== where.tenantId) return false;
+            if (where?.tripId && l.tripId !== where.tripId) return false;
+            return true;
+          })
+          .map((l) => {
+            if (!include?.jobItem) return l;
+            const it = jobItems.find((j) => j.id === l.jobItemId);
+            return {
+              ...l,
+              jobItem: it
+                ? {
+                    id: it.id,
+                    itemCode: it.itemCode,
+                    description: it.description ?? null,
+                    sealNo: it.sealNo ?? null,
+                    pickupReference: it.pickupReference ?? null,
+                    qty: it.qty ?? null,
+                  }
+                : null,
+            };
+          }),
+      ),
+      createMany: jest.fn(async ({ data }: any) => {
+        const rows = Array.isArray(data) ? data : [];
+        for (const row of rows) {
+          tripJobItems.push({ id: `tji_${++seq}`, ...row });
+        }
+        return { count: rows.length };
+      }),
+    },
+    tripDocumentRequirement: {
+      findMany: jest.fn(async () => []),
+      createMany: jest.fn(async () => ({ count: 0 })),
+    },
+    masterLogisticsLocation: {
+      findFirst: jest.fn(async () => null),
+    },
     job_internal_ref_counters: {
       upsert: jest.fn(async () => ({ nextSeq: jobs.length + 1 })),
     },
@@ -186,6 +305,8 @@ function makePrismaMemory() {
         drafts: clone(drafts),
         jobs: clone(jobs),
         jobItems: clone(jobItems),
+        trips: clone(trips),
+        tripJobItems: clone(tripJobItems),
       };
       try {
         return await cb(prisma);
@@ -194,12 +315,35 @@ function makePrismaMemory() {
         drafts.splice(0, drafts.length, ...snap.drafts);
         jobs.splice(0, jobs.length, ...snap.jobs);
         jobItems.splice(0, jobItems.length, ...snap.jobItems);
+        trips.splice(0, trips.length, ...snap.trips);
+        tripJobItems.splice(0, tripJobItems.length, ...snap.tripJobItems);
         throw e;
       }
     }),
-    _state: { batches, drafts, jobs, jobItems },
+    _state: { batches, drafts, jobs, jobItems, trips, tripJobItems },
   };
   return prisma;
+}
+
+function makeJobsService(prisma: any) {
+  const jobs = new TransportJobsService(
+    prisma,
+    { log: jest.fn().mockResolvedValue(undefined) } as any,
+    { getClient: jest.fn() } as any,
+  );
+  jest.spyOn(jobs as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
+  jest.spyOn(jobs as any, "attachTripAssignedDriverNamesForJobs").mockResolvedValue(undefined);
+  jest.spyOn(jobs as any, "syncJobInvoiceReadinessForJob").mockResolvedValue(undefined);
+  jest.spyOn(jobs as any, "syncTripRouteSnapshotForJob").mockResolvedValue(undefined);
+  return jobs;
+}
+
+function makeImportSvc(
+  prisma: any,
+  audit: any,
+  parser: JobMessageParser = new FakeJobMessageParser(),
+) {
+  return new JobMessageImportService(prisma, audit, parser as any, makeJobsService(prisma));
 }
 
 function confirmDraftsFromPreview(
@@ -243,7 +387,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("preview persists parsedJson and controllerJson without canonical writes", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     const res = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -260,7 +404,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("reuses an in-review batch for the same source fingerprint instead of creating twins", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     const a = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -283,7 +427,7 @@ describe("JobMessageImportService workflow", () => {
     const prisma = makePrismaMemory();
     const parser = new FakeJobMessageParser();
     const parseSpy = jest.spyOn(parser, "parse");
-    const svc = new JobMessageImportService(prisma, audit as any, parser);
+    const svc = makeImportSvc(prisma, audit, parser);
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -303,7 +447,7 @@ describe("JobMessageImportService workflow", () => {
   it("rejects oversized input before calling the parser", async () => {
     const prisma = makePrismaMemory();
     const parser = { getParserVersion: () => "v", parse: jest.fn(), getModelName: () => null };
-    const svc = new JobMessageImportService(prisma, audit as any, parser as any);
+    const svc = makeImportSvc(prisma, audit, parser);
     await expect(
       svc.createPreviewBatch({
         tenantId: "t1",
@@ -323,7 +467,7 @@ describe("JobMessageImportService workflow", () => {
       getModelName: () => null,
       parse: jest.fn().mockResolvedValue({ message: { parserVersion: 1, drafts: "nope" }, meta: { modelName: null, usage: null, providerRequestId: null } }),
     };
-    const svc = new JobMessageImportService(prisma, audit as any, parser as any);
+    const svc = makeImportSvc(prisma, audit, parser);
     await expect(
       svc.createPreviewBatch({
         tenantId: "t1",
@@ -337,7 +481,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("denies cross-tenant batch access", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     const res = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -352,7 +496,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("PATCH updates controllerJson, preserves parsedJson, and bumps version", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -383,7 +527,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("PATCH rejects stale versions", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -405,7 +549,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("confirm creates jobs from controllerJson, skips excluded drafts, and is idempotent", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -461,7 +605,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("blocks confirmation when an included draft is invalid", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -497,7 +641,7 @@ describe("JobMessageImportService workflow", () => {
         },
       },
     ]);
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -571,7 +715,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("creates canonical jobs from controllerJson rather than stale parsedJson", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -592,12 +736,13 @@ describe("JobMessageImportService workflow", () => {
     });
     expect(confirmed.createdCount).toBe(1);
     expect(prisma._state.jobs[0].pickupAddress1).toBe("CONTROLLER PICKUP");
-    expect(prisma.trip.create).not.toHaveBeenCalled();
+    expect(prisma.trip.createMany).toHaveBeenCalled();
+    expect(prisma._state.trips.length).toBeGreaterThan(0);
   });
 
   it("rejects foreign draft IDs and keeps confirmed batches immutable", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -651,7 +796,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("allows a new preview of the same source after the prior batch is confirmed", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -697,7 +842,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("rolls back the confirm claim when Job creation fails inside the transaction", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -744,7 +889,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("reuses the winning IN_REVIEW batch when preview create hits a unique conflict", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     const first = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -779,7 +924,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("PATCH applies controller edits only when the expected draft version still matches", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -817,7 +962,7 @@ describe("JobMessageImportService workflow", () => {
 
   it("does not let excluded invalid drafts block confirmable included drafts", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -846,6 +991,101 @@ describe("JobMessageImportService workflow", () => {
     expect(preview.drafts.some((d) => d.inclusionState === "EXCLUDED" && d.validationStatus !== "READY")).toBe(
       true,
     );
+  });
+
+  it("creates equivalent IMPORT canonical state via manual create and AI import confirm", async () => {
+    const reviewed = normalizeReviewedDraft({
+      movementType: JobMessageImportMovementType.IMPORT,
+      customerCompanyId: "comp_1",
+      pickupAddress1: "Tuas",
+      deliveryAddress1: "DB warehouse",
+      picName: "Shuman",
+      picPhone: "96440435",
+      carrierName: "ocean",
+      shipper: "nippon",
+      vesselName: "ONE HANNOVER",
+      voyage: "101W",
+      items: [
+        {
+          containerNumber: "GESU6311344",
+          sealNumber: "FJ28581743",
+          referenceNumber: null,
+          quantity: 1,
+        },
+      ],
+    });
+    const createDto = reviewedDraftToCreateJobDto({
+      reviewed,
+      timezone: "Asia/Singapore",
+    });
+
+    const prismaManual = makePrismaMemory();
+    const manualJobs = makeJobsService(prismaManual);
+    await manualJobs.create("t1", createDto, {
+      userId: "u1",
+      role: Role.TRANSPORT_STAFF,
+    });
+
+    const prismaImport = makePrismaMemory();
+    const importSvc = makeImportSvc(prismaImport, audit);
+    const preview = await importSvc.createPreviewBatch({
+      tenantId: "t1",
+      actorUserId: "u1",
+      timezone: "Asia/Singapore",
+      sourceChannel: "WHATSAPP" as any,
+      sourceText: fixtureMessage,
+    });
+    const imp = preview.drafts.find((d) => d.reviewed.movementType === "IMPORT")!;
+    await importSvc.confirmBatch({
+      tenantId: "t1",
+      actorUserId: "u1",
+      batchId: preview.batchId,
+      drafts: confirmDraftsFromPreview(preview, {
+        ids: [imp.id],
+        extra: {
+          [imp.id]: {
+            pickupAddress1: reviewed.pickupAddress1,
+            deliveryAddress1: reviewed.deliveryAddress1,
+            picName: reviewed.picName,
+            picPhone: reviewed.picPhone,
+            carrierName: reviewed.carrierName,
+            shipper: reviewed.shipper,
+            vesselName: reviewed.vesselName,
+            voyage: reviewed.voyage,
+            items: reviewed.items,
+          },
+        },
+      }),
+    });
+
+    const jobA = prismaManual._state.jobs[0];
+    const jobB = prismaImport._state.jobs[0];
+    expect(jobA.status).toBe(JobStatus.ONGOING);
+    expect(jobB.status).toBe(jobA.status);
+    expect(jobB.jobType).toBe(JobType.IMPORT);
+    expect(jobB.jobType).toBe(jobA.jobType);
+    expect(jobB.customerCompanyId).toBe(jobA.customerCompanyId);
+    expect(jobB.pickupAddress1).toBe(jobA.pickupAddress1);
+    expect(jobB.deliveryAddress1).toBe(jobA.deliveryAddress1);
+    expect(jobB.pickupContactName).toBe(jobA.pickupContactName);
+    expect(jobB.receiverName).toBe(jobA.receiverName);
+    expect(jobB.carrierName).toBe(jobA.carrierName);
+    expect(jobB.shipper).toBe(jobA.shipper);
+    expect(jobB.vesselName).toBe(jobA.vesselName);
+    expect(jobB.voyage).toBe(jobA.voyage);
+    expect(jobB.collectionType).toBe(jobA.collectionType);
+    expect(jobB.items.map((it: any) => ({ itemCode: it.itemCode, sealNo: it.sealNo, qty: it.qty }))).toEqual(
+      jobA.items.map((it: any) => ({ itemCode: it.itemCode, sealNo: it.sealNo, qty: it.qty })),
+    );
+    expect(prismaImport._state.trips.map((t: any) => t.jobTripTemplate).sort()).toEqual(
+      prismaManual._state.trips.map((t: any) => t.jobTripTemplate).sort(),
+    );
+    expect(prismaImport._state.trips).toHaveLength(prismaManual._state.trips.length);
+    // IDs, timestamps, and allocated internal refs may differ. Import also writes
+    // batch/draft provenance plus AI_JOB_MESSAGE_IMPORT_CONFIRM audit after the shared CREATE audit.
+    expect(jobA.id).not.toBeUndefined();
+    expect(jobB.id).not.toBeUndefined();
+    expect(prismaImport._state.drafts.some((d: any) => d.canonicalJobId === jobB.id)).toBe(true);
   });
 });
 
@@ -915,7 +1155,7 @@ describe("JobMessageImportService parser safeguards", () => {
       },
       meta: { modelName: "gpt-4.1-mini", usage: null, providerRequestId: "req_1" },
     });
-    const svc = new JobMessageImportService(prisma, audit as any, parser);
+    const svc = makeImportSvc(prisma, audit, parser);
 
     await expect(
       svc.createPreviewBatch({
@@ -1008,7 +1248,7 @@ describe("JobMessageImportService parser safeguards", () => {
       },
       meta: { modelName: "gpt-4.1-mini", usage: null, providerRequestId: "req_2" },
     });
-    const svc = new JobMessageImportService(prisma, audit as any, parser);
+    const svc = makeImportSvc(prisma, audit, parser);
     const res = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -1064,7 +1304,7 @@ describe("JobMessageImportService parser safeguards", () => {
         },
         meta: { modelName: null, usage: null, providerRequestId: null },
       });
-      const svc = new JobMessageImportService(prisma, audit as any, parser);
+      const svc = makeImportSvc(prisma, audit, parser);
 
       await expect(
         svc.createPreviewBatch({
@@ -1246,7 +1486,7 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
   it("extracts pickup timing, postal/unit addresses, instructions, and structured items", async () => {
     const prisma = makePrismaMemory();
     const parser = new StubJobMessageParser(productionWhatsAppParserResult());
-    const svc = new JobMessageImportService(prisma, audit as any, parser);
+    const svc = makeImportSvc(prisma, audit, parser);
     const res = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -1296,7 +1536,7 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
   it("repairs stale controllerJson that still embeds timing in pickup address on fetch", async () => {
     const prisma = makePrismaMemory();
     const parser = new StubJobMessageParser(productionWhatsAppParserResult());
-    const svc = new JobMessageImportService(prisma, audit as any, parser);
+    const svc = makeImportSvc(prisma, audit, parser);
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -1321,7 +1561,7 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
   it("persists reviewed instructions and structured items when drafts are confirmed", async () => {
     const prisma = makePrismaMemory();
     const parser = new StubJobMessageParser(productionWhatsAppParserResult());
-    const svc = new JobMessageImportService(prisma, audit as any, parser);
+    const svc = makeImportSvc(prisma, audit, parser);
     let preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -1368,7 +1608,7 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
   it("confirms three reviewed drafts in one request from final values", async () => {
     const prisma = makePrismaMemory();
     const parser = new StubJobMessageParser(productionWhatsAppParserResult());
-    const svc = new JobMessageImportService(prisma, audit as any, parser);
+    const svc = makeImportSvc(prisma, audit, parser);
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -1402,7 +1642,7 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
 
   it("rejects duplicate draft IDs, foreign customers, and other-tenant batches", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",
@@ -1445,7 +1685,7 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
 
   it("does not create jobs when confirm is never called", async () => {
     const prisma = makePrismaMemory();
-    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const svc = makeImportSvc(prisma, audit);
     await svc.createPreviewBatch({
       tenantId: "t1",
       actorUserId: "u1",

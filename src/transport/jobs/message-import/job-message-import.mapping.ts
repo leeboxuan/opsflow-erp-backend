@@ -1,4 +1,5 @@
 import { JobStatus, JobType } from "@prisma/client";
+import type { CreateJobDto } from "../dto/create-job.dto";
 import {
   assertCreateJobItemsRequiredForJobType,
   assertDeliveryLocationForCreate,
@@ -55,14 +56,33 @@ function composeNotes(reviewed: ControllerReviewedDraft): string | null {
   return out || null;
 }
 
+function mapReviewedItems(reviewed: ControllerReviewedDraft, jobType: JobType) {
+  return reviewed.items.map((it) =>
+    jobType === JobType.LCL
+      ? {
+          itemCode: it.referenceNumber || it.containerNumber,
+          qty: it.quantity ?? 1,
+          sealNo: it.sealNumber,
+        }
+      : {
+          containerNumber: it.containerNumber || it.referenceNumber,
+          sealNo: it.sealNumber,
+          qty: it.quantity,
+        },
+  );
+}
+
 /**
- * Maps the controller-reviewed draft to canonical Job + JobItem create data.
- * Reuses existing create-job validation helpers. Never reads parsedJson.
+ * Convert a human-reviewed import draft into canonical Create Job input.
+ * Import owns only this conversion (prefill → form fields). TransportJobsService.createCanonicalJob
+ * owns validation, status, refs, JobItems, Trips, and other creation invariants.
+ * PIC maps onto both pickup contact and receiver because the review UI has a single PIC field;
+ * that is form prefill, not an AI-specific Job creation rule.
  */
-export function reviewedDraftToCanonicalJobCreate(input: {
+export function reviewedDraftToCreateJobDto(input: {
   reviewed: ControllerReviewedDraft;
   timezone: string;
-}): CanonicalJobCreateData {
+}): CreateJobDto {
   const reviewed = input.reviewed;
   const jobType = movementTypeToJobType(reviewed.movementType);
   if (!jobType) {
@@ -80,19 +100,7 @@ export function reviewedDraftToCanonicalJobCreate(input: {
       ? resolveCollectionTypeForJobCreate(jobType, reviewed.collectionType)
       : null;
 
-  const mappedItems = reviewed.items.map((it) =>
-    jobType === JobType.LCL
-      ? {
-          itemCode: it.referenceNumber || it.containerNumber,
-          qty: it.quantity ?? 1,
-          sealNo: it.sealNumber,
-        }
-      : {
-          containerNumber: it.containerNumber || it.referenceNumber,
-          sealNo: it.sealNumber,
-          qty: it.quantity,
-        },
-  );
+  const mappedItems = mapReviewedItems(reviewed, jobType);
   const validItems = parseValidJobItemsFromInput(mappedItems, jobType);
   assertCreateJobItemsRequiredForJobType(jobType, mappedItems, validItems);
 
@@ -138,30 +146,85 @@ export function reviewedDraftToCanonicalJobCreate(input: {
     });
   }
 
+  const pickupDate = reviewed.pickupDateLocal
+    ? zonedLocalDateTimeToUtc(reviewed.pickupDateLocal, input.timezone)
+    : null;
+  const firstContainer = validItems[0]?.itemCode ?? null;
+  const seedContainer =
+    jobType === JobType.IMPORT || jobType === JobType.EXPORT ? firstContainer : null;
+
   return {
     jobType,
-    collectionType,
+    collectionType: collectionType ?? undefined,
     customerCompanyId: reviewed.customerCompanyId,
-    pickupDate: reviewed.pickupDateLocal
-      ? zonedLocalDateTimeToUtc(reviewed.pickupDateLocal, input.timezone)
-      : null,
+    pickupDate: pickupDate ? pickupDate.toISOString() : undefined,
     pickupAddress1: reviewed.pickupAddress1,
-    pickupAddress2: reviewed.pickupAddress2,
-    pickupPostal: reviewed.pickupPostal,
+    pickupAddress2: reviewed.pickupAddress2 ?? undefined,
+    pickupPostal: reviewed.pickupPostal ?? undefined,
+    pickupPlaceId: reviewed.pickupPlaceId ?? undefined,
+    pickupLat: reviewed.pickupLat ?? undefined,
+    pickupLng: reviewed.pickupLng ?? undefined,
     deliveryAddress1: reviewed.deliveryAddress1,
-    deliveryAddress2: reviewed.deliveryAddress2,
-    deliveryPostal: reviewed.deliveryPostal,
-    pickupContactName: reviewed.picName,
-    pickupContactPhone: reviewed.picPhone,
-    // Manual Job.create persists omitted receiver contact as "" (required String columns).
+    deliveryAddress2: reviewed.deliveryAddress2 ?? undefined,
+    deliveryPostal: reviewed.deliveryPostal ?? undefined,
+    deliveryPlaceId: reviewed.deliveryPlaceId ?? undefined,
+    deliveryLat: reviewed.deliveryLat ?? undefined,
+    deliveryLng: reviewed.deliveryLng ?? undefined,
+    pickupContactName: reviewed.picName ?? undefined,
+    pickupContactPhone: reviewed.picPhone ?? undefined,
     receiverName: reviewed.picName ?? "",
     receiverPhone: reviewed.picPhone ?? "",
-    description: reviewed.timingText,
-    notes: composeNotes(reviewed),
-    carrierName: reviewed.carrierName,
-    shipper: reviewed.shipper,
-    vesselName: reviewed.vesselName,
-    voyage: reviewed.voyage,
+    description: reviewed.timingText ?? undefined,
+    notes: composeNotes(reviewed) ?? undefined,
+    carrierName: reviewed.carrierName ?? undefined,
+    shipper: reviewed.shipper ?? undefined,
+    vesselName: reviewed.vesselName ?? undefined,
+    voyage: reviewed.voyage ?? undefined,
+    containerNumber: seedContainer ?? undefined,
+    items: validItems.map((it) => ({
+      itemCode: it.itemCode,
+      description: it.description ?? undefined,
+      sealNo: it.sealNo ?? undefined,
+      pickupReference: it.pickupReference ?? undefined,
+      qty: it.qty ?? undefined,
+    })),
+  };
+}
+
+/**
+ * @deprecated Prefer reviewedDraftToCreateJobDto + TransportJobsService.create.
+ * Kept for mapping unit tests that inspect the projected Job fields.
+ */
+export function reviewedDraftToCanonicalJobCreate(input: {
+  reviewed: ControllerReviewedDraft;
+  timezone: string;
+}): CanonicalJobCreateData {
+  const dto = reviewedDraftToCreateJobDto(input);
+  const validItems = parseValidJobItemsFromInput(dto.items ?? [], dto.jobType);
+  return {
+    jobType: dto.jobType,
+    collectionType:
+      dto.jobType === JobType.COLLECTION
+        ? resolveCollectionTypeForJobCreate(dto.jobType, dto.collectionType)
+        : null,
+    customerCompanyId: dto.customerCompanyId,
+    pickupDate: dto.pickupDate ? new Date(dto.pickupDate) : null,
+    pickupAddress1: dto.pickupAddress1,
+    pickupAddress2: dto.pickupAddress2 ?? null,
+    pickupPostal: dto.pickupPostal ?? null,
+    deliveryAddress1: dto.deliveryAddress1,
+    deliveryAddress2: dto.deliveryAddress2 ?? null,
+    deliveryPostal: dto.deliveryPostal ?? null,
+    pickupContactName: dto.pickupContactName ?? null,
+    pickupContactPhone: dto.pickupContactPhone ?? null,
+    receiverName: dto.receiverName ?? "",
+    receiverPhone: dto.receiverPhone ?? "",
+    description: dto.description ?? null,
+    notes: dto.notes ?? null,
+    carrierName: dto.carrierName ?? null,
+    shipper: dto.shipper ?? null,
+    vesselName: dto.vesselName ?? null,
+    voyage: dto.voyage ?? null,
     status: JobStatus.ONGOING,
     items: validItems,
   };

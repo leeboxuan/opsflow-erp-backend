@@ -75,40 +75,41 @@ export class CreateJobImportDetailsDto {
   })
   @IsOptional()
   @IsString()
-  pickupPortId?: string;
+  pickupPortId?: string | null;
 
   @ApiPropertyOptional({
     description:
       "Optional IMPORT port/terminal metadata (master_singapore_ports.code). Stored when sent; trip origin uses pickup address autocomplete when address/geo fields are provided.",
+    nullable: true,
   })
   @IsOptional()
   @IsString()
-  pickupPortCode?: string;
+  pickupPortCode?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true })
   @IsOptional()
   @IsString()
-  portTerminalCode?: string;
+  portTerminalCode?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true })
   @IsOptional()
   @IsString()
-  portName?: string;
+  portName?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true })
   @IsOptional()
   @IsDateString()
-  psaStorageRentLastDay?: string;
+  psaStorageRentLastDay?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true })
   @IsOptional()
   @IsString()
-  vesselName?: string;
+  vesselName?: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true })
   @IsOptional()
   @IsDateString()
-  vesselEta?: string;
+  vesselEta?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -123,26 +124,29 @@ export class CreateJobImportDetailsDto {
   @ApiPropertyOptional({
     description:
       "Optional IMPORT return depot code (master_singapore_depots.code). When omitted, only one port → delivery trip is generated.",
+    nullable: true,
   })
   @IsOptional()
   @IsString()
-  returningDepotCode?: string;
+  returningDepotCode?: string | null;
 
   @ApiPropertyOptional({
     description:
       "Legacy/FE alias: optional logistics location id for return depot; converted to returningDepotCode server-side",
+    nullable: true,
   })
   @IsOptional()
   @IsString()
-  returningDepotId?: string;
+  returningDepotId?: string | null;
 
   @ApiPropertyOptional({
     description:
       "Optional container return due date. Does not require or imply a return depot/trip when omitted.",
+    nullable: true,
   })
   @IsOptional()
   @IsDateString()
-  returnLastDay?: string;
+  returnLastDay?: string | null;
 }
 
 export class CreateJobExportDetailsDto {

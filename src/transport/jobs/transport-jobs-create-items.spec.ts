@@ -177,7 +177,7 @@ describe("create job items (LCL optional)", () => {
     });
 
     function makeCreatePrisma() {
-      return {
+      const prisma: any = {
         customer_companies: {
           findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
         },
@@ -197,14 +197,18 @@ describe("create job items (LCL optional)", () => {
         },
         trip: {
           createMany: jest.fn().mockResolvedValue({ count: 1 }),
-          findMany: jest
-            .fn()
-            .mockResolvedValueOnce([{ id: "trip1", status: "DRAFT" }])
-            .mockResolvedValueOnce([{ id: "trip1" }]),
+          findMany: jest.fn().mockResolvedValue([{ id: "trip1", status: "DRAFT" }]),
           update: jest.fn().mockResolvedValue({}),
+        },
+        jobItem: { findMany: jest.fn().mockResolvedValue([]) },
+        tripJobItem: {
+          findMany: jest.fn().mockResolvedValue([]),
+          createMany: jest.fn().mockResolvedValue({ count: 0 }),
         },
         masterLogisticsLocation: { findFirst: jest.fn().mockResolvedValue(null) },
       };
+      prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
+      return prisma;
     }
 
     function makeSvc(prisma: ReturnType<typeof makeCreatePrisma>) {
@@ -215,6 +219,7 @@ describe("create job items (LCL optional)", () => {
       );
       jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
       jest.spyOn(svc as any, "attachTripAssignedDriverNamesForJobs").mockResolvedValue(undefined);
+      jest.spyOn(svc as any, "syncJobInvoiceReadinessForJob").mockResolvedValue(undefined);
       return svc;
     }
 
@@ -640,8 +645,12 @@ describe("create job items (LCL optional)", () => {
           update: jest.fn().mockResolvedValue({ id: "job1" }),
         },
         jobItem: {
+          findMany: jest.fn().mockResolvedValue([{ id: "it1" }]),
           deleteMany: jobItemDeleteMany,
           createMany: jobItemCreateMany,
+        },
+        tripJobItem: {
+          findMany: jest.fn().mockResolvedValue([]),
         },
         $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>) =>
           fn({
@@ -650,8 +659,12 @@ describe("create job items (LCL optional)", () => {
               findFirst: jest.fn().mockResolvedValue(freshAfterUpdate()),
             },
             jobItem: {
+              findMany: jest.fn().mockResolvedValue([{ id: "it1" }]),
               deleteMany: jobItemDeleteMany,
               createMany: jobItemCreateMany,
+            },
+            tripJobItem: {
+              findMany: jest.fn().mockResolvedValue([]),
             },
           }),
         ),
