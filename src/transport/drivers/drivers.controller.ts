@@ -21,6 +21,7 @@ import { Roles } from '../../shared/auth/guards/role.guard';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { Role } from '@prisma/client';
 import { UpdateDriverDto } from './dto/update-driver.dto';
+import { UsersService } from '../../shared/users/users.service';
 import { publicEmailOrNull } from '../../shared/auth/auth-internal-email';
 
 export interface DriverDto {
