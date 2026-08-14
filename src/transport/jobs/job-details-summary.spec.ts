@@ -225,6 +225,7 @@ describe("TransportJobsService.getDetails", () => {
           },
         ],
         documents: [],
+        documentRequirements: [],
         vehicles: null,
         fleetVehicle: null,
         _count: { stops: 2, tripJobItems: 1 },
@@ -280,7 +281,12 @@ describe("TransportJobsService.getDetails", () => {
       payoutTotalCents: 1000,
       stopCount: 2,
       containerCount: 1,
+      cargoLabels: ["CONT-1"],
+      tripDisplayRef: "JOB-1-T01",
     });
+    expect(result.trips[0].id).toBe("trip-1");
+    expect(result.trips[0].fromLabel).toBeTruthy();
+    expect(result.trips[0].toLabel).toBeTruthy();
   });
 
   it("returns the standard 404 for missing or cross-tenant jobs", async () => {
