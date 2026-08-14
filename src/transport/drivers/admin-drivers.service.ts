@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   Optional,
@@ -33,6 +34,12 @@ import * as rt from "../../shared/realtime/realtime-publish";
 import { DriverTripEarningsService } from "./driver-trip-earnings.service";
 import { resolveDriverTripEarningCents } from "./driver-trip-earnings.helpers";
 import { CANONICAL_TRIP_PAYOUT_LINE_SELECT } from "../trips/trip-payout.helpers";
+import {
+  assertValidUsername,
+  buildInternalAuthEmail,
+  normalizeUsername,
+  publicEmailOrNull,
+} from "../../shared/auth/auth-internal-email";
 
 function firstNonEmptyText(...values: Array<unknown>): string | null {
   for (const value of values) {
@@ -42,6 +49,26 @@ function firstNonEmptyText(...values: Array<unknown>): string | null {
     }
   }
   return null;
+}
+
+function publicDriverEmail(email: string | null | undefined): string | null {
+  return publicEmailOrNull(email);
+}
+
+function driverDisplayFallback(user: {
+  displayName?: string | null;
+  name?: string | null;
+  username?: string | null;
+  email?: string | null;
+}): string | null {
+  return (
+    firstNonEmptyText(
+      user.displayName,
+      user.name,
+      user.username,
+      publicDriverEmail(user.email),
+    )
+  );
 }
 
 @Injectable()
@@ -90,6 +117,7 @@ export class AdminDriversService {
         OR: [
           { name: { contains: q, mode: "insensitive" } },
           { email: { contains: q, mode: "insensitive" } },
+          { username: { contains: q, mode: "insensitive" } },
         ],
       };
     }
@@ -190,22 +218,21 @@ export class AdminDriversService {
       const profile = profileByUserId.get(m.userId);
       const displayName =
         profile?.name ??
-        (m.user as any).displayName ??
-        m.user.name ??
-        m.user.email ??
-        null;
+        driverDisplayFallback(m.user as any);
       const avatarUrl = await this.usersService.getUserAvatarSignedUrl(
         (m.user as any).avatarKey ?? null,
       );
+      const publicEmail = publicDriverEmail(m.user.email);
 
       return {
         userId: m.user.id,
         id: m.user.id,
-        email: m.user.email,
+        email: publicEmail,
+        username: (m.user as any).username ?? null,
         name: displayName,
         displayName,
         userName: m.user.name ?? null,
-        userEmail: m.user.email ?? null,
+        userEmail: publicEmail,
         phone: (m.user as any).phone ?? null,
         status: m.status,
         isSuspended: m.status === MembershipStatus.Suspended,
@@ -238,20 +265,64 @@ export class AdminDriversService {
     tenantId: string,
     dto: AdminCreateDriverDto,
   ): Promise<AdminDriverDto> {
-    const email = dto.email.trim().toLowerCase();
     const password = dto.password;
-
     if (!password || password.length < 8) {
       throw new BadRequestException("Password must be at least 8 characters");
     }
 
+    const usernameRaw = dto.username?.trim() ?? "";
+    const emailRaw = dto.email?.trim() ?? "";
+    if (usernameRaw && emailRaw) {
+      throw new BadRequestException("Provide a username or an email, not both");
+    }
+    if (!usernameRaw && !emailRaw) {
+      throw new BadRequestException("Username or email is required");
+    }
+
+    let authEmail: string;
+    let normalizedUsername: string | null = null;
+
+    if (usernameRaw) {
+      normalizedUsername = normalizeUsername(usernameRaw);
+      try {
+        assertValidUsername(normalizedUsername);
+      } catch (e: any) {
+        throw new BadRequestException(e?.message || "Invalid username");
+      }
+
+      const existingInTenant = await this.prisma.tenantMembership.findFirst({
+        where: {
+          tenantId,
+          user: { username: normalizedUsername },
+        },
+        select: { id: true },
+      });
+      if (existingInTenant) {
+        throw new ConflictException("Username is already taken in this tenant");
+      }
+
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { slug: true },
+      });
+      if (!tenant?.slug) {
+        throw new BadRequestException(
+          "Tenant slug is required for username users",
+        );
+      }
+      authEmail = buildInternalAuthEmail(tenant.slug, normalizedUsername);
+    } else {
+      authEmail = emailRaw.toLowerCase();
+    }
+
     const supabase = this.supabaseService.getClient();
     const { data, error } = await supabase.auth.admin.createUser({
-      email,
+      email: authEmail,
       password,
       email_confirm: true,
       user_metadata: {
         name: dto.name ?? undefined,
+        username: normalizedUsername ?? undefined,
         tenantId,
         role: "DRIVER",
       },
@@ -268,15 +339,17 @@ export class AdminDriversService {
 
     const result = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.upsert({
-        where: { email },
+        where: { email: authEmail },
         update: {
           authUserId,
           ...(dto.name !== undefined && { name: dto.name }),
           ...(dto.phone !== undefined && { phone: dto.phone }),
+          ...(normalizedUsername && { username: normalizedUsername }),
         },
         create: {
           authUserId,
-          email,
+          email: authEmail,
+          username: normalizedUsername,
           name: dto.name ?? null,
           phone: dto.phone ?? null,
           role: UserRole.USER,
@@ -294,8 +367,11 @@ export class AdminDriversService {
         },
       });
 
-      // ✅ Wallet depends on prisma.drivers row
-      const name = (dto.name ?? user.name ?? "").trim() || user.email;
+      const name =
+        (dto.name ?? user.name ?? "").trim() ||
+        user.username ||
+        publicDriverEmail(user.email) ||
+        "Driver";
       const phone =
         ((dto.phone ?? (user as any).phone ?? "") as string).trim() || "-";
 
@@ -328,14 +404,20 @@ export class AdminDriversService {
       result.user.id,
     );
 
+    const publicEmail = publicDriverEmail(result.user.email);
     return {
       userId: result.user.id,
       id: result.user.id,
-      email: result.user.email,
+      email: publicEmail,
+      username: result.user.username ?? null,
       name: result.user.name,
-      displayName: (result.user as any).displayName ?? result.user.name ?? result.user.email,
+      displayName:
+        (result.user as any).displayName ??
+        result.user.name ??
+        result.user.username ??
+        publicEmail,
       userName: result.user.name ?? null,
-      userEmail: result.user.email ?? null,
+      userEmail: publicEmail,
       phone: (result.user as any).phone ?? null,
       status: result.membership.status,
       isSuspended: result.membership.status === MembershipStatus.Suspended,
@@ -379,7 +461,11 @@ export class AdminDriversService {
             },
           });
 
-    const name = (dto.name ?? user.name ?? "").trim() || user.email;
+    const name =
+      (dto.name ?? user.name ?? "").trim() ||
+      user.username ||
+      publicDriverEmail(user.email) ||
+      "Driver";
     const phone =
       ((dto.phone ?? (user as any).phone ?? "") as string).trim() || "-";
 
@@ -458,11 +544,12 @@ export class AdminDriversService {
     return {
       userId: user.id,
       id: user.id,
-      email: user.email,
-      name: profile?.name ?? (user as any).displayName ?? user.name ?? user.email,
-      displayName: (user as any).displayName ?? user.name ?? user.email,
+      email: publicDriverEmail(user.email),
+      username: user.username ?? null,
+      name: profile?.name ?? driverDisplayFallback(user as any),
+      displayName: driverDisplayFallback(user as any),
       userName: user.name ?? null,
-      userEmail: user.email ?? null,
+      userEmail: publicDriverEmail(user.email),
       phone: (user as any).phone ?? null,
       status: membership.status,
       isSuspended: membership.status === MembershipStatus.Suspended,
@@ -585,6 +672,7 @@ export class AdminDriversService {
       user: {
         id: string;
         email: string;
+        username?: string | null;
         name: string | null;
         displayName?: string | null;
         phone?: string | null;
@@ -616,23 +704,21 @@ export class AdminDriversService {
     ]);
 
     const displayName =
-      profile?.name ??
-      membership.user.displayName ??
-      membership.user.name ??
-      membership.user.email ??
-      null;
+      profile?.name ?? driverDisplayFallback(membership.user as any);
     const avatarUrl = await this.usersService.getUserAvatarSignedUrl(
       membership.user.avatarKey ?? null,
     );
+    const publicEmail = publicDriverEmail(membership.user.email);
 
     return {
       userId,
       id: userId,
-      email: membership.user.email,
+      email: publicEmail,
+      username: membership.user.username ?? null,
       name: displayName,
       displayName,
       userName: membership.user.name ?? null,
-      userEmail: membership.user.email ?? null,
+      userEmail: publicEmail,
       phone: membership.user.phone ?? null,
       status: membership.status,
       isSuspended: membership.status === MembershipStatus.Suspended,

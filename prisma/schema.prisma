@@ -94,7 +94,7 @@ model User {
   /// Supabase Auth user id (auth.users.id, UUID). Links JWT sub to this row; not the same as id (cuid).
   authUserId String? @unique
   email      String  @unique
-  /// Optional login username (warehouse mobile). Uniqueness enforced per tenant in app logic.
+  /// Optional login username (warehouse / driver mobile). Uniqueness enforced per tenant in app logic.
   username   String?
   name       String?
   displayName String?

@@ -18,7 +18,8 @@ export class LoginDto {
 
   @ApiPropertyOptional({
     example: 'floor1',
-    description: 'Username login (warehouse mobile). Mutually exclusive with email.',
+    description:
+      'Username login (warehouse or driver mobile). Mutually exclusive with email.',
   })
   @ValidateIf((o: LoginDto) => !o.email)
   @IsString()

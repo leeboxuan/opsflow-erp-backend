@@ -8,8 +8,18 @@ export class AdminDriverDto {
   @ApiProperty()
   id: string;
 
-  @ApiProperty()
-  email: string;
+  @ApiProperty({
+    nullable: true,
+    description: "Public email. Null for username-only drivers.",
+  })
+  email: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    required: false,
+    description: "Login username when the driver has no email.",
+  })
+  username?: string | null;
 
   @ApiProperty({ nullable: true })
   name: string | null;

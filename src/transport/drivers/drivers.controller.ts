@@ -21,12 +21,13 @@ import { Roles } from '../../shared/auth/guards/role.guard';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { Role } from '@prisma/client';
 import { UpdateDriverDto } from './dto/update-driver.dto';
-import { UsersService } from '../../shared/users/users.service';
+import { publicEmailOrNull } from '../../shared/auth/auth-internal-email';
 
 export interface DriverDto {
   id: string;
   userId: string;
-  email: string;
+  email: string | null;
+  username?: string | null;
   name: string | null;
   displayName?: string | null;
   userName?: string | null;
@@ -83,21 +84,28 @@ export class DriversController {
       },
     });
 
+    const publicEmail = publicEmailOrNull(membership.user.email);
+    const loginName =
+      (membership.user as any).username ??
+      publicEmail ??
+      membership.user.email;
+
     return {
       userId: membership.user.id,
       id: membership.user.id,
-      email: membership.user.email,
+      email: publicEmail,
+      username: (membership.user as any).username ?? null,
       name:
         (profile as any)?.name ??
         (membership.user as any).displayName ??
         membership.user.name ??
-        membership.user.email,
+        loginName,
       displayName:
         (membership.user as any).displayName ??
         membership.user.name ??
-        membership.user.email,
+        loginName,
       userName: membership.user.name ?? null,
-      userEmail: membership.user.email ?? null,
+      userEmail: publicEmail,
       role: membership.role,
       avatarUrl: await this.usersService.getUserAvatarSignedUrl(
         (membership.user as any).avatarKey ?? null,
@@ -155,21 +163,25 @@ export class DriversController {
       },
     });
 
+    const publicEmail = publicEmailOrNull(user.email);
+    const loginName = (user as any).username ?? publicEmail ?? user.email;
+
     return {
       userId: user.id,
       id: user.id,
-      email: user.email,
+      email: publicEmail,
+      username: (user as any).username ?? null,
       name:
         (profile as any)?.name ??
         (user as any).displayName ??
         user.name ??
-        user.email,
+        loginName,
       displayName:
         (user as any).displayName ??
         user.name ??
-        user.email,
+        loginName,
       userName: user.name ?? null,
-      userEmail: user.email ?? null,
+      userEmail: publicEmail,
       role: membership.role,
       avatarUrl: await this.usersService.getUserAvatarSignedUrl(
         (user as any).avatarKey ?? null,

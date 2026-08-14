@@ -113,6 +113,7 @@ describe("AdminDriversService", () => {
       prisma,
       usersService,
       tripEarnings,
+      supabaseService,
     };
   }
 
@@ -226,5 +227,50 @@ describe("AdminDriversService", () => {
         where: expect.objectContaining({ tenantId: "tenant-a" }),
       }),
     );
+  });
+
+  it("creates a username-only driver and hides the synthetic auth email", async () => {
+    const createUser = jest.fn().mockResolvedValue({
+      data: { user: { id: "auth-1" } },
+      error: null,
+    });
+    const { service, prisma, supabaseService } = makeService();
+    supabaseService.getClient.mockReturnValue({
+      auth: { admin: { createUser } },
+    });
+    prisma.tenant = {
+      findUnique: jest.fn().mockResolvedValue({ slug: "acme" }),
+    };
+    prisma.tenantMembership.findFirst = jest.fn().mockResolvedValue(null);
+    prisma.tenantMembership.upsert = jest.fn().mockResolvedValue({
+      id: "m-new",
+      status: "Active",
+    });
+    prisma.user.upsert = jest.fn().mockResolvedValue({
+      id: "u-new",
+      email: "acme.ahmad@auth.opsflow.app",
+      username: "ahmad",
+      name: "Ahmad",
+      phone: "+6590000001",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const result = await service.createDriver("t1", {
+      username: "Ahmad",
+      name: "Ahmad",
+      phone: "+6590000001",
+      password: "StrongPass123",
+    });
+
+    expect(createUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: "acme.ahmad@auth.opsflow.app",
+      }),
+    );
+    expect(result.email).toBeNull();
+    expect(result.username).toBe("ahmad");
+    expect(result.userEmail).toBeNull();
+    expect(JSON.stringify(result)).not.toContain("auth.opsflow.app");
   });
 });

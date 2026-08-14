@@ -1,10 +1,30 @@
-import { ApiProperty } from "@nestjs/swagger";
-import { IsEmail, IsOptional, IsString, MinLength } from "class-validator";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import {
+  IsEmail,
+  IsOptional,
+  IsString,
+  MinLength,
+  ValidateIf,
+} from "class-validator";
 
 export class AdminCreateDriverDto {
-  @ApiProperty({ example: "driver@example.com" })
+  @ApiPropertyOptional({
+    example: "driver@example.com",
+    description: "Required when username is not provided.",
+  })
+  @ValidateIf((o: AdminCreateDriverDto) => !o.username?.trim())
   @IsEmail()
-  email: string;
+  email?: string;
+
+  @ApiPropertyOptional({
+    example: "ahmad",
+    description:
+      "Login username for drivers without email. Required when email is not provided.",
+  })
+  @ValidateIf((o: AdminCreateDriverDto) => !o.email?.trim())
+  @IsString()
+  @MinLength(2)
+  username?: string;
 
   @ApiProperty({ example: "John Doe", required: false })
   @IsOptional()
