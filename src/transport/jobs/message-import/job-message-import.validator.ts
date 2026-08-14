@@ -87,6 +87,20 @@ export function normalizeReviewedDraft(
     deliveryPlaceId: trimToNull(input.deliveryPlaceId),
     deliveryLat: toCoord(input.deliveryLat),
     deliveryLng: toCoord(input.deliveryLng),
+    portAddress1: normalizeLocationLabel(input.portAddress1),
+    portAddress2: trimToNull(input.portAddress2),
+    portPostal: trimToNull(input.portPostal)?.replace(/\D/g, "").slice(0, 6) ?? null,
+    portPlaceId: trimToNull(input.portPlaceId),
+    portLat: toCoord(input.portLat),
+    portLng: toCoord(input.portLng),
+    returningDepotAddress1: normalizeLocationLabel(input.returningDepotAddress1),
+    returningDepotAddress2: trimToNull(input.returningDepotAddress2),
+    returningDepotPostal:
+      trimToNull(input.returningDepotPostal)?.replace(/\D/g, "").slice(0, 6) ?? null,
+    returningDepotPlaceId: trimToNull(input.returningDepotPlaceId),
+    returningDepotLat: toCoord(input.returningDepotLat),
+    returningDepotLng: toCoord(input.returningDepotLng),
+    returningDepotCode: trimToNull(input.returningDepotCode),
     pickupDateLocal: trimToNull(input.pickupDateLocal),
     deliveryDateLocal: trimToNull(input.deliveryDateLocal),
     pickupDateDisplay: trimToNull(input.pickupDateDisplay),
@@ -141,6 +155,33 @@ export function mergeReviewedDraftPatch(
     ...(patch.deliveryPlaceId !== undefined ? { deliveryPlaceId: patch.deliveryPlaceId } : {}),
     ...(patch.deliveryLat !== undefined ? { deliveryLat: patch.deliveryLat } : {}),
     ...(patch.deliveryLng !== undefined ? { deliveryLng: patch.deliveryLng } : {}),
+    ...(patch.portAddress1 !== undefined ? { portAddress1: patch.portAddress1 } : {}),
+    ...(patch.portAddress2 !== undefined ? { portAddress2: patch.portAddress2 } : {}),
+    ...(patch.portPostal !== undefined ? { portPostal: patch.portPostal } : {}),
+    ...(patch.portPlaceId !== undefined ? { portPlaceId: patch.portPlaceId } : {}),
+    ...(patch.portLat !== undefined ? { portLat: patch.portLat } : {}),
+    ...(patch.portLng !== undefined ? { portLng: patch.portLng } : {}),
+    ...(patch.returningDepotAddress1 !== undefined
+      ? { returningDepotAddress1: patch.returningDepotAddress1 }
+      : {}),
+    ...(patch.returningDepotAddress2 !== undefined
+      ? { returningDepotAddress2: patch.returningDepotAddress2 }
+      : {}),
+    ...(patch.returningDepotPostal !== undefined
+      ? { returningDepotPostal: patch.returningDepotPostal }
+      : {}),
+    ...(patch.returningDepotPlaceId !== undefined
+      ? { returningDepotPlaceId: patch.returningDepotPlaceId }
+      : {}),
+    ...(patch.returningDepotLat !== undefined
+      ? { returningDepotLat: patch.returningDepotLat }
+      : {}),
+    ...(patch.returningDepotLng !== undefined
+      ? { returningDepotLng: patch.returningDepotLng }
+      : {}),
+    ...(patch.returningDepotCode !== undefined
+      ? { returningDepotCode: patch.returningDepotCode }
+      : {}),
     ...(patch.pickupDateLocal !== undefined ? { pickupDateLocal: patch.pickupDateLocal } : {}),
     ...(patch.deliveryDateLocal !== undefined ? { deliveryDateLocal: patch.deliveryDateLocal } : {}),
     ...(patch.pickupDateDisplay !== undefined
@@ -222,16 +263,61 @@ export function validateReviewedDraft(
     );
   }
 
-  if (!reviewed.pickupAddress1) {
-    pushBlocking("pickupAddress1", "MISSING_PICKUP", "Pickup location is required.");
-  }
-
-  if (!reviewed.deliveryAddress1) {
-    pushBlocking(
-      "deliveryAddress1",
-      "MISSING_DELIVERY",
-      "Delivery location is required.",
-    );
+  if (reviewed.movementType === JobMessageImportMovementType.EXPORT) {
+    if (!reviewed.pickupAddress1) {
+      pushBlocking(
+        "pickupAddress1",
+        "MISSING_DEPOT",
+        "Empty container depot is required.",
+      );
+    }
+    if (!reviewed.deliveryAddress1) {
+      pushBlocking(
+        "deliveryAddress1",
+        "MISSING_CUSTOMER",
+        "Customer / stuffing location is required.",
+      );
+    }
+    if (!reviewed.portAddress1) {
+      pushBlocking(
+        "portAddress1",
+        "MISSING_PORT",
+        "Export port / terminal is required.",
+      );
+    }
+  } else if (reviewed.movementType === JobMessageImportMovementType.IMPORT) {
+    if (!reviewed.pickupAddress1) {
+      pushBlocking(
+        "pickupAddress1",
+        "MISSING_PORT",
+        "Import port / terminal is required.",
+      );
+    }
+    if (!reviewed.deliveryAddress1) {
+      pushBlocking(
+        "deliveryAddress1",
+        "MISSING_CUSTOMER",
+        "Customer / delivery location is required.",
+      );
+    }
+    if (!reviewed.returningDepotAddress1 && !reviewed.returningDepotCode) {
+      pushBlocking(
+        "returningDepotAddress1",
+        "MISSING_RETURN_DEPOT",
+        "Empty container return depot is required.",
+      );
+    }
+  } else {
+    if (!reviewed.pickupAddress1) {
+      pushBlocking("pickupAddress1", "MISSING_PICKUP", "Pickup location is required.");
+    }
+    if (!reviewed.deliveryAddress1) {
+      pushBlocking(
+        "deliveryAddress1",
+        "MISSING_DELIVERY",
+        "Delivery location is required.",
+      );
+    }
   }
 
   const postalOk = (v: string | null) => !v || /^\d{6}$/.test(v);

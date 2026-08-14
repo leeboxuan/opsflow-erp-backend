@@ -163,6 +163,12 @@ export function assertPickupLocationForCreate(input: {
   ) {
     return;
   }
+  if (input.jobType === JobType.EXPORT) {
+    throw new BadRequestException("Empty container depot is required.");
+  }
+  if (input.jobType === JobType.IMPORT) {
+    throw new BadRequestException("Import port / terminal is required.");
+  }
   throw new BadRequestException("Pickup location is required.");
 }
 
@@ -183,7 +189,10 @@ export function assertDeliveryLocationForCreate(input: {
     return;
   }
   if (input.jobType === JobType.EXPORT) {
-    throw new BadRequestException("Delivery / export location is required.");
+    throw new BadRequestException("Customer / stuffing location is required.");
+  }
+  if (input.jobType === JobType.IMPORT) {
+    throw new BadRequestException("Customer / delivery location is required.");
   }
   throw new BadRequestException("Delivery location is required.");
 }

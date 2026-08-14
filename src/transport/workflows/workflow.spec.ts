@@ -10,6 +10,8 @@ import {
   trailerCheckoutBlocksCompletion,
   tripCreateManyForJob,
   TRIP_COMPLETION_RULES,
+  canonicalAutoTripCarriesCreatedJobItems,
+  jobItemIdsForCanonicalAutoTrip,
 } from "./job-workflow.helpers";
 import { resolveTripNotesResponseFields } from "../trips/trip-notes.helpers";
 import {
@@ -23,44 +25,41 @@ describe("workflow helpers", () => {
       {
         label: "LCL",
         jobType: JobType.LCL,
-        options: undefined,
         expectedCount: 1,
         templates: [JobTripTemplate.PICKUP_TO_DELIVERY],
+        titles: ["Pickup to Delivery"],
       },
       {
         label: "COLLECTION",
         jobType: JobType.COLLECTION,
-        options: undefined,
         expectedCount: 1,
         templates: [JobTripTemplate.PICKUP_TO_DELIVERY],
+        titles: ["Pickup to Delivery"],
       },
       {
         label: "EXPORT",
         jobType: JobType.EXPORT,
-        options: undefined,
-        expectedCount: 1,
-        templates: [JobTripTemplate.PICKUP_TO_DELIVERY],
+        expectedCount: 3,
+        templates: [
+          JobTripTemplate.DEPOT_TO_DELIVERY,
+          JobTripTemplate.DELIVERY_TO_PORT,
+          JobTripTemplate.PORT_TO_DEPOT,
+        ],
+        titles: ["Depot to Customer", "Customer to Port", "Port to Depot"],
       },
       {
-        label: "IMPORT without return",
+        label: "IMPORT",
         jobType: JobType.IMPORT,
-        options: undefined,
-        expectedCount: 1,
-        templates: [JobTripTemplate.PICKUP_TO_DELIVERY],
-      },
-      {
-        label: "IMPORT with return",
-        jobType: JobType.IMPORT,
-        options: { tripSeedOptions: { importHasReturnLocation: true } },
         expectedCount: 2,
         templates: [
           JobTripTemplate.PICKUP_TO_DELIVERY,
           JobTripTemplate.DELIVERY_TO_DEPOT,
         ],
+        titles: ["Port to Customer", "Customer to Depot"],
       },
     ])(
       "$label generates expected trip count and templates",
-      ({ jobType, options, expectedCount, templates }) => {
+      ({ jobType, expectedCount, templates, titles }) => {
         const rows = tripCreateManyForJob(
           "t1",
           "j1",
@@ -68,16 +67,89 @@ describe("workflow helpers", () => {
           new Date("2026-03-15"),
           null,
           null,
-          undefined,
-          options,
         );
         expect(rows).toHaveLength(expectedCount);
         expect(rows.map((r) => r.jobTripTemplate)).toEqual(templates);
+        expect(rows.map((r) => r.tripSequence)).toEqual(
+          templates.map((_, i) => i + 1),
+        );
+        expect(rows.map((r) => r.jobSequence)).toEqual(
+          templates.map((_, i) => i + 1),
+        );
+        expect(rows.map((r) => r.displayTitle)).toEqual(titles);
       },
     );
   });
 
-  it("IMPORT with return location generates delivery→return leg completion rules", () => {
+  describe("canonical auto-trip cargo ownership", () => {
+    const itemIds = ["item-a", "item-b"];
+
+    it("IMPORT links every JobItem to Port→Customer and Customer→Depot", () => {
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.IMPORT,
+          jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
+          jobItemIds: itemIds,
+        }),
+      ).toEqual(itemIds);
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.IMPORT,
+          jobTripTemplate: JobTripTemplate.DELIVERY_TO_DEPOT,
+          jobItemIds: itemIds,
+        }),
+      ).toEqual(itemIds);
+    });
+
+    it("EXPORT links JobItems to Depot→Customer and Customer→Port only", () => {
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.EXPORT,
+          jobTripTemplate: JobTripTemplate.DEPOT_TO_DELIVERY,
+          jobItemIds: itemIds,
+        }),
+      ).toEqual(itemIds);
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.EXPORT,
+          jobTripTemplate: JobTripTemplate.DELIVERY_TO_PORT,
+          jobItemIds: itemIds,
+        }),
+      ).toEqual(itemIds);
+      expect(
+        canonicalAutoTripCarriesCreatedJobItems(
+          JobType.EXPORT,
+          JobTripTemplate.PORT_TO_DEPOT,
+        ),
+      ).toBe(false);
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.EXPORT,
+          jobTripTemplate: JobTripTemplate.PORT_TO_DEPOT,
+          jobItemIds: itemIds,
+        }),
+      ).toEqual([]);
+    });
+
+    it("LCL and COLLECTION link all JobItems to the single Pickup→Delivery trip", () => {
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.LCL,
+          jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
+          jobItemIds: itemIds,
+        }),
+      ).toEqual(itemIds);
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.COLLECTION,
+          jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
+          jobItemIds: itemIds,
+        }),
+      ).toEqual(itemIds);
+    });
+  });
+
+  it("IMPORT auto-trips are always port→customer then customer→depot", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -85,8 +157,6 @@ describe("workflow helpers", () => {
       new Date("2026-03-15"),
       null,
       null,
-      undefined,
-      { tripSeedOptions: { importHasReturnLocation: true } },
     );
     expect(rows).toHaveLength(2);
     expect(rows[0].jobSequence).toBe(1);
@@ -132,7 +202,7 @@ describe("workflow helpers", () => {
     expect(rows[0].destinationLabel).toBe("Delivery Address");
   });
 
-  it("tripCreateManyForJob creates one EXPORT leg (pickup to export point)", () => {
+  it("tripCreateManyForJob creates three EXPORT legs in order", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -141,18 +211,22 @@ describe("workflow helpers", () => {
       null,
       null,
     );
-    expect(rows).toHaveLength(1);
-    expect(rows[0].displayTitle).toBe("Pickup to Export Point");
-    expect(rows[0].jobTripTemplate).toBe(JobTripTemplate.PICKUP_TO_DELIVERY);
-    expect(rows[0].completionRuleJson).toEqual({
-      requireGeneratedDoSigned: true,
-      tripUploads: {
-        minUploadCount: 2,
-        allowedUploadTypes: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
-        requiredUploadTypesExact: [TripDocumentType.PICKUP_DO, TripDocumentType.POD_SIGNATURE],
-      },
-    });
-    expect(rows[0].status).toBe("DRAFT");
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => r.displayTitle)).toEqual([
+      "Depot to Customer",
+      "Customer to Port",
+      "Port to Depot",
+    ]);
+    expect(rows.map((r) => r.jobTripTemplate)).toEqual([
+      JobTripTemplate.DEPOT_TO_DELIVERY,
+      JobTripTemplate.DELIVERY_TO_PORT,
+      JobTripTemplate.PORT_TO_DEPOT,
+    ]);
+    expect(rows[0].completionRuleJson).toEqual(
+      TRIP_COMPLETION_RULES[JobTripTemplate.DEPOT_TO_DELIVERY],
+    );
+    expect(rows[2].jobTripTemplate).toBe(JobTripTemplate.PORT_TO_DEPOT);
+    expect(rows.every((r) => r.status === "DRAFT")).toBe(true);
   });
 
   it("tripCreateManyForJob creates one COLLECTION leg like LCL", () => {
@@ -314,6 +388,9 @@ describe("workflow helpers", () => {
     expect(completionRuleForTemplate(JobTripTemplate.DELIVERY_TO_PORT)).toEqual(
       TRIP_COMPLETION_RULES[JobTripTemplate.DELIVERY_TO_PORT],
     );
+    expect(completionRuleForTemplate(JobTripTemplate.PORT_TO_DEPOT)).toEqual(
+      TRIP_COMPLETION_RULES[JobTripTemplate.PORT_TO_DEPOT],
+    );
     expect(completionRuleForTemplate(JobTripTemplate.CUSTOMER_TO_GUL)).toEqual(
       TRIP_COMPLETION_RULES[JobTripTemplate.CUSTOMER_TO_GUL],
     );
@@ -326,6 +403,9 @@ describe("workflow helpers", () => {
   });
 
   it("jobTripTemplateDisplayLabel maps Gul Circle shortcuts", () => {
+    expect(jobTripTemplateDisplayLabel(JobTripTemplate.PORT_TO_DEPOT)).toBe(
+      "Port → Depot",
+    );
     expect(jobTripTemplateDisplayLabel(JobTripTemplate.CUSTOMER_TO_GUL)).toBe(
       "Customer → Gul Circle",
     );
@@ -473,7 +553,7 @@ describe("workflow helpers", () => {
     expect(fromGul.destinationLat).toBeNull();
   });
 
-  it("tripCreateManyForJob seeds containerNumber onto both IMPORT legs when return location provided", () => {
+  it("tripCreateManyForJob seeds containerNumber onto both IMPORT legs as display cache", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -481,14 +561,12 @@ describe("workflow helpers", () => {
       new Date("2026-03-15"),
       "  CONT-001  ",
       null,
-      undefined,
-      { tripSeedOptions: { importHasReturnLocation: true } },
     );
     expect(rows).toHaveLength(2);
     expect(rows.every((r) => r.containerNumber === "CONT-001")).toBe(true);
   });
 
-  it("tripCreateManyForJob seeds containerNumber onto EXPORT-generated trip", () => {
+  it("tripCreateManyForJob seeds containerNumber onto cargo-carrying EXPORT legs only", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -497,8 +575,11 @@ describe("workflow helpers", () => {
       "  CONT-EXP-01  ",
       null,
     );
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(3);
     expect(rows[0].containerNumber).toBe("CONT-EXP-01");
+    expect(rows[1].containerNumber).toBe("CONT-EXP-01");
+    expect(rows[2].jobTripTemplate).toBe(JobTripTemplate.PORT_TO_DEPOT);
+    expect(rows[2].containerNumber).toBeNull();
   });
 
   it("tripCreateManyForJob seeds shipping reference fields onto IMPORT and EXPORT trips", () => {
@@ -515,8 +596,6 @@ describe("workflow helpers", () => {
       new Date("2026-03-15"),
       null,
       seeds,
-      undefined,
-      { tripSeedOptions: { importHasReturnLocation: true } },
     );
     expect(
       importRows.every((r) =>

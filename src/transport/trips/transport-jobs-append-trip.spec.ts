@@ -114,6 +114,13 @@ describe("TransportJobsService.appendTrip", () => {
           { status: "DRAFT" },
         ]),
       },
+      jobItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      tripJobItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       driverPayoutItem: {
         findFirst: jest.fn().mockResolvedValue({
           id: "rate-1",

@@ -42,6 +42,7 @@ import {
   trailerCheckoutBlocksCompletion,
   resolveTripRouteAddressResponseFields,
   isContainerCargoJobType,
+  canonicalAutoTripCarriesCreatedJobItems,
   jobTripTemplateDisplayLabel,
 } from "../workflows/job-workflow.helpers";
 import {
@@ -2480,6 +2481,10 @@ export class DriverJobsService {
       });
       if (
         isContainerBasedTransportJob(job.jobType as JobType, jobItemCount)
+        && canonicalAutoTripCarriesCreatedJobItems(
+          job.jobType as JobType,
+          trip.jobTripTemplate,
+        )
         && containerDocumentation.length === 0
       ) {
         throw new BadRequestException(
@@ -2736,6 +2741,10 @@ export class DriverJobsService {
     if (
       isContainerCargoJobType(job.jobType as JobType)
       && containerDocumentation.length === 0
+      && canonicalAutoTripCarriesCreatedJobItems(
+        job.jobType as JobType,
+        trip.jobTripTemplate,
+      )
     ) {
       const jobItemCount = await this.prisma.jobItem.count({
         where: { tenantId, jobId },

@@ -123,12 +123,45 @@ export class CreateJobImportDetailsDto {
 
   @ApiPropertyOptional({
     description:
-      "Optional IMPORT return depot code (master_singapore_depots.code). When omitted, only one port → delivery trip is generated.",
+      "IMPORT empty-container return depot code (master_singapore_depots.code). Required with address or code so Customer → Depot can be generated.",
     nullable: true,
   })
   @IsOptional()
   @IsString()
   returningDepotCode?: string | null;
+
+  @ApiPropertyOptional({
+    description: "IMPORT return depot address line 1 when Places intake is used",
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  returningDepotAddress1?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  returningDepotAddress2?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  returningDepotPostal?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  returningDepotPlaceId?: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsNumber()
+  returningDepotLat?: number | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsNumber()
+  returningDepotLng?: number | null;
 
   @ApiPropertyOptional({
     description:
@@ -265,6 +298,38 @@ export class CreateJobExportDetailsDto {
   @IsOptional()
   @IsString()
   exportPortCode?: string;
+
+  @ApiPropertyOptional({
+    description: "Export port / terminal address line 1 (Places intake)",
+  })
+  @IsOptional()
+  @IsString()
+  exportPortAddress1?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  exportPortAddress2?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  exportPortPostal?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  exportPortPlaceId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  exportPortLat?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  exportPortLng?: number;
 
   @ApiPropertyOptional({ description: "Export terminal code (optional context)" })
   @IsOptional()
@@ -577,7 +642,7 @@ export class CreateJobDto {
 
   @ApiPropertyOptional({
     description:
-      "Legacy flat field (prefer importDetails.returningDepotCode). Optional; omit for single port → delivery IMPORT trip.",
+      "Legacy flat field (prefer importDetails.returningDepotCode). Optional depot endpoint for the auto-created customer → depot trip.",
     deprecated: true,
   })
   @IsOptional()

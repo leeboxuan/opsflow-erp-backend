@@ -141,14 +141,21 @@ import {
 } from "../trips/dto/job-trip.dto";
 import {
   tripCreateManyForJob,
-  lclPickupToDeliveryRouteSnapshot,
   completionRuleForTemplate,
   GUL_CIRCLE_ROUTE_DEFAULTS,
   jobTripTemplateDisplayLabel,
   resolveAppendTripRouteSnapshot,
   resolveTripRouteAddressResponseFields,
   isContainerCargoJobType,
+  buildTripCompletionDocumentGaps,
+  canonicalAutoTripCarriesCreatedJobItems,
+  jobItemIdsForCanonicalAutoTrip,
 } from "../workflows/job-workflow.helpers";
+import {
+  assertCanonicalRouteLocationsForCreate,
+  canonicalAutoTripRouteSnapshots,
+  resolveCanonicalRouteLocations,
+} from "./job-route-locations";
 import {
   documentTypeSupportsCustomerSignature,
   ensureDefaultTripDocumentRequirementSnapshots,
@@ -167,6 +174,10 @@ import {
   replaceTripJobItemLinks,
   applyJobItemsUpdateInTransaction,
 } from "./trip-job-item.mutations";
+import {
+  CANONICAL_JOB_DELIVERY_DO_CONCURRENCY,
+  mapWithConcurrency,
+} from "./bounded-concurrency";
 import {
   assertCreateJobInteractiveTxClient,
   assertPrismaInteractiveTransactionAvailable,
@@ -218,10 +229,7 @@ import {
 } from "./job-batch-import.helpers";
 import {
   assertCreateJobItemsRequiredForJobType,
-  assertDeliveryLocationForCreate,
   assertExportDestinationFieldsConsistent,
-  assertImportPickupSourceForCreate,
-  assertPickupLocationForCreate,
   importPickupOriginUsesAddressFields,
   parseValidJobItemsFromInput,
   parseValidUpdateJobItemsFromInput,
@@ -548,6 +556,7 @@ function toJobDto(j: any): JobDto {
             Array.isArray(t.tripJobItems)
               ? t.tripJobItems.length
               : (t._count?.tripJobItems ?? 0),
+          jobTripTemplate: t.jobTripTemplate ?? null,
         }).canPublish,
         canMarkDone: t.status === TripStatus.COMPLETED,
         plannedStartAt: t.plannedStartAt ?? null,
@@ -620,6 +629,7 @@ type TripPublishReadinessInput = {
   jobType?: JobType | null;
   jobItemCount?: number;
   linkedJobItemCount?: number;
+  jobTripTemplate?: JobTripTemplate | null;
 };
 
 type TripPublishReadinessResult = {
@@ -784,6 +794,7 @@ function applyTripJobItemLinkPublishGate(
     jobType: input.jobType,
     jobItemCount: input.jobItemCount ?? 0,
     linkedJobItemCount: input.linkedJobItemCount ?? 0,
+    jobTripTemplate: input.jobTripTemplate,
   });
   if (!link.required) return base;
   if (link.satisfied || link.shouldAutoHealSingleItem) return base;
@@ -967,7 +978,7 @@ function deriveTripRouteSummaryFromJobAndTemplate(job: any, trip: any): {
   if (snapshotOriginLabel || snapshotDestinationLabel) {
     const payoutLines = (trip.payoutLines ?? []).map((line: any) => ({
       id: line.id,
-      sourceRateMasterItemId: line.payoutItemId ?? null,
+      sourceRateMasterItemId: line.earningRateMasterId ?? line.payoutItemId ?? null,
       code: line.code ?? null,
       label: line.label,
       description: line.description ?? null,
@@ -1062,6 +1073,15 @@ function deriveTripRouteSummaryFromJobAndTemplate(job: any, trip: any): {
         toAddress: portLabel,
         fromType: "DELIVERY",
         toType: "PORT",
+      };
+    case JobTripTemplate.PORT_TO_DEPOT:
+      return {
+        fromLabel: portLabel ?? "Port",
+        toLabel: exportDepotLabel ?? "Origin depot",
+        fromAddress: portLabel,
+        toAddress: exportDepotLabel,
+        fromType: portLabel ? "PORT" : null,
+        toType: exportDepotLabel ? "DEPOT" : null,
       };
     case JobTripTemplate.CUSTOMER_TO_GUL:
       return {
@@ -2047,7 +2067,14 @@ export class TransportJobsService {
         );
         destination = this.locationSnapshotFromMaster(returnDepot);
       } else if (trip.jobTripTemplate === JobTripTemplate.DEPOT_TO_DELIVERY) {
-        origin = this.locationSnapshotFromMaster(exportOriginDepot);
+        origin =
+          this.locationSnapshotFromMaster(exportOriginDepot) ??
+          this.buildAddressSnapshot(
+            job.pickupAddress1 ?? "Empty container depot",
+            job,
+            "pickup",
+            this.resolveRouteGeo("pickup", trip, "origin", options),
+          );
         destination = this.buildAddressSnapshot(
           job.deliveryAddress1 ?? "Stuffing destination",
           job,
@@ -2062,29 +2089,44 @@ export class TransportJobsService {
           this.resolveRouteGeo("delivery", trip, "origin", options),
         );
         destination = this.locationSnapshotFromMaster(exportPort);
+      } else if (trip.jobTripTemplate === JobTripTemplate.PORT_TO_DEPOT) {
+        origin = this.locationSnapshotFromMaster(exportPort);
+        destination =
+          this.locationSnapshotFromMaster(exportOriginDepot) ??
+          this.buildAddressSnapshot(
+            job.pickupAddress1 ?? "Empty container depot",
+            job,
+            "pickup",
+            this.resolveRouteGeo("pickup", trip, "destination", options),
+          );
       }
+      const routeData: Record<string, unknown> = {};
+      if (origin) {
+        routeData.originLocationId = origin.locationId ?? null;
+        routeData.originLabel = origin.label ?? null;
+        routeData.originAddressLine1 = origin.addressLine1 ?? null;
+        routeData.originAddressLine2 = origin.addressLine2 ?? null;
+        routeData.originPostalCode = origin.postalCode ?? null;
+        routeData.originCountry = origin.country ?? null;
+        routeData.originLat = origin.lat ?? null;
+        routeData.originLng = origin.lng ?? null;
+        routeData.originPlaceId = origin.placeId ?? null;
+      }
+      if (destination) {
+        routeData.destinationLocationId = destination.locationId ?? null;
+        routeData.destinationLabel = destination.label ?? null;
+        routeData.destinationAddressLine1 = destination.addressLine1 ?? null;
+        routeData.destinationAddressLine2 = destination.addressLine2 ?? null;
+        routeData.destinationPostalCode = destination.postalCode ?? null;
+        routeData.destinationCountry = destination.country ?? null;
+        routeData.destinationLat = destination.lat ?? null;
+        routeData.destinationLng = destination.lng ?? null;
+        routeData.destinationPlaceId = destination.placeId ?? null;
+      }
+      if (Object.keys(routeData).length === 0) continue;
       await this.prisma.trip.update({
         where: { id: trip.id },
-        data: {
-          originLocationId: origin?.locationId ?? null,
-          originLabel: origin?.label ?? null,
-          originAddressLine1: origin?.addressLine1 ?? null,
-          originAddressLine2: origin?.addressLine2 ?? null,
-          originPostalCode: origin?.postalCode ?? null,
-          originCountry: origin?.country ?? null,
-          originLat: origin?.lat ?? null,
-          originLng: origin?.lng ?? null,
-          originPlaceId: origin?.placeId ?? null,
-          destinationLocationId: destination?.locationId ?? null,
-          destinationLabel: destination?.label ?? null,
-          destinationAddressLine1: destination?.addressLine1 ?? null,
-          destinationAddressLine2: destination?.addressLine2 ?? null,
-          destinationPostalCode: destination?.postalCode ?? null,
-          destinationCountry: destination?.country ?? null,
-          destinationLat: destination?.lat ?? null,
-          destinationLng: destination?.lng ?? null,
-          destinationPlaceId: destination?.placeId ?? null,
-        },
+        data: routeData,
       });
     }
   }
@@ -2251,7 +2293,12 @@ export class TransportJobsService {
     tenantId: string,
     dto: CreateJobDto,
     user: any,
-    options?: { tx?: any },
+    options?: {
+      tx?: any;
+      perf?: {
+        measure<T>(name: string, fn: () => T | Promise<T>): Promise<T>;
+      };
+    },
   ): Promise<{ id: string; internalRef: string | null }> {
     this.assertCustomerCanOnlyRead(user);
     const actorUserId: string | null = user?.userId ?? null;
@@ -2370,16 +2417,6 @@ export class TransportJobsService {
     )?.trim();
 
     if (dto.jobType === JobType.IMPORT) {
-      assertImportPickupSourceForCreate({
-        pickupPortCode,
-        pickupAddress1: dto.pickupAddress1,
-        pickupPlaceId: dto.pickupPlaceId,
-      });
-      assertDeliveryLocationForCreate({
-        jobType: JobType.IMPORT,
-        deliveryAddress1: dto.deliveryAddress1,
-        deliveryPlaceId: dto.deliveryPlaceId,
-      });
       const portCode = pickupPortCode?.trim();
       if (portCode) {
         const port = await this.prisma.masterLogisticsLocation.findFirst({
@@ -2423,17 +2460,6 @@ export class TransportJobsService {
         stuffingAddress2: exportDetails.stuffingAddress2,
         stuffingPostal: exportDetails.stuffingPostal,
       });
-      assertPickupLocationForCreate({
-        jobType: JobType.EXPORT,
-        pickupAddress1: exportPickup.address1,
-        pickupPlaceId: dto.pickupPlaceId,
-      });
-      assertDeliveryLocationForCreate({
-        jobType: JobType.EXPORT,
-        deliveryAddress1: dto.deliveryAddress1,
-        deliveryPlaceId: dto.deliveryPlaceId,
-        stuffingAddress1,
-      });
 
       if (exportOriginDepotCode) {
         const pickupDepot = await this.prisma.masterLogisticsLocation.findFirst({
@@ -2451,6 +2477,61 @@ export class TransportJobsService {
       }
     }
 
+    const routeLocations = resolveCanonicalRouteLocations({
+      jobType: dto.jobType,
+      pickupAddress1:
+        dto.jobType === JobType.EXPORT ? exportPickup.address1 : dto.pickupAddress1,
+      pickupAddress2:
+        dto.jobType === JobType.EXPORT ? exportPickup.address2 : dto.pickupAddress2,
+      pickupPostal:
+        dto.jobType === JobType.EXPORT ? exportPickup.postal : dto.pickupPostal,
+      pickupPlaceId: dto.pickupPlaceId,
+      pickupLat: dto.pickupLat,
+      pickupLng: dto.pickupLng,
+      pickupContactName: dto.pickupContactName,
+      pickupContactPhone: dto.pickupContactPhone,
+      pickupPortCode,
+      deliveryAddress1:
+        dto.jobType === JobType.EXPORT
+          ? stuffingAddress1 ?? dto.deliveryAddress1
+          : dto.deliveryAddress1,
+      deliveryAddress2:
+        dto.jobType === JobType.EXPORT
+          ? stuffingAddress2 ?? dto.deliveryAddress2
+          : dto.deliveryAddress2,
+      deliveryPostal:
+        dto.jobType === JobType.EXPORT
+          ? stuffingPostal ?? dto.deliveryPostal
+          : dto.deliveryPostal,
+      deliveryPlaceId: dto.deliveryPlaceId,
+      deliveryLat: dto.deliveryLat,
+      deliveryLng: dto.deliveryLng,
+      receiverName: stuffingContactName ?? dto.receiverName,
+      receiverPhone: stuffingContactPhone ?? dto.receiverPhone,
+      exportDetails: {
+        ...exportDetails,
+        containerPickupAddress1: legacyContainerPickupAddress1,
+        containerPickupAddress2: legacyContainerPickupAddress2,
+        containerPickupPostal: legacyContainerPickupPostal,
+        stuffingAddress1,
+        stuffingAddress2,
+        stuffingPostal,
+        stuffingContactName,
+        stuffingContactPhone,
+        exportOriginDepotCode,
+        exportPortCode,
+      },
+      importDetails: {
+        ...importDetails,
+        pickupPortCode,
+        returningDepotCode,
+      },
+      returningDepotCode,
+      exportPortCode,
+      exportOriginDepotCode,
+    });
+    assertCanonicalRouteLocationsForCreate(dto.jobType, routeLocations);
+
     const internalRef = await this.getNextInternalRef(tenantId, dto.jobType);
 
     const pickupDateParsed = dto.pickupDate ? new Date(dto.pickupDate) : null;
@@ -2462,57 +2543,10 @@ export class TransportJobsService {
       shipper: null as string | null,
       vessel: String(vesselName ?? "").trim() || null,
     };
-    const pickupDeliveryRouteInput = {
-      pickupAddress1:
-        dto.jobType === JobType.EXPORT
-          ? exportPickup.address1
-          : (dto.pickupAddress1?.trim() || ""),
-      pickupAddress2:
-        dto.jobType === JobType.EXPORT
-          ? exportPickup.address2
-          : (dto.pickupAddress2 ?? null),
-      pickupPostal:
-        dto.jobType === JobType.EXPORT
-          ? exportPickup.postal
-          : (dto.pickupPostal ?? null),
-      pickupPlaceId: dto.pickupPlaceId ?? null,
-      pickupLat: dto.pickupLat ?? null,
-      pickupLng: dto.pickupLng ?? null,
-      deliveryAddress1:
-        dto.jobType === JobType.EXPORT
-          ? (stuffingAddress1 ?? dto.deliveryAddress1)
-          : dto.deliveryAddress1,
-      deliveryAddress2:
-        dto.jobType === JobType.EXPORT
-          ? (stuffingAddress2 ?? dto.deliveryAddress2 ?? null)
-          : (dto.deliveryAddress2 ?? null),
-      deliveryPostal:
-        dto.jobType === JobType.EXPORT
-          ? (stuffingPostal ?? dto.deliveryPostal ?? null)
-          : (dto.deliveryPostal ?? null),
-      deliveryPlaceId: dto.deliveryPlaceId ?? null,
-      deliveryLat: dto.deliveryLat ?? null,
-      deliveryLng: dto.deliveryLng ?? null,
-    };
-    const importUsesAddressPickup =
-      dto.jobType === JobType.IMPORT
-      && importPickupOriginUsesAddressFields({
-        pickupAddress1: dto.pickupAddress1,
-        pickupPlaceId: dto.pickupPlaceId,
-        pickupPostal: dto.pickupPostal,
-        pickupLat: dto.pickupLat,
-        pickupLng: dto.pickupLng,
-      });
-    const lclRouteSnapshots =
-      dto.jobType === JobType.LCL
-      || dto.jobType === JobType.COLLECTION
-      || dto.jobType === JobType.EXPORT
-      || importUsesAddressPickup
-        ? {
-            [JobTripTemplate.PICKUP_TO_DELIVERY]:
-              lclPickupToDeliveryRouteSnapshot(pickupDeliveryRouteInput),
-          }
-        : undefined;
+    const autoTripRouteSnapshots = canonicalAutoTripRouteSnapshots(
+      dto.jobType,
+      routeLocations,
+    );
 
     // Atomic: job + JobItems + auto trips + TripJobItem links (or full rollback).
     // Fail closed: never fall back to non-transactional or root-client writes.
@@ -2619,51 +2653,71 @@ export class TransportJobsService {
         },
       });
 
-      await tx.trip.createMany({
-        data: tripCreateManyForJob(
-          tenantId,
-          createdJob.id,
-          dto.jobType,
-          pickupDateParsed,
-          seededContainerNumber,
-          seededShippingRefs,
-          lclRouteSnapshots,
-          {
-            createdByUserId: actorUserId,
-            tripSeedOptions:
-              dto.jobType === JobType.IMPORT
-                ? { importHasReturnLocation: !!returningDepotCode }
-                : undefined,
-          },
-        ),
-      });
-
-      const createdTripsInTx = await tx.trip.findMany({
-        where: { tenantId, jobId: createdJob.id },
-        orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
-        select: { id: true, status: true, containerNumber: true },
-      });
-
-      const createdJobItems = Array.isArray(createdJob.items)
-        ? createdJob.items
-        : [];
-      if (
-        isContainerBasedTransportJob(dto.jobType, createdJobItems.length)
-        && createdJobItems.length > 0
-      ) {
-        const linkIds = createdJobItems.map((i: { id: string }) => i.id);
-        for (const trip of createdTripsInTx) {
-          await createTripJobItemLinksIfAbsent(tx, {
+      const createTripsAndLinks = async () => {
+        await tx.trip.createMany({
+          data: tripCreateManyForJob(
             tenantId,
-            tripId: trip.id,
-            jobId: createdJob.id,
-            tripStatus: trip.status,
-            previousContainerNumber: trip.containerNumber,
-            jobItemIds: linkIds,
-            linkedByUserId: actorUserId,
-          });
+            createdJob.id,
+            dto.jobType,
+            pickupDateParsed,
+            seededContainerNumber,
+            seededShippingRefs,
+            autoTripRouteSnapshots,
+            {
+              createdByUserId: actorUserId,
+            },
+          ),
+        });
+
+        const createdTripsInTx = await tx.trip.findMany({
+          where: { tenantId, jobId: createdJob.id },
+          orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
+          select: {
+            id: true,
+            status: true,
+            containerNumber: true,
+            jobTripTemplate: true,
+          },
+        });
+
+        const createdJobItems = Array.isArray(createdJob.items)
+          ? createdJob.items
+          : [];
+        // TripJobItem is cargo authority. Link per cargo-movement model
+        // (jobItemIdsForCanonicalAutoTrip) — not cartesian across all legs.
+        if (createdJobItems.length > 0) {
+          const createdItemIds = createdJobItems.map((i: { id: string }) => i.id);
+          for (const trip of createdTripsInTx) {
+            const linkIds = jobItemIdsForCanonicalAutoTrip({
+              jobType: dto.jobType,
+              jobTripTemplate: trip.jobTripTemplate,
+              jobItemIds: createdItemIds,
+            });
+            if (linkIds.length === 0) continue;
+            await createTripJobItemLinksIfAbsent(tx, {
+              tenantId,
+              tripId: trip.id,
+              jobId: createdJob.id,
+              tripStatus: trip.status,
+              previousContainerNumber: trip.containerNumber,
+              jobItemIds: linkIds,
+              linkedByUserId: actorUserId,
+            });
+          }
         }
-      }
+
+        await ensureDefaultTripDocumentRequirementSnapshots(
+          tx,
+          tenantId,
+          createdTripsInTx.map((trip: { id: string }) => trip.id),
+        );
+      };
+
+      await (options?.perf
+        ? options.perf.measure("canonicalJobCreate.tripsAndLinks", () =>
+            createTripsAndLinks(),
+          )
+        : createTripsAndLinks());
 
       return createdJob;
     };
@@ -2680,9 +2734,50 @@ export class TransportJobsService {
     dto: CreateJobDto,
     user: any,
     created: { id: string; internalRef: string | null },
+    options?: {
+      omitHttpPayload?: boolean;
+      tolerateSideEffectFailures?: boolean;
+      onSideEffectWarning?: (warning: {
+        code: "POST_CREATE_FINALIZATION_INCOMPLETE";
+        jobId: string;
+        operation: string;
+      }) => void;
+      perf?: {
+        measure<T>(name: string, fn: () => T | Promise<T>): Promise<T>;
+      };
+    },
   ): Promise<JobDto> {
     const actorUserId: string | null = user?.userId ?? null;
     const jobId = created.id;
+    const measure = async <T>(name: string, fn: () => T | Promise<T>): Promise<T> =>
+      options?.perf ? options.perf.measure(name, fn) : fn();
+    const tolerate = options?.tolerateSideEffectFailures === true;
+    const warn = (operation: string, error?: unknown) => {
+      const detail =
+        error && typeof error === "object" && "message" in error
+          ? String((error as { message?: unknown }).message ?? error)
+          : error;
+      console.error(
+        `[TransportJobsService] Post-create ${operation} failed for job ${jobId}:`,
+        detail ?? "unknown error",
+      );
+      options?.onSideEffectWarning?.({
+        code: "POST_CREATE_FINALIZATION_INCOMPLETE",
+        jobId,
+        operation,
+      });
+    };
+    const runSideEffect = async (
+      operation: string,
+      fn: () => Promise<unknown>,
+    ): Promise<void> => {
+      try {
+        await fn();
+      } catch (error) {
+        if (!tolerate) throw error;
+        warn(operation, error);
+      }
+    };
 
     const createdTrips = await this.prisma.trip.findMany({
       where: { tenantId, jobId },
@@ -2690,94 +2785,170 @@ export class TransportJobsService {
       select: { id: true, status: true, containerNumber: true },
     });
 
-    await ensureDefaultTripDocumentRequirementSnapshots(
-      this.prisma,
-      tenantId,
-      createdTrips.map((trip) => trip.id),
+    await measure("documentSnapshots", () =>
+      runSideEffect("DOCUMENT_SNAPSHOTS", () =>
+        ensureDefaultTripDocumentRequirementSnapshots(
+          this.prisma,
+          tenantId,
+          createdTrips.map((trip) => trip.id),
+        ),
+      ),
     );
 
-    await this.audit.log(
-      tenantId,
-      "CREATE",
-      "JOB",
-      jobId,
-      {
-        createdByUserId: actorUserId,
-        internalRef: created.internalRef,
-        externalRef: normalizeExternalRef(dto.externalRef),
-      },
-      actorUserId,
+    await measure("createAudit", () =>
+      runSideEffect("CREATE_AUDIT", async () => {
+        const alreadyLogged =
+          typeof this.prisma.auditLog?.findFirst === "function"
+            ? await this.prisma.auditLog.findFirst({
+                where: {
+                  tenantId,
+                  entityType: "JOB",
+                  entityId: jobId,
+                  action: "CREATE",
+                },
+                select: { id: true },
+              })
+            : null;
+        if (alreadyLogged) return;
+        await this.audit.log(
+          tenantId,
+          "CREATE",
+          "JOB",
+          jobId,
+          {
+            createdByUserId: actorUserId,
+            internalRef: created.internalRef,
+            externalRef: normalizeExternalRef(dto.externalRef),
+          },
+          actorUserId,
+        );
+      }),
     );
 
     if ((this.prisma as any).masterLogisticsLocation) {
-      await this.syncTripRouteSnapshotForJob(tenantId, jobId, {
-        pickupLat: dto.pickupLat ?? null,
-        pickupLng: dto.pickupLng ?? null,
-        pickupPlaceId: dto.pickupPlaceId ?? null,
-        deliveryLat: dto.deliveryLat ?? null,
-        deliveryLng: dto.deliveryLng ?? null,
-        deliveryPlaceId: dto.deliveryPlaceId ?? null,
-      });
+      await measure("routeSnapshot", () =>
+        runSideEffect("ROUTE_SNAPSHOT", () =>
+          this.syncTripRouteSnapshotForJob(tenantId, jobId, {
+            pickupLat: dto.pickupLat ?? null,
+            pickupLng: dto.pickupLng ?? null,
+            pickupPlaceId: dto.pickupPlaceId ?? null,
+            deliveryLat: dto.deliveryLat ?? null,
+            deliveryLng: dto.deliveryLng ?? null,
+            deliveryPlaceId: dto.deliveryPlaceId ?? null,
+          }),
+        ),
+      );
     }
 
-    await this.syncJobInvoiceReadinessForJob(tenantId, jobId);
+    await measure("invoiceReadiness", () =>
+      runSideEffect("INVOICE_READINESS", () =>
+        this.syncJobInvoiceReadinessForJob(tenantId, jobId),
+      ),
+    );
 
     // Best-effort: auto-generate trip-level DELIVERY_DO for each created trip.
-    // We do not fail whole job creation when document generation/storage fails.
-    for (const trip of createdTrips) {
-      try {
-        await this.generateTripDeliveryDoDocument(
+    // Post-commit side effect: storage/PDF failure is logged and does not roll back Jobs.
+    // Import confirm skips HTTP hydration; load Job once for all trip DOs.
+    // Manual create keeps hydrate-after-DO so the response includes new documents.
+    const doJob =
+      options?.omitHttpPayload && createdTrips.length > 0
+        ? await this.prisma.job.findFirst({
+            where: { id: jobId, tenantId },
+            include: {
+              customerCompany: true,
+              assignedDriver: true,
+              items: { orderBy: { createdAt: "asc" } },
+            },
+          })
+        : null;
+
+    const existingDoTripIds = new Set<string>();
+    if (createdTrips.length && typeof this.prisma.tripDocument?.findMany === "function") {
+      const existingDos = await this.prisma.tripDocument.findMany({
+        where: {
           tenantId,
-          jobId,
-          trip.id,
-          user,
-          "AUTO_CREATE_JOB",
-        );
-      } catch (error: any) {
-        console.error(
-          `[TransportJobsService] Auto-generate trip DELIVERY_DO failed for job ${jobId}, trip ${trip.id}:`,
-          error?.message ?? error,
-        );
+          tripId: { in: createdTrips.map((trip) => trip.id) },
+          type: TripDocumentType.DELIVERY_DO,
+          isActive: true,
+        },
+        select: { tripId: true },
+      });
+      for (const row of existingDos) {
+        if (row?.tripId) existingDoTripIds.add(String(row.tripId));
       }
     }
 
+    await mapWithConcurrency(
+      createdTrips,
+      CANONICAL_JOB_DELIVERY_DO_CONCURRENCY,
+      async (trip: { id: string }) => {
+        if (existingDoTripIds.has(trip.id)) return;
+        try {
+          await measure(`deliveryDo:${trip.id}`, () =>
+            this.generateTripDeliveryDoDocument(
+              tenantId,
+              jobId,
+              trip.id,
+              user,
+              "AUTO_CREATE_JOB",
+              doJob,
+            ),
+          );
+        } catch (error: any) {
+          warn("DELIVERY_DO", error);
+        }
+      },
+    );
+
+    if (options?.omitHttpPayload) {
+      await measure("realtime", () =>
+        runSideEffect("REALTIME", async () => {
+          rt.publishJobEvent(this.realtime, "job.created", tenantId, jobId, {
+            jobInternalRef: created.internalRef,
+            customerCompanyName: doJob?.customerCompany?.name ?? undefined,
+          });
+        }),
+      );
+      return { id: jobId, internalRef: created.internalRef } as JobDto;
+    }
+
     const freshJob = await this.prisma.job.findFirst({
-      where: { id: jobId, tenantId },
-      include: {
-        customerCompany: {
-          select: { id: true, name: true },
-        },
-        sourceCustomerQuotation: {
-          select: sourceCustomerQuotationSelect,
-        },
-        assignedDriver: {
-          select: { id: true, name: true, email: true },
-        },
-        createdBy: {
-          select: { id: true, name: true, email: true },
-        },
-        items: {
-          orderBy: { createdAt: "asc" },
-        },
-        trips: {
-          orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
-          include: {
-            payoutLines: {
-              orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        where: { id: jobId, tenantId },
+        include: {
+          customerCompany: {
+            select: { id: true, name: true },
+          },
+          sourceCustomerQuotation: {
+            select: sourceCustomerQuotationSelect,
+          },
+          assignedDriver: {
+            select: { id: true, name: true, email: true },
+          },
+          createdBy: {
+            select: { id: true, name: true, email: true },
+          },
+          items: {
+            orderBy: { createdAt: "asc" },
+          },
+          trips: {
+            orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
+            include: {
+              payoutLines: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              },
+              _count: { select: { tripJobItems: true } },
             },
-            _count: { select: { tripJobItems: true } },
+          },
+          charges: {
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          },
+          documents: {
+            where: { isActive: true },
+            orderBy: { createdAt: "desc" },
+            include: documentUploadedByInclude,
           },
         },
-        charges: {
-          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-        },
-        documents: {
-          where: { isActive: true },
-          orderBy: { createdAt: "desc" },
-          include: documentUploadedByInclude,
-        },
-      },
-    });
+      });
 
     if (!freshJob) {
       throw new NotFoundException("Job not found after creation");
@@ -2787,15 +2958,24 @@ export class TransportJobsService {
     await this.attachTripAssignedDriverNamesForJobs(tenantId, [jobDto]);
 
     if (freshJob.documents?.length) {
-      jobDto.documents = await Promise.all(
-        freshJob.documents.map((doc: any) => this.attachSignedUrl(doc)),
-      );
+      try {
+        jobDto.documents = await measure("signedUrls", () =>
+          Promise.all(freshJob.documents.map((doc: any) => this.attachSignedUrl(doc))),
+        );
+      } catch (error) {
+        if (!tolerate) throw error;
+        warn("SIGNED_URLS", error);
+      }
     }
 
-    rt.publishJobEvent(this.realtime, "job.created", tenantId, freshJob.id, {
-      jobInternalRef: freshJob.internalRef,
-      customerCompanyName: freshJob.customerCompany?.name ?? undefined,
-    });
+    await measure("realtime", () =>
+      runSideEffect("REALTIME", async () => {
+        rt.publishJobEvent(this.realtime, "job.created", tenantId, freshJob.id, {
+          jobInternalRef: freshJob.internalRef,
+          customerCompanyName: freshJob.customerCompany?.name ?? undefined,
+        });
+      }),
+    );
 
     return jobDto;
   }
@@ -2920,6 +3100,13 @@ export class TransportJobsService {
               orderBy: { createdAt: "desc" },
               include: documentUploadedByInclude,
             },
+            documentRequirements: {
+              select: {
+                type: true,
+                isRequired: true,
+                requiresSignature: true,
+              },
+            },
             _count: { select: { stops: true, tripJobItems: true } },
           },
         },
@@ -2984,6 +3171,20 @@ export class TransportJobsService {
         sortOrder: line.sortOrder,
       }));
 
+      const route = deriveTripRouteSummaryFromJobAndTemplate(job, trip);
+      const itemById = new Map<string, { itemCode?: string | null }>();
+      for (const item of (job.items ?? []) as Array<{ id: string; itemCode?: string | null }>) {
+        if (item?.id) itemById.set(item.id, item);
+      }
+      const cargoLabels = (trip.tripJobItems ?? [])
+        .map((link: { jobItemId: string; containerNumberSnapshot?: string | null }) => {
+          const item = itemById.get(link.jobItemId);
+          return String(item?.itemCode ?? "").trim()
+            || String(link.containerNumberSnapshot ?? "").trim()
+            || "";
+        })
+        .filter(Boolean);
+
       return {
         id: trip.id,
         tripDisplayRef: tripDisplayRefById.get(trip.id) ?? trip.id,
@@ -3004,13 +3205,26 @@ export class TransportJobsService {
         plannedStartAt: trip.plannedStartAt ?? null,
         startedAt: trip.startedAt ?? null,
         closedAt: trip.closedAt ?? null,
-        stopCount: trip._count.stops,
-        containerCount: trip._count.tripJobItems,
+        stopCount: trip._count?.stops ?? 0,
+        containerCount: trip._count?.tripJobItems ?? trip.tripJobItems?.length ?? 0,
         payoutTotalCents: tripPayoutTotalCents(trip.payoutLines),
         payoutLines,
-        documents: trip.documents.map((document) =>
+        documents: (trip.documents ?? []).map((document) =>
           this.toDocumentMetadataDto(document),
         ),
+        fromLabel: route.fromLabel,
+        toLabel: route.toLabel,
+        pendingState: trip.pendingState ?? null,
+        jobTripTemplate: trip.jobTripTemplate ?? null,
+        cargoLabels,
+        incompleteDocumentCount: buildTripCompletionDocumentGaps(
+          (trip.documents ?? []).map((document) => ({
+            type: document.type,
+            signedAt: document.signedAt ?? null,
+            isSigned: Boolean(document.signedAt),
+          })),
+          trip.documentRequirements ?? [],
+        ).length,
       };
     });
 
@@ -3760,22 +3974,34 @@ export class TransportJobsService {
     tripId: string,
     user: any,
     source: "AUTO_CREATE_JOB" | "MANUAL_REGENERATE" = "MANUAL_REGENERATE",
+    cachedJob?: {
+      id: string;
+      items?: unknown[];
+      externalRef?: string | null;
+      internalRef?: string | null;
+      customerCompany?: { name?: string | null } | null;
+      assignedDriver?: unknown;
+      [key: string]: unknown;
+    } | null,
   ) {
     this.assertCustomerCanOnlyRead(user);
     const userId: string | null = user?.userId ?? null;
-    const job = await this.prisma.job.findFirst({
-      where: {
-        id: jobId,
-        tenantId,
-      },
-      include: {
-        customerCompany: true,
-        assignedDriver: true,
-        items: {
-          orderBy: { createdAt: "asc" },
-        },
-      },
-    });
+    const job =
+      cachedJob && cachedJob.id === jobId
+        ? cachedJob
+        : await this.prisma.job.findFirst({
+            where: {
+              id: jobId,
+              tenantId,
+            },
+            include: {
+              customerCompany: true,
+              assignedDriver: true,
+              items: {
+                orderBy: { createdAt: "asc" },
+              },
+            },
+          });
 
     if (!job) {
       throw new NotFoundException("Job not found");
@@ -3794,6 +4020,23 @@ export class TransportJobsService {
       throw new NotFoundException("Trip not found");
     }
 
+    if (source === "AUTO_CREATE_JOB") {
+      const existingAutoDo =
+        typeof this.prisma.tripDocument?.findFirst === "function"
+          ? await this.prisma.tripDocument.findFirst({
+              where: {
+                tenantId,
+                tripId,
+                type: TripDocumentType.DELIVERY_DO,
+                isActive: true,
+              },
+            })
+          : null;
+      if (existingAutoDo) {
+        return this.attachSignedUrl(existingAutoDo);
+      }
+    }
+
     if (!isTripDocumentRequirementFrozen(trip.status)) {
       await ensureDefaultTripDocumentRequirementSnapshots(this.prisma, tenantId, [
         tripId,
@@ -3806,7 +4049,14 @@ export class TransportJobsService {
       TripDocumentType.DELIVERY_DO,
     );
 
+    const pdfStarted = Date.now();
     const pdfBuffer = await this.buildDoPdfBuffer(job);
+    if (process.env.JOB_MESSAGE_IMPORT_CONFIRM_PERF === "1") {
+      console.info("job_message_import_confirm_perf", {
+        name: `deliveryDo.pdf:${tripId}`,
+        ms: Date.now() - pdfStarted,
+      });
+    }
 
     const refForFile =
       job.externalRef?.trim() || job.internalRef?.trim() || job.id;
@@ -3815,6 +4065,7 @@ export class TransportJobsService {
     const fileName = `${safeRef}_delivery-do.pdf`;
     const storageKey = `${tenantId}/jobs/${jobId}/trips/${tripId}/delivery-do/${Date.now()}-${fileName}`;
 
+    const uploadStarted = Date.now();
     const { error: uploadError } = await this.supabaseService
       .getClient()
       .storage.from(JOB_DOCUMENTS_BUCKET)
@@ -3822,6 +4073,12 @@ export class TransportJobsService {
         contentType: "application/pdf",
         upsert: false,
       });
+    if (process.env.JOB_MESSAGE_IMPORT_CONFIRM_PERF === "1") {
+      console.info("job_message_import_confirm_perf", {
+        name: `deliveryDo.storageUpload:${tripId}`,
+        ms: Date.now() - uploadStarted,
+      });
+    }
 
     if (uploadError) {
       throw new BadRequestException(
@@ -4422,7 +4679,14 @@ export class TransportJobsService {
     const requestedLinkIds = normalizeJobItemIdsInput(dto.jobItemIds);
     if (isContainerBasedTransportJob(job.jobType as JobType, jobItems.length)) {
       let linkIds = requestedLinkIds;
-      if (linkIds.length === 0 && jobItems.length === 1) {
+      if (
+        linkIds.length === 0
+        && jobItems.length === 1
+        && canonicalAutoTripCarriesCreatedJobItems(
+          job.jobType as JobType,
+          normalizedTemplate,
+        )
+      ) {
         linkIds = [jobItems[0].id];
       }
       if (linkIds.length > 0) {
@@ -4682,6 +4946,7 @@ export class TransportJobsService {
       vehicleId: string | null;
       fleetVehicleId: string | null;
       jobId?: string | null;
+      jobTripTemplate?: JobTripTemplate | null;
     },
     opts?: {
       jobId?: string | null;
@@ -4742,6 +5007,7 @@ export class TransportJobsService {
       jobType: jobType ?? null,
       jobItemCount: jobItemCount ?? 0,
       linkedJobItemCount: linkedJobItemCount ?? 0,
+      jobTripTemplate: trip.jobTripTemplate ?? null,
     });
     return { readiness, payoutLines };
   }
@@ -4772,7 +5038,7 @@ export class TransportJobsService {
     const jobItems = Array.isArray(job.items) ? job.items : [];
     const trip = await this.prisma.trip.findFirst({
       where: { id: tripId, tenantId, jobId },
-      select: { containerNumber: true },
+      select: { containerNumber: true, jobTripTemplate: true },
     });
     const existingLinks =
       (this.prisma as any).tripJobItem?.findMany
@@ -4786,6 +5052,7 @@ export class TransportJobsService {
       jobItemCount: jobItems.length,
       linkedJobItemCount: existingLinks.length,
       jobItemIds: jobItems.map((i) => i.id),
+      jobTripTemplate: trip?.jobTripTemplate ?? null,
     });
     if (linkReadiness.shouldAutoHealSingleItem && linkReadiness.singleJobItemId) {
       if (!(this.prisma as any).tripJobItem?.createMany && !(this.prisma as any).tripJobItem?.findMany) {
@@ -4979,6 +5246,7 @@ export class TransportJobsService {
         driverId: true,
         vehicleId: true,
         fleetVehicleId: true,
+        jobTripTemplate: true,
       },
     });
     const tripById = new Map(trips.map((t) => [t.id, t] as const));
@@ -5746,6 +6014,7 @@ export class TransportJobsService {
         fleetVehicleId: true,
         containerNumber: true,
         jobId: true,
+        jobTripTemplate: true,
       },
     });
     if (!trip) throw new NotFoundException("Trip not found");
@@ -6249,6 +6518,7 @@ export class TransportJobsService {
         jobType: job.jobType ?? null,
         jobItemCount: job._count?.items ?? 0,
         linkedJobItemCount: t._count?.tripJobItems ?? 0,
+        jobTripTemplate: t.jobTripTemplate ?? null,
       });
       const driverEarningCentsTotal = resolveCanonicalTripPayoutCents({
         driverEarningCents: t.driverEarningCents ?? null,
@@ -6908,7 +7178,7 @@ export class TransportJobsService {
     const documentStatus = deriveTripDocumentStatus(trip.documents ?? []);
     const payoutLines = (trip.payoutLines ?? []).map((line: any) => ({
       id: line.id,
-      sourceRateMasterItemId: line.payoutItemId ?? null,
+      sourceRateMasterItemId: line.earningRateMasterId ?? line.payoutItemId ?? null,
       code: line.code ?? null,
       label: line.label,
       description: line.description ?? null,
@@ -6968,6 +7238,7 @@ export class TransportJobsService {
       jobType: trip.job?.jobType ?? null,
       jobItemCount: cargoItems.length,
       linkedJobItemCount: tripJobItemLinks.length,
+      jobTripTemplate: trip.jobTripTemplate ?? null,
     });
     const cargoBuilt = buildTripCargoFromLinks({
       jobType: trip.job?.jobType,
@@ -7334,7 +7605,9 @@ export class TransportJobsService {
       return {
         idx,
         sourceRateMasterItemId:
-          line.sourceRateMasterItemId ?? line.payoutItemId ?? null,
+          line.sourceRateMasterItemId ?? line.payoutItemId ?? line.earningRateMasterId ?? null,
+        payoutItemId: null as string | null,
+        earningRateMasterId: null as string | null,
         code: line.code ?? null,
         label: String(line.label ?? "").trim(),
         description: line.description ?? null,
@@ -7366,10 +7639,20 @@ export class TransportJobsService {
             `payoutLines[${line.idx}] requires amountCents for manual payout item "${sourceItem.label}"`,
           );
         }
+        if (typeof (sourceItem as { datasetId?: string }).datasetId === "string") {
+          line.earningRateMasterId = sourceItem.id;
+          line.payoutItemId = null;
+        } else {
+          line.payoutItemId = sourceItem.id;
+          line.earningRateMasterId = null;
+        }
       }
     }
 
     const totalDriverEarningCents = payoutCacheCentsToPersist(normalized);
+    const selectedIsDataset =
+      selectedMaster != null
+      && typeof (selectedMaster as { datasetId?: string }).datasetId === "string";
 
     await this.prisma.$transaction(async (tx) => {
       await tx.tripPayoutLine.deleteMany({ where: { tenantId, tripId } });
@@ -7380,8 +7663,8 @@ export class TransportJobsService {
             tenantId,
             tripId,
             sourceType: JobChargeSourceType.DRIVER_RATE_MASTER,
-            payoutItemId: line.sourceRateMasterItemId,
-            earningRateMasterId: null,
+            payoutItemId: line.payoutItemId,
+            earningRateMasterId: line.earningRateMasterId,
             code: line.code,
             label: line.label,
             description: line.description,
@@ -7400,8 +7683,8 @@ export class TransportJobsService {
       await tx.trip.update({
         where: { id: tripId },
         data: {
-          earningRateMasterId: null,
-          payoutItemId: selectedMaster?.id ?? null,
+          earningRateMasterId: selectedIsDataset ? selectedMaster.id : null,
+          payoutItemId: selectedMaster && !selectedIsDataset ? selectedMaster.id : null,
           driverEarningCents: totalDriverEarningCents,
           earningLabelSnapshot: normalized.length
             ? `${normalized.length} payout items`

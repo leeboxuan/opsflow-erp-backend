@@ -2,14 +2,13 @@ import { JobStatus, JobType } from "@prisma/client";
 import type { CreateJobDto } from "../dto/create-job.dto";
 import {
   assertCreateJobItemsRequiredForJobType,
-  assertDeliveryLocationForCreate,
-  assertImportPickupSourceForCreate,
-  assertPickupLocationForCreate,
   parseValidJobItemsFromInput,
   resolveCollectionTypeForJobCreate,
-  resolveExportDestinationFields,
-  resolveExportPickupFields,
 } from "../create-job-validation.helpers";
+import {
+  assertCanonicalRouteLocationsForCreate,
+  resolveCanonicalRouteLocations,
+} from "../job-route-locations";
 import { movementTypeToJobType } from "./job-message-import.validator";
 import type { ControllerReviewedDraft } from "./job-message-import.types";
 import { zonedLocalDateTimeToUtc } from "./job-message-import.timing";
@@ -91,9 +90,6 @@ export function reviewedDraftToCreateJobDto(input: {
   if (!reviewed.customerCompanyId) {
     throw new Error("MISSING_CUSTOMER");
   }
-  if (!reviewed.pickupAddress1 || !reviewed.deliveryAddress1) {
-    throw new Error("MISSING_LOCATION");
-  }
 
   const collectionType =
     jobType === JobType.COLLECTION
@@ -104,46 +100,55 @@ export function reviewedDraftToCreateJobDto(input: {
   const validItems = parseValidJobItemsFromInput(mappedItems, jobType);
   assertCreateJobItemsRequiredForJobType(jobType, mappedItems, validItems);
 
-  if (jobType === JobType.IMPORT) {
-    assertImportPickupSourceForCreate({
-      pickupPortCode: null,
-      pickupAddress1: reviewed.pickupAddress1,
-      pickupPlaceId: reviewed.pickupPlaceId,
-    });
-    assertDeliveryLocationForCreate({
-      jobType: JobType.IMPORT,
-      deliveryAddress1: reviewed.deliveryAddress1,
-      deliveryPlaceId: reviewed.deliveryPlaceId,
-    });
-  } else if (jobType === JobType.EXPORT) {
-    const exportPickup = resolveExportPickupFields({
-      pickupAddress1: reviewed.pickupAddress1,
-    });
-    assertPickupLocationForCreate({
-      jobType: JobType.EXPORT,
-      pickupAddress1: exportPickup.address1,
-      pickupPlaceId: reviewed.pickupPlaceId,
-    });
-    assertDeliveryLocationForCreate({
-      jobType: JobType.EXPORT,
-      deliveryAddress1: reviewed.deliveryAddress1,
-      deliveryPlaceId: reviewed.deliveryPlaceId,
-      stuffingAddress1: null,
-    });
-    void resolveExportDestinationFields({
-      deliveryAddress1: reviewed.deliveryAddress1,
-    });
-  } else {
-    assertPickupLocationForCreate({
-      jobType,
-      pickupAddress1: reviewed.pickupAddress1,
-      pickupPlaceId: reviewed.pickupPlaceId,
-    });
-    assertDeliveryLocationForCreate({
-      jobType,
-      deliveryAddress1: reviewed.deliveryAddress1,
-      deliveryPlaceId: reviewed.deliveryPlaceId,
-    });
+  const routeLocations = resolveCanonicalRouteLocations({
+    jobType,
+    pickupAddress1: reviewed.pickupAddress1,
+    pickupAddress2: reviewed.pickupAddress2,
+    pickupPostal: reviewed.pickupPostal,
+    pickupPlaceId: reviewed.pickupPlaceId,
+    pickupLat: reviewed.pickupLat,
+    pickupLng: reviewed.pickupLng,
+    pickupContactName: reviewed.picName,
+    pickupContactPhone: reviewed.picPhone,
+    deliveryAddress1: reviewed.deliveryAddress1,
+    deliveryAddress2: reviewed.deliveryAddress2,
+    deliveryPostal: reviewed.deliveryPostal,
+    deliveryPlaceId: reviewed.deliveryPlaceId,
+    deliveryLat: reviewed.deliveryLat,
+    deliveryLng: reviewed.deliveryLng,
+    receiverName: reviewed.picName,
+    receiverPhone: reviewed.picPhone,
+    exportDetails:
+      jobType === JobType.EXPORT
+        ? {
+            stuffingAddress1: reviewed.deliveryAddress1,
+            stuffingContactName: reviewed.picName,
+            stuffingContactPhone: reviewed.picPhone,
+            exportPortAddress1: reviewed.portAddress1,
+            exportPortAddress2: reviewed.portAddress2,
+            exportPortPostal: reviewed.portPostal,
+            exportPortPlaceId: reviewed.portPlaceId,
+            exportPortLat: reviewed.portLat,
+            exportPortLng: reviewed.portLng,
+          }
+        : null,
+    importDetails:
+      jobType === JobType.IMPORT
+        ? {
+            returningDepotAddress1: reviewed.returningDepotAddress1,
+            returningDepotAddress2: reviewed.returningDepotAddress2,
+            returningDepotPostal: reviewed.returningDepotPostal,
+            returningDepotPlaceId: reviewed.returningDepotPlaceId,
+            returningDepotLat: reviewed.returningDepotLat,
+            returningDepotLng: reviewed.returningDepotLng,
+            returningDepotCode: reviewed.returningDepotCode,
+          }
+        : null,
+  });
+  try {
+    assertCanonicalRouteLocationsForCreate(jobType, routeLocations);
+  } catch {
+    throw new Error("MISSING_LOCATION");
   }
 
   const pickupDate = reviewed.pickupDateLocal
@@ -188,6 +193,37 @@ export function reviewedDraftToCreateJobDto(input: {
       pickupReference: it.pickupReference ?? undefined,
       qty: it.qty ?? undefined,
     })),
+    importDetails:
+      jobType === JobType.IMPORT
+        ? {
+            returningDepotAddress1: reviewed.returningDepotAddress1,
+            returningDepotAddress2: reviewed.returningDepotAddress2,
+            returningDepotPostal: reviewed.returningDepotPostal,
+            returningDepotPlaceId: reviewed.returningDepotPlaceId,
+            returningDepotLat: reviewed.returningDepotLat,
+            returningDepotLng: reviewed.returningDepotLng,
+            returningDepotCode: reviewed.returningDepotCode,
+          }
+        : undefined,
+    exportDetails:
+      jobType === JobType.EXPORT
+        ? {
+            stuffingAddress1: reviewed.deliveryAddress1,
+            stuffingAddress2: reviewed.deliveryAddress2,
+            stuffingPostal: reviewed.deliveryPostal,
+            stuffingContactName: reviewed.picName,
+            stuffingContactPhone: reviewed.picPhone,
+            containerPickupAddress1: reviewed.pickupAddress1,
+            containerPickupAddress2: reviewed.pickupAddress2,
+            containerPickupPostal: reviewed.pickupPostal,
+            exportPortAddress1: reviewed.portAddress1,
+            exportPortAddress2: reviewed.portAddress2,
+            exportPortPostal: reviewed.portPostal,
+            exportPortPlaceId: reviewed.portPlaceId,
+            exportPortLat: reviewed.portLat,
+            exportPortLng: reviewed.portLng,
+          }
+        : undefined,
   };
 }
 

@@ -523,6 +523,29 @@ export class JobDetailsTripDto {
 
   payoutLines!: JobDetailsTripPayoutLineDto[];
   documents!: JobDocumentDto[];
+
+  @ApiPropertyOptional({ description: "Trip origin label for compact Job Details summaries." })
+  fromLabel?: string | null;
+
+  @ApiPropertyOptional({ description: "Trip destination label for compact Job Details summaries." })
+  toLabel?: string | null;
+
+  @ApiPropertyOptional()
+  pendingState?: string | null;
+
+  @ApiPropertyOptional()
+  jobTripTemplate?: string | null;
+
+  @ApiPropertyOptional({
+    description: "Linked cargo labels from TripJobItem (not Trip.containerNumber).",
+    type: [String],
+  })
+  cargoLabels?: string[];
+
+  @ApiPropertyOptional({
+    description: "Count of incomplete trip document requirements from existing completion helpers.",
+  })
+  incompleteDocumentCount?: number;
 }
 
 export class JobPayoutSummaryDto {

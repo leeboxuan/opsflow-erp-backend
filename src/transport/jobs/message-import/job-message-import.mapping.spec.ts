@@ -1,5 +1,5 @@
 import { JobMessageImportMovementType, JobStatus, JobType } from "@prisma/client";
-import { reviewedDraftToCanonicalJobCreate } from "./job-message-import.mapping";
+import { reviewedDraftToCanonicalJobCreate, reviewedDraftToCreateJobDto } from "./job-message-import.mapping";
 import { normalizeReviewedDraft } from "./job-message-import.validator";
 
 describe("reviewedDraftToCanonicalJobCreate", () => {
@@ -9,6 +9,7 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
       customerCompanyId: "comp_1",
       pickupAddress1: "Tuas",
       deliveryAddress1: "DB warehouse",
+      returningDepotAddress1: "Tuas Depot",
       picName: "Shuman",
       picPhone: "96440435",
       timingText: "morning asap",
@@ -37,6 +38,9 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
     expect(canonical.items[0].sealNo).toBe("FJ28581743");
     expect(canonical.notes).toContain("morning asap");
     expect(canonical.carrierName).toBe("ocean");
+    expect((reviewedDraftToCreateJobDto({ reviewed, timezone: "Asia/Singapore" }) as any).importDetails.returningDepotAddress1).toBe(
+      "Tuas Depot",
+    );
   });
 
   it("does not invent missing PIC values", () => {
@@ -67,6 +71,7 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
       customerCompanyId: "comp_1",
       pickupAddress1: "CONTROLLER PICKUP",
       deliveryAddress1: "CONTROLLER DELIVERY",
+      returningDepotAddress1: "Tuas Depot",
       items: [{ containerNumber: "GESU6311344", sealNumber: null, referenceNumber: null, quantity: 1 }],
     });
     const canonical = reviewedDraftToCanonicalJobCreate({
@@ -76,5 +81,25 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
     expect(canonical.pickupDate).toBeNull();
     expect(canonical.pickupAddress1).toBe("CONTROLLER PICKUP");
     expect(canonical.deliveryAddress1).toBe("CONTROLLER DELIVERY");
+  });
+
+  it("EXPORT mapping fills depot, customer, and port without substituting customer for port", () => {
+    const reviewed = normalizeReviewedDraft({
+      movementType: JobMessageImportMovementType.EXPORT,
+      customerCompanyId: "comp_1",
+      pickupAddress1: "PSA Empty Depot",
+      deliveryAddress1: "Nat Test Company",
+      portAddress1: "Pasir Panjang Terminal",
+      items: [{ containerNumber: "MSCU1234567", sealNumber: null, referenceNumber: null, quantity: 1 }],
+    });
+    const dto = reviewedDraftToCreateJobDto({
+      reviewed,
+      timezone: "Asia/Singapore",
+    });
+    expect(dto.pickupAddress1).toBe("PSA Empty Depot");
+    expect(dto.deliveryAddress1).toBe("Nat Test Company");
+    expect(dto.exportDetails?.exportPortAddress1).toBe("Pasir Panjang Terminal");
+    expect(dto.exportDetails?.stuffingAddress1).toBe("Nat Test Company");
+    expect(dto.exportDetails?.exportPortAddress1).not.toBe(dto.deliveryAddress1);
   });
 });

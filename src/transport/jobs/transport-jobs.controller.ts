@@ -691,7 +691,7 @@ export class TransportJobsController {
           metadata: {
             generatedBySystem: true,
             generatedSource: "AUTO_CREATE_JOB",
-            displayTitle: "Port to Delivery Point",
+            displayTitle: "Port to Customer",
           },
           createdAt: "2026-04-24T10:00:00.000Z",
         },
@@ -713,7 +713,7 @@ export class TransportJobsController {
             generatedBySystem: true,
             generatedSource: "MANUAL_REGENERATE",
             previousDocumentId: "tripdoc_delivery_do_01",
-            displayTitle: "Port to Delivery Point",
+            displayTitle: "Port to Customer",
           },
           createdAt: "2026-04-24T10:20:00.000Z",
         },
@@ -1202,7 +1202,7 @@ export class TransportJobsController {
         previewUrl: "https://signed.example/preview/tripdoc_delivery_do_active_02",
         downloadUrl: "https://signed.example/download/tripdoc_delivery_do_active_02",
         tripSequence: 1,
-        displayTitle: "Port to Delivery Point",
+        displayTitle: "Port to Customer",
       },
     },
   })

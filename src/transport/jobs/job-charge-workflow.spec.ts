@@ -682,7 +682,7 @@ describe("job charge workflow hardening", () => {
     expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(2);
   });
 
-  it("IMPORT create without return location stores null returningDepotCode and generates one trip", async () => {
+  it("IMPORT create without return depot is rejected", async () => {
     const prisma: any = withCreateJobTransaction({
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
@@ -730,6 +730,72 @@ describe("job charge workflow hardening", () => {
     jest.spyOn(svc as any, "attachTripAssignedDriverNamesForJobs").mockResolvedValue(undefined);
     jest.spyOn(svc as any, "syncJobInvoiceReadinessForJob").mockResolvedValue(undefined);
 
+    await expect(
+      svc.create(
+        "t1",
+        {
+          jobType: JobType.IMPORT,
+          customerCompanyId: "comp1",
+          pickupAddress1: "Jurong Port",
+          deliveryAddress1: "Addr",
+          receiverName: "Receiver",
+          receiverPhone: "123",
+          importDetails: { pickupPortCode: "JURONG" },
+        } as any,
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
+      ),
+    ).rejects.toThrow("Empty container return depot is required.");
+    expect(prisma.job.create).not.toHaveBeenCalled();
+  });
+
+  it("IMPORT create with return depot address generates two trips and stores null returningDepotCode", async () => {
+    const prisma: any = withCreateJobTransaction({
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
+      },
+      masterLogisticsLocation: {
+        findFirst: jest.fn().mockResolvedValue({ code: "JURONG", name: "Jurong Port", type: "PORT" }),
+      },
+      job_internal_ref_counters: {
+        upsert: jest.fn().mockResolvedValue({ nextSeq: 1 }),
+      },
+      job: {
+        create: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "comp1",
+          jobType: JobType.IMPORT,
+          customerCompany: { id: "comp1", name: "Customer A" },
+          items: [],
+        }),
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          jobType: JobType.IMPORT,
+          status: "ONGOING",
+          customerCompany: { id: "comp1", name: "Customer A" },
+          assignedDriver: null,
+          createdBy: null,
+          items: [],
+          trips: [],
+          charges: [],
+          documents: [],
+        }),
+      },
+      trip: {
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    });
+    const svc = new TransportJobsService(
+      prisma,
+      { log: jest.fn() } as any,
+      { getClient: jest.fn() } as any,
+    );
+    jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
+    jest.spyOn(svc as any, "attachTripAssignedDriverNamesForJobs").mockResolvedValue(undefined);
+    jest.spyOn(svc as any, "syncJobInvoiceReadinessForJob").mockResolvedValue(undefined);
+
     await svc.create(
       "t1",
       {
@@ -739,14 +805,17 @@ describe("job charge workflow hardening", () => {
         deliveryAddress1: "Addr",
         receiverName: "Receiver",
         receiverPhone: "123",
-        importDetails: { pickupPortCode: "JURONG" },
+        importDetails: {
+          pickupPortCode: "JURONG",
+          returningDepotAddress1: "Tuas Depot",
+        },
       } as any,
       { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
     const data = prisma.job.create.mock.calls[0][0].data;
     expect(data.returningDepotCode).toBeNull();
-    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(1);
+    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(2);
   });
 
   it("create job accepts nested exportDetails and maps export routing fields", async () => {
@@ -894,7 +963,7 @@ describe("job charge workflow hardening", () => {
     expect(data.deliveryAddress1).toBe("Stuffing A1");
     expect(data.receiverName).toBe("Stuffing PIC");
     expect(data.receiverPhone).toBe("99999999");
-    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(1);
+    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(3);
   });
 
   it("invoice draft from jobs uses saved JobCharge rows and fails if any selected job has none", async () => {
@@ -2705,6 +2774,90 @@ describe("job charge workflow hardening", () => {
         driverEarningCents: 5000,
       }),
     });
+  });
+
+  it("saveTripPayoutDraft snapshots TRUCKING_RATES onto earningRateMasterId without live master coupling", async () => {
+    const tripUpdate = jest.fn().mockResolvedValue({});
+    const createMany = jest.fn().mockResolvedValue({ count: 1 });
+    const liveRow = {
+      id: "trucking-row-a1",
+      datasetId: "dataset-current",
+      tenantId: "t1",
+      code: "A-1",
+      label: "Normal full trip",
+      rateCents: 1800,
+      requiresManualAmount: false,
+      isActive: true,
+    };
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          tenantId: "t1",
+          jobId: "job1",
+          status: "DRAFT",
+        }),
+        update: tripUpdate,
+      },
+      tripPayoutLine: {
+        deleteMany: jest.fn().mockResolvedValue({}),
+        createMany,
+      },
+      masterRateDataset: {
+        findFirst: jest.fn().mockResolvedValue({ id: "dataset-current" }),
+      },
+      masterRateDatasetRow: {
+        findFirst: jest.fn().mockResolvedValue(liveRow),
+      },
+      driverPayoutItem: { findFirst: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn(async (fn: any) => fn(prisma)),
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
+    jest.spyOn(svc, "getOne").mockResolvedValue({ id: "job1" } as any);
+    await svc.saveTripPayoutDraft(
+      "t1",
+      "job1",
+      "trip1",
+      {
+        earningRateMasterId: "trucking-row-a1",
+        payoutLines: [
+          {
+            sourceRateMasterItemId: "trucking-row-a1",
+            code: "A-1",
+            label: "Normal full trip",
+            quantity: 1,
+            amountCents: 1800,
+            totalCents: 1800,
+            isManual: false,
+          } as any,
+        ],
+      } as any,
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
+    );
+    expect(createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          earningRateMasterId: "trucking-row-a1",
+          payoutItemId: null,
+          amountCents: 1800,
+          totalCents: 1800,
+          code: "A-1",
+          label: "Normal full trip",
+        }),
+      ],
+    });
+    expect(tripUpdate).toHaveBeenCalledWith({
+      where: { id: "trip1" },
+      data: expect.objectContaining({
+        earningRateMasterId: "trucking-row-a1",
+        payoutItemId: null,
+        driverEarningCents: 1800,
+      }),
+    });
+    liveRow.rateCents = 9999;
+    expect(createMany.mock.calls[0][0].data[0].amountCents).toBe(1800);
   });
 
   it("saveTripPayoutDraft supports multiple lines and sums total", async () => {

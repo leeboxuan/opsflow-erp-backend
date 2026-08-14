@@ -63,6 +63,14 @@ export const TRIP_COMPLETION_RULES: Record<JobTripTemplate, TripCompletionRule> 
       requiredUploadTypesExact: [TripDocumentType.POD_SIGNATURE],
     },
   },
+  [JobTripTemplate.PORT_TO_DEPOT]: {
+    requireGeneratedDoSigned: true,
+    tripUploads: {
+      minUploadCount: 1,
+      allowedUploadTypes: [TripDocumentType.PICKUP_DO],
+      requiredUploadTypesExact: [TripDocumentType.PICKUP_DO],
+    },
+  },
   [JobTripTemplate.CUSTOMER_TO_GUL]: {
     requireGeneratedDoSigned: true,
     tripUploads: {
@@ -273,6 +281,8 @@ export function jobTripTemplateDisplayLabel(template: JobTripTemplate): string {
       return "Depot → Delivery";
     case JobTripTemplate.DELIVERY_TO_PORT:
       return "Delivery → Port";
+    case JobTripTemplate.PORT_TO_DEPOT:
+      return "Port → Depot";
     case JobTripTemplate.CUSTOMER_TO_GUL:
       return "Customer → Gul Circle";
     case JobTripTemplate.GUL_TO_CUSTOMER:
@@ -539,95 +549,128 @@ export type DefaultTripSeed = {
   plannedStartAt: Date | null;
 };
 
-export type BuildDefaultTripSeedsOptions = {
-  /**
-   * IMPORT only. When true (return location resolved on the job), adds a second
-   * delivery → return leg. When false/omitted, IMPORT gets one port → delivery leg.
-   */
-  importHasReturnLocation?: boolean;
-};
-
 export type TripCreateManyForJobOptions = {
   createdByUserId?: string | null;
-  tripSeedOptions?: BuildDefaultTripSeedsOptions;
 };
 
 /**
- * Default trip legs generated on job create.
+ * Canonical auto-trip templates for every Job create channel
+ * (manual Create Job, AI / WhatsApp reviewed import, Excel, future intake).
  *
- * - LCL: 1 trip — pickup → delivery
- * - COLLECTION: 1 trip — pickup → delivery
- * - EXPORT: 1 trip — pickup → delivery/export location
- * - IMPORT without return location: 1 trip — port/terminal → delivery
- * - IMPORT with return location: 2 trips — port/terminal → delivery, then delivery → return
+ * Sequences are 1-based and contiguous. Do not branch by intake channel.
+ *
+ * - EXPORT: Depot → Customer, Customer → Port, Port → Depot
+ * - IMPORT: Port → Customer, Customer → Depot
+ * - LCL: Pickup → Delivery
+ * - COLLECTION: Pickup → Delivery (same count as LCL)
  */
+export const CANONICAL_AUTO_TRIP_TEMPLATES: Record<
+  JobType,
+  JobTripTemplate[]
+> = {
+  [JobType.EXPORT]: [
+    JobTripTemplate.DEPOT_TO_DELIVERY,
+    JobTripTemplate.DELIVERY_TO_PORT,
+    JobTripTemplate.PORT_TO_DEPOT,
+  ],
+  [JobType.IMPORT]: [
+    JobTripTemplate.PICKUP_TO_DELIVERY,
+    JobTripTemplate.DELIVERY_TO_DEPOT,
+  ],
+  [JobType.LCL]: [JobTripTemplate.PICKUP_TO_DELIVERY],
+  [JobType.COLLECTION]: [JobTripTemplate.PICKUP_TO_DELIVERY],
+};
+
+/**
+ * Cargo-movement model for canonical auto-trips (`TripJobItem`).
+ *
+ * Do not cartesian-link every JobItem onto every auto-leg. Same JobItem on
+ * multiple legs means the same cargo actually moves on each of those legs.
+ *
+ * IMPORT — each created container JobItem on both legs:
+ *   1. Port → Customer (`PICKUP_TO_DELIVERY`) — laden
+ *   2. Customer → Depot (`DELIVERY_TO_DEPOT`) — empty return of the same boxes
+ *
+ * EXPORT — each created container JobItem on stuffing / gate-in only:
+ *   1. Depot → Customer (`DEPOT_TO_DELIVERY`) — empty to stuffing
+ *   2. Customer → Port (`DELIVERY_TO_PORT`) — laden to port
+ *   3. Port → Depot (`PORT_TO_DEPOT`) — does not carry those JobItems
+ *      (the export box remains at port; this leg is truck/empty reposition).
+ *      Controllers may later link different cargo.
+ *
+ * LCL / COLLECTION — all created JobItems on the single Pickup → Delivery trip.
+ */
+export function canonicalAutoTripCarriesCreatedJobItems(
+  jobType: JobType,
+  jobTripTemplate: JobTripTemplate | null | undefined,
+): boolean {
+  if (jobType === JobType.EXPORT && jobTripTemplate === JobTripTemplate.PORT_TO_DEPOT) {
+    return false;
+  }
+  return true;
+}
+
+export function jobItemIdsForCanonicalAutoTrip(input: {
+  jobType: JobType;
+  jobTripTemplate: JobTripTemplate | null | undefined;
+  jobItemIds: string[];
+}): string[] {
+  if (
+    !canonicalAutoTripCarriesCreatedJobItems(
+      input.jobType,
+      input.jobTripTemplate,
+    )
+  ) {
+    return [];
+  }
+  return input.jobItemIds;
+}
+
+const CANONICAL_AUTO_TRIP_TITLES: Record<JobType, string[]> = {
+  [JobType.EXPORT]: ["Depot to Customer", "Customer to Port", "Port to Depot"],
+  [JobType.IMPORT]: ["Port to Customer", "Customer to Depot"],
+  [JobType.LCL]: ["Pickup to Delivery"],
+  [JobType.COLLECTION]: ["Pickup to Delivery"],
+};
+
+function contiguousDefaultTripSeeds(
+  jobType: JobType,
+  pickupDate: Date | null,
+): DefaultTripSeed[] {
+  const templates = CANONICAL_AUTO_TRIP_TEMPLATES[jobType];
+  const titles = CANONICAL_AUTO_TRIP_TITLES[jobType];
+  if (!templates?.length || !titles?.length) {
+    return [
+      {
+        jobSequence: 1,
+        tripSequence: 1,
+        displayTitle: "Main leg",
+        jobTripTemplate: JobTripTemplate.CUSTOM,
+        title: "Main leg",
+        plannedStartAt: pickupDate,
+      },
+    ];
+  }
+  return templates.map((jobTripTemplate, index) => {
+    const title = titles[index] ?? jobTripTemplateDisplayLabel(jobTripTemplate);
+    const sequence = index + 1;
+    return {
+      jobSequence: sequence,
+      tripSequence: sequence,
+      displayTitle: title,
+      jobTripTemplate,
+      title,
+      // Job pickupDate is the first operational trip's service time.
+      plannedStartAt: sequence === 1 ? pickupDate : null,
+    };
+  });
+}
+
 export function buildDefaultTripSeeds(
   jobType: JobType,
   pickupDate: Date | null,
-  options?: BuildDefaultTripSeedsOptions,
 ): DefaultTripSeed[] {
-  const planned = pickupDate;
-
-  if (jobType === JobType.LCL || jobType === JobType.COLLECTION) {
-    return [
-      {
-        jobSequence: 1,
-        tripSequence: 1,
-        displayTitle: "Delivery",
-        jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
-        title: "Delivery",
-        plannedStartAt: planned,
-      },
-    ];
-  }
-
-  if (jobType === JobType.IMPORT) {
-    const legs: DefaultTripSeed[] = [
-      {
-        jobSequence: 1,
-        tripSequence: 1,
-        displayTitle: "Port to Delivery Point",
-        jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
-        title: "Port to Delivery Point",
-        plannedStartAt: planned,
-      },
-    ];
-    if (options?.importHasReturnLocation) {
-      legs.push({
-        jobSequence: 2,
-        tripSequence: 2,
-        displayTitle: "Delivery Point to Return",
-        jobTripTemplate: JobTripTemplate.DELIVERY_TO_DEPOT,
-        title: "Delivery Point to Return",
-        plannedStartAt: planned,
-      });
-    }
-    return legs;
-  }
-
-  if (jobType === JobType.EXPORT) {
-    return [
-      {
-        jobSequence: 1,
-        tripSequence: 1,
-        displayTitle: "Pickup to Export Point",
-        jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
-        title: "Pickup to Export Point",
-        plannedStartAt: planned,
-      },
-    ];
-  }
-
-  return [
-    {
-      jobSequence: 1,
-      tripSequence: 1,
-      displayTitle: "Main leg",
-      jobTripTemplate: JobTripTemplate.CUSTOM,
-      title: "Main leg",
-      plannedStartAt: planned,
-    },
-  ];
+  return contiguousDefaultTripSeeds(jobType, pickupDate);
 }
 
 /**
@@ -707,7 +750,42 @@ export function lclPickupToDeliveryRouteSnapshot(
   };
 }
 
-/** Bulk-create default trips for a new job. Pass `options.tripSeedOptions.importHasReturnLocation` for IMPORT jobs with a return depot. */
+/**
+ * @deprecated Prefer canonicalAutoTripRouteSnapshots from job-route-locations.
+ * Kept for existing unit tests that only seed the customer site on EXPORT legs 1–2.
+ */
+export function exportCustomerRouteSnapshots(
+  input: JobAddressRouteInput,
+): Partial<Record<JobTripTemplate, Partial<Prisma.TripCreateManyInput>>> {
+  const customerLabel = String(input.deliveryAddress1 ?? "").trim() || null;
+  const customerLine2 = String(input.deliveryAddress2 ?? "").trim() || null;
+  const customerPostal = String(input.deliveryPostal ?? "").trim() || null;
+  const customerPlaceId = String(input.deliveryPlaceId ?? "").trim() || null;
+  return {
+    [JobTripTemplate.DEPOT_TO_DELIVERY]: {
+      destinationLabel: customerLabel,
+      destinationAddressLine1: customerLabel,
+      destinationAddressLine2: customerLine2,
+      destinationPostalCode: customerPostal,
+      destinationCountry: "SG",
+      destinationLat: input.deliveryLat ?? null,
+      destinationLng: input.deliveryLng ?? null,
+      destinationPlaceId: customerPlaceId,
+    },
+    [JobTripTemplate.DELIVERY_TO_PORT]: {
+      originLabel: customerLabel,
+      originAddressLine1: customerLabel,
+      originAddressLine2: customerLine2,
+      originPostalCode: customerPostal,
+      originCountry: "SG",
+      originLat: input.deliveryLat ?? null,
+      originLng: input.deliveryLng ?? null,
+      originPlaceId: customerPlaceId,
+    },
+  };
+}
+
+/** Bulk-create default trips for a new job. Templates come only from `buildDefaultTripSeeds`. */
 export function tripCreateManyForJob(
   tenantId: string,
   jobId: string,
@@ -732,7 +810,7 @@ export function tripCreateManyForJob(
     containerNumber,
     shippingRefs,
   );
-  return buildDefaultTripSeeds(jobType, pickupDate, options?.tripSeedOptions).map((s) => {
+  return buildDefaultTripSeeds(jobType, pickupDate).map((s) => {
     const row: Prisma.TripCreateManyInput = {
       tenantId,
       jobId,
@@ -751,6 +829,10 @@ export function tripCreateManyForJob(
       completionRuleJson: completionRuleForTemplate(s.jobTripTemplate),
       ...(routeSnapshots?.[s.jobTripTemplate] ?? {}),
     };
+
+    if (!canonicalAutoTripCarriesCreatedJobItems(jobType, s.jobTripTemplate)) {
+      row.containerNumber = null;
+    }
 
     // LCL/COLLECTION: never persist container/shipping defaults on bulk-generated legs.
     if (jobType === JobType.LCL || jobType === JobType.COLLECTION) {

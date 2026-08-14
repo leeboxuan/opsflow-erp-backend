@@ -8,11 +8,15 @@
  */
 
 import {
+  JobTripTemplate,
   JobType,
   TripStatus,
   type Prisma,
 } from "@prisma/client";
-import { isContainerCargoJobType } from "../workflows/job-workflow.helpers";
+import {
+  canonicalAutoTripCarriesCreatedJobItems,
+  isContainerCargoJobType,
+} from "../workflows/job-workflow.helpers";
 
 export type LinkedCargoItemDto = {
   id: string;
@@ -244,8 +248,25 @@ export function evaluateTripPublishLinkReadiness(input: {
   jobItemCount: number;
   linkedJobItemCount: number;
   jobItemIds?: string[];
+  jobTripTemplate?: JobTripTemplate | null;
 }): TripPublishLinkReadiness {
   if (!isContainerBasedTransportJob(input.jobType, input.jobItemCount)) {
+    return {
+      required: false,
+      satisfied: true,
+      shouldAutoHealSingleItem: false,
+      singleJobItemId: null,
+      errorMessage: null,
+    };
+  }
+
+  if (
+    input.jobType
+    && !canonicalAutoTripCarriesCreatedJobItems(
+      input.jobType,
+      input.jobTripTemplate,
+    )
+  ) {
     return {
       required: false,
       satisfied: true,

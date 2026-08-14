@@ -54,7 +54,7 @@ describe("create job items (LCL optional)", () => {
         assertImportPickupSourceForCreate({ pickupPlaceId: "ChIJ-import" }),
       ).not.toThrow();
       expect(() => assertImportPickupSourceForCreate({})).toThrow(
-        /Pickup location is required/i,
+        /Import port \/ terminal is required/i,
       );
     });
 
@@ -85,7 +85,7 @@ describe("create job items (LCL optional)", () => {
       ).not.toThrow();
       expect(() =>
         assertPickupLocationForCreate({ jobType: JobType.EXPORT }),
-      ).toThrow(/Pickup location is required/i);
+      ).toThrow(/Empty container depot is required/i);
     });
   });
 
@@ -292,6 +292,7 @@ describe("create job items (LCL optional)", () => {
           pickupPostal: "117352",
           importDetails: {
             pickupPortCode: "JURONG",
+            returningDepotAddress1: "Tuas Depot",
           },
         } as any,
         { userId: "u1", role: Role.TRANSPORT_STAFF },
@@ -333,12 +334,13 @@ describe("create job items (LCL optional)", () => {
           pickupPostal: null,
           importDetails: {
             pickupPortCode: "JURONG",
+            returningDepotAddress1: "Tuas Depot",
           },
         } as any,
         { userId: "u1", role: Role.TRANSPORT_STAFF },
       );
 
-      expect(prisma.trip.createMany.mock.calls[0][0].data[0].originAddressLine1).toBeUndefined();
+      expect(prisma.trip.createMany.mock.calls[0][0].data[0].originAddressLine1).toBeNull();
       expect(prisma.trip.update).toHaveBeenCalled();
       const syncData = prisma.trip.update.mock.calls[0][0].data;
       expect(syncData.originLabel).toBe("JURONG — Jurong Port");
@@ -360,6 +362,7 @@ describe("create job items (LCL optional)", () => {
             jobType: JobType.IMPORT,
             importDetails: {
               pickupPortCode: "JURONG",
+            returningDepotAddress1: "Tuas Depot",
             },
           } as any,
           { userId: "u1", role: Role.TRANSPORT_STAFF },
@@ -382,6 +385,7 @@ describe("create job items (LCL optional)", () => {
             pickupAddress1: "20 Tuas Ave 9",
             pickupPostal: "639201",
             pickupPlaceId: "ChIJ-import-pickup",
+            importDetails: { returningDepotAddress1: "Tuas Depot" },
           } as any,
           { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
@@ -390,7 +394,11 @@ describe("create job items (LCL optional)", () => {
       const jobData = prisma.job.create.mock.calls[0][0].data;
       expect(jobData.pickupPortCode).toBeNull();
       const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
-      expect(tripRows).toHaveLength(1);
+      expect(tripRows).toHaveLength(2);
+      expect(tripRows.map((r: any) => r.jobTripTemplate)).toEqual([
+        "PICKUP_TO_DELIVERY",
+        "DELIVERY_TO_DEPOT",
+      ]);
       expect(tripRows[0].originAddressLine1).toBe("20 Tuas Ave 9");
       expect(tripRows[0].originPostalCode).toBe("639201");
       expect(tripRows[0].originPlaceId).toBe("ChIJ-import-pickup");
@@ -411,7 +419,7 @@ describe("create job items (LCL optional)", () => {
           } as any,
           { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
-      ).rejects.toThrow(/Pickup location is required/i);
+      ).rejects.toThrow(/Import port \/ terminal is required/i);
       expect(prisma.job.create).not.toHaveBeenCalled();
     });
 
@@ -428,6 +436,7 @@ describe("create job items (LCL optional)", () => {
             pickupAddress1: "1 Harbour Drive",
             pickupPostal: "117352",
             pickupPlaceId: "ChIJ-import-pickup",
+            importDetails: { returningDepotAddress1: "Tuas Depot" },
           } as any,
           { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
@@ -439,7 +448,7 @@ describe("create job items (LCL optional)", () => {
       expect(tripRows[0].originPlaceId).toBe("ChIJ-import-pickup");
     });
 
-    it("creates IMPORT address pickup without return and generates one trip", async () => {
+    it("IMPORT create without return depot is rejected", async () => {
       const prisma = makeCreatePrisma();
       const svc = makeSvc(prisma);
 
@@ -454,9 +463,8 @@ describe("create job items (LCL optional)", () => {
           } as any,
           { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
-      ).resolves.toBeTruthy();
-
-      expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(1);
+      ).rejects.toThrow(/Empty container return depot is required/i);
+      expect(prisma.job.create).not.toHaveBeenCalled();
     });
 
     it("creates IMPORT address pickup with return and generates two trips", async () => {
@@ -488,7 +496,7 @@ describe("create job items (LCL optional)", () => {
       expect(tripRows[1].jobTripTemplate).toBe("DELIVERY_TO_DEPOT");
     });
 
-    it("creates IMPORT job without return location and generates one port→delivery trip", async () => {
+    it("IMPORT create without return depot is rejected even when port code is present", async () => {
       const prisma = makeCreatePrisma();
       prisma.masterLogisticsLocation = {
         findFirst: jest.fn().mockResolvedValue({ code: "JURONG", name: "Jurong Port" }),
@@ -507,16 +515,10 @@ describe("create job items (LCL optional)", () => {
           } as any,
           { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
-      ).resolves.toBeTruthy();
-
-      const jobData = prisma.job.create.mock.calls[0][0].data;
-      expect(jobData.returningDepotCode).toBeNull();
-      const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
-      expect(tripRows).toHaveLength(1);
-      expect(tripRows[0].jobTripTemplate).toBe("PICKUP_TO_DELIVERY");
+      ).rejects.toThrow(/Empty container return depot is required/i);
     });
 
-    it("creates IMPORT job with returnLastDay only (no return depot) and still generates one trip", async () => {
+    it("creates IMPORT job with returnLastDay and return depot and generates two trips", async () => {
       const prisma = makeCreatePrisma();
       prisma.masterLogisticsLocation = {
         findFirst: jest.fn().mockResolvedValue({ code: "JURONG", name: "Jurong Port" }),
@@ -531,6 +533,7 @@ describe("create job items (LCL optional)", () => {
             jobType: JobType.IMPORT,
             importDetails: {
               pickupPortCode: "JURONG",
+            returningDepotAddress1: "Tuas Depot",
               returnLastDay: "2026-06-30",
             },
           } as any,
@@ -541,7 +544,7 @@ describe("create job items (LCL optional)", () => {
       const jobData = prisma.job.create.mock.calls[0][0].data;
       expect(jobData.returningDepotCode).toBeNull();
       expect(jobData.returnLastDay).toEqual(new Date("2026-06-30"));
-      expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(1);
+      expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(2);
     });
 
     it("creates IMPORT job with return location and generates port→delivery plus delivery→return trips", async () => {
@@ -562,6 +565,7 @@ describe("create job items (LCL optional)", () => {
             jobType: JobType.IMPORT,
             importDetails: {
               pickupPortCode: "JURONG",
+            returningDepotAddress1: "Tuas Depot",
               returningDepotCode: "GUL",
             },
           } as any,

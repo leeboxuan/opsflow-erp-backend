@@ -226,6 +226,7 @@ describe("create-job interactive transaction contract", () => {
         receiverPhone: "1",
         pickupPortCode: "PSA",
         items: [{ itemCode: "CONT1" }],
+        importDetails: { returningDepotAddress1: "Tuas Depot" },
       } as any,
       { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
@@ -317,6 +318,7 @@ describe("create-job interactive transaction contract", () => {
           receiverPhone: "1",
           pickupPortCode: "PSA",
           items: [{ itemCode: "CONT1" }],
+          importDetails: { returningDepotAddress1: "Tuas Depot" },
         } as any,
         { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),

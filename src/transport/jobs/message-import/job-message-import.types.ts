@@ -26,13 +26,26 @@ export type ControllerReviewedDraft = {
   pickupPostal: string | null;
   pickupPlaceId: string | null;
   pickupLat: number | null;
-  pickupLng: number | null;
-  deliveryAddress1: string | null;
-  deliveryAddress2: string | null;
-  deliveryPostal: string | null;
-  deliveryPlaceId: string | null;
-  deliveryLat: number | null;
-  deliveryLng: number | null;
+    pickupLng: number | null;
+    deliveryAddress1: string | null;
+    deliveryAddress2: string | null;
+    deliveryPostal: string | null;
+    deliveryPlaceId: string | null;
+    deliveryLat: number | null;
+    deliveryLng: number | null;
+    portAddress1: string | null;
+    portAddress2: string | null;
+    portPostal: string | null;
+    portPlaceId: string | null;
+    portLat: number | null;
+    portLng: number | null;
+    returningDepotAddress1: string | null;
+    returningDepotAddress2: string | null;
+    returningDepotPostal: string | null;
+    returningDepotPlaceId: string | null;
+    returningDepotLat: number | null;
+    returningDepotLng: number | null;
+    returningDepotCode: string | null;
   pickupDateLocal: string | null;
   deliveryDateLocal: string | null;
   pickupDateDisplay: string | null;
@@ -128,4 +141,17 @@ export type JobMessageParseMeta = {
   modelName: string | null;
   usage: { inputTokens: number | null; outputTokens: number | null } | null;
   providerRequestId: string | null;
+};
+
+/** Post-commit confirm side effect; never implies Jobs were not created. */
+export type JobMessageImportConfirmWarning = {
+  code: "POST_CREATE_FINALIZATION_INCOMPLETE";
+  jobId: string;
+  operation: string;
+};
+
+export type JobMessageImportConfirmResult = {
+  createdJobIds: string[];
+  createdCount: number;
+  warnings: JobMessageImportConfirmWarning[];
 };

@@ -14,6 +14,7 @@ function baseDraft(overrides: Record<string, unknown> = {}) {
     customerNameText: "Acme",
     pickupAddress1: "Tuas",
     deliveryAddress1: "DB warehouse",
+    returningDepotAddress1: "Tuas Depot",
     picName: null,
     picPhone: null,
     notes: null,

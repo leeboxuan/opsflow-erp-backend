@@ -12,11 +12,21 @@ describe("TransportJobsService route planning", () => {
           customerCompanyId: "c1",
           internalRef: "WF-2026-04-0002-IMP",
           status: JobStatus.ONGOING,
+          jobType: "IMPORT",
+          items: [],
         }),
       },
       trip: {
         findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue({
+          containerNumber: null,
+          jobTripTemplate: null,
+        }),
         update: jest.fn().mockResolvedValue({}),
+      },
+      tripJobItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       tripPayoutLine: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -226,6 +236,10 @@ describe("TransportJobsService route planning", () => {
             driverEarningCents: 1000,
           },
         ]),
+        findFirst: jest.fn().mockResolvedValue({
+          containerNumber: null,
+          jobTripTemplate: null,
+        }),
         update: jest.fn().mockResolvedValue({}),
       },
       tripPayoutLine: {
