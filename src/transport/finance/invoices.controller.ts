@@ -15,7 +15,7 @@ import {
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from "@nestjs/swagger";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
-import { RoleGuard, Roles } from "@/shared/auth/guards/role.guard";
+import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
 import {
   ModuleEntitlementGuard,
   RequiresTenantModule,
@@ -37,7 +37,7 @@ import { FileInterceptor } from "@nestjs/platform-express";
 @Controller("finance/invoices")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard, DestructiveActionGuard)
 @RequiresTenantModule(TenantModule.FINANCE)
-@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER) // add Role.FINANCE later if you have it
+@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
 @ApiBearerAuth("JWT-auth")
 export class InvoicesController {
   @Get("jobs/:jobId/prefill")
@@ -128,7 +128,7 @@ export class InvoicesController {
   constructor(private readonly invoices: InvoicesService) {}
 
   @Get()
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
   async list(@Request() req: any, @Query() query: ListInvoicesQueryDto) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -140,7 +140,7 @@ export class InvoicesController {
   }
 
   @Get(":id")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
   async get(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -152,6 +152,7 @@ export class InvoicesController {
   }
   // Update an existing Draft invoice (used by web: /invoices/[id]/edit)
   @Post(":id/draft")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   async updateDraft(
     @Request() req: any,
     @Param("id") id: string,
@@ -167,6 +168,7 @@ export class InvoicesController {
   }
 
   @Patch(":id")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   async patchDraft(
     @Request() req: any,
     @Param("id") id: string,
@@ -182,6 +184,7 @@ export class InvoicesController {
   }
 
   @Post()
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   async create(@Request() req: any, @Body() dto: CreateInvoiceDto) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -193,6 +196,7 @@ export class InvoicesController {
   }
 
   @Post("draft")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   async createDraft(@Request() req: any, @Body() dto: CreateInvoiceDto) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -204,6 +208,7 @@ export class InvoicesController {
   }
 
   @Post("draft/from-jobs")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   async draftFromJobs(@Request() req: any, @Body() dto: DraftFromJobsDto) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {
@@ -219,6 +224,7 @@ export class InvoicesController {
   }
 
   @Post(":id/issue")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @DestructiveAction({
     resource: "INVOICE",
     action: "ISSUE",
@@ -235,6 +241,7 @@ export class InvoicesController {
   }
 
   @Post(":id/void")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @DestructiveAction({ resource: "INVOICE", action: "VOID" })
   async voidInvoice(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
@@ -264,6 +271,7 @@ export class InvoicesController {
   }
 
   @Post(":id/revert")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   @DestructiveAction({ resource: "INVOICE", action: "REVERT" })
   async revertToDraft(
     @Request() req: any,
@@ -291,6 +299,7 @@ export class InvoicesController {
     },
   })
   @UseInterceptors(FileInterceptor("file"))
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   async uploadPdf(
     @Request() req: any,
     @Param("id") id: string,
@@ -322,6 +331,7 @@ export class InvoicesController {
   }
 
   @Post(":id/generate")
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
   async generate(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
     const accessUser = {

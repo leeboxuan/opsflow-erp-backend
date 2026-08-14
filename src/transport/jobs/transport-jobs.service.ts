@@ -131,6 +131,7 @@ import {
   AppendJobTripDto,
   AssignJobTripDto,
   PatchTripPayoutDto,
+  PatchTripDocumentRequirementDto,
   PatchJobTripDto,
   PatchTripDetailsDto,
   PublishJobTripRouteDto,
@@ -148,6 +149,12 @@ import {
   resolveTripRouteAddressResponseFields,
   isContainerCargoJobType,
 } from "../workflows/job-workflow.helpers";
+import {
+  documentTypeSupportsCustomerSignature,
+  ensureDefaultTripDocumentRequirementSnapshots,
+  isTripDocumentRequirementFrozen,
+  requirementSnapshotForType,
+} from "../workflows/trip-document-requirements";
 import {
   buildTripCargoFromLinks,
   evaluateTripPublishLinkReadiness,
@@ -2642,6 +2649,12 @@ export class TransportJobsService {
       select: { id: true, status: true, containerNumber: true },
     });
 
+    await ensureDefaultTripDocumentRequirementSnapshots(
+      this.prisma,
+      tenantId,
+      createdTrips.map((trip) => trip.id),
+    );
+
     await this.audit.log(
       tenantId,
       "CREATE",
@@ -3737,6 +3750,12 @@ export class TransportJobsService {
       throw new NotFoundException("Trip not found");
     }
 
+    if (!isTripDocumentRequirementFrozen(trip.status)) {
+      await ensureDefaultTripDocumentRequirementSnapshots(this.prisma, tenantId, [
+        tripId,
+      ]);
+    }
+
     const previousDo = await this.replaceTripDocumentByType(
       tenantId,
       tripId,
@@ -3782,6 +3801,12 @@ export class TransportJobsService {
           ?? (uploadActor.uploadedByUserId ? null : "System"),
         generatedBySystem: true,
         generatedSource: source,
+        requiresSignature: await this.resolveTripDocumentRequiresSignature(
+          tenantId,
+          tripId,
+          TripDocumentType.DELIVERY_DO,
+          true,
+        ),
       },
       include: documentUploadedByInclude,
     });
@@ -4339,6 +4364,10 @@ export class TransportJobsService {
         completionRuleJson: completionRuleForTemplate(normalizedTemplate),
       },
     });
+
+    await ensureDefaultTripDocumentRequirementSnapshots(this.prisma, tenantId, [
+      trip.id,
+    ]);
 
     // Phase 1 TripJobItem linkage on append.
     const jobItems = await this.prisma.jobItem.findMany({
@@ -6111,6 +6140,7 @@ export class TransportJobsService {
           include: documentUploadedByInclude,
         },
         payoutLines: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        documentRequirements: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
         _count: { select: { tripJobItems: true } },
       },
     });
@@ -6257,6 +6287,7 @@ export class TransportJobsService {
         destinationLng: destination?.lng ?? null,
       },
       documents: tripDocs,
+      documentRequirements: t.documentRequirements ?? [],
       documentStatus: deriveTripDocumentStatus(t.documents ?? []),
       completionRuleJson:
         (t.completionRuleJson as Record<string, unknown> | null) ?? null,
@@ -6332,7 +6363,12 @@ export class TransportJobsService {
         requiresSignature:
           type === TripDocumentType.POD_SIGNATURE
             ? false
-            : !!requiresSignature,
+            : await this.resolveTripDocumentRequiresSignature(
+                tenantId,
+                tripId,
+                type,
+                !!requiresSignature,
+              ),
       },
       include: documentUploadedByInclude,
     });
@@ -7059,6 +7095,97 @@ export class TransportJobsService {
     });
   }
 
+  async patchTripDocumentRequirement(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    requirementId: string,
+    dto: PatchTripDocumentRequirementDto,
+    user: any,
+  ) {
+    this.assertCustomerCanOnlyRead(user);
+    const job = await this.prisma.job.findFirst({ where: { id: jobId, tenantId } });
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job, user);
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+      select: { id: true, status: true },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+    if (isTripDocumentRequirementFrozen(trip.status)) {
+      throw new BadRequestException(
+        "Document requirements are frozen after the trip is published.",
+      );
+    }
+    const requirement = await this.prisma.tripDocumentRequirement.findFirst({
+      where: { id: requirementId, tenantId, tripId },
+    });
+    if (!requirement) throw new NotFoundException("Document requirement not found");
+
+    const nextRequiresSignature =
+      dto.requiresSignature === undefined
+        ? requirement.requiresSignature
+        : dto.requiresSignature === true;
+    if (
+      nextRequiresSignature
+      && !documentTypeSupportsCustomerSignature(requirement.type)
+    ) {
+      throw new BadRequestException(
+        `Customer signature is not supported for ${requirement.type}.`,
+      );
+    }
+
+    return this.prisma.tripDocumentRequirement.update({
+      where: { id: requirement.id },
+      data: {
+        ...(dto.isRequired === undefined ? {} : { isRequired: dto.isRequired === true }),
+        ...(dto.requiresSignature === undefined
+          ? {}
+          : { requiresSignature: nextRequiresSignature }),
+      },
+    });
+  }
+
+  private async seedDefaultDocumentRequirementsForJob(
+    tenantId: string,
+    jobId: string,
+  ): Promise<void> {
+    const trips = await this.prisma.trip.findMany({
+      where: { tenantId, jobId },
+      select: { id: true },
+    });
+    await ensureDefaultTripDocumentRequirementSnapshots(
+      this.prisma,
+      tenantId,
+      trips.map((row) => row.id),
+    );
+  }
+
+  private async resolveTripDocumentRequiresSignature(
+    tenantId: string,
+    tripId: string,
+    type: TripDocumentType,
+    fallback: boolean,
+  ): Promise<boolean> {
+    if (!documentTypeSupportsCustomerSignature(type)) return false;
+    const snapshots = await this.loadTripDocumentRequirementSnapshots(tenantId, tripId);
+    const row = requirementSnapshotForType(snapshots, type);
+    if (row) return row.requiresSignature === true;
+    return fallback === true;
+  }
+
+  private async loadTripDocumentRequirementSnapshots(
+    tenantId: string,
+    tripId: string,
+  ): Promise<Array<{ type: TripDocumentType; isRequired: boolean; requiresSignature: boolean }>> {
+    if (!this.prisma.tripDocumentRequirement?.findMany) return [];
+    return this.prisma.tripDocumentRequirement.findMany({
+      where: { tenantId, tripId },
+      select: { type: true, isRequired: true, requiresSignature: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+  }
+
   async replaceTripPayoutLines(
     tenantId: string,
     jobId: string,
@@ -7645,6 +7772,8 @@ export class TransportJobsService {
           ),
         });
 
+        await this.seedDefaultDocumentRequirementsForJob(tenantId, job.id);
+
         createdCount++;
 
         await this.audit.log(
@@ -7767,6 +7896,8 @@ export class TransportJobsService {
             { createdByUserId: actorUserId },
           ),
         });
+
+        await this.seedDefaultDocumentRequirementsForJob(tenantId, job.id);
 
         createdCount++;
         createdIds.push(job.id);
@@ -8289,6 +8420,8 @@ export class TransportJobsService {
             { createdByUserId: actorUserId },
           ),
         });
+
+        await this.seedDefaultDocumentRequirementsForJob(tenantId, job.id);
 
         createdCount++;
         created.push({

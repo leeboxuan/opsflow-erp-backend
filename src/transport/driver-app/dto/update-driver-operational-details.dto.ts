@@ -44,7 +44,7 @@ export class UpdateDriverOperationalDetailsDto {
   @ApiPropertyOptional({
     type: [DriverOperationalContainerDto],
     description:
-      "Container rows to update by itemId. Drivers may only update items belonging to this job.",
+      "Canonical container rows: containers[{ itemId, containerNumber, sealNumber }]. The legacy `items[{ id, sealNo }]` shape is rejected.",
   })
   @IsOptional()
   @IsArray()

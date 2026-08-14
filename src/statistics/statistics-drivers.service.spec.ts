@@ -268,10 +268,8 @@ describe("StatisticsDriversService", () => {
         completionRuleJson: {
           tripUploads: {
             minUploadCount: 1,
-            allowedUploadTypes: [TripDocumentType.POD_SIGNATURE],
-            requiredUploadTypesExact: [
-              TripDocumentType.POD_SIGNATURE,
-            ],
+            allowedUploadTypes: [TripDocumentType.POD_PHOTO],
+            requiredUploadTypesExact: [TripDocumentType.POD_PHOTO],
           },
         },
       },
@@ -285,7 +283,7 @@ describe("StatisticsDriversService", () => {
     prisma.tripDocument.findMany.mockResolvedValue([
       {
         tripId: "trip-1",
-        type: TripDocumentType.POD_SIGNATURE,
+        type: TripDocumentType.POD_PHOTO,
         isActive: true,
         generatedBySystem: false,
         isSigned: false,

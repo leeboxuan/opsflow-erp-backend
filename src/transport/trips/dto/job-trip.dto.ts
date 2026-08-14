@@ -724,6 +724,18 @@ export class PutTripPayoutLinesDto {
   lines!: TripPayoutLineInputDto[];
 }
 
+export class PatchTripDocumentRequirementDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  requiresSignature?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isRequired?: boolean;
+}
+
 export class PatchTripPayoutDto {
   @ApiPropertyOptional()
   @IsOptional()

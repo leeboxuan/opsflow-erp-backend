@@ -38,6 +38,7 @@ import {
   isStaleOperationalTrip,
   resolveCompletedTripPayoutState,
 } from "./statistics.predicates";
+import { loadTripDocumentRequirementSnapshotsByTrip } from "../transport/workflows/trip-document-requirements";
 
 const EXCEPTION_BATCH_SIZE = 200;
 
@@ -289,7 +290,7 @@ export class StatisticsExceptionsService {
       })) as ExceptionTrip[];
       if (trips.length === 0) break;
       const tripIds = trips.map((trip) => trip.id);
-      const [payoutRows, documentRows] = await Promise.all([
+      const [payoutRows, documentRows, requirementRowsByTrip] = await Promise.all([
         scanPayout
           ? this.prisma.tripPayoutLine.findMany({
               where: { tenantId, tripId: { in: tripIds } },
@@ -319,6 +320,9 @@ export class StatisticsExceptionsService {
               },
             })
           : Promise.resolve([]),
+        scanDocuments
+          ? loadTripDocumentRequirementSnapshotsByTrip(this.prisma, tenantId, tripIds)
+          : Promise.resolve(new Map()),
       ]);
       const payoutsByTrip = this.groupByTripId<ExceptionPayoutLine>(
         payoutRows as ExceptionPayoutLine[],
@@ -345,6 +349,7 @@ export class StatisticsExceptionsService {
           !evaluateRequiredDocumentCompletion(
             trip.completionRuleJson,
             documentsByTrip.get(trip.id) ?? [],
+            requirementRowsByTrip.get(trip.id) ?? [],
           ).complete
         ) {
           collector.add(

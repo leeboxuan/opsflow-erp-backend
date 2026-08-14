@@ -45,6 +45,11 @@ import {
   jobTripTemplateDisplayLabel,
 } from "../workflows/job-workflow.helpers";
 import {
+  documentTypeSupportsCustomerSignature,
+  requirementSnapshotForType,
+  type TripDocumentRequirementSnapshot,
+} from "../workflows/trip-document-requirements";
+import {
   buildTripCargoFromLinks,
   isContainerBasedTransportJob,
 } from "../jobs/trip-job-item.helpers";
@@ -63,6 +68,10 @@ import {
   evaluateTripStartDateGate,
   tripStartDateGateErrorMessage,
 } from "./driver-trip-schedule.helpers";
+import {
+  DRIVER_TRIP_SEQUENCE_BLOCKING_ERROR,
+  findBlockingEarlierDriverTrip,
+} from "./driver-trip-sequence.helpers";
 import {
   buildContainerDocumentationRequirements,
   containerDocumentationErrorLabels,
@@ -664,26 +673,45 @@ export class DriverJobsService {
 
     const isCompleted = (s: TripStatus) => s === TripStatus.COMPLETED || s === TripStatus.DONE;
     const current = sorted.find((t: any) => t.status === TripStatus.ONGOING) ?? null;
-    const sequentialEnforced = sorted.some((t: any) => (t.tripSequence ?? t.jobSequence) != null);
+    const runRows = sorted.map((t: any) => ({
+      id: t.id,
+      status: t.status,
+      tripSequence: t.tripSequence ?? null,
+      jobSequence: t.jobSequence ?? null,
+      plannedStartAt: t.plannedStartAt ?? null,
+      jobPickupDate: t.job?.pickupDate ?? null,
+      createdAt: t.createdAt ?? null,
+      assignedDriverUserId: t.assignedDriverUserId ?? driverUserId,
+    }));
 
     let nextTripId: string | null = current?.id ?? null;
     if (!nextTripId) {
       for (let i = 0; i < sorted.length; i += 1) {
         const t = sorted[i];
         if (t.status !== TripStatus.PUBLISHED) continue;
-        const prevIncomplete = sorted.slice(0, i).some((p: any) => !isCompleted(p.status));
-        if (!prevIncomplete) {
+        const blocked = findBlockingEarlierDriverTrip({
+          tripId: t.id,
+          driverUserId,
+          trips: runRows,
+          timeZone: tz,
+        });
+        if (!blocked) {
           nextTripId = t.id;
           break;
         }
       }
     }
 
-    const items = sorted.map((t: any, idx: number) => {
+    const items = sorted.map((t: any) => {
       const sequence = t.tripSequence ?? t.jobSequence ?? null;
-      const prevIncomplete = sorted.slice(0, idx).some((p: any) => !isCompleted(p.status));
       const isLockedBySequence =
-        !!sequentialEnforced && t.status === TripStatus.PUBLISHED && prevIncomplete;
+        t.status === TripStatus.PUBLISHED &&
+        findBlockingEarlierDriverTrip({
+          tripId: t.id,
+          driverUserId,
+          trips: runRows,
+          timeZone: tz,
+        }) != null;
       const isCurrent = current?.id === t.id;
       const canContinue = t.status === TripStatus.ONGOING;
       const canComplete = t.status === TripStatus.ONGOING;
@@ -2151,6 +2179,42 @@ export class DriverJobsService {
       throw new BadRequestException(tripStartDateGateErrorMessage(startGate));
     }
 
+    const siblingTrips = await this.prisma.trip.findMany({
+      where: {
+        tenantId,
+        assignedDriverUserId: driverUserId,
+        status: { not: TripStatus.DRAFT },
+      },
+      select: {
+        id: true,
+        status: true,
+        tripSequence: true,
+        jobSequence: true,
+        plannedStartAt: true,
+        createdAt: true,
+        assignedDriverUserId: true,
+        job: { select: { pickupDate: true } },
+      },
+    });
+    const blockingEarlier = findBlockingEarlierDriverTrip({
+      tripId,
+      driverUserId,
+      timeZone: tz,
+      trips: siblingTrips.map((row) => ({
+        id: row.id,
+        status: row.status,
+        tripSequence: row.tripSequence,
+        jobSequence: row.jobSequence,
+        plannedStartAt: row.plannedStartAt,
+        jobPickupDate: row.job?.pickupDate ?? null,
+        createdAt: row.createdAt,
+        assignedDriverUserId: row.assignedDriverUserId,
+      })),
+    });
+    if (blockingEarlier) {
+      throw new BadRequestException(DRIVER_TRIP_SEQUENCE_BLOCKING_ERROR);
+    }
+
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
     const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/trailer-start/${Date.now()}${ext}`;
 
@@ -2344,6 +2408,18 @@ export class DriverJobsService {
     return buildContainerDocumentationRequirements(items, documents);
   }
 
+  private async loadTripDocumentRequirementSnapshots(
+    tenantId: string,
+    tripId: string,
+  ): Promise<TripDocumentRequirementSnapshot[]> {
+    if (!this.prisma.tripDocumentRequirement?.findMany) return [];
+    return this.prisma.tripDocumentRequirement.findMany({
+      where: { tenantId, tripId },
+      select: { type: true, isRequired: true, requiresSignature: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+  }
+
   async completeTrip(
     tenantId: string,
     jobId: string,
@@ -2369,7 +2445,7 @@ export class DriverJobsService {
       throw new BadRequestException("Trip must be ONGOING to complete");
     }
 
-    const [completionDocs, trailerCheckout] = await Promise.all([
+    const [completionDocs, trailerCheckout, documentRequirements] = await Promise.all([
       this.prisma.tripDocument.findMany({
         where: {
           tenantId,
@@ -2389,6 +2465,7 @@ export class DriverJobsService {
         trailerParkingLocationCode: payload?.trailerParkingLocationCode,
         hasNewTrailerEndPhotoUpload: !!payload?.trailerEndPhoto?.buffer?.length,
       }),
+      this.loadTripDocumentRequirementSnapshots(tenantId, tripId),
     ]);
     const containerDocumentation = await this.buildContainerDocumentationForTrip(
       tenantId,
@@ -2424,7 +2501,7 @@ export class DriverJobsService {
     }
 
     const missing = [
-      ...buildTripCompletionDocumentGaps(completionDocs),
+      ...buildTripCompletionDocumentGaps(completionDocs, documentRequirements),
       ...getMissingContainerDocumentTypes(containerDocumentation),
     ];
 
@@ -2622,7 +2699,7 @@ export class DriverJobsService {
       throw new BadRequestException("You are not assigned to this trip");
     }
 
-    const [completionDocs, trailerCheckout] = await Promise.all([
+    const [completionDocs, trailerCheckout, documentRequirements] = await Promise.all([
       this.prisma.tripDocument.findMany({
         where: {
           tenantId,
@@ -2639,6 +2716,7 @@ export class DriverJobsService {
         },
       }),
       this.computeTrailerCheckoutGapsForTrip(tenantId, driverUserId, trip),
+      this.loadTripDocumentRequirementSnapshots(tenantId, tripId),
     ]);
     const containerDocumentation = await this.buildContainerDocumentationForTrip(
       tenantId,
@@ -2651,7 +2729,7 @@ export class DriverJobsService {
       (requirement) => requirement.missing.length > 0,
     );
     const missingDocuments = [
-      ...buildTripCompletionDocumentGaps(completionDocs),
+      ...buildTripCompletionDocumentGaps(completionDocs, documentRequirements),
       ...getMissingContainerDocumentTypes(containerDocumentation),
     ];
     // Surface missing linkage as a completion gap for container-based trips.
@@ -2786,6 +2864,9 @@ export class DriverJobsService {
           orderBy: { createdAt: "desc" },
           include: documentUploadedByInclude,
         },
+        documentRequirements: {
+          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        },
       },
     });
     if (!trip || trip.assignedDriverUserId !== driverUserId) {
@@ -2897,7 +2978,15 @@ export class DriverJobsService {
           }
         : null,
 
-      documents: docsWithUrls.map((doc) => ({
+      documents: docsWithUrls.map((doc) => {
+        const requirement = requirementSnapshotForType(
+          trip.documentRequirements ?? [],
+          doc.type,
+        );
+        const requiresSignature = requirement
+          ? requirement.requiresSignature === true
+          : null;
+        return {
         id: doc.id,
         type: doc.type,
         jobItemId: doc.jobItemId ?? null,
@@ -2911,6 +3000,8 @@ export class DriverJobsService {
         fileUrl: null,
         uploadedAt: doc.uploadedAt ?? doc.createdAt,
         signedAt: doc.signedAt ?? null,
+        isSigned: doc.isSigned === true || !!doc.signedAt,
+        requiresSignature,
         uploadedByUserId: doc.uploadedByUserId ?? null,
         uploadedByName: doc.uploadedByName ?? null,
         uploadedByEmail: doc.uploadedByEmail ?? null,
@@ -2920,6 +3011,16 @@ export class DriverJobsService {
           && doc.uploadedByUserId === driverUserId
           && !DRIVER_NON_DELETABLE_TRIP_DOC_TYPES.has(doc.type as TripDocumentType)
           && !DRIVER_NON_DELETABLE_TRIP_STATUSES.has(trip.status as TripStatus),
+        };
+      }),
+      documentRequirements: (trip.documentRequirements ?? []).map((row) => ({
+        id: row.id,
+        type: row.type,
+        label: row.label,
+        isRequired: row.isRequired,
+        requiresSignature: row.requiresSignature,
+        minCount: row.minCount,
+        sortOrder: row.sortOrder,
       })),
 
       cargo,
@@ -3262,10 +3363,17 @@ export class DriverJobsService {
         mimeType: file.mimetype ?? "application/octet-stream",
         sizeBytes: file.size ?? null,
         ...uploadActor,
-        requiresSignature:
-          type === TripDocumentType.POD_SIGNATURE
-            ? false
-            : !!requiresSignature,
+        requiresSignature: await (async () => {
+          if (type === TripDocumentType.POD_SIGNATURE) return false;
+          if (!documentTypeSupportsCustomerSignature(type)) return false;
+          const snapshots = await this.loadTripDocumentRequirementSnapshots(
+            tenantId,
+            tripId,
+          );
+          const snapshot = requirementSnapshotForType(snapshots, type);
+          if (snapshot) return snapshot.requiresSignature === true;
+          return !!requiresSignature;
+        })(),
       },
       include: documentUploadedByInclude,
     });

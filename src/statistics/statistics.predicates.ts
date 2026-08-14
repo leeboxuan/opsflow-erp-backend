@@ -5,7 +5,12 @@ import {
   tripPayoutTotalCents,
 } from "../transport/jobs/job-details-summary";
 import { resolveCanonicalTripPayoutCents } from "../transport/trips/trip-payout.helpers";
-import { resolveTripCompletionRule } from "../transport/workflows/job-workflow.helpers";
+import {
+  PHOTO_DOCUMENTATION_MISSING_KEY,
+  PHOTO_DOCUMENTATION_SATISFYING_TYPES,
+  buildTripCompletionDocumentGaps,
+} from "../transport/workflows/job-workflow.helpers";
+import type { TripDocumentRequirementSnapshot } from "../transport/workflows/trip-document-requirements";
 import {
   ACTIVE_TRIP_STATUSES,
   COMPLETED_TRIP_STATUSES,
@@ -146,62 +151,54 @@ function isSignedDocument(document: StatisticsTripDocumentInput): boolean {
 }
 
 /**
- * Applies the existing completionRuleJson parser, then evaluates only active,
- * explicitly qualifying documents. Unrelated and inactive uploads never
- * improve completion.
+ * Live completion evaluator shared with driver `completeTrip()`.
+ * Stored `completionRuleJson` Pickup DO / POD_SIGNATURE lists are legacy and
+ * are not required. `completionRuleJson` is ignored.
  */
 export function evaluateRequiredDocumentCompletion(
-  completionRuleJson: unknown,
+  _completionRuleJson: unknown,
   documents: StatisticsTripDocumentInput[],
+  requirements?: TripDocumentRequirementSnapshot[] | null,
 ): RequiredDocumentCompletionResult {
-  const rule = resolveTripCompletionRule(completionRuleJson);
   const activeDocuments = documents.filter((document) => document.isActive);
-  const allowedTypes = new Set(rule.allowedUploadTypes);
+  const gaps = buildTripCompletionDocumentGaps(
+    activeDocuments.map((document) => ({
+      type: document.type,
+      signedAt: document.signedAt ?? null,
+      isSigned: document.isSigned === true || isSignedDocument(document),
+    })),
+    requirements,
+  );
+  const missingRequiredTypes = gaps.filter(
+    (gap): gap is TripDocumentType =>
+      gap === TripDocumentType.DELIVERY_DO ||
+      gap === TripDocumentType.PICKUP_DO ||
+      gap === PHOTO_DOCUMENTATION_MISSING_KEY,
+  );
   const qualifyingActiveUploads = activeDocuments.filter((document) =>
-    allowedTypes.has(document.type),
+    PHOTO_DOCUMENTATION_SATISFYING_TYPES.includes(document.type),
   );
-  const presentTypes = new Set(
-    qualifyingActiveUploads.map((document) => document.type),
-  );
-  const missingRequiredTypes = rule.requiredUploadTypesExact.filter(
-    (type) => !presentTypes.has(type),
-  );
-  const missingUploadCount = Math.max(
-    0,
-    rule.minUploadCount - qualifyingActiveUploads.length,
-  );
-  const hasSignedGeneratedDo = activeDocuments.some(
-    (document) =>
-      document.generatedBySystem === true &&
-      (document.type === TripDocumentType.PICKUP_DO ||
-        document.type === TripDocumentType.DELIVERY_DO) &&
-      isSignedDocument(document),
-  );
-  const missingSignedGeneratedDo =
-    rule.requireGeneratedDoSigned && !hasSignedGeneratedDo;
+  const missingSignedGeneratedDo = gaps.includes(TripDocumentType.DELIVERY_DO);
+  const missingPhoto = gaps.includes(PHOTO_DOCUMENTATION_MISSING_KEY);
 
   return {
-    complete:
-      missingRequiredTypes.length === 0 &&
-      missingUploadCount === 0 &&
-      !missingSignedGeneratedDo,
-    requiredUploadCount: rule.minUploadCount,
+    complete: gaps.length === 0,
+    requiredUploadCount: 1 + (missingSignedGeneratedDo || activeDocuments.some((d) => d.type === TripDocumentType.DELIVERY_DO) ? 1 : 0),
     qualifyingActiveUploadCount: qualifyingActiveUploads.length,
     missingRequiredTypes,
-    missingUploadCount,
+    missingUploadCount: missingPhoto ? 1 : 0,
     missingSignedGeneratedDo,
   };
 }
 
+/**
+ * Live photo + conditional Delivery DO rules always apply. Stored JSON is not
+ * required to evaluate missing-document exceptions.
+ */
 export function hasResolvableRequiredDocumentRule(
-  completionRuleJson: unknown,
+  _completionRuleJson?: unknown,
 ): boolean {
-  const rule = resolveTripCompletionRule(completionRuleJson);
-  return (
-    rule.requireGeneratedDoSigned ||
-    rule.minUploadCount > 0 ||
-    rule.requiredUploadTypesExact.length > 0
-  );
+  return true;
 }
 
 export function isInvalidCompletedTripTimestamp(input: {

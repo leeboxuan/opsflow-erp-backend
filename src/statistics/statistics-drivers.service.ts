@@ -5,7 +5,6 @@ import {
   parsePaginationFromQuery,
 } from "../shared/common/pagination";
 import { PrismaService } from "../shared/prisma/prisma.service";
-import { resolveTripCompletionRule } from "../transport/workflows/job-workflow.helpers";
 import {
   StatisticsDriverRowDto,
   StatisticsDriversDto,
@@ -21,7 +20,11 @@ import {
 import { resolveStatisticsDateRange } from "./statistics-date-range";
 import { calendarDateKey } from "./statistics-references";
 import { buildContainerMovementWhere } from "./statistics-scope";
-import { evaluateRequiredDocumentCompletion } from "./statistics.predicates";
+import { loadTripDocumentRequirementSnapshotsByTrip } from "../transport/workflows/trip-document-requirements";
+import {
+  evaluateRequiredDocumentCompletion,
+  hasResolvableRequiredDocumentRule,
+} from "./statistics.predicates";
 
 type DriverAggregateRawRow = {
   driverUserId: string | null;
@@ -410,6 +413,11 @@ export class StatisticsDriversService {
             },
           })
         : [];
+    const requirementsByTrip = await loadTripDocumentRequirementSnapshotsByTrip(
+      this.prisma,
+      tenantId,
+      resolvableTrips.map((trip) => trip.id),
+    );
 
     const names = new Map(
       typedDriverProfiles
@@ -437,6 +445,7 @@ export class StatisticsDriversService {
       driverUserIds,
       resolvableTrips,
       documents,
+      requirementsByTrip,
     );
     const truckingStats = await this.loadDriverTruckingStats(
       tenantId,
@@ -664,12 +673,7 @@ export class StatisticsDriversService {
   }
 
   private hasResolvableCompletionRule(raw: Prisma.JsonValue | null): boolean {
-    const rule = resolveTripCompletionRule(raw);
-    return (
-      rule.requireGeneratedDoSigned === true ||
-      rule.minUploadCount > 0 ||
-      rule.requiredUploadTypesExact.length > 0
-    );
+    return hasResolvableRequiredDocumentRule(raw);
   }
 
   private buildRequiredDocumentRates(
@@ -683,6 +687,7 @@ export class StatisticsDriversService {
       isSigned: boolean;
       signedAt: Date | null;
     }>,
+    requirementsByTrip: Map<string, Array<{ type: string; isRequired: boolean; requiresSignature: boolean }>>,
   ): Map<string, number> {
     const documentsByTrip = new Map<string, typeof documents>();
     for (const document of documents) {
@@ -705,6 +710,7 @@ export class StatisticsDriversService {
         evaluateRequiredDocumentCompletion(
           trip.completionRuleJson,
           documentsByTrip.get(trip.id) ?? [],
+          requirementsByTrip.get(trip.id) ?? [],
         ).complete
       ) {
         total.complete += 1;

@@ -51,6 +51,7 @@ import {
   hasResolvableRequiredDocumentRule,
   resolveTripDuration,
 } from "./statistics.predicates";
+import { loadTripDocumentRequirementSnapshotsByTrip } from "../transport/workflows/trip-document-requirements";
 
 export const TRUCKING_BATCH_SIZE = 200;
 
@@ -910,6 +911,11 @@ export class StatisticsTruckingService {
         signedAt: true,
       },
     });
+    const requirementsByTrip = await loadTripDocumentRequirementSnapshotsByTrip(
+      this.prisma,
+      tenantId,
+      uniqueTripIds,
+    );
     const docsByTrip = new Map<string, typeof documents>();
     for (const document of documents) {
       const list = docsByTrip.get(document.tripId) ?? [];
@@ -925,6 +931,7 @@ export class StatisticsTruckingService {
       const evaluation = evaluateRequiredDocumentCompletion(
         rule,
         docsByTrip.get(tripId) ?? [],
+        requirementsByTrip.get(tripId) ?? [],
       );
       result.set(tripId, evaluation.complete ? "Complete" : "Incomplete");
     }

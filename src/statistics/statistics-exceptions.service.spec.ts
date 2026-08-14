@@ -186,12 +186,12 @@ describe("StatisticsExceptionsService categories", () => {
     });
   });
 
-  it("emits document gaps only when the completion rule is resolvable", async () => {
+  it("emits document gaps from live completion rules, not stored Pickup DO JSON", async () => {
     const prisma = createPrismaMock();
     prisma.trip.findMany.mockResolvedValue([
-      trip({ id: "trip-no-rule", completionRuleJson: null }),
+      trip({ id: "trip-no-photo", completionRuleJson: null }),
       trip({
-        id: "trip-rule",
+        id: "trip-photo-ok",
         completionRuleJson: {
           tripUploads: {
             minUploadCount: 1,
@@ -203,15 +203,7 @@ describe("StatisticsExceptionsService categories", () => {
     ]);
     prisma.tripDocument.findMany.mockResolvedValue([
       {
-        tripId: "trip-rule",
-        type: TripDocumentType.OTHER,
-        isActive: true,
-        generatedBySystem: false,
-        isSigned: false,
-        signedAt: null,
-      },
-      {
-        tripId: "trip-rule",
+        tripId: "trip-photo-ok",
         type: TripDocumentType.OTHER,
         isActive: true,
         generatedBySystem: false,
@@ -224,11 +216,11 @@ describe("StatisticsExceptionsService categories", () => {
       "tenant-1",
       query({ key: "ex_trip_missing_required_docs" }),
     );
-    expect(result.data.map((row) => row.entityId)).toEqual(["trip-rule"]);
+    expect(result.data.map((row) => row.entityId)).toEqual(["trip-no-photo"]);
     expect(result.meta.total).toBe(1);
     expect(prisma.tripDocument.findMany.mock.calls[0][0].where).toEqual({
       tenantId: "tenant-1",
-      tripId: { in: ["trip-no-rule", "trip-rule"] },
+      tripId: { in: ["trip-no-photo", "trip-photo-ok"] },
       isActive: true,
     });
   });

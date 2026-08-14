@@ -22,6 +22,12 @@
     "jobs:backfill-invoice-readiness": "dotenv -e .env.local -- ts-node scripts/backfill-job-invoice-readiness.ts",
     "drivers:reset-passwords": "dotenv -e .env.local -- ts-node scripts/reset-driver-passwords.ts",
     "wipe:ops-data": "dotenv -e .env.local -- ts-node --project tsconfig.seed.json scripts/wipe-operational-data.ts",
+    "e2e:reset": "ts-node --project tsconfig.seed.json scripts/e2e-reset.ts",
+    "e2e:bootstrap-tenant": "ts-node --project tsconfig.seed.json scripts/e2e-bootstrap-tenant.ts",
+    "e2e:bootstrap-personas": "ts-node --project tsconfig.seed.json scripts/e2e-bootstrap-personas.ts",
+    "e2e:bootstrap-catalogues": "ts-node --project tsconfig.seed.json scripts/e2e-bootstrap-catalogues.ts",
+    "e2e:check-safety": "ts-node --project tsconfig.seed.json scripts/e2e-check-safety.ts",
+    "e2e:seed-document-requirements": "ts-node --project tsconfig.seed.json scripts/e2e-seed-document-requirements.ts",
     "bench:phase5": "ts-node --transpile-only scripts/phase5-query-benchmark.ts",
     "start": "node dist/main",
     "gen:api": "openapi-typescript https://opsflow-erp-api.onrender.com/api/docs-json -o src/api/generated.ts"

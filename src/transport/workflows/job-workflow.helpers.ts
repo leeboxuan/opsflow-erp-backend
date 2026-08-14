@@ -7,6 +7,10 @@ import {
   TripStatus,
 } from "@prisma/client";
 import { GUL_CIRCLE_LOCATION } from "./gul-circle-location";
+import {
+  shouldSkipCompletionSnapshotType,
+  type TripDocumentRequirementSnapshot,
+} from "./trip-document-requirements";
 
 export type TripCompletionRule = {
   requireGeneratedDoSigned: boolean;
@@ -372,24 +376,41 @@ export type TripCompletionDocRow = {
   isSigned: boolean;
 };
 
-function isSignableDoMarkedSigned(doc: TripCompletionDocRow): boolean {
-  if (
-    doc.type !== TripDocumentType.DELIVERY_DO
-    && doc.type !== TripDocumentType.PICKUP_DO
-  ) {
-    return false;
-  }
+function isDocumentMarkedSigned(doc: TripCompletionDocRow): boolean {
   return !!doc.signedAt || doc.isSigned === true;
 }
 
 /**
- * Driver trip completion document gaps:
- * - POD photo documentation
- * - delivery DO signing (when a DELIVERY_DO exists)
+ * Canonical live completion rules (web chips, mobile checklist, completeTrip,
+ * and Statistics missing-docs exceptions must agree):
  *
- * Container/seal requirements are evaluated per JobItem by the driver service.
+ * When TripDocumentRequirement snapshots exist, those rows are the source of
+ * truth (isRequired / requiresSignature). Do not infer signature from type.
+ *
+ * When no snapshots exist (historical trips), keep legacy semantics:
+ * - Photo documentation: active POD_PHOTO or OTHER
+ * - Signed DELIVERY_DO when a DELIVERY_DO exists (unsigned DO may be satisfied
+ *   by a legacy POD_SIGNATURE)
+ *
+ * Always (outside this helper):
+ * - Container + seal photos per linked TripJobItem on IMPORT/EXPORT/COLLECTION
+ * - Trailer end photo when this is the driver's last open trip that calendar day
+ *
+ * Advisory (do not block completeTrip):
+ * - trailerParkingLocationCode
+ *
+ * Legacy / display-only (stored completionRuleJson Pickup DO / POD_SIGNATURE
+ * exact lists). Kept on the trip row for historical templates; not enforced.
  */
-export function buildTripCompletionDocumentGaps(
+export const CANONICAL_COMPLETION_RULES = {
+  requiredPhotoTypes: PHOTO_DOCUMENTATION_SATISFYING_TYPES,
+  requiredSignedDeliveryDoIfPresent: true,
+  pickupDoEnforced: false,
+  podSignatureEnforced: false,
+  parkingCodeBlocksCompletion: false,
+} as const;
+
+function buildLegacyTripCompletionDocumentGaps(
   docs: TripCompletionDocRow[],
 ): string[] {
   const missing: string[] = [];
@@ -406,12 +427,84 @@ export function buildTripCompletionDocumentGaps(
     return missing;
   }
 
-  const deliveryDoSigned = isSignableDoMarkedSigned(deliveryDo);
+  const deliveryDoSigned = isDocumentMarkedSigned(deliveryDo);
   const hasLegacyPodSignature = docs.some(
     (d) => d.type === TripDocumentType.POD_SIGNATURE,
   );
   if (!deliveryDoSigned && !hasLegacyPodSignature) {
     missing.push(TripDocumentType.DELIVERY_DO);
+  }
+
+  return missing;
+}
+
+function hasSatisfyingPhotoDocumentation(docs: TripCompletionDocRow[]): boolean {
+  return docs.some((d) => PHOTO_DOCUMENTATION_SATISFYING_TYPES.includes(d.type));
+}
+
+function matchingDocs(
+  docs: TripCompletionDocRow[],
+  type: string,
+): TripCompletionDocRow[] {
+  const key = type.trim().toUpperCase();
+  return docs.filter((d) => String(d.type) === key);
+}
+
+/**
+ * Driver trip completion document gaps.
+ *
+ * Pass TripDocumentRequirement snapshots when present. Empty/missing snapshots
+ * use historical DELIVERY_DO-if-present semantics only — never guess signature
+ * flags onto old rows.
+ *
+ * Container/seal requirements are evaluated per JobItem by the driver service.
+ */
+export function buildTripCompletionDocumentGaps(
+  docs: TripCompletionDocRow[],
+  requirements?: TripDocumentRequirementSnapshot[] | null,
+): string[] {
+  const snapshots = (requirements ?? []).filter(
+    (row) => !shouldSkipCompletionSnapshotType(row.type),
+  );
+  if (snapshots.length === 0) {
+    return buildLegacyTripCompletionDocumentGaps(docs);
+  }
+
+  const missing: string[] = [];
+  const seenPhotoGap = new Set<string>();
+
+  for (const requirement of snapshots) {
+    const type = String(requirement.type ?? "")
+      .trim()
+      .toUpperCase();
+    if (!type) continue;
+
+    const isPhotoRequirement =
+      type === TripDocumentType.POD_PHOTO || type === TripDocumentType.OTHER;
+
+    if (requirement.isRequired && isPhotoRequirement) {
+      if (!hasSatisfyingPhotoDocumentation(docs) && !seenPhotoGap.has(PHOTO_DOCUMENTATION_MISSING_KEY)) {
+        missing.push(PHOTO_DOCUMENTATION_MISSING_KEY);
+        seenPhotoGap.add(PHOTO_DOCUMENTATION_MISSING_KEY);
+      }
+      continue;
+    }
+
+    const matches = matchingDocs(docs, type);
+    if (requirement.isRequired && matches.length === 0) {
+      missing.push(type);
+      continue;
+    }
+    if (!requirement.requiresSignature) {
+      continue;
+    }
+    if (matches.length === 0) {
+      continue;
+    }
+    const signed = matches.some((doc) => isDocumentMarkedSigned(doc));
+    if (!signed) {
+      missing.push(type);
+    }
   }
 
   return missing;

@@ -804,6 +804,156 @@ describe("trip completion document gaps", () => {
     expect(missing).toEqual([]);
   });
 
+  it("required + signature required + unsigned is incomplete", () => {
+    const missing = buildTripCompletionDocumentGaps(
+      [
+        {
+          type: TripDocumentType.POD_PHOTO,
+          signedAt: null,
+          isSigned: false,
+        },
+        {
+          type: TripDocumentType.DELIVERY_DO,
+          signedAt: null,
+          isSigned: false,
+        },
+      ],
+      [
+        {
+          type: TripDocumentType.DELIVERY_DO,
+          isRequired: true,
+          requiresSignature: true,
+        },
+        {
+          type: TripDocumentType.POD_PHOTO,
+          isRequired: true,
+          requiresSignature: false,
+        },
+      ],
+    );
+    expect(missing).toEqual([TripDocumentType.DELIVERY_DO]);
+  });
+
+  it("required + signature required + signed is complete", () => {
+    const missing = buildTripCompletionDocumentGaps(
+      [
+        {
+          type: TripDocumentType.POD_PHOTO,
+          signedAt: null,
+          isSigned: false,
+        },
+        {
+          type: TripDocumentType.DELIVERY_DO,
+          signedAt: new Date(),
+          isSigned: true,
+        },
+      ],
+      [
+        {
+          type: TripDocumentType.DELIVERY_DO,
+          isRequired: true,
+          requiresSignature: true,
+        },
+        {
+          type: TripDocumentType.POD_PHOTO,
+          isRequired: true,
+          requiresSignature: false,
+        },
+      ],
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("required + no signature + uploaded is complete even if unsigned", () => {
+    const missing = buildTripCompletionDocumentGaps(
+      [
+        {
+          type: TripDocumentType.POD_PHOTO,
+          signedAt: null,
+          isSigned: false,
+        },
+        {
+          type: TripDocumentType.DELIVERY_DO,
+          signedAt: null,
+          isSigned: false,
+        },
+      ],
+      [
+        {
+          type: TripDocumentType.DELIVERY_DO,
+          isRequired: true,
+          requiresSignature: false,
+        },
+        {
+          type: TripDocumentType.POD_PHOTO,
+          isRequired: true,
+          requiresSignature: false,
+        },
+      ],
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("optional absent document does not block", () => {
+    const missing = buildTripCompletionDocumentGaps(
+      [
+        {
+          type: TripDocumentType.POD_PHOTO,
+          signedAt: null,
+          isSigned: false,
+        },
+      ],
+      [
+        {
+          type: TripDocumentType.PICKUP_DO,
+          isRequired: false,
+          requiresSignature: true,
+        },
+        {
+          type: TripDocumentType.POD_PHOTO,
+          isRequired: true,
+          requiresSignature: false,
+        },
+      ],
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("does not treat historical POD_SIGNATURE as satisfying a data-driven signature requirement", () => {
+    const missing = buildTripCompletionDocumentGaps(
+      [
+        {
+          type: TripDocumentType.POD_PHOTO,
+          signedAt: null,
+          isSigned: false,
+        },
+        {
+          type: TripDocumentType.DELIVERY_DO,
+          signedAt: null,
+          isSigned: false,
+        },
+        {
+          type: TripDocumentType.POD_SIGNATURE,
+          signedAt: null,
+          isSigned: false,
+        },
+      ],
+      [
+        {
+          type: TripDocumentType.DELIVERY_DO,
+          isRequired: true,
+          requiresSignature: true,
+        },
+        {
+          type: TripDocumentType.POD_PHOTO,
+          isRequired: true,
+          requiresSignature: false,
+        },
+      ],
+    );
+    expect(missing).toEqual([TripDocumentType.DELIVERY_DO]);
+  });
+
   it("does not block completion for trailerParkingLocationCode alone", () => {
     expect(
       trailerCheckoutBlocksCompletion(true, ["trailerParkingLocationCode"]),

@@ -145,6 +145,28 @@ describe("DriverJobsService updateOperationalDetails", () => {
     ).rejects.toThrow(/do not belong to this job/);
   });
 
+  it("updates only the addressed JobItem and leaves others untouched", async () => {
+    const { svc, prisma, jobItemUpdate } = makeSvc();
+    const allItems = [
+      { id: "item-1", itemCode: "CONT-OLD", sealNo: "SEAL-OLD" },
+      { id: "item-2", itemCode: "CONT-B", sealNo: "SEAL-B" },
+    ];
+    prisma.jobItem.findMany.mockImplementation(async ({ where }: any) => {
+      const ids: string[] = where?.id?.in ?? [];
+      return allItems.filter((item) => ids.includes(item.id));
+    });
+
+    await svc.updateOperationalDetails(tenantId, jobId, tripId, driverUserId, {
+      containers: [{ itemId: "item-1", containerNumber: "CONT-NEW", sealNumber: "SEAL-NEW" }],
+    });
+
+    expect(jobItemUpdate).toHaveBeenCalledTimes(1);
+    expect(jobItemUpdate).toHaveBeenCalledWith({
+      where: { id: "item-1" },
+      data: { itemCode: "CONT-NEW", sealNo: "SEAL-NEW" },
+    });
+  });
+
   it("rejects edits after completion", async () => {
     const { svc } = makeSvc({ tripStatus: TripStatus.COMPLETED });
 

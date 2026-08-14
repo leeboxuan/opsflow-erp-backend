@@ -100,6 +100,16 @@ export class JobDocumentDto {
   signedByName?: string | null;
 }
 
+export class TripDocumentRequirementDto {
+  id!: string;
+  type!: string;
+  label!: string;
+  isRequired!: boolean;
+  requiresSignature!: boolean;
+  minCount!: number;
+  sortOrder!: number;
+}
+
 export class JobTripLocationDto {
   label!: string | null;
   addressLine1!: string | null;
@@ -245,6 +255,9 @@ export class JobTripResponseDto {
     trailerEndPhoto?: "PENDING" | "UPLOADED" | "GENERATED" | "SIGNED";
   };
   completionRuleJson?: Record<string, unknown> | null;
+
+  /** Per-trip snapshot of required documents and whether customer signature is required. */
+  documentRequirements?: TripDocumentRequirementDto[];
 
   /** Driver active/home: job ref on the trip row (same as parent job when linked). */
   @ApiPropertyOptional()

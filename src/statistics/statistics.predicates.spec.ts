@@ -376,71 +376,99 @@ describe("Statistics V1 canonical predicates", () => {
   });
 
   describe("required documents", () => {
-    const rule = {
-      requireGeneratedDoSigned: true,
-      tripUploads: {
-        minUploadCount: 2,
-        allowedUploadTypes: [
-          TripDocumentType.PICKUP_DO,
-          TripDocumentType.POD_SIGNATURE,
-        ],
-        requiredUploadTypesExact: [
-          TripDocumentType.PICKUP_DO,
-          TripDocumentType.POD_SIGNATURE,
-        ],
-      },
-    };
-
-    it("counts explicit active requirements and signed generated DO", () => {
-      expect(
-        evaluateRequiredDocumentCompletion(rule, [
-          {
-            type: TripDocumentType.PICKUP_DO,
-            isActive: true,
-            generatedBySystem: true,
-            isSigned: true,
-          },
-          {
-            type: TripDocumentType.POD_SIGNATURE,
-            isActive: true,
-          },
-        ]),
-      ).toEqual({
-        complete: true,
-        requiredUploadCount: 2,
-        qualifyingActiveUploadCount: 2,
-        missingRequiredTypes: [],
-        missingUploadCount: 0,
-        missingSignedGeneratedDo: false,
-      });
-    });
-
-    it("excludes inactive and unrelated uploads", () => {
-      const result = evaluateRequiredDocumentCompletion(rule, [
+    it("is complete with POD photo and no delivery DO", () => {
+      const result = evaluateRequiredDocumentCompletion(null, [
         {
-          type: TripDocumentType.PICKUP_DO,
-          isActive: false,
-          generatedBySystem: true,
-          isSigned: true,
-        },
-        {
-          type: TripDocumentType.OTHER,
+          type: TripDocumentType.POD_PHOTO,
           isActive: true,
         },
       ]);
-      expect(result.complete).toBe(false);
-      expect(result.qualifyingActiveUploadCount).toBe(0);
-      expect(result.missingRequiredTypes).toEqual([
-        TripDocumentType.PICKUP_DO,
-        TripDocumentType.POD_SIGNATURE,
+      expect(result.complete).toBe(true);
+      expect(result.missingRequiredTypes).toEqual([]);
+      expect(result.missingSignedGeneratedDo).toBe(false);
+    });
+
+    it("accepts OTHER as photo documentation", () => {
+      expect(
+        evaluateRequiredDocumentCompletion({}, [
+          { type: TripDocumentType.OTHER, isActive: true },
+        ]).complete,
+      ).toBe(true);
+    });
+
+    it("requires a signed delivery DO when one exists", () => {
+      const result = evaluateRequiredDocumentCompletion(null, [
+        { type: TripDocumentType.POD_PHOTO, isActive: true },
+        {
+          type: TripDocumentType.DELIVERY_DO,
+          isActive: true,
+          generatedBySystem: true,
+          isSigned: false,
+        },
       ]);
+      expect(result.complete).toBe(false);
+      expect(result.missingRequiredTypes).toEqual([TripDocumentType.DELIVERY_DO]);
       expect(result.missingSignedGeneratedDo).toBe(true);
     });
 
-    it("distinguishes missing rules from confirmed document requirements", () => {
-      expect(hasResolvableRequiredDocumentRule(null)).toBe(false);
-      expect(hasResolvableRequiredDocumentRule({})).toBe(false);
-      expect(hasResolvableRequiredDocumentRule(rule)).toBe(true);
+    it("uses trip document requirement snapshots when present", () => {
+      const unsignedDo = evaluateRequiredDocumentCompletion(
+        null,
+        [
+          { type: TripDocumentType.POD_PHOTO, isActive: true },
+          { type: TripDocumentType.DELIVERY_DO, isActive: true, isSigned: false },
+        ],
+        [
+          { type: TripDocumentType.DELIVERY_DO, isRequired: true, requiresSignature: false },
+          { type: TripDocumentType.POD_PHOTO, isRequired: true, requiresSignature: false },
+        ],
+      );
+      expect(unsignedDo.complete).toBe(true);
+
+      const missingOptional = evaluateRequiredDocumentCompletion(
+        null,
+        [{ type: TripDocumentType.POD_PHOTO, isActive: true }],
+        [
+          { type: TripDocumentType.PICKUP_DO, isRequired: false, requiresSignature: true },
+          { type: TripDocumentType.POD_PHOTO, isRequired: true, requiresSignature: false },
+        ],
+      );
+      expect(missingOptional.complete).toBe(true);
+    });
+
+    it("does not treat Pickup DO / POD_SIGNATURE stored rules as required", () => {
+      const legacyRule = {
+        requireGeneratedDoSigned: true,
+        tripUploads: {
+          minUploadCount: 2,
+          allowedUploadTypes: [
+            TripDocumentType.PICKUP_DO,
+            TripDocumentType.POD_SIGNATURE,
+          ],
+          requiredUploadTypesExact: [
+            TripDocumentType.PICKUP_DO,
+            TripDocumentType.POD_SIGNATURE,
+          ],
+        },
+      };
+      const result = evaluateRequiredDocumentCompletion(legacyRule, [
+        { type: TripDocumentType.POD_PHOTO, isActive: true },
+      ]);
+      expect(result.complete).toBe(true);
+    });
+
+    it("excludes inactive uploads from photo documentation", () => {
+      const result = evaluateRequiredDocumentCompletion(null, [
+        { type: TripDocumentType.POD_PHOTO, isActive: false },
+        { type: TripDocumentType.PICKUP_DO, isActive: true, isSigned: true },
+      ]);
+      expect(result.complete).toBe(false);
+      expect(result.missingUploadCount).toBe(1);
+    });
+
+    it("always resolves live completion rules", () => {
+      expect(hasResolvableRequiredDocumentRule(null)).toBe(true);
+      expect(hasResolvableRequiredDocumentRule({})).toBe(true);
     });
   });
 

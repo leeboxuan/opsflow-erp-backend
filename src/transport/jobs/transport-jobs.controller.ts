@@ -60,6 +60,7 @@ import {
   AppendJobTripDto,
   AssignJobTripDto,
   PatchTripPayoutDto,
+  PatchTripDocumentRequirementDto,
   PatchJobTripDto,
   PatchTripDetailsDto,
   PublishJobTripRouteDto,
@@ -910,6 +911,34 @@ export class TransportJobsController {
       customerCompanyId: req.tenant.customerCompanyId,
     };
     return this.jobs.publishTripRoute(tenantId, jobId, dto, accessUser);
+  }
+
+  @Patch(":jobId/trips/:tripId/document-requirements/:requirementId")
+  @ApiOperation({
+    summary:
+      "Update a frozen-on-publish trip document requirement (signature / required). Draft trips only.",
+  })
+  async patchTripDocumentRequirement(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Param("requirementId") requirementId: string,
+    @Body() dto: PatchTripDocumentRequirementDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = {
+      ...req.user,
+      role: req.tenant.role,
+      customerCompanyId: req.tenant.customerCompanyId,
+    };
+    return this.jobs.patchTripDocumentRequirement(
+      tenantId,
+      jobId,
+      tripId,
+      requirementId,
+      dto,
+      accessUser,
+    );
   }
 
   @Patch(":jobId/trips/:tripId/details")
