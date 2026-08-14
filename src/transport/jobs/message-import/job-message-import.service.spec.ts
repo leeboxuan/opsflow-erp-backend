@@ -202,6 +202,42 @@ function makePrismaMemory() {
   return prisma;
 }
 
+function confirmDraftsFromPreview(
+  preview: {
+    drafts: Array<{
+      id: string;
+      reviewed: any;
+      duplicateOverride?: { acknowledged: boolean; reason: string | null };
+    }>;
+  },
+  opts?: {
+    ids?: string[];
+    extra?: Record<string, Record<string, unknown>>;
+    customerCompanyId?: string | null;
+  },
+) {
+  const allow = opts?.ids ? new Set(opts.ids) : null;
+  return preview.drafts
+    .filter((d) => (allow ? allow.has(d.id) : true))
+    .map((d) => ({
+      draftId: d.id,
+      ...d.reviewed,
+      customerCompanyId:
+        opts?.customerCompanyId !== undefined
+          ? opts.customerCompanyId
+          : (d.reviewed.customerCompanyId ?? "comp_1"),
+      collectionType:
+        d.reviewed.movementType === "COLLECTION"
+          ? d.reviewed.collectionType ?? "EMPTY"
+          : d.reviewed.collectionType,
+      pickupDateNeedsReview: false,
+      deliveryDateNeedsReview: false,
+      duplicateOverrideAcknowledged: d.duplicateOverride?.acknowledged,
+      duplicateOverrideReason: d.duplicateOverride?.reason,
+      ...(opts?.extra?.[d.id] ?? {}),
+    }));
+}
+
 describe("JobMessageImportService workflow", () => {
   const audit = { log: jest.fn().mockResolvedValue(undefined) };
 
@@ -406,11 +442,7 @@ describe("JobMessageImportService workflow", () => {
       tenantId: "t1",
       actorUserId: "u1",
       batchId: preview.batchId,
-      expectedBatchVersion: preview.version,
-      selection: included.map((d) => ({
-        draftId: d.id,
-        expectedDraftVersion: d.draftVersion,
-      })),
+      drafts: confirmDraftsFromPreview(preview, { ids: included.map((d) => d.id) }),
     });
     expect(first.createdCount).toBe(included.length);
     expect(prisma._state.jobs).toHaveLength(included.length);
@@ -421,11 +453,7 @@ describe("JobMessageImportService workflow", () => {
       tenantId: "t1",
       actorUserId: "u1",
       batchId: preview.batchId,
-      expectedBatchVersion: preview.version,
-      selection: included.map((d) => ({
-        draftId: d.id,
-        expectedDraftVersion: d.draftVersion,
-      })),
+      drafts: confirmDraftsFromPreview(preview, { ids: included.map((d) => d.id) }),
     });
     expect(again.createdJobIds).toEqual(first.createdJobIds);
     expect(prisma._state.jobs).toHaveLength(included.length);
@@ -446,10 +474,7 @@ describe("JobMessageImportService workflow", () => {
         tenantId: "t1",
         actorUserId: "u1",
         batchId: preview.batchId,
-        expectedBatchVersion: preview.version,
-        selection: preview.drafts
-          .filter((d) => d.inclusionState === "INCLUDED")
-          .map((d) => ({ draftId: d.id, expectedDraftVersion: d.draftVersion })),
+        drafts: confirmDraftsFromPreview(preview, { customerCompanyId: null }),
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma._state.jobs).toHaveLength(0);
@@ -515,8 +540,7 @@ describe("JobMessageImportService workflow", () => {
         tenantId: "t1",
         actorUserId: "u1",
         batchId: preview.batchId,
-        expectedBatchVersion: preview.version,
-        selection: [{ draftId: latest.id, expectedDraftVersion: latest.draftVersion }],
+        drafts: confirmDraftsFromPreview(preview, { ids: [latest.id] }),
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
 
@@ -537,8 +561,10 @@ describe("JobMessageImportService workflow", () => {
       tenantId: "t1",
       actorUserId: "u1",
       batchId: preview.batchId,
-      expectedBatchVersion: preview.version,
-      selection: [{ draftId: ready.id, expectedDraftVersion: ready.draftVersion }],
+      drafts: confirmDraftsFromPreview(preview, {
+        ids: [ready.id],
+        extra: { [ready.id]: { duplicateOverrideAcknowledged: true, duplicateOverrideReason: "Different consignee" } },
+      }),
     });
     expect(confirmed.createdCount).toBe(1);
   });
@@ -554,39 +580,22 @@ describe("JobMessageImportService workflow", () => {
       sourceText: fixtureMessage,
     });
     const imp = preview.drafts.find((d) => d.reviewed.movementType === "IMPORT")!;
-    for (const d of preview.drafts) {
-      preview = await svc.patchDraft({
-        tenantId: "t1",
-        actorUserId: "u1",
-        batchId: preview.batchId,
-        draftId: d.id,
-        patch: {
-          expectedDraftVersion: preview.drafts.find((x) => x.id === d.id)!.draftVersion,
-          customerCompanyId: "comp_1",
-          collectionType: d.reviewed.movementType === "COLLECTION" ? "EMPTY" : undefined,
-          inclusionState:
-            d.id === imp.id
-              ? JobMessageImportDraftInclusionState.INCLUDED
-              : JobMessageImportDraftInclusionState.EXCLUDED,
-          pickupAddress1: d.id === imp.id ? "CONTROLLER PICKUP" : undefined,
-        },
-      });
-    }
-    const latest = preview.drafts.find((d) => d.id === imp.id)!;
-    expect(latest.parsed.pickupRawText).not.toBe("CONTROLLER PICKUP");
+    expect(imp.parsed.pickupRawText).not.toBe("CONTROLLER PICKUP");
     const confirmed = await svc.confirmBatch({
       tenantId: "t1",
       actorUserId: "u1",
       batchId: preview.batchId,
-      expectedBatchVersion: preview.version,
-      selection: [{ draftId: latest.id, expectedDraftVersion: latest.draftVersion }],
+      drafts: confirmDraftsFromPreview(preview, {
+        ids: [imp.id],
+        extra: { [imp.id]: { pickupAddress1: "CONTROLLER PICKUP" } },
+      }),
     });
     expect(confirmed.createdCount).toBe(1);
     expect(prisma._state.jobs[0].pickupAddress1).toBe("CONTROLLER PICKUP");
     expect(prisma.trip.create).not.toHaveBeenCalled();
   });
 
-  it("rejects stale confirm versions and keeps confirmed batches immutable", async () => {
+  it("rejects foreign draft IDs and keeps confirmed batches immutable", async () => {
     const prisma = makePrismaMemory();
     const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
     let preview = await svc.createPreviewBatch({
@@ -601,13 +610,9 @@ describe("JobMessageImportService workflow", () => {
         tenantId: "t1",
         actorUserId: "u1",
         batchId: preview.batchId,
-        expectedBatchVersion: preview.version + 9,
-        selection: preview.drafts.map((d) => ({
-          draftId: d.id,
-          expectedDraftVersion: d.draftVersion,
-        })),
+        drafts: [{ draftId: "foreign_draft", customerCompanyId: "comp_1", pickupAddress1: "X", deliveryAddress1: "Y", movementType: "IMPORT", items: [{ containerNumber: "GESU6311344", sealNumber: null, referenceNumber: null, quantity: 1 }] }],
       }),
-    ).rejects.toBeInstanceOf(ConflictException);
+    ).rejects.toBeInstanceOf(BadRequestException);
 
     for (const d of preview.drafts) {
       preview = await svc.patchDraft({
@@ -631,11 +636,7 @@ describe("JobMessageImportService workflow", () => {
       tenantId: "t1",
       actorUserId: "u1",
       batchId: preview.batchId,
-      expectedBatchVersion: preview.version,
-      selection: included.map((d) => ({
-        draftId: d.id,
-        expectedDraftVersion: d.draftVersion,
-      })),
+      drafts: confirmDraftsFromPreview(preview, { ids: included.map((d) => d.id) }),
     });
     await expect(
       svc.patchDraft({
@@ -680,11 +681,7 @@ describe("JobMessageImportService workflow", () => {
       tenantId: "t1",
       actorUserId: "u1",
       batchId: preview.batchId,
-      expectedBatchVersion: preview.version,
-      selection: included.map((d) => ({
-        draftId: d.id,
-        expectedDraftVersion: d.draftVersion,
-      })),
+      drafts: confirmDraftsFromPreview(preview, { ids: included.map((d) => d.id) }),
     });
     const second = await svc.createPreviewBatch({
       tenantId: "t1",
@@ -728,16 +725,13 @@ describe("JobMessageImportService workflow", () => {
     }
     prisma.job.create.mockRejectedValueOnce(new Error("forced job create failure"));
     const included = preview.drafts.filter((d) => d.inclusionState === "INCLUDED");
+    audit.log.mockClear();
     await expect(
       svc.confirmBatch({
         tenantId: "t1",
         actorUserId: "u1",
         batchId: preview.batchId,
-        expectedBatchVersion: preview.version,
-        selection: included.map((d) => ({
-          draftId: d.id,
-          expectedDraftVersion: d.draftVersion,
-        })),
+        drafts: confirmDraftsFromPreview(preview, { ids: included.map((d) => d.id) }),
       }),
     ).rejects.toThrow("forced job create failure");
     expect(prisma._state.jobs).toHaveLength(0);
@@ -745,6 +739,7 @@ describe("JobMessageImportService workflow", () => {
     expect(prisma._state.batches[0].version).toBe(preview.version);
     expect(prisma._state.drafts.every((d: any) => !d.canonicalJobId)).toBe(true);
     expect(prisma._state.batches[0].version).toBeGreaterThanOrEqual(versionBefore);
+    expect(audit.log).not.toHaveBeenCalled();
   });
 
   it("reuses the winning IN_REVIEW batch when preview create hits a unique conflict", async () => {
@@ -1360,8 +1355,7 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
       tenantId: "t1",
       actorUserId: "u1",
       batchId: preview.batchId,
-      expectedBatchVersion: preview.version,
-      selection: [{ draftId: readyJob1.id, expectedDraftVersion: readyJob1.draftVersion }],
+      drafts: confirmDraftsFromPreview(preview, { ids: [readyJob1.id] }),
     });
 
     expect(confirmed.createdCount).toBe(1);
@@ -1369,5 +1363,97 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
     expect(createdJobs.some((j: { notes: string | null }) => (j.notes ?? "").includes("Call PIC 30 minutes before arrival."))).toBe(true);
     expect(createdJobs.some((j: { pickupAddress1: string }) => j.pickupAddress1 === "PSA")).toBe(true);
     expect(createdJobs[0].items.some((it: { itemCode: string }) => it.itemCode === "ONEY1234567")).toBe(true);
+  });
+
+  it("confirms three reviewed drafts in one request from final values", async () => {
+    const prisma = makePrismaMemory();
+    const parser = new StubJobMessageParser(productionWhatsAppParserResult());
+    const svc = new JobMessageImportService(prisma, audit as any, parser);
+    const preview = await svc.createPreviewBatch({
+      tenantId: "t1",
+      actorUserId: "u1",
+      timezone: "Asia/Singapore",
+      sourceChannel: "WHATSAPP" as any,
+      sourceText: productionWhatsAppThreeJobMessage,
+    });
+    expect(preview.drafts).toHaveLength(3);
+    const confirmed = await svc.confirmBatch({
+      tenantId: "t1",
+      actorUserId: "u1",
+      batchId: preview.batchId,
+      drafts: confirmDraftsFromPreview(preview, {
+        extra: Object.fromEntries(
+          preview.drafts.map((d, i) => [d.id, { pickupAddress1: `FINAL PICKUP ${i + 1}` }]),
+        ),
+      }),
+    });
+    expect(confirmed.createdCount).toBe(3);
+    expect(prisma._state.jobs).toHaveLength(3);
+    expect(prisma._state.jobs.map((j: { pickupAddress1: string }) => j.pickupAddress1)).toEqual([
+      "FINAL PICKUP 1",
+      "FINAL PICKUP 2",
+      "FINAL PICKUP 3",
+    ]);
+    expect(prisma.$transaction.mock.calls[0][1]).toEqual({
+      maxWait: 10_000,
+      timeout: 20_000,
+    });
+  });
+
+  it("rejects duplicate draft IDs, foreign customers, and other-tenant batches", async () => {
+    const prisma = makePrismaMemory();
+    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    const preview = await svc.createPreviewBatch({
+      tenantId: "t1",
+      actorUserId: "u1",
+      timezone: "Asia/Singapore",
+      sourceChannel: "WHATSAPP" as any,
+      sourceText: fixtureMessage,
+    });
+    const one = confirmDraftsFromPreview(preview, { ids: [preview.drafts[0].id] })[0];
+    await expect(
+      svc.confirmBatch({
+        tenantId: "t1",
+        actorUserId: "u1",
+        batchId: preview.batchId,
+        drafts: [one, { ...one }],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    await expect(
+      svc.confirmBatch({
+        tenantId: "t1",
+        actorUserId: "u1",
+        batchId: preview.batchId,
+        drafts: confirmDraftsFromPreview(preview, {
+          ids: [preview.drafts[0].id],
+          extra: { [preview.drafts[0].id]: { customerCompanyId: "other_tenant_company" } },
+        }),
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    await expect(
+      svc.confirmBatch({
+        tenantId: "t2",
+        actorUserId: "u1",
+        batchId: preview.batchId,
+        drafts: confirmDraftsFromPreview(preview, { ids: [preview.drafts[0].id] }),
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma._state.jobs).toHaveLength(0);
+  });
+
+  it("does not create jobs when confirm is never called", async () => {
+    const prisma = makePrismaMemory();
+    const svc = new JobMessageImportService(prisma, audit as any, new FakeJobMessageParser());
+    await svc.createPreviewBatch({
+      tenantId: "t1",
+      actorUserId: "u1",
+      timezone: "Asia/Singapore",
+      sourceChannel: "WHATSAPP" as any,
+      sourceText: fixtureMessage,
+    });
+    expect(prisma._state.jobs).toHaveLength(0);
+    expect(prisma._state.batches[0].status).toBe(JobMessageImportBatchStatus.IN_REVIEW);
   });
 });

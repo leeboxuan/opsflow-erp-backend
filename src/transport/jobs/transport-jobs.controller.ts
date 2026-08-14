@@ -289,8 +289,7 @@ export class TransportJobsController {
       tenantId,
       actorUserId,
       batchId,
-      expectedBatchVersion: dto.expectedBatchVersion,
-      selection: dto.selectedDrafts,
+      drafts: dto.drafts,
     });
   }
 

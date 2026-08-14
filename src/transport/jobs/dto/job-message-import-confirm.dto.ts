@@ -1,28 +1,27 @@
-import { ApiProperty } from "@nestjs/swagger";
-import { IsArray, IsInt, IsString, ValidateNested } from "class-validator";
+import { ApiProperty, IntersectionType, OmitType } from "@nestjs/swagger";
 import { Type } from "class-transformer";
+import { IsArray, IsString, ValidateNested } from "class-validator";
+import { JobMessageImportPatchDraftDto } from "./job-message-import-patch-draft.dto";
 
-export class JobMessageImportConfirmDraftSelectionDto {
+class JobMessageImportConfirmDraftIdDto {
   @ApiProperty({ description: "Draft id within the import batch" })
   @IsString()
   draftId!: string;
-
-  @ApiProperty({ description: "Expected draft optimistic concurrency version" })
-  @IsInt()
-  expectedDraftVersion!: number;
 }
 
-export class JobMessageImportConfirmRequestDto {
-  @ApiProperty({ description: "Expected batch version for optimistic concurrency" })
-  @IsInt()
-  expectedBatchVersion!: number;
+export class JobMessageImportConfirmDraftDto extends IntersectionType(
+  JobMessageImportConfirmDraftIdDto,
+  OmitType(JobMessageImportPatchDraftDto, ["expectedDraftVersion", "inclusionState"] as const),
+) {}
 
+export class JobMessageImportConfirmRequestDto {
   @ApiProperty({
-    type: [JobMessageImportConfirmDraftSelectionDto],
-    description: "Must include every currently INCLUDED draft with its current version.",
+    type: [JobMessageImportConfirmDraftDto],
+    description:
+      "Final reviewed values for each draft to create. Drafts omitted from this list are not created.",
   })
   @IsArray()
   @ValidateNested({ each: true })
-  @Type(() => JobMessageImportConfirmDraftSelectionDto)
-  selectedDrafts!: JobMessageImportConfirmDraftSelectionDto[];
+  @Type(() => JobMessageImportConfirmDraftDto)
+  drafts!: JobMessageImportConfirmDraftDto[];
 }

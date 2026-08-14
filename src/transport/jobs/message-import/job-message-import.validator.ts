@@ -108,6 +108,61 @@ export function normalizeReviewedDraft(
   };
 }
 
+export type ReviewedDraftPatch = Omit<Partial<ControllerReviewedDraft>, "items"> & {
+  items?: ControllerReviewedDraft["items"];
+};
+
+export function mergeReviewedDraftPatch(
+  current: ControllerReviewedDraft,
+  patch: ReviewedDraftPatch,
+): ControllerReviewedDraft {
+  return normalizeReviewedDraft({
+    ...current,
+    ...(patch.movementType != null ? { movementType: patch.movementType } : {}),
+    ...(patch.collectionType !== undefined ? { collectionType: patch.collectionType } : {}),
+    ...(patch.customerCompanyId !== undefined
+      ? { customerCompanyId: patch.customerCompanyId }
+      : {}),
+    ...(patch.customerNameText !== undefined ? { customerNameText: patch.customerNameText } : {}),
+    ...(patch.pickupAddress1 !== undefined ? { pickupAddress1: patch.pickupAddress1 } : {}),
+    ...(patch.pickupAddress2 !== undefined ? { pickupAddress2: patch.pickupAddress2 } : {}),
+    ...(patch.pickupPostal !== undefined ? { pickupPostal: patch.pickupPostal } : {}),
+    ...(patch.pickupPlaceId !== undefined ? { pickupPlaceId: patch.pickupPlaceId } : {}),
+    ...(patch.pickupLat !== undefined ? { pickupLat: patch.pickupLat } : {}),
+    ...(patch.pickupLng !== undefined ? { pickupLng: patch.pickupLng } : {}),
+    ...(patch.deliveryAddress1 !== undefined ? { deliveryAddress1: patch.deliveryAddress1 } : {}),
+    ...(patch.deliveryAddress2 !== undefined ? { deliveryAddress2: patch.deliveryAddress2 } : {}),
+    ...(patch.deliveryPostal !== undefined ? { deliveryPostal: patch.deliveryPostal } : {}),
+    ...(patch.deliveryPlaceId !== undefined ? { deliveryPlaceId: patch.deliveryPlaceId } : {}),
+    ...(patch.deliveryLat !== undefined ? { deliveryLat: patch.deliveryLat } : {}),
+    ...(patch.deliveryLng !== undefined ? { deliveryLng: patch.deliveryLng } : {}),
+    ...(patch.pickupDateLocal !== undefined ? { pickupDateLocal: patch.pickupDateLocal } : {}),
+    ...(patch.deliveryDateLocal !== undefined ? { deliveryDateLocal: patch.deliveryDateLocal } : {}),
+    ...(patch.pickupDateDisplay !== undefined
+      ? { pickupDateDisplay: patch.pickupDateDisplay }
+      : {}),
+    ...(patch.deliveryDateDisplay !== undefined
+      ? { deliveryDateDisplay: patch.deliveryDateDisplay }
+      : {}),
+    ...(patch.pickupDateNeedsReview !== undefined
+      ? { pickupDateNeedsReview: patch.pickupDateNeedsReview }
+      : {}),
+    ...(patch.deliveryDateNeedsReview !== undefined
+      ? { deliveryDateNeedsReview: patch.deliveryDateNeedsReview }
+      : {}),
+    ...(patch.picName !== undefined ? { picName: patch.picName } : {}),
+    ...(patch.picPhone !== undefined ? { picPhone: patch.picPhone } : {}),
+    ...(patch.notes !== undefined ? { notes: patch.notes } : {}),
+    ...(patch.instructions !== undefined ? { instructions: patch.instructions } : {}),
+    ...(patch.timingText !== undefined ? { timingText: patch.timingText } : {}),
+    ...(patch.carrierName !== undefined ? { carrierName: patch.carrierName } : {}),
+    ...(patch.shipper !== undefined ? { shipper: patch.shipper } : {}),
+    ...(patch.vesselName !== undefined ? { vesselName: patch.vesselName } : {}),
+    ...(patch.voyage !== undefined ? { voyage: patch.voyage } : {}),
+    ...(patch.items !== undefined ? { items: patch.items } : {}),
+  });
+}
+
 export function movementTypeToJobType(
   mt: JobMessageImportMovementType,
 ): JobType | null {

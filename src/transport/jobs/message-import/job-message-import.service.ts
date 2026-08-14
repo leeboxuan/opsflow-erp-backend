@@ -25,6 +25,8 @@ import {
   JOB_MESSAGE_IMPORT_MAX_INPUT_CHARS,
   JOB_MESSAGE_PARSER_TOKEN,
   FAKE_JOB_MESSAGE_PARSER_VERSION,
+  JOB_MESSAGE_IMPORT_CONFIRM_TX_MAX_WAIT_MS,
+  JOB_MESSAGE_IMPORT_CONFIRM_TX_TIMEOUT_MS,
 } from "./job-message-import.constants";
 import { assertSourceFragmentsTraceable } from "./job-message-import.source-fidelity";
 import { mapParserError } from "./job-message-import.parser-http-errors";
@@ -37,6 +39,7 @@ import { findDuplicateCandidates } from "./job-message-import.duplicates";
 import { reviewedDraftToCanonicalJobCreate } from "./job-message-import.mapping";
 import {
   classifyValidationStatus,
+  mergeReviewedDraftPatch,
   normalizeReviewedDraft,
   trimToNull,
   validateReviewedDraft,
@@ -63,52 +66,18 @@ import type {
   JobMessageImportReviewResponse,
   ReviewableJobDraft,
 } from "./job-message-import.types";
+import type { ReviewedDraftPatch } from "./job-message-import.validator";
 
-export type JobMessageImportConfirmDraftSelection = {
+export type JobMessageImportConfirmDraftInput = {
   draftId: string;
-  expectedDraftVersion: number;
-  inclusionState?: JobMessageImportDraftInclusionState;
+} & ReviewedDraftPatch & {
+  duplicateOverrideAcknowledged?: boolean;
+  duplicateOverrideReason?: string | null;
 };
 
 export type PatchDraftInput = {
   expectedDraftVersion: number;
-  movementType?: ControllerReviewedDraft["movementType"];
-  collectionType?: ControllerReviewedDraft["collectionType"];
-  customerCompanyId?: string | null;
-  customerNameText?: string | null;
-  pickupAddress1?: string | null;
-  pickupAddress2?: string | null;
-  pickupPostal?: string | null;
-  pickupPlaceId?: string | null;
-  pickupLat?: number | null;
-  pickupLng?: number | null;
-  deliveryAddress1?: string | null;
-  deliveryAddress2?: string | null;
-  deliveryPostal?: string | null;
-  deliveryPlaceId?: string | null;
-  deliveryLat?: number | null;
-  deliveryLng?: number | null;
-  pickupDateLocal?: string | null;
-  deliveryDateLocal?: string | null;
-  pickupDateDisplay?: string | null;
-  deliveryDateDisplay?: string | null;
-  pickupDateNeedsReview?: boolean;
-  deliveryDateNeedsReview?: boolean;
-  picName?: string | null;
-  picPhone?: string | null;
-  notes?: string | null;
-  instructions?: string[];
-  timingText?: string | null;
-  carrierName?: string | null;
-  shipper?: string | null;
-  vesselName?: string | null;
-  voyage?: string | null;
-  items?: Array<{
-    containerNumber?: string | null;
-    sealNumber?: string | null;
-    referenceNumber?: string | null;
-    quantity?: number | null;
-  }>;
+} & ReviewedDraftPatch & {
   inclusionState?: JobMessageImportDraftInclusionState;
   duplicateOverrideAcknowledged?: boolean;
   duplicateOverrideReason?: string | null;
@@ -510,89 +479,7 @@ export class JobMessageImportService {
     }
 
     const current = readControllerJson(draft.controllerJson);
-    const nextReviewed = normalizeReviewedDraft({
-      ...current,
-      ...(params.patch.movementType != null
-        ? { movementType: params.patch.movementType }
-        : {}),
-      ...(params.patch.collectionType !== undefined
-        ? { collectionType: params.patch.collectionType }
-        : {}),
-      ...(params.patch.customerCompanyId !== undefined
-        ? { customerCompanyId: params.patch.customerCompanyId }
-        : {}),
-      ...(params.patch.customerNameText !== undefined
-        ? { customerNameText: params.patch.customerNameText }
-        : {}),
-      ...(params.patch.pickupAddress1 !== undefined
-        ? { pickupAddress1: params.patch.pickupAddress1 }
-        : {}),
-      ...(params.patch.pickupAddress2 !== undefined
-        ? { pickupAddress2: params.patch.pickupAddress2 }
-        : {}),
-      ...(params.patch.pickupPostal !== undefined
-        ? { pickupPostal: params.patch.pickupPostal }
-        : {}),
-      ...(params.patch.pickupPlaceId !== undefined
-        ? { pickupPlaceId: params.patch.pickupPlaceId }
-        : {}),
-      ...(params.patch.pickupLat !== undefined ? { pickupLat: params.patch.pickupLat } : {}),
-      ...(params.patch.pickupLng !== undefined ? { pickupLng: params.patch.pickupLng } : {}),
-      ...(params.patch.deliveryAddress1 !== undefined
-        ? { deliveryAddress1: params.patch.deliveryAddress1 }
-        : {}),
-      ...(params.patch.deliveryAddress2 !== undefined
-        ? { deliveryAddress2: params.patch.deliveryAddress2 }
-        : {}),
-      ...(params.patch.deliveryPostal !== undefined
-        ? { deliveryPostal: params.patch.deliveryPostal }
-        : {}),
-      ...(params.patch.deliveryPlaceId !== undefined
-        ? { deliveryPlaceId: params.patch.deliveryPlaceId }
-        : {}),
-      ...(params.patch.deliveryLat !== undefined
-        ? { deliveryLat: params.patch.deliveryLat }
-        : {}),
-      ...(params.patch.deliveryLng !== undefined
-        ? { deliveryLng: params.patch.deliveryLng }
-        : {}),
-      ...(params.patch.pickupDateLocal !== undefined
-        ? { pickupDateLocal: params.patch.pickupDateLocal }
-        : {}),
-      ...(params.patch.deliveryDateLocal !== undefined
-        ? { deliveryDateLocal: params.patch.deliveryDateLocal }
-        : {}),
-      ...(params.patch.pickupDateDisplay !== undefined
-        ? { pickupDateDisplay: params.patch.pickupDateDisplay }
-        : {}),
-      ...(params.patch.deliveryDateDisplay !== undefined
-        ? { deliveryDateDisplay: params.patch.deliveryDateDisplay }
-        : {}),
-      ...(params.patch.pickupDateNeedsReview !== undefined
-        ? { pickupDateNeedsReview: params.patch.pickupDateNeedsReview }
-        : {}),
-      ...(params.patch.deliveryDateNeedsReview !== undefined
-        ? { deliveryDateNeedsReview: params.patch.deliveryDateNeedsReview }
-        : {}),
-      ...(params.patch.picName !== undefined ? { picName: params.patch.picName } : {}),
-      ...(params.patch.picPhone !== undefined ? { picPhone: params.patch.picPhone } : {}),
-      ...(params.patch.notes !== undefined ? { notes: params.patch.notes } : {}),
-      ...(params.patch.instructions !== undefined
-        ? { instructions: params.patch.instructions }
-        : {}),
-      ...(params.patch.timingText !== undefined
-        ? { timingText: params.patch.timingText }
-        : {}),
-      ...(params.patch.carrierName !== undefined
-        ? { carrierName: params.patch.carrierName }
-        : {}),
-      ...(params.patch.shipper !== undefined ? { shipper: params.patch.shipper } : {}),
-      ...(params.patch.vesselName !== undefined
-        ? { vesselName: params.patch.vesselName }
-        : {}),
-      ...(params.patch.voyage !== undefined ? { voyage: params.patch.voyage } : {}),
-      ...(params.patch.items !== undefined ? { items: params.patch.items } : {}),
-    });
+    const nextReviewed = mergeReviewedDraftPatch(current, params.patch);
 
     if (nextReviewed.customerCompanyId) {
       const exists = await this.prisma.customer_companies.findFirst({
@@ -689,8 +576,7 @@ export class JobMessageImportService {
     tenantId: string;
     actorUserId: string | null;
     batchId: string;
-    expectedBatchVersion: number;
-    selection: JobMessageImportConfirmDraftSelection[];
+    drafts: JobMessageImportConfirmDraftInput[];
   }): Promise<{ createdJobIds: string[]; createdCount: number }> {
     const batch = await this.prisma.jobMessageImportBatch.findFirst({
       where: { tenantId: params.tenantId, id: params.batchId },
@@ -708,47 +594,108 @@ export class JobMessageImportService {
     if (batch.status !== JobMessageImportBatchStatus.IN_REVIEW) {
       throw new BadRequestException("Batch cannot be confirmed");
     }
-    if (batch.version !== params.expectedBatchVersion) {
-      throw new ConflictException({
-        code: "STALE_VERSION",
-        message: "Batch version is stale; please refresh.",
-        currentVersion: batch.version,
+
+    const submitted = params.drafts ?? [];
+    if (!submitted.length) {
+      throw new BadRequestException("No drafts to confirm");
+    }
+    const seenIds = new Set<string>();
+    for (const row of submitted) {
+      if (!row?.draftId || typeof row.draftId !== "string") {
+        throw new BadRequestException("Each confirmed draft must include draftId");
+      }
+      if (seenIds.has(row.draftId)) {
+        throw new BadRequestException("Duplicate draft IDs are not allowed");
+      }
+      seenIds.add(row.draftId);
+    }
+
+    const draftsById = new Map(batch.drafts.map((d) => [d.id, d] as const));
+    const prepared: Array<{
+      draft: (typeof batch.drafts)[number];
+      reviewed: ControllerReviewedDraft;
+      fingerprint: string;
+      overrideAcknowledged: boolean;
+      overrideReason: string | null;
+    }> = [];
+
+    for (const row of submitted) {
+      const draft = draftsById.get(row.draftId) as (typeof batch.drafts)[number] | undefined;
+      if (!draft) {
+        throw new BadRequestException("Draft does not belong to this batch");
+      }
+      if (draft.confirmedAt) {
+        throw new BadRequestException("Draft already confirmed");
+      }
+      const reviewed = mergeReviewedDraftPatch(readControllerJson(draft.controllerJson), row);
+      const validation = validateReviewedDraft(reviewed);
+      if (validation.hasBlockingErrors) {
+        throw new BadRequestException("Included drafts have unresolved validation errors");
+      }
+      if (reviewed.customerCompanyId) {
+        const exists = await this.prisma.customer_companies.findFirst({
+          where: { tenantId: params.tenantId, id: reviewed.customerCompanyId },
+          select: { id: true },
+        });
+        if (!exists) {
+          throw new BadRequestException("Customer is invalid for this tenant");
+        }
+      }
+
+      const fingerprint = computeDraftFingerprint({
+        tenantId: params.tenantId,
+        movementType: reviewed.movementType,
+        reviewed,
+      });
+      const fingerprintChanged = fingerprint !== draft.duplicateFingerprint;
+      const overrideAcknowledged = fingerprintChanged
+        ? row.duplicateOverrideAcknowledged === true
+        : row.duplicateOverrideAcknowledged === true
+          ? true
+          : row.duplicateOverrideAcknowledged === false
+            ? false
+            : !!draft.duplicateOverrideAt;
+      const overrideReason = overrideAcknowledged
+        ? trimToNull(row.duplicateOverrideReason) ??
+          draft.duplicateOverrideReason ??
+          "Acknowledged possible duplicate"
+        : null;
+
+      const candidates = await findDuplicateCandidates({
+        tx: this.prisma,
+        tenantId: params.tenantId,
+        requestedPickupDateYmd: requestedPickupDateYmd(reviewed),
+        reviewed,
+        duplicateFingerprint: fingerprint,
+        excludeDraftId: draft.id,
+      });
+      const status = classifyValidationStatus({
+        hasBlockingErrors: false,
+        duplicateCandidateCount: candidates.length,
+        duplicateOverrideAcknowledged: overrideAcknowledged,
+      });
+      if (status !== JobMessageImportDraftValidationStatus.READY) {
+        throw new BadRequestException(
+          "Possible duplicate requires an explicit override before confirmation",
+        );
+      }
+
+      prepared.push({
+        draft,
+        reviewed,
+        fingerprint,
+        overrideAcknowledged,
+        overrideReason,
       });
     }
 
-    const included = batch.drafts.filter(
-      (d) => d.inclusionState === JobMessageImportDraftInclusionState.INCLUDED,
-    );
-    if (!included.length) {
-      throw new BadRequestException("No included drafts to confirm");
-    }
-
-    const selectionById = new Map(params.selection.map((s) => [s.draftId, s]));
-    for (const d of included) {
-      const sel = selectionById.get(d.id);
-      if (!sel) {
-        throw new ConflictException({
-          code: "STALE_SELECTION",
-          message: "Included draft missing from confirmation payload; please refresh.",
-        });
-      }
-      if (d.version !== sel.expectedDraftVersion) {
-        throw new ConflictException({
-          code: "STALE_VERSION",
-          message: "Draft version is stale; please refresh.",
-          draftId: d.id,
-          currentVersion: d.version,
-        });
-      }
-    }
-
-    const result = await this.prisma.$transaction(async (tx: any) => {
+    const result = await this.prisma.$transaction(
+      async (tx: any) => {
       const claimed = await tx.jobMessageImportBatch.updateMany({
         where: {
           id: params.batchId,
           tenantId: params.tenantId,
           status: JobMessageImportBatchStatus.IN_REVIEW,
-          version: params.expectedBatchVersion,
         },
         data: { version: { increment: 1 } },
       });
@@ -765,59 +712,28 @@ export class JobMessageImportService {
           };
         }
         throw new ConflictException({
-          code: "STALE_VERSION",
-          message: "Batch version is stale; please refresh.",
+          code: "BATCH_NOT_CONFIRMABLE",
+          message: "Batch cannot be confirmed.",
         });
       }
 
-      const drafts = await tx.jobMessageImportDraft.findMany({
-        where: { tenantId: params.tenantId, batchId: params.batchId },
-      });
-      const includedNow = drafts.filter(
-        (d: any) => d.inclusionState === JobMessageImportDraftInclusionState.INCLUDED,
-      );
       const createdJobIds: string[] = [];
       const auditEvents: Array<{ jobId: string; draftId: string; clientDraftId: string }> = [];
 
-      for (const d of includedNow) {
-        if (d.confirmedAt) {
+      for (const item of prepared) {
+        const live = await tx.jobMessageImportDraft.findFirst({
+          where: {
+            id: item.draft.id,
+            tenantId: params.tenantId,
+            batchId: params.batchId,
+          },
+        });
+        if (!live || live.confirmedAt) {
           throw new BadRequestException("Draft already confirmed");
-        }
-        const reviewed = readControllerJson(d.controllerJson);
-        const validation = validateReviewedDraft(reviewed);
-        const candidates = await findDuplicateCandidates({
-          tx,
-          tenantId: params.tenantId,
-          requestedPickupDateYmd: requestedPickupDateYmd(reviewed),
-          reviewed,
-          duplicateFingerprint: d.duplicateFingerprint,
-          excludeDraftId: d.id,
-        });
-        const overrideAcknowledged = !!d.duplicateOverrideAt;
-        const status = classifyValidationStatus({
-          hasBlockingErrors: validation.hasBlockingErrors,
-          duplicateCandidateCount: candidates.length,
-          duplicateOverrideAcknowledged: overrideAcknowledged,
-        });
-        if (status !== JobMessageImportDraftValidationStatus.READY) {
-          throw new BadRequestException(
-            status === JobMessageImportDraftValidationStatus.POSSIBLE_DUPLICATE
-              ? "Possible duplicate requires an explicit override before confirmation"
-              : "Included drafts have unresolved validation errors",
-          );
-        }
-        if (reviewed.customerCompanyId) {
-          const exists = await tx.customer_companies.findFirst({
-            where: { tenantId: params.tenantId, id: reviewed.customerCompanyId },
-            select: { id: true },
-          });
-          if (!exists) {
-            throw new BadRequestException("Customer is invalid for this tenant");
-          }
         }
 
         const canonical = reviewedDraftToCanonicalJobCreate({
-          reviewed,
+          reviewed: item.reviewed,
           timezone: batch.timezone,
         });
         const internalRef = await this.getNextInternalRef(tx, params.tenantId, canonical.jobType);
@@ -862,20 +778,27 @@ export class JobMessageImportService {
         });
 
         await tx.jobMessageImportDraft.update({
-          where: { id: d.id },
+          where: { id: item.draft.id },
           data: {
+            movementType: item.reviewed.movementType,
+            controllerJson: item.reviewed as object,
+            duplicateFingerprint: item.fingerprint,
+            inclusionState: JobMessageImportDraftInclusionState.INCLUDED,
             confirmedAt: new Date(),
             confirmedByUserId: params.actorUserId,
             canonicalJobId: createdJob.id,
             validationStatus: JobMessageImportDraftValidationStatus.READY,
+            duplicateOverrideReason: item.overrideAcknowledged ? item.overrideReason : null,
+            duplicateOverrideActorUserId: item.overrideAcknowledged ? params.actorUserId : null,
+            duplicateOverrideAt: item.overrideAcknowledged ? new Date() : null,
           },
         });
 
         createdJobIds.push(createdJob.id);
         auditEvents.push({
           jobId: createdJob.id,
-          draftId: d.id,
-          clientDraftId: d.clientDraftId,
+          draftId: item.draft.id,
+          clientDraftId: item.draft.clientDraftId,
         });
       }
 
@@ -889,7 +812,12 @@ export class JobMessageImportService {
       });
 
       return { createdJobIds, auditEvents };
-    });
+      },
+      {
+        maxWait: JOB_MESSAGE_IMPORT_CONFIRM_TX_MAX_WAIT_MS,
+        timeout: JOB_MESSAGE_IMPORT_CONFIRM_TX_TIMEOUT_MS,
+      },
+    );
 
     for (const event of result.auditEvents) {
       await this.audit.log(
