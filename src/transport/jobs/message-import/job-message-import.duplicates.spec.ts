@@ -1,5 +1,5 @@
 import { JobType } from "@prisma/client";
-import { findDuplicateCandidates } from "./job-message-import.duplicates";
+import { findDuplicateCandidates, findDuplicateCandidatesForDrafts } from "./job-message-import.duplicates";
 import { normalizeReviewedDraft } from "./job-message-import.validator";
 import { JobMessageImportMovementType } from "@prisma/client";
 
@@ -151,7 +151,8 @@ describe("findDuplicateCandidates", () => {
           tenantId: "t1",
           confirmedAt: { not: null },
           canonicalJobId: { not: null },
-          id: { not: "draft_self" },
+          id: { notIn: ["draft_self"] },
+          duplicateFingerprint: { in: ["fp"] },
         }),
       }),
     );
@@ -278,5 +279,96 @@ describe("findDuplicateCandidates", () => {
       reviewed,
     });
     expect(result).toEqual([]);
+  });
+});
+
+describe("findDuplicateCandidatesForDrafts", () => {
+  const reviewedA = normalizeReviewedDraft({
+    movementType: JobMessageImportMovementType.IMPORT,
+    customerCompanyId: "c1",
+    pickupAddress1: "Tuas",
+    deliveryAddress1: "DB",
+    items: [{ containerNumber: "GESU6311344", sealNumber: null, referenceNumber: null, quantity: 1 }],
+  });
+  const reviewedB = normalizeReviewedDraft({
+    movementType: JobMessageImportMovementType.IMPORT,
+    customerCompanyId: "c1",
+    pickupAddress1: "Tuas",
+    deliveryAddress1: "DB",
+    items: [{ containerNumber: "ONEY1234567", sealNumber: null, referenceNumber: null, quantity: 1 }],
+  });
+
+  it("scans job items once for drafts that share type and service date", async () => {
+    const tx = {
+      jobItem: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            itemCode: "GESU6311344",
+            job: {
+              id: "job_1",
+              internalRef: "WFL-A",
+              jobType: JobType.IMPORT,
+              status: "ONGOING",
+              pickupDate: new Date("2026-08-03T00:00:00.000Z"),
+              customerCompanyId: "c1",
+              customerCompany: { name: "Acme" },
+              items: [{ itemCode: "GESU6311344" }],
+            },
+          },
+        ]),
+      },
+      job: { findMany: jest.fn() },
+      jobMessageImportDraft: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const byKey = await findDuplicateCandidatesForDrafts({
+      tx,
+      tenantId: "t1",
+      drafts: [
+        {
+          key: "d1",
+          reviewed: reviewedA,
+          requestedPickupDateYmd: "2026-08-03",
+          duplicateFingerprint: "fp-a",
+        },
+        {
+          key: "d2",
+          reviewed: reviewedB,
+          requestedPickupDateYmd: "2026-08-03",
+          duplicateFingerprint: "fp-b",
+        },
+      ],
+    });
+    expect(tx.jobItem.findMany).toHaveBeenCalledTimes(1);
+    expect(tx.jobItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: "t1",
+          itemCode: { in: expect.arrayContaining(["GESU6311344", "ONEY1234567"]) },
+        }),
+      }),
+    );
+    expect(byKey.get("d1")).toHaveLength(1);
+    expect(byKey.get("d2")).toHaveLength(0);
+  });
+
+  it("does not return other-tenant rows even when item codes overlap", async () => {
+    const tx = {
+      jobItem: { findMany: jest.fn().mockResolvedValue([]) },
+      job: { findMany: jest.fn() },
+      jobMessageImportDraft: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    await findDuplicateCandidatesForDrafts({
+      tx,
+      tenantId: "tenant-a",
+      drafts: [
+        {
+          key: "d1",
+          reviewed: reviewedA,
+          requestedPickupDateYmd: "2026-08-03",
+        },
+      ],
+    });
+    expect(tx.jobItem.findMany.mock.calls[0][0].where.tenantId).toBe("tenant-a");
+    expect(tx.jobItem.findMany.mock.calls[0][0].where.job.tenantId).toBe("tenant-a");
   });
 });

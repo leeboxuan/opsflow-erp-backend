@@ -11,3 +11,6 @@ export const FAKE_JOB_MESSAGE_PARSER_VERSION = "fake.fixture.v1";
 export const JOB_MESSAGE_IMPORT_CONFIRM_TX_MAX_WAIT_MS = 10_000;
 export const JOB_MESSAGE_IMPORT_CONFIRM_TX_TIMEOUT_MS = 20_000;
 
+/** Post-commit finalize: independent Jobs, bounded — not unbounded Promise.all. */
+export const JOB_MESSAGE_IMPORT_FINALIZE_CONCURRENCY = 3;
+

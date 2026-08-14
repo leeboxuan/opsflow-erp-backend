@@ -27,6 +27,7 @@ import {
   FAKE_JOB_MESSAGE_PARSER_VERSION,
   JOB_MESSAGE_IMPORT_CONFIRM_TX_MAX_WAIT_MS,
   JOB_MESSAGE_IMPORT_CONFIRM_TX_TIMEOUT_MS,
+  JOB_MESSAGE_IMPORT_FINALIZE_CONCURRENCY,
 } from "./job-message-import.constants";
 import { assertSourceFragmentsTraceable } from "./job-message-import.source-fidelity";
 import { mapParserError } from "./job-message-import.parser-http-errors";
@@ -35,7 +36,7 @@ import {
   computeBatchFingerprint,
   computeDraftFingerprint,
 } from "./job-message-import.fingerprint";
-import { findDuplicateCandidates } from "./job-message-import.duplicates";
+import { findDuplicateCandidates, findDuplicateCandidatesForDrafts } from "./job-message-import.duplicates";
 import { reviewedDraftToCreateJobDto } from "./job-message-import.mapping";
 import {
   classifyValidationStatus,
@@ -44,7 +45,8 @@ import {
   trimToNull,
   validateReviewedDraft,
 } from "./job-message-import.validator";
-import { parseOperationalTiming } from "./job-message-import.timing";
+import { ConfirmPerfTracker } from "./job-message-import-confirm-perf";
+import { mapWithConcurrency } from "../bounded-concurrency";
 import {
   parseReferenceDateForTimezone,
   requestedPickupDateYmd,
@@ -58,11 +60,14 @@ import {
   mergeInstructions,
   splitLocationFromTiming,
 } from "./job-message-import.labelled-fields";
+import { parseOperationalTiming } from "./job-message-import.timing";
 import { enrichAddressFields } from "./job-message-import.address-parse";
 import { sanitizeReviewedDraftForResponse } from "./job-message-import.repair";
 import type {
   ControllerReviewedDraft,
   DuplicateCandidate,
+  JobMessageImportConfirmResult,
+  JobMessageImportConfirmWarning,
   JobMessageImportReviewResponse,
   ReviewableJobDraft,
 } from "./job-message-import.types";
@@ -257,6 +262,19 @@ function readControllerJson(raw: unknown): ControllerReviewedDraft {
     deliveryPlaceId: c.deliveryPlaceId ?? null,
     deliveryLat: c.deliveryLat ?? null,
     deliveryLng: c.deliveryLng ?? null,
+    portAddress1: c.portAddress1 ?? null,
+    portAddress2: c.portAddress2 ?? null,
+    portPostal: c.portPostal ?? null,
+    portPlaceId: c.portPlaceId ?? null,
+    portLat: c.portLat ?? null,
+    portLng: c.portLng ?? null,
+    returningDepotAddress1: c.returningDepotAddress1 ?? null,
+    returningDepotAddress2: c.returningDepotAddress2 ?? null,
+    returningDepotPostal: c.returningDepotPostal ?? null,
+    returningDepotPlaceId: c.returningDepotPlaceId ?? null,
+    returningDepotLat: c.returningDepotLat ?? null,
+    returningDepotLng: c.returningDepotLng ?? null,
+    returningDepotCode: c.returningDepotCode ?? null,
     pickupDateLocal: c.pickupDateLocal ?? null,
     deliveryDateLocal: c.deliveryDateLocal ?? null,
     pickupDateDisplay: c.pickupDateDisplay ?? null,
@@ -578,18 +596,40 @@ export class JobMessageImportService {
     actorUserId: string | null;
     batchId: string;
     drafts: JobMessageImportConfirmDraftInput[];
-  }): Promise<{ createdJobIds: string[]; createdCount: number }> {
+  }): Promise<JobMessageImportConfirmResult> {
+    const perf = new ConfirmPerfTracker();
+    type ConfirmTxResult = {
+      createdJobIds: string[];
+      auditEvents: Array<{ jobId: string; draftId: string; clientDraftId: string }>;
+      createdForFinalize: Array<{
+        jobId: string;
+        internalRef: string | null;
+        dto: ReturnType<typeof reviewedDraftToCreateJobDto>;
+      }>;
+    };
+    const batchLoadStarted = Date.now();
     const batch = await this.prisma.jobMessageImportBatch.findFirst({
       where: { tenantId: params.tenantId, id: params.batchId },
       include: { drafts: true },
     });
+    perf.record("batchLoad", Date.now() - batchLoadStarted);
     if (!batch) throw new NotFoundException("Batch not found");
 
     if (batch.status === JobMessageImportBatchStatus.CONFIRMED) {
       const confirmedDrafts = batch.drafts.filter((d) => !!d.canonicalJobId);
+      const warnings = await this.runPostCommitImportFinalization({
+        tenantId: params.tenantId,
+        actorUserId: params.actorUserId,
+        batchId: params.batchId,
+        timezone: batch.timezone,
+        drafts: confirmedDrafts,
+        perf,
+      });
+      perf.flush();
       return {
         createdJobIds: confirmedDrafts.map((d) => String(d.canonicalJobId)),
         createdCount: confirmedDrafts.length,
+        warnings,
       };
     }
     if (batch.status !== JobMessageImportBatchStatus.IN_REVIEW) {
@@ -620,78 +660,99 @@ export class JobMessageImportService {
       overrideReason: string | null;
     }> = [];
 
-    for (const row of submitted) {
-      const draft = draftsById.get(row.draftId) as (typeof batch.drafts)[number] | undefined;
-      if (!draft) {
-        throw new BadRequestException("Draft does not belong to this batch");
-      }
-      if (draft.confirmedAt) {
-        throw new BadRequestException("Draft already confirmed");
-      }
-      const reviewed = mergeReviewedDraftPatch(readControllerJson(draft.controllerJson), row);
-      const validation = validateReviewedDraft(reviewed);
-      if (validation.hasBlockingErrors) {
-        throw new BadRequestException("Included drafts have unresolved validation errors");
-      }
-      if (reviewed.customerCompanyId) {
-        const exists = await this.prisma.customer_companies.findFirst({
-          where: { tenantId: params.tenantId, id: reviewed.customerCompanyId },
-          select: { id: true },
+    await perf.measure("reviewedDraftValidation", async () => {
+      for (const row of submitted) {
+        const draft = draftsById.get(row.draftId) as (typeof batch.drafts)[number] | undefined;
+        if (!draft) {
+          throw new BadRequestException("Draft does not belong to this batch");
+        }
+        if (draft.confirmedAt) {
+          throw new BadRequestException("Draft already confirmed");
+        }
+        const reviewed = mergeReviewedDraftPatch(readControllerJson(draft.controllerJson), row);
+        const validation = validateReviewedDraft(reviewed);
+        if (validation.hasBlockingErrors) {
+          throw new BadRequestException("Included drafts have unresolved validation errors");
+        }
+        const fingerprint = computeDraftFingerprint({
+          tenantId: params.tenantId,
+          movementType: reviewed.movementType,
+          reviewed,
         });
-        if (!exists) {
+        const fingerprintChanged = fingerprint !== draft.duplicateFingerprint;
+        const overrideAcknowledged = fingerprintChanged
+          ? row.duplicateOverrideAcknowledged === true
+          : row.duplicateOverrideAcknowledged === true
+            ? true
+            : row.duplicateOverrideAcknowledged === false
+              ? false
+              : !!draft.duplicateOverrideAt;
+        const overrideReason = overrideAcknowledged
+          ? trimToNull(row.duplicateOverrideReason) ??
+            draft.duplicateOverrideReason ??
+            "Acknowledged possible duplicate"
+          : null;
+        prepared.push({
+          draft,
+          reviewed,
+          fingerprint,
+          overrideAcknowledged,
+          overrideReason,
+        });
+      }
+    });
+
+    await perf.measure("customerValidation", async () => {
+      const customerIds = Array.from(
+        new Set(
+          prepared
+            .map((p) => p.reviewed.customerCompanyId)
+            .filter((id): id is string => !!id),
+        ),
+      );
+      if (!customerIds.length) return;
+      const rows = await this.prisma.customer_companies.findMany({
+        where: { tenantId: params.tenantId, id: { in: customerIds } },
+        select: { id: true },
+      });
+      const ok = new Set(rows.map((r: { id: string }) => r.id));
+      for (const id of customerIds) {
+        if (!ok.has(id)) {
           throw new BadRequestException("Customer is invalid for this tenant");
         }
       }
+    });
 
-      const fingerprint = computeDraftFingerprint({
-        tenantId: params.tenantId,
-        movementType: reviewed.movementType,
-        reviewed,
-      });
-      const fingerprintChanged = fingerprint !== draft.duplicateFingerprint;
-      const overrideAcknowledged = fingerprintChanged
-        ? row.duplicateOverrideAcknowledged === true
-        : row.duplicateOverrideAcknowledged === true
-          ? true
-          : row.duplicateOverrideAcknowledged === false
-            ? false
-            : !!draft.duplicateOverrideAt;
-      const overrideReason = overrideAcknowledged
-        ? trimToNull(row.duplicateOverrideReason) ??
-          draft.duplicateOverrideReason ??
-          "Acknowledged possible duplicate"
-        : null;
-
-      const candidates = await findDuplicateCandidates({
+    await perf.measure("duplicateDetection", async () => {
+      const candidatesByKey = await findDuplicateCandidatesForDrafts({
         tx: this.prisma,
         tenantId: params.tenantId,
-        requestedPickupDateYmd: requestedPickupDateYmd(reviewed),
-        reviewed,
-        duplicateFingerprint: fingerprint,
-        excludeDraftId: draft.id,
+        drafts: prepared.map((item) => ({
+          key: item.draft.id,
+          reviewed: item.reviewed,
+          requestedPickupDateYmd: requestedPickupDateYmd(item.reviewed),
+          duplicateFingerprint: item.fingerprint,
+          excludeDraftId: item.draft.id,
+        })),
       });
-      const status = classifyValidationStatus({
-        hasBlockingErrors: false,
-        duplicateCandidateCount: candidates.length,
-        duplicateOverrideAcknowledged: overrideAcknowledged,
-      });
-      if (status !== JobMessageImportDraftValidationStatus.READY) {
-        throw new BadRequestException(
-          "Possible duplicate requires an explicit override before confirmation",
-        );
+      for (const item of prepared) {
+        const candidates = candidatesByKey.get(item.draft.id) ?? [];
+        const status = classifyValidationStatus({
+          hasBlockingErrors: false,
+          duplicateCandidateCount: candidates.length,
+          duplicateOverrideAcknowledged: item.overrideAcknowledged,
+        });
+        if (status !== JobMessageImportDraftValidationStatus.READY) {
+          throw new BadRequestException(
+            "Possible duplicate requires an explicit override before confirmation",
+          );
+        }
       }
+    });
 
-      prepared.push({
-        draft,
-        reviewed,
-        fingerprint,
-        overrideAcknowledged,
-        overrideReason,
-      });
-    }
-
-    const result = await this.prisma.$transaction(
-      async (tx: any) => {
+    const result: ConfirmTxResult = await perf.measure("canonicalTransaction", () =>
+      this.prisma.$transaction(
+        async (tx: any): Promise<ConfirmTxResult> => {
       const claimed = await tx.jobMessageImportBatch.updateMany({
         where: {
           id: params.batchId,
@@ -749,11 +810,13 @@ export class JobMessageImportService {
           reviewed: item.reviewed,
           timezone: batch.timezone,
         });
-        const createdJob = await this.jobs.createCanonicalJob(
-          params.tenantId,
-          createDto,
-          actorUser,
-          { tx },
+        const createdJob = await perf.measure(
+          `canonicalJobCreate:${item.draft.id}`,
+          () =>
+            this.jobs.createCanonicalJob(params.tenantId, createDto, actorUser, {
+              tx,
+              perf,
+            }),
         );
 
         await tx.jobMessageImportDraft.update({
@@ -796,34 +859,167 @@ export class JobMessageImportService {
       });
 
       return { createdJobIds, auditEvents, createdForFinalize };
-      },
-      {
-        maxWait: JOB_MESSAGE_IMPORT_CONFIRM_TX_MAX_WAIT_MS,
-        timeout: JOB_MESSAGE_IMPORT_CONFIRM_TX_TIMEOUT_MS,
+        },
+        {
+          maxWait: JOB_MESSAGE_IMPORT_CONFIRM_TX_MAX_WAIT_MS,
+          timeout: JOB_MESSAGE_IMPORT_CONFIRM_TX_TIMEOUT_MS,
+        },
+      ),
+    );
+
+    const liveDrafts =
+      result.createdForFinalize.length > 0
+        ? result.auditEvents.map((event) => ({
+            id: event.draftId,
+            clientDraftId: event.clientDraftId,
+            canonicalJobId: event.jobId,
+            controllerJson: prepared.find((p) => p.draft.id === event.draftId)?.reviewed ?? null,
+          }))
+        : (await this.prisma.jobMessageImportBatch.findFirst({
+            where: { id: params.batchId, tenantId: params.tenantId },
+            include: { drafts: true },
+          }))?.drafts?.filter((d: { canonicalJobId?: string | null }) => !!d.canonicalJobId) ?? [];
+
+    const warnings = await this.runPostCommitImportFinalization({
+      tenantId: params.tenantId,
+      actorUserId: params.actorUserId,
+      batchId: params.batchId,
+      timezone: batch.timezone,
+      drafts: liveDrafts,
+      createdForFinalize: result.createdForFinalize,
+      perf,
+    });
+
+    perf.flush();
+    return {
+      createdJobIds: result.createdJobIds,
+      createdCount: result.createdJobIds.length,
+      warnings,
+    };
+  }
+
+  private async runPostCommitImportFinalization(params: {
+    tenantId: string;
+    actorUserId: string | null;
+    batchId: string;
+    timezone: string;
+    drafts: Array<{
+      id: string;
+      clientDraftId?: string | null;
+      canonicalJobId?: string | null;
+      controllerJson?: unknown;
+    }>;
+    createdForFinalize?: Array<{
+      jobId: string;
+      internalRef: string | null;
+      dto: ReturnType<typeof reviewedDraftToCreateJobDto>;
+    }>;
+    perf: ConfirmPerfTracker;
+  }): Promise<JobMessageImportConfirmWarning[]> {
+    const warnings: JobMessageImportConfirmWarning[] = [];
+    const byCreated = new Map(
+      (params.createdForFinalize ?? []).map((row) => [row.jobId, row] as const),
+    );
+    const targets = params.drafts
+      .filter((d) => !!d.canonicalJobId)
+      .map((draft) => {
+        const jobId = String(draft.canonicalJobId);
+        const existing = byCreated.get(jobId);
+        const reviewed = readControllerJson(draft.controllerJson);
+        return {
+          jobId,
+          draftId: draft.id,
+          clientDraftId: String(draft.clientDraftId ?? draft.id),
+          internalRef: existing?.internalRef ?? null,
+          dto:
+            existing?.dto ??
+            reviewedDraftToCreateJobDto({
+              reviewed,
+              timezone: params.timezone,
+            }),
+        };
+      });
+
+    await mapWithConcurrency(
+      targets,
+      JOB_MESSAGE_IMPORT_FINALIZE_CONCURRENCY,
+      async (created) => {
+        try {
+          await params.perf.measure(`finalizeCanonicalJobCreate:${created.jobId}`, () =>
+            this.jobs.finalizeCanonicalJobCreate(
+              params.tenantId,
+              created.dto,
+              { userId: params.actorUserId },
+              { id: created.jobId, internalRef: created.internalRef },
+              {
+                omitHttpPayload: true,
+                tolerateSideEffectFailures: true,
+                onSideEffectWarning: (warning) => warnings.push(warning),
+                perf: params.perf,
+              },
+            ),
+          );
+        } catch (error) {
+          console.error(
+            `[JobMessageImportService] Post-create finalization failed for job ${created.jobId}:`,
+            error && typeof error === "object" && "message" in error
+              ? (error as { message?: unknown }).message
+              : "unknown error",
+          );
+          warnings.push({
+            code: "POST_CREATE_FINALIZATION_INCOMPLETE",
+            jobId: created.jobId,
+            operation: "FINALIZE",
+          });
+        }
       },
     );
 
-    for (const created of result.createdForFinalize) {
-      await this.jobs.finalizeCanonicalJobCreate(
-        params.tenantId,
-        created.dto,
-        { userId: params.actorUserId },
-        { id: created.jobId, internalRef: created.internalRef },
-      );
-    }
+    await params.perf.measure("importProvenanceAudit", async () => {
+      for (const event of targets) {
+        try {
+          const alreadyLogged =
+            typeof this.prisma.auditLog?.findFirst === "function"
+              ? await this.prisma.auditLog.findFirst({
+                  where: {
+                    tenantId: params.tenantId,
+                    entityType: "JOB",
+                    entityId: event.jobId,
+                    action: "AI_JOB_MESSAGE_IMPORT_CONFIRM",
+                  },
+                  select: { id: true },
+                })
+              : null;
+          if (alreadyLogged) continue;
+          await this.audit.log(
+            params.tenantId,
+            "AI_JOB_MESSAGE_IMPORT_CONFIRM",
+            "JOB",
+            event.jobId,
+            {
+              batchId: params.batchId,
+              draftId: event.draftId,
+              clientDraftId: event.clientDraftId,
+            },
+            params.actorUserId,
+          );
+        } catch (error) {
+          console.error(
+            `[JobMessageImportService] Import provenance audit failed for job ${event.jobId}:`,
+            error && typeof error === "object" && "message" in error
+              ? (error as { message?: unknown }).message
+              : "unknown error",
+          );
+          warnings.push({
+            code: "POST_CREATE_FINALIZATION_INCOMPLETE",
+            jobId: event.jobId,
+            operation: "IMPORT_PROVENANCE_AUDIT",
+          });
+        }
+      }
+    });
 
-    for (const event of result.auditEvents) {
-      await this.audit.log(
-        params.tenantId,
-        "AI_JOB_MESSAGE_IMPORT_CONFIRM",
-        "JOB",
-        event.jobId,
-        { batchId: params.batchId, draftId: event.draftId, clientDraftId: event.clientDraftId },
-        params.actorUserId,
-      );
-    }
-
-    return { createdJobIds: result.createdJobIds, createdCount: result.createdJobIds.length };
+    return warnings;
   }
 
   private assertProductionParserOutput(parsed: ParseJobMessageResult["message"]): void {
