@@ -27,6 +27,7 @@ import { InviteMemberDto } from './dto/invite-member.dto';
 import { UpdateMembershipDto } from './dto/update-membership.dto';
 import { TenantListQueryDto } from './dto/list-query.dto';
 import { toPersistedMembershipRole } from '../auth/role-compat';
+import { AccessSurface } from '../auth/guards/access-surface.guard';
 
 export interface TenantDto {
   id: string;
@@ -106,12 +107,16 @@ export class TenantsController {
 
   @Get('me')
   @UseGuards(AuthGuard, TenantGuard)
+  @AccessSurface('member')
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Get current tenant information' })
   async getCurrentTenant(@Request() req: any) {
     const tenantId = req.tenant.tenantId;
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
+      include: {
+        moduleEntitlements: { select: { module: true, enabled: true } },
+      },
     });
 
     if (!tenant) {
@@ -125,6 +130,10 @@ export class TenantsController {
       role: req.tenant.role,
       createdAt: tenant.createdAt,
       updatedAt: tenant.updatedAt,
+      modules: (tenant.moduleEntitlements ?? []).map((row) => ({
+        module: row.module,
+        enabled: row.enabled === true,
+      })),
     };
   }
 

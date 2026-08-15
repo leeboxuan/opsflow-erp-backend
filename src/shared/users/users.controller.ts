@@ -27,10 +27,17 @@ import {
   UserMeDto,
 } from "./dto/users.dto";
 import { UsersService } from "./users.service";
+import { AccessSurface } from "../auth/guards/access-surface.guard";
+import {
+  accessActorFromRequest,
+  actorIsDriverOnly,
+} from "../auth/access-actor";
+import { Role } from "@prisma/client";
 
 @ApiTags("users")
 @Controller("users")
 @UseGuards(AuthGuard, TenantGuard)
+@AccessSurface("member")
 @ApiBearerAuth("JWT-auth")
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
@@ -50,7 +57,7 @@ export class UsersController {
     return this.usersService.updateMyProfile(
       req.tenant.tenantId,
       req.user.userId,
-      req.tenant.role,
+      actorIsDriverOnly(accessActorFromRequest(req)) ? Role.DRIVER : Role.ADMIN,
       dto,
     );
   }

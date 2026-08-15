@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from "@nestjs/swa
 import { Role } from "@prisma/client";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
+import { AccessSurface } from "../../shared/auth/guards/access-surface.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
 import {
   ModuleEntitlementGuard,
@@ -16,6 +17,7 @@ import { DriverJobsService } from "./driver-jobs.service";
 @UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT)
 @Roles(Role.DRIVER)
+@AccessSurface("driver")
 @ApiBearerAuth("JWT-auth")
 export class DriverTripsController {
   constructor(private readonly driverJobs: DriverJobsService) {}

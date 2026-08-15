@@ -39,7 +39,7 @@ import { StatisticsTruckingService } from "./statistics-trucking.service";
 @Controller("statistics")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT)
-@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+@Roles(Role.ADMIN)
 @ApiBearerAuth("JWT-auth")
 export class StatisticsTruckingController {
   constructor(

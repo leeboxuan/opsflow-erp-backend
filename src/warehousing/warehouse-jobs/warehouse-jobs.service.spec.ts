@@ -582,7 +582,7 @@ describe('WarehouseJobsService', () => {
           warehouseNotes: 'Floor note',
         },
         actorUserId,
-        Role.TRANSPORT_STAFF,
+        Role.WAREHOUSE,
       );
 
       expect(tx.warehouseJob.update).toHaveBeenCalledWith(
@@ -785,7 +785,7 @@ describe('WarehouseJobsService', () => {
         expect.objectContaining({
           where: expect.objectContaining({
             tenantId,
-            role: { in: [Role.TRANSPORT_STAFF, Role.OPS, Role.WAREHOUSE] },
+            OR: expect.any(Array),
           }),
         }),
       );

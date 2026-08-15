@@ -1,6 +1,10 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { Prisma, Role, WarehouseJobStatus } from '@prisma/client';
-import { isTransportStaffRole } from '../../shared/auth/role-compat';
+import { CanonicalTenantRole, Prisma, Role, WarehouseJobStatus } from '@prisma/client';
+import {
+  hasRole,
+  toCanonicalTenantRoles,
+  type RoleLike,
+} from '../../shared/auth/canonical-tenant-role';
 
 const TERMINAL_STATUSES = new Set<WarehouseJobStatus>([
   WarehouseJobStatus.COMPLETED,
@@ -13,13 +17,25 @@ export type WarehouseJobAccessRef = {
   assignedToUserId: string | null;
 };
 
-/** Admin / transport staff / finance — office roles for warehouse job access. */
+/** Tenant Admin / Warehouse Admin — office warehouse administration. */
 export function isOpsLikeRole(role: Role): boolean {
-  return (
-    role === Role.ADMIN ||
-    isTransportStaffRole(role) ||
-    role === Role.FINANCE
-  );
+  return role === Role.ADMIN;
+}
+
+export function warehouseLegacyRoleFromCanonical(
+  roles: readonly RoleLike[] | null | undefined,
+): Role {
+  const canonical = toCanonicalTenantRoles(roles);
+  if (
+    hasRole(canonical, CanonicalTenantRole.TENANT_ADMIN) ||
+    hasRole(canonical, CanonicalTenantRole.WAREHOUSE_ADMIN)
+  ) {
+    return Role.ADMIN;
+  }
+  if (hasRole(canonical, CanonicalTenantRole.WAREHOUSE_STAFF)) {
+    return Role.WAREHOUSE;
+  }
+  return Role.WAREHOUSE;
 }
 
 /**

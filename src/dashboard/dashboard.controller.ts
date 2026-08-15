@@ -7,6 +7,8 @@ import {
 } from "@nestjs/swagger";
 import { AuthGuard } from "../shared/auth/guards/auth.guard";
 import { TenantGuard } from "../shared/auth/guards/tenant.guard";
+import { RoleGuard, Roles } from "../shared/auth/guards/role.guard";
+import { INTERNAL_STAFF_ROLES } from "../shared/auth/canonical-tenant-role";
 import { DashboardService } from "./dashboard.service";
 import { DashboardSummaryMetaDto, DashboardSummaryQueryDto } from "./dto";
 
@@ -16,7 +18,8 @@ import { DashboardSummaryMetaDto, DashboardSummaryQueryDto } from "./dto";
 export class DashboardController {
   constructor(private readonly dashboardService: DashboardService) {}
 
-  @UseGuards(AuthGuard, TenantGuard)
+  @UseGuards(AuthGuard, TenantGuard, RoleGuard)
+  @Roles(...INTERNAL_STAFF_ROLES)
   @Get("summary")
   @ApiOperation({
     summary:

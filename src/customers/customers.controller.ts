@@ -21,7 +21,7 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { FileInterceptor } from "@nestjs/platform-express";
-import { MembershipStatus, Role, TenantModule } from "@prisma/client";
+import { MembershipStatus, TenantModule } from "@prisma/client";
 
 import { AuthGuard } from "../shared/auth/guards/auth.guard";
 import { RoleGuard, Roles } from "../shared/auth/guards/role.guard";
@@ -31,6 +31,10 @@ import {
   RequiresTenantModule,
 } from "../shared/auth/guards/module-entitlement.guard";
 import { CustomersService } from "./customers.service";
+import {
+  CUSTOMER_DIRECTORY_ROLES,
+  TRANSPORT_OPS_ROLES,
+} from "../shared/auth/canonical-tenant-role";
 import {
   CreateCustomerCompanyDto,
   CreateCustomerCompanyUserDto,
@@ -45,7 +49,8 @@ import {
 
 @ApiTags("customers")
 @Controller("customers")
-@UseGuards(AuthGuard, TenantGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard)
+@Roles(...CUSTOMER_DIRECTORY_ROLES)
 @ApiBearerAuth("JWT-auth")
 export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
@@ -62,7 +67,7 @@ export class CustomersController {
 
   @Post("companies")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(...TRANSPORT_OPS_ROLES)
   @ApiOperation({ summary: "Create a customer company (Admin/Ops/Finance only)" })
   async createCompany(
     @Request() req: any,
@@ -89,7 +94,7 @@ export class CustomersController {
 
   @Post("companies/:companyId/contacts")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(...TRANSPORT_OPS_ROLES)
   @ApiOperation({
     summary:
       "Create/upsert a contact under a customer company (Admin/Ops/Finance only)",
@@ -105,7 +110,7 @@ export class CustomersController {
 
   @Post("companies/:companyId/quotation")
   @UseGuards(RoleGuard, ModuleEntitlementGuard)
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(...TRANSPORT_OPS_ROLES)
   @RequiresTenantModule(TenantModule.TRANSPORT)
   @ApiOperation({
     summary:
@@ -148,7 +153,7 @@ export class CustomersController {
 
   @Get("companies/:companyId/quotations")
   @UseGuards(RoleGuard, ModuleEntitlementGuard)
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(...TRANSPORT_OPS_ROLES)
   @RequiresTenantModule(TenantModule.TRANSPORT)
   @ApiOperation({ summary: "List quotation versions for a company" })
   async listCompanyQuotations(
@@ -161,7 +166,7 @@ export class CustomersController {
 
   @Get("companies/:companyId/quotation/active")
   @UseGuards(RoleGuard, ModuleEntitlementGuard)
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(...TRANSPORT_OPS_ROLES)
   @RequiresTenantModule(TenantModule.TRANSPORT)
   @ApiOperation({ summary: "Get ACTIVE quotation with signed URL" })
   async getActiveQuotation(
@@ -174,7 +179,7 @@ export class CustomersController {
 
   @Get("companies/:companyId/quotation/lines")
   @UseGuards(RoleGuard, ModuleEntitlementGuard)
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(...TRANSPORT_OPS_ROLES)
   @RequiresTenantModule(TenantModule.TRANSPORT)
   @ApiOperation({
     summary:
@@ -190,7 +195,7 @@ export class CustomersController {
 
   @Get("companies/:companyId/users")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(...TRANSPORT_OPS_ROLES)
   @ApiOperation({
     summary:
       "List portal users linked to a customer company (Admin/Ops/Finance only)",
@@ -205,10 +210,10 @@ export class CustomersController {
 
   @Post("companies/:companyId/users")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+    @Roles(...TRANSPORT_OPS_ROLES)
   @ApiOperation({
     summary:
-      "Create/invite a portal user linked to a customer company (Admin/Ops/Finance only)",
+      "Create/invite a portal user linked to a customer company (Tenant Admin / Transport Admin)",
   })
   async createCompanyUser(
     @Request() req: any,
@@ -228,7 +233,7 @@ export class CustomersController {
 
   @Patch("companies/:companyId")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(...TRANSPORT_OPS_ROLES)
   @ApiOperation({
     summary: "Update a customer company profile (Admin/Ops/Finance only)",
   })
@@ -244,7 +249,7 @@ export class CustomersController {
   // ✅ NEW: suspend/unsuspend endpoints
   @Patch("companies/:companyId/suspend")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(...TRANSPORT_OPS_ROLES)
   @ApiOperation({ summary: "Suspend a customer company and all its users" })
   async suspendCompany(@Request() req: any, @Param("companyId") companyId: string) {
     const tenantId = req.tenant.tenantId;
@@ -253,7 +258,7 @@ export class CustomersController {
 
   @Patch("companies/:companyId/unsuspend")
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(...TRANSPORT_OPS_ROLES)
   @ApiOperation({ summary: "Unsuspend a customer company and all its users" })
   async unsuspendCompany(@Request() req: any, @Param("companyId") companyId: string) {
     const tenantId = req.tenant.tenantId;
@@ -262,7 +267,7 @@ export class CustomersController {
 
   @Patch("companies/:companyId/users/:userId/suspend")
 @UseGuards(RoleGuard)
-@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(...TRANSPORT_OPS_ROLES)
 @ApiOperation({ summary: "Suspend a customer portal user under a company" })
 async suspendCompanyUser(
   @Request() req: any,
@@ -280,7 +285,7 @@ async suspendCompanyUser(
 
 @Patch("companies/:companyId/users/:userId/unsuspend")
 @UseGuards(RoleGuard)
-@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(...TRANSPORT_OPS_ROLES)
 @ApiOperation({ summary: "Unsuspend a customer portal user under a company" })
 async unsuspendCompanyUser(
   @Request() req: any,

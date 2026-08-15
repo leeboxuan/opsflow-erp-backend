@@ -227,11 +227,8 @@ export class CreatePlatformTenantUserDto {
   @IsString()
   phone?: string;
 
-  @IsEnum(Role, {
-    message:
-      "role must be ADMIN, TRANSPORT_STAFF, FINANCE, WAREHOUSE, or CUSTOMER",
-  })
-  role!: Role;
+  @IsString()
+  role!: string;
 
   /** Required. Never logged, audited, or returned. */
   @IsString()
@@ -261,11 +258,8 @@ export class UpdatePlatformTenantUserDto {
   phone?: string | null;
 
   @IsOptional()
-  @IsEnum(Role, {
-    message:
-      "role must be ADMIN, TRANSPORT_STAFF, FINANCE, WAREHOUSE, or CUSTOMER",
-  })
-  role?: Role;
+  @IsString()
+  role?: string;
 
   @IsOptional()
   @IsEnum(MembershipStatus)
@@ -297,8 +291,8 @@ export class PlatformTenantUsersQueryDto {
   filter?: string;
 
   @IsOptional()
-  @IsEnum(Role)
-  role?: Role;
+  @IsString()
+  role?: string;
 
   @IsOptional()
   @IsString()

@@ -1,25 +1,42 @@
-import { Role, WarehouseJobType } from '@prisma/client';
+import { CanonicalTenantRole, Role, WarehouseJobType } from '@prisma/client';
 import { PATH_METADATA } from '@nestjs/common/constants';
 import { Reflector } from '@nestjs/core';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { RoleGuard } from '../../shared/auth/guards/role.guard';
+import { toCanonicalTenantRoles } from '../../shared/auth/canonical-tenant-role';
 import { WarehouseJobsController } from './warehouse-jobs.controller';
 
 const controllerPath = join(__dirname, 'warehouse-jobs.controller.ts');
 const controllerSource = readFileSync(controllerPath, 'utf8');
 
-const READ_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.WAREHOUSE];
-const MUTATE_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF];
-const FLOOR_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF, Role.WAREHOUSE];
-const BLOCKED_ROLES = [Role.DRIVER, Role.CUSTOMER];
+const READ_ROLES = [
+  CanonicalTenantRole.TENANT_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_STAFF,
+];
+const MUTATE_ROLES = [
+  CanonicalTenantRole.TENANT_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_ADMIN,
+];
+const FLOOR_ROLES = [
+  CanonicalTenantRole.TENANT_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_STAFF,
+];
+const BLOCKED_ROLES = [
+  CanonicalTenantRole.TRANSPORT_DRIVER,
+  CanonicalTenantRole.CUSTOMER_ADMIN,
+  CanonicalTenantRole.FINANCE_ADMIN,
+  CanonicalTenantRole.TRANSPORT_ADMIN,
+];
 
 function getEffectiveRoles(
   handler: (...args: unknown[]) => unknown,
-): Role[] {
+): CanonicalTenantRole[] {
   const reflector = new Reflector();
   return (
-    reflector.getAllAndOverride<Role[]>('roles', [
+    reflector.getAllAndOverride<CanonicalTenantRole[]>('roles', [
       handler,
       WarehouseJobsController,
     ]) ?? []
@@ -28,11 +45,14 @@ function getEffectiveRoles(
 
 function ctxForHandler(
   handler: (...args: unknown[]) => unknown,
-  role: Role,
+  role: Role | CanonicalTenantRole,
 ) {
+  const roles = toCanonicalTenantRoles([role]);
   return {
     switchToHttp: () => ({
-      getRequest: () => ({ tenant: { tenantId: 'tenant-1', role } }),
+      getRequest: () => ({
+        tenant: { tenantId: 'tenant-1', role, roles },
+      }),
     }),
     getHandler: () => handler,
     getClass: () => WarehouseJobsController,
@@ -56,7 +76,7 @@ describe('WarehouseJobsController metadata', () => {
     expect(controllerSource).toContain('DestructiveActionGuard');
   });
 
-  it('defaults class roles to ADMIN, OPS, FINANCE, WAREHOUSE (excludes DRIVER and CUSTOMER)', () => {
+  it('defaults class roles to tenant/warehouse admin and warehouse staff', () => {
     const classRoles = Reflect.getMetadata('roles', WarehouseJobsController);
     expect(classRoles).toEqual(READ_ROLES);
     for (const blocked of BLOCKED_ROLES) {
@@ -72,7 +92,7 @@ describe('WarehouseJobsController metadata', () => {
     ['listDocuments', WarehouseJobsController.prototype.listDocuments],
     ['reportPreview', WarehouseJobsController.prototype.reportPreview],
   ])('read endpoint %s', (_name, handler) => {
-    it('allows ADMIN, OPS, FINANCE, WAREHOUSE', () => {
+    it('allows TENANT_ADMIN, WAREHOUSE_ADMIN, WAREHOUSE_STAFF', () => {
       expect(getEffectiveRoles(handler)).toEqual(READ_ROLES);
     });
   });
@@ -83,12 +103,17 @@ describe('WarehouseJobsController metadata', () => {
     ['start', WarehouseJobsController.prototype.start],
     ['complete', WarehouseJobsController.prototype.complete],
   ])('floor endpoint %s', (_name, handler) => {
-    it('allows ADMIN, OPS, WAREHOUSE', () => {
+    it('allows TENANT_ADMIN, WAREHOUSE_ADMIN, WAREHOUSE_STAFF', () => {
       expect(getEffectiveRoles(handler)).toEqual(FLOOR_ROLES);
     });
 
-    it('does not allow FINANCE', () => {
-      expect(getEffectiveRoles(handler)).not.toContain(Role.FINANCE);
+    it('does not allow FINANCE_ADMIN or TRANSPORT_ADMIN', () => {
+      expect(getEffectiveRoles(handler)).not.toContain(
+        CanonicalTenantRole.FINANCE_ADMIN,
+      );
+      expect(getEffectiveRoles(handler)).not.toContain(
+        CanonicalTenantRole.TRANSPORT_ADMIN,
+      );
     });
   });
 
@@ -111,12 +136,20 @@ describe('WarehouseJobsController metadata', () => {
     ['approveDocument', WarehouseJobsController.prototype.approveDocument],
     ['rejectDocument', WarehouseJobsController.prototype.rejectDocument],
   ])('mutating endpoint %s', (_name, handler) => {
-    it('allows ADMIN and OPS only', () => {
+    it('allows TENANT_ADMIN and WAREHOUSE_ADMIN only', () => {
       expect(getEffectiveRoles(handler)).toEqual(MUTATE_ROLES);
     });
 
-    it('does not allow FINANCE', () => {
-      expect(getEffectiveRoles(handler)).not.toContain(Role.FINANCE);
+    it('does not allow FINANCE_ADMIN, TRANSPORT_ADMIN, or WAREHOUSE_STAFF', () => {
+      expect(getEffectiveRoles(handler)).not.toContain(
+        CanonicalTenantRole.FINANCE_ADMIN,
+      );
+      expect(getEffectiveRoles(handler)).not.toContain(
+        CanonicalTenantRole.TRANSPORT_ADMIN,
+      );
+      expect(getEffectiveRoles(handler)).not.toContain(
+        CanonicalTenantRole.WAREHOUSE_STAFF,
+      );
     });
   });
 
@@ -137,14 +170,21 @@ describe('RoleGuard + WarehouseJobsController', () => {
   describe('read routes', () => {
     const handler = WarehouseJobsController.prototype.list;
 
-    it.each([Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.WAREHOUSE])(
-      'allows %s',
-      (role) => {
-        expect(guard.canActivate(ctxForHandler(handler, role))).toBe(true);
-      },
-    );
+    it.each([
+      CanonicalTenantRole.TENANT_ADMIN,
+      CanonicalTenantRole.WAREHOUSE_ADMIN,
+      CanonicalTenantRole.WAREHOUSE_STAFF,
+      Role.WAREHOUSE,
+    ])('allows %s', (role) => {
+      expect(guard.canActivate(ctxForHandler(handler, role))).toBe(true);
+    });
 
-    it.each(BLOCKED_ROLES)('rejects %s', (role) => {
+    it.each([
+      CanonicalTenantRole.TRANSPORT_ADMIN,
+      CanonicalTenantRole.FINANCE_ADMIN,
+      Role.DRIVER,
+      Role.CUSTOMER,
+    ])('rejects %s', (role) => {
       expect(() => guard.canActivate(ctxForHandler(handler, role))).toThrow(
         /Required role/,
       );
@@ -154,11 +194,21 @@ describe('RoleGuard + WarehouseJobsController', () => {
   describe('mutating header route', () => {
     const handler = WarehouseJobsController.prototype.create;
 
-    it.each(MUTATE_ROLES)('allows %s', (role) => {
+    it.each([
+      CanonicalTenantRole.TENANT_ADMIN,
+      CanonicalTenantRole.WAREHOUSE_ADMIN,
+    ])('allows %s', (role) => {
       expect(guard.canActivate(ctxForHandler(handler, role))).toBe(true);
     });
 
-    it.each([Role.FINANCE, ...BLOCKED_ROLES])('rejects %s', (role) => {
+    it.each([
+      CanonicalTenantRole.WAREHOUSE_STAFF,
+      Role.WAREHOUSE,
+      CanonicalTenantRole.FINANCE_ADMIN,
+      CanonicalTenantRole.TRANSPORT_ADMIN,
+      Role.DRIVER,
+      Role.CUSTOMER,
+    ])('rejects %s', (role) => {
       expect(() => guard.canActivate(ctxForHandler(handler, role))).toThrow(
         /Required role/,
       );
@@ -168,13 +218,18 @@ describe('RoleGuard + WarehouseJobsController', () => {
   describe('mutating line route', () => {
     const handler = WarehouseJobsController.prototype.createLine;
 
-    it.each(MUTATE_ROLES)('allows %s', (role) => {
+    it.each([
+      CanonicalTenantRole.TENANT_ADMIN,
+      CanonicalTenantRole.WAREHOUSE_ADMIN,
+    ])('allows %s', (role) => {
       expect(guard.canActivate(ctxForHandler(handler, role))).toBe(true);
     });
 
-    it('rejects FINANCE', () => {
+    it('rejects FINANCE_ADMIN', () => {
       expect(() =>
-        guard.canActivate(ctxForHandler(handler, Role.FINANCE)),
+        guard.canActivate(
+          ctxForHandler(handler, CanonicalTenantRole.FINANCE_ADMIN),
+        ),
       ).toThrow(/Required role/);
     });
   });
@@ -182,11 +237,19 @@ describe('RoleGuard + WarehouseJobsController', () => {
   describe('mutating unit route', () => {
     const handler = WarehouseJobsController.prototype.confirmJobUnits;
 
-    it.each(MUTATE_ROLES)('allows %s', (role) => {
+    it.each([
+      CanonicalTenantRole.TENANT_ADMIN,
+      CanonicalTenantRole.WAREHOUSE_ADMIN,
+    ])('allows %s', (role) => {
       expect(guard.canActivate(ctxForHandler(handler, role))).toBe(true);
     });
 
-    it.each([Role.FINANCE, Role.DRIVER, Role.CUSTOMER])('rejects %s', (role) => {
+    it.each([
+      CanonicalTenantRole.FINANCE_ADMIN,
+      Role.DRIVER,
+      Role.CUSTOMER,
+      Role.WAREHOUSE,
+    ])('rejects %s', (role) => {
       expect(() => guard.canActivate(ctxForHandler(handler, role))).toThrow(
         /Required role/,
       );
@@ -280,7 +343,7 @@ describe('WarehouseJobsController delegation', () => {
     expect(warehouseJobsService.list).toHaveBeenCalledWith(
       tenantId,
       query,
-      Role.TRANSPORT_STAFF,
+      Role.WAREHOUSE,
       actorUserId,
     );
   });
@@ -302,13 +365,13 @@ describe('WarehouseJobsController delegation', () => {
       tenantId,
       jobId,
       actorUserId,
-      Role.TRANSPORT_STAFF,
+      Role.WAREHOUSE,
     );
     expect(warehouseJobsService.complete).toHaveBeenCalledWith(
       tenantId,
       jobId,
       actorUserId,
-      Role.TRANSPORT_STAFF,
+      Role.WAREHOUSE,
     );
     expect(warehouseJobsService.cancel).toHaveBeenCalledWith(
       tenantId,
@@ -339,7 +402,7 @@ describe('WarehouseJobsController delegation', () => {
 
     expect(warehouseJobReportPreviewService.getReportPreview).toHaveBeenCalledWith(
       tenantId,
-      { role: Role.TRANSPORT_STAFF, userId: actorUserId },
+      { role: Role.WAREHOUSE, userId: actorUserId },
       jobId,
     );
   });

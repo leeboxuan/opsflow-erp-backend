@@ -22,7 +22,7 @@ import {
 } from "../../shared/auth/guards/module-entitlement.guard";
 import { DestructiveActionGuard } from "../../shared/auth/guards/destructive-action.guard";
 import { DestructiveAction } from "../../shared/auth/guards/destructive-action.decorator";
-import { Role, TenantModule } from "@prisma/client";
+import { CanonicalTenantRole, Role, TenantModule } from "@prisma/client";
 import { InvoicesService } from "./invoices.service";
 import {
   CreateInvoiceDto,
@@ -32,71 +32,56 @@ import {
 import { DraftFromJobsDto } from "./dto/draft-from-jobs.dto";
 import { ListInvoicesQueryDto } from "./dto/list-invoices-query.dto";
 import { FileInterceptor } from "@nestjs/platform-express";
+import { accessActorFromRequest } from "../../shared/auth/access-actor";
 
 @ApiTags("Finance")
 @Controller("finance/invoices")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard, DestructiveActionGuard)
 @RequiresTenantModule(TenantModule.FINANCE)
-@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+@Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
 @ApiBearerAuth("JWT-auth")
 export class InvoicesController {
   @Get("jobs/:jobId/prefill")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async prefillFromJob(
     @Request() req: any,
     @Param("jobId") jobId: string,
   ): Promise<InvoicePrefillResponseDto> {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.getInvoicePrefillFromJob(tenantId, jobId, accessUser);
   }
 
   @Get("companies/:companyId/invoiceable-jobs")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async listInvoiceableJobs(
     @Request() req: any,
     @Param("companyId") companyId: string,
   ): Promise<{ items: InvoiceableJobDto[] }> {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.listInvoiceableJobsByCompany(tenantId, companyId, accessUser);
   }
 
   @Get("companies/:companyId/quotation-options")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async listQuotationOptions(
     @Request() req: any,
     @Param("companyId") companyId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.listQuotationOptionsByCompany(tenantId, companyId, accessUser);
   }
 
   @Get("companies/:companyId/commercial-agreements")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async listCommercialAgreements(
     @Request() req: any,
     @Param("companyId") companyId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.listCommercialAgreementsByCompany(
       tenantId,
       companyId,
@@ -105,18 +90,14 @@ export class InvoicesController {
   }
 
   @Get("companies/:companyId/invoiceable-charges")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async listInvoiceableCharges(
     @Request() req: any,
     @Param("companyId") companyId: string,
     @Query("quotationId") quotationId?: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.listInvoiceableChargesByCompany(
       tenantId,
       companyId,
@@ -128,94 +109,66 @@ export class InvoicesController {
   constructor(private readonly invoices: InvoicesService) {}
 
   @Get()
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async list(@Request() req: any, @Query() query: ListInvoicesQueryDto) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.listInvoices(tenantId, query, accessUser);
   }
 
   @Get(":id")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async get(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.getInvoice(tenantId, id, accessUser);
   }
   // Update an existing Draft invoice (used by web: /invoices/[id]/edit)
   @Post(":id/draft")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async updateDraft(
     @Request() req: any,
     @Param("id") id: string,
     @Body() dto: CreateInvoiceDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.updateDraftInvoice(tenantId, id, dto, accessUser);
   }
 
   @Patch(":id")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async patchDraft(
     @Request() req: any,
     @Param("id") id: string,
     @Body() dto: CreateInvoiceDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.updateDraftInvoice(tenantId, id, dto, accessUser);
   }
 
   @Post()
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async create(@Request() req: any, @Body() dto: CreateInvoiceDto) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.createInvoice(tenantId, dto, accessUser);
   }
 
   @Post("draft")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async createDraft(@Request() req: any, @Body() dto: CreateInvoiceDto) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.createDraftInvoice(tenantId, dto, accessUser);
   }
 
   @Post("draft/from-jobs")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async draftFromJobs(@Request() req: any, @Body() dto: DraftFromJobsDto) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.getInvoiceDraftFromJobs(
       tenantId,
       dto.jobIds,
@@ -224,7 +177,7 @@ export class InvoicesController {
   }
 
   @Post(":id/issue")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   @DestructiveAction({
     resource: "INVOICE",
     action: "ISSUE",
@@ -232,29 +185,21 @@ export class InvoicesController {
   })
   async issue(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.issueInvoice(tenantId, id, accessUser);
   }
 
   @Post(":id/void")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   @DestructiveAction({ resource: "INVOICE", action: "VOID" })
   async voidInvoice(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.voidInvoice(tenantId, id, accessUser);
   }
 
   @Post(":id/paid")
-  @Roles(Role.ADMIN, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   @DestructiveAction({
     resource: "INVOICE",
     action: "PAID",
@@ -262,16 +207,12 @@ export class InvoicesController {
   })
   async markPaid(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.markInvoicePaid(tenantId, id, accessUser);
   }
 
   @Post(":id/revert")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   @DestructiveAction({ resource: "INVOICE", action: "REVERT" })
   async revertToDraft(
     @Request() req: any,
@@ -279,11 +220,7 @@ export class InvoicesController {
     @Body() body?: { reason?: string },
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.revertInvoiceToDraft(tenantId, id, accessUser);
   }
 
@@ -299,7 +236,7 @@ export class InvoicesController {
     },
   })
   @UseInterceptors(FileInterceptor("file"))
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async uploadPdf(
     @Request() req: any,
     @Param("id") id: string,
@@ -310,11 +247,7 @@ export class InvoicesController {
     }
 
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
 
     return this.invoices.uploadInvoicePdf(tenantId, id, file, accessUser);
   }
@@ -322,34 +255,22 @@ export class InvoicesController {
   @Get(":id/preview")
   async preview(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.getInvoicePreview(tenantId, id, accessUser);
   }
 
   @Post(":id/generate")
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
   async generate(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.generateInvoicePdf(tenantId, id, accessUser);
   }
 
   @Get(":id/pdf/download")
   async getDownloadUrl(@Request() req: any, @Param("id") id: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
 
     return this.invoices.getInvoicePdfDownloadUrl(tenantId, id, accessUser);
   }

@@ -1,55 +1,104 @@
 import { BadRequestException } from '@nestjs/common';
-import { Role } from '@prisma/client';
+import { CanonicalTenantRole, Prisma, Role } from '@prisma/client';
 import {
   isTransportStaffRole,
   TRANSPORT_STAFF_COMPAT_ROLES,
 } from '../shared/auth/role-compat';
+import {
+  CANONICAL_TO_LEGACY_ROLE,
+  toCanonicalTenantRole,
+} from '../shared/auth/canonical-tenant-role';
 
-const ALL_ROLES = new Set<string>(Object.values(Role));
+const LEGACY_ROLE_SET = new Set<string>(Object.values(Role));
+
+export type ParsedTenantRoleFilter = {
+  legacyRoles: Role[];
+  canonicalRoles: CanonicalTenantRole[];
+};
 
 /**
- * Parse role query filters. During the OPS↔TRANSPORT_STAFF compatibility window,
- * requesting either transport-staff value expands to both so lists still find
- * legacy OPS memberships (and any future TRANSPORT_STAFF rows).
+ * Parse role query filters.
+ * Accepts legacy Role values and canonical tenant roles.
+ * Transport-staff aliases expand to OPS + TRANSPORT_STAFF + TRANSPORT_ADMIN.
  */
-export function parseTenantRoleFilter(
-  role?: Role,
+export function parseTenantRoleListFilter(
+  role?: Role | string,
   roles?: string,
-): Role[] | undefined {
-  let parsed: Role[] | undefined;
+): ParsedTenantRoleFilter | undefined {
+  let tokens: string[] | undefined;
 
   if (role) {
-    parsed = [role];
+    tokens = [String(role)];
   } else if (roles?.trim()) {
-    const tokens = roles
+    tokens = roles
       .split(',')
       .map((value) => value.trim())
       .filter(Boolean);
-
-    const invalid = tokens.filter((value) => !ALL_ROLES.has(value));
-    if (invalid.length > 0) {
-      throw new BadRequestException(`Invalid role filter: ${invalid.join(', ')}`);
-    }
-
-    parsed = tokens as Role[];
   }
 
-  if (!parsed?.length) return undefined;
+  if (!tokens?.length) return undefined;
 
-  const expanded = new Set<Role>();
+  const invalid = tokens.filter(
+    (value) => !LEGACY_ROLE_SET.has(value) && !toCanonicalTenantRole(value),
+  );
+  if (invalid.length) {
+    throw new BadRequestException(`Invalid role filter: ${invalid.join(', ')}`);
+  }
+
+  const legacy = new Set<Role>();
+  const canonical = new Set<CanonicalTenantRole>();
   let includesTransportStaff = false;
-  for (const value of parsed) {
-    if (isTransportStaffRole(value)) {
+
+  for (const value of tokens) {
+    const mapped = toCanonicalTenantRole(value);
+    if (mapped) canonical.add(mapped);
+    if (isTransportStaffRole(value) || mapped === CanonicalTenantRole.TRANSPORT_ADMIN) {
       includesTransportStaff = true;
       continue;
     }
-    expanded.add(value);
-  }
-  if (includesTransportStaff) {
-    for (const value of TRANSPORT_STAFF_COMPAT_ROLES) {
-      expanded.add(value);
+    if (LEGACY_ROLE_SET.has(value)) {
+      legacy.add(value as Role);
+    } else if (mapped) {
+      legacy.add(CANONICAL_TO_LEGACY_ROLE[mapped]);
     }
   }
 
-  return [...expanded];
+  if (includesTransportStaff) {
+    for (const value of TRANSPORT_STAFF_COMPAT_ROLES) {
+      legacy.add(value);
+    }
+    canonical.add(CanonicalTenantRole.TRANSPORT_ADMIN);
+  }
+
+  return {
+    legacyRoles: [...legacy],
+    canonicalRoles: [...canonical],
+  };
+}
+
+/**
+ * Legacy helper: returns Role[] for the membership.role column filter.
+ */
+export function parseTenantRoleFilter(
+  role?: Role | string,
+  roles?: string,
+): Role[] | undefined {
+  return parseTenantRoleListFilter(role, roles)?.legacyRoles;
+}
+
+export function tenantRoleFilterWhere(
+  parsed: ParsedTenantRoleFilter,
+): Prisma.TenantMembershipWhereInput {
+  const clauses: Prisma.TenantMembershipWhereInput[] = [];
+  if (parsed.legacyRoles.length) {
+    clauses.push({ role: { in: parsed.legacyRoles } });
+  }
+  if (parsed.canonicalRoles.length) {
+    clauses.push({
+      membershipRoles: { some: { role: { in: parsed.canonicalRoles } } },
+    });
+  }
+  if (!clauses.length) return {};
+  if (clauses.length === 1) return clauses[0];
+  return { OR: clauses };
 }

@@ -14,10 +14,12 @@ import {
   ApiOperation,
   ApiTags,
 } from "@nestjs/swagger";
-import { Role } from "@prisma/client";
+import { CanonicalTenantRole, Role } from "@prisma/client";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { RoleGuard, Roles } from "../auth/guards/role.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
+import { AccessSurface } from "../auth/guards/access-surface.guard";
+import { INTERNAL_STAFF_ROLES } from "../auth/canonical-tenant-role";
 import {
   PushDeviceDto,
   RegisterPushDeviceDto,
@@ -28,7 +30,8 @@ import { PushDevicesService } from "./push-devices.service";
 @ApiTags("push")
 @Controller("push/devices")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.DRIVER)
+@Roles(...INTERNAL_STAFF_ROLES, CanonicalTenantRole.TRANSPORT_DRIVER)
+@AccessSurface("member")
 @ApiBearerAuth("JWT-auth")
 @ApiHeader({ name: "x-tenant-id", required: true })
 export class PushController {

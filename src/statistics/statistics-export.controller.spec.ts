@@ -35,8 +35,6 @@ describe("StatisticsExportController", () => {
     ).toEqual([AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard]);
     expect(Reflect.getMetadata("roles", StatisticsExportController)).toEqual([
       Role.ADMIN,
-      Role.TRANSPORT_STAFF,
-      Role.FINANCE,
     ]);
   });
 

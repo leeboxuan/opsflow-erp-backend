@@ -1,4 +1,4 @@
-import { MembershipStatus, Role } from '@prisma/client';
+import { CanonicalTenantRole, MembershipStatus, Role } from '@prisma/client';
 
 export class UserDto {
   id!: string;
@@ -7,9 +7,12 @@ export class UserDto {
   username?: string | null;
   name!: string | null;
   phone?: string | null;
+  /** @deprecated Singular compatibility projection. Use `roles`. */
   role!: Role;
+  roles!: CanonicalTenantRole[];
   status!: MembershipStatus;
   membershipId!: string;
+  customerCompanyId?: string | null;
   createdAt!: Date;
   updatedAt!: Date;
   lastLoginAt?: Date | null;

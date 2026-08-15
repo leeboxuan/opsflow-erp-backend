@@ -38,6 +38,7 @@ import {
 } from "pdf-lib";
 
 import { PrismaService } from "../../shared/prisma/prisma.service";
+import { actorIsCustomerAdmin } from "../../shared/auth/access-actor";
 import { AuditService } from "../../shared/audit/audit.service";
 import { SupabaseService } from "../../shared/auth/supabase.service";
 import {
@@ -1159,7 +1160,7 @@ export class TransportJobsService {
   }
 
   private getCustomerCompanyIdOrThrow(user: any): string {
-    if (user?.role !== Role.CUSTOMER) {
+    if (!actorIsCustomerAdmin(user)) {
       throw new ForbiddenException("Access denied");
     }
     const customerCompanyId = user?.customerCompanyId;
@@ -1173,14 +1174,14 @@ export class TransportJobsService {
 
   applyJobAccessFilter(tenantId: string, user: any): any {
     const where: any = { tenantId };
-    if (user?.role === Role.CUSTOMER) {
+    if (actorIsCustomerAdmin(user)) {
       where.customerCompanyId = this.getCustomerCompanyIdOrThrow(user);
     }
     return where;
   }
 
   assertCanAccessJob(job: any, user: any) {
-    if (user?.role !== Role.CUSTOMER) return;
+    if (!actorIsCustomerAdmin(user)) return;
     const customerCompanyId = this.getCustomerCompanyIdOrThrow(user);
     if (job?.customerCompanyId !== customerCompanyId) {
       throw new ForbiddenException("Not allowed to access this job");
@@ -1581,13 +1582,10 @@ export class TransportJobsService {
   }
 
   private assertCustomerCanOnlyRead(user: any) {
-    if (user?.role !== Role.CUSTOMER && user?.role !== Role.FINANCE) return;
-    if (user?.role === Role.CUSTOMER) {
-      // Ensure we throw ForbiddenException when customerCompanyId is missing too.
-      this.getCustomerCompanyIdOrThrow(user);
-    }
+    if (!actorIsCustomerAdmin(user)) return;
+    this.getCustomerCompanyIdOrThrow(user);
     throw new ForbiddenException(
-      `${user?.role} users are read-only for job and trip documents`,
+      `CUSTOMER_ADMIN users are read-only for job and trip documents`,
     );
   }
 
@@ -2145,7 +2143,7 @@ export class TransportJobsService {
     }
 
     // CUSTOMER users can't choose other customerCompanyIds.
-    if (query.companyId && user?.role !== Role.CUSTOMER) {
+    if (query.companyId && !actorIsCustomerAdmin(user)) {
       where.customerCompanyId = query.companyId;
     }
 

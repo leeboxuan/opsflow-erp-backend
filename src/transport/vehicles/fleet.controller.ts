@@ -7,6 +7,8 @@ import {
   RequiresTenantModule,
 } from "../../shared/auth/guards/module-entitlement.guard";
 import { TenantModule } from "@prisma/client";
+import { RoleGuard, Roles } from "../../shared/auth/guards/role.guard";
+import { TRANSPORT_OPS_ROLES } from "../../shared/auth/canonical-tenant-role";
 import { VehiclesService } from "./vehicles.service";
 import { ListVehiclesQueryDto } from "./dto/list-vehicles.query.dto";
 
@@ -15,8 +17,9 @@ import { ListVehiclesQueryDto } from "./dto/list-vehicles.query.dto";
  */
 @ApiTags("fleet")
 @Controller("fleet")
-@UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT)
+@Roles(...TRANSPORT_OPS_ROLES)
 @ApiBearerAuth("JWT-auth")
 export class FleetController {
   constructor(private readonly vehiclesService: VehiclesService) {}

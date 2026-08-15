@@ -71,8 +71,6 @@ describe("StatisticsDriversController", () => {
     ).toEqual([AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard]);
     expect(Reflect.getMetadata("roles", StatisticsDriversController)).toEqual([
       Role.ADMIN,
-      Role.TRANSPORT_STAFF,
-      Role.FINANCE,
     ]);
     const reflector = new Reflector();
     expect(

@@ -23,6 +23,7 @@ describe('admin-users.mapper', () => {
     });
     expect(dto.email).toBeNull();
     expect(dto.username).toBe('floor1');
+    expect(dto.roles).toEqual(['WAREHOUSE_STAFF']);
     expect(JSON.stringify(dto)).not.toContain(AUTH_INTERNAL_EMAIL_DOMAIN);
   });
 
@@ -42,6 +43,30 @@ describe('admin-users.mapper', () => {
       },
     });
     expect(dto.email).toBe('ops@example.com');
+    expect(dto.roles).toEqual(['TRANSPORT_ADMIN']);
+  });
+
+  it('exposes multiple canonical roles when membership rows exist', () => {
+    const dto = mapTenantMembershipToPublicUserDto({
+      id: 'm3',
+      role: Role.TRANSPORT_STAFF,
+      status: MembershipStatus.Active,
+      membershipRoles: [
+        { role: 'TRANSPORT_ADMIN' },
+        { role: 'FINANCE_ADMIN' },
+      ],
+      user: {
+        id: 'u3',
+        email: 'cs@example.com',
+        username: null,
+        name: 'CS',
+        phone: null,
+        createdAt: new Date('2026-01-01'),
+        updatedAt: new Date('2026-01-01'),
+      },
+    });
+    expect(dto.roles).toEqual(['TRANSPORT_ADMIN', 'FINANCE_ADMIN']);
+    expect(dto.role).toBe(Role.TRANSPORT_STAFF);
   });
 
   it('identifies username/password operational users', () => {

@@ -26,11 +26,13 @@ import { TripDto } from './dto/trip.dto';
 import { AssignDriverDto } from './trips/dto/assign-driver.dto';
 import { AssignVehicleDto } from './trips/dto/assign-vehicle.dto';
 import { Role } from '@prisma/client';
+import { TRANSPORT_OPS_ROLES } from '../shared/auth/canonical-tenant-role';
 
 @ApiTags('transport')
 @Controller('transport/trips')
-@UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT)
+@Roles(...TRANSPORT_OPS_ROLES)
 @ApiBearerAuth('JWT-auth')
 export class TripController {
   constructor(private readonly tripService: TripService) {}

@@ -71,7 +71,7 @@ describe("StatisticsExceptionsController", () => {
     ).toEqual([AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard]);
     expect(
       Reflect.getMetadata("roles", StatisticsExceptionsController),
-    ).toEqual([Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE]);
+    ).toEqual([Role.ADMIN]);
     const reflector = new Reflector();
     expect(
       reflector.getAllAndOverride<TenantModule[]>(REQUIRES_TENANT_MODULE_KEY, [

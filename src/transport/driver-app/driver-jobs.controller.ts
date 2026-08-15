@@ -52,12 +52,14 @@ import { DriverTripCompleteDto } from "./dto/driver-trip-complete.dto";
 import { UpdateDriverOperationalDetailsDto } from "./dto/update-driver-operational-details.dto";
 import { ContainerDocumentationRequirementDto } from "./dto/container-documentation-requirement.dto";
 import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
+import { AccessSurface } from "../../shared/auth/guards/access-surface.guard";
 
 @ApiTags("driver-jobs")
 @Controller("drivers/jobs")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT)
 @Roles(Role.DRIVER)
+@AccessSurface("driver")
 @ApiBearerAuth("JWT-auth")
 @ApiExtraModels(JobDocumentDto, ContainerDocumentationRequirementDto)
 export class DriverJobsController {

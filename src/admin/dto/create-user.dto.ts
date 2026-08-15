@@ -1,13 +1,13 @@
 import {
+  IsArray,
   IsBoolean,
   IsEmail,
-  IsEnum,
   IsOptional,
   IsString,
   MinLength,
   ValidateIf,
 } from 'class-validator';
-import { Role } from '@prisma/client';
+import { CanonicalTenantRole } from '@prisma/client';
 
 export class CreateUserDto {
   @ValidateIf((o: CreateUserDto) => !o.username)
@@ -27,8 +27,15 @@ export class CreateUserDto {
   @IsString()
   phone?: string;
 
-  @IsEnum(Role)
-  role!: Role; // ADMIN | TRANSPORT_STAFF | OPS (deprecated) | FINANCE | WAREHOUSE | CUSTOMER (NOT Driver)
+  /** @deprecated Prefer `roles`. Singular compatibility input. */
+  @ValidateIf((o: CreateUserDto) => !o.roles?.length)
+  @IsString()
+  role?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  roles?: string[];
 
   @IsOptional()
   @IsBoolean()
@@ -40,7 +47,10 @@ export class CreateUserDto {
   @MinLength(8)
   password?: string;
 
-  // 👇 Only required when role === CUSTOMER
+  @IsOptional()
+  @IsString()
+  customerCompanyId?: string;
+
   @IsOptional()
   @IsString()
   customerCompanyName?: string;
@@ -53,3 +63,5 @@ export class CreateUserDto {
   @IsString()
   customerContactEmail?: string;
 }
+
+export { CanonicalTenantRole };

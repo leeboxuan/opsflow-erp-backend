@@ -33,7 +33,9 @@ import {
   RequiresTenantModule,
 } from '../../shared/auth/guards/module-entitlement.guard';
 import { UpdateUnitStatusDto } from './dto/update-unit-status.dto';
-import { Role, TenantModule } from '@prisma/client';
+import { CanonicalTenantRole, TenantModule } from '@prisma/client';
+import { actorIsCustomerAdmin } from '../../shared/auth/access-actor';
+import { WAREHOUSE_ADMIN_ROLES } from '../../shared/auth/canonical-tenant-role';
 
 /** Allowed batch status filter (matches Prisma InventoryBatchStatus) */
 const BATCH_STATUS_VALUES = ['Draft', 'Open', 'Completed', 'Cancelled'] as const;
@@ -41,8 +43,13 @@ type BatchStatusQuery = (typeof BATCH_STATUS_VALUES)[number];
 
 @ApiTags('inventory')
 @Controller('inventory')
-@UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.WAREHOUSING)
+@Roles(
+  CanonicalTenantRole.TENANT_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_STAFF,
+)
 @ApiBearerAuth('JWT-auth')
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) { }
@@ -63,8 +70,12 @@ export class InventoryController {
     meta: { page: number; pageSize: number; total: number };
   }> {
     const tenantId = req.tenant.tenantId;
-    const customerCompanyId =
-      req.tenant.role === "CUSTOMER" ? req.tenant.customerCompanyId : undefined;
+    const customerCompanyId = actorIsCustomerAdmin({
+      roles: req.tenant?.roles,
+      role: req.tenant?.role,
+    })
+      ? req.tenant.customerCompanyId
+      : undefined;
     return this.inventoryService.getItemsSummary(tenantId, query, customerCompanyId);
   }
 
@@ -80,7 +91,7 @@ export class InventoryController {
 
   @Post('batches')
   @UseGuards(RoleGuard)
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
+  @Roles(...WAREHOUSE_ADMIN_ROLES)
   @ApiOperation({ summary: 'Create a new inventory batch' })
   async createBatch(
     @Request() req: any,
@@ -91,6 +102,7 @@ export class InventoryController {
   }
 
   @Post('batches/:batchId/receive')
+  @Roles(...WAREHOUSE_ADMIN_ROLES)
   @ApiOperation({ summary: 'Stock In: receive items into a batch, create batch_items + inventory_units' })
   async receiveStock(
     @Request() req: any,
@@ -157,6 +169,7 @@ export class InventoryController {
   }
 
   @Post('orders/:orderId/reserve')
+  @Roles(...WAREHOUSE_ADMIN_ROLES)
   @ApiOperation({ summary: 'Reserve inventory units for an order' })
   async reserveItems(
     @Request() req: any,
@@ -168,6 +181,7 @@ export class InventoryController {
   }
 
   @Post('orders/:orderId/dispatch')
+  @Roles(...WAREHOUSE_ADMIN_ROLES)
   @ApiOperation({ summary: 'Dispatch reserved units (mark as InTransit)' })
   async dispatchItems(
     @Request() req: any,
@@ -179,6 +193,7 @@ export class InventoryController {
   }
 
   @Post('orders/:orderId/deliver')
+  @Roles(...WAREHOUSE_ADMIN_ROLES)
   @ApiOperation({ summary: 'Mark units as delivered' })
   async deliverItems(
     @Request() req: any,
@@ -190,6 +205,7 @@ export class InventoryController {
   }
 
   @Post('orders/:orderId/cancel')
+  @Roles(...WAREHOUSE_ADMIN_ROLES)
   @ApiOperation({ summary: 'Cancel reservation and release units' })
   async cancelReservation(
     @Request() req: any,
@@ -200,6 +216,7 @@ export class InventoryController {
   }
 
   @Post('orders/:orderId/release-units')
+  @Roles(...WAREHOUSE_ADMIN_ROLES)
   async releaseUnits(
     @Request() req: any,
     @Param('orderId') orderId: string,
@@ -262,12 +279,17 @@ export class InventoryController {
     };
   }> {
     const tenantId = req.tenant.tenantId;
-    const customerCompanyId =
-      req.tenant.role === "CUSTOMER" ? req.tenant.customerCompanyId : undefined;
+    const customerCompanyId = actorIsCustomerAdmin({
+      roles: req.tenant?.roles,
+      role: req.tenant?.role,
+    })
+      ? req.tenant.customerCompanyId
+      : undefined;
     return this.inventoryService.searchUnits(tenantId, query, customerCompanyId);
   }
 
   @Post('stock-in')
+  @Roles(...WAREHOUSE_ADMIN_ROLES)
   @ApiOperation({ summary: 'Create a batch + receive units from a client item sheet' })
   async stockIn(@Request() req: any, @Body() dto: StockInDto) {
     const tenantId = req.tenant.tenantId;
@@ -276,7 +298,7 @@ export class InventoryController {
 
   @Patch('units/:unitId/status')
   @UseGuards(RoleGuard)
-  @Roles('ADMIN')
+  @Roles(...WAREHOUSE_ADMIN_ROLES)
   @ApiOperation({ summary: 'Admin: update inventory unit status' })
   async updateUnitStatus(
     @Request() req: any,
@@ -288,6 +310,7 @@ export class InventoryController {
   }
 
   @Delete("items/:itemId")
+  @Roles(...WAREHOUSE_ADMIN_ROLES)
   deleteInventoryItem(@Req() req, @Param("itemId") itemId: string) {
     const tenantId = req.tenant.tenantId;
     return this.inventoryService.deleteItem(tenantId, itemId);

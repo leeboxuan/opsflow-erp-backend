@@ -25,6 +25,9 @@ import {
   TripStatus,
 } from "@prisma/client";
 import { SupabaseService } from "../../shared/auth/supabase.service";
+import { actorIsCustomerAdmin } from "../../shared/auth/access-actor";
+import { hasRole } from "../../shared/auth/canonical-tenant-role";
+import { CanonicalTenantRole } from "@prisma/client";
 import { AuditService } from "../../shared/audit/audit.service";
 import { loadInvoiceAssetBuffer, renderInvoiceHtml } from "./invoice-render";
 import { PDFDocument, StandardFonts } from "pdf-lib";
@@ -99,7 +102,7 @@ export class InvoicesService {
   }
 
   private getCustomerCompanyIdOrThrow(user: any): string {
-    if (user?.role !== Role.CUSTOMER) {
+    if (!actorIsCustomerAdmin(user)) {
       throw new ForbiddenException("Access denied");
     }
     const customerCompanyId = user?.customerCompanyId;
@@ -112,7 +115,7 @@ export class InvoicesService {
   }
 
   private assertCustomerCanOnlyRead(user: any) {
-    if (user?.role !== Role.CUSTOMER) return;
+    if (!actorIsCustomerAdmin(user)) return;
     // Ensure we throw ForbiddenException when customerCompanyId is missing too.
     this.getCustomerCompanyIdOrThrow(user);
     throw new ForbiddenException(
@@ -121,7 +124,7 @@ export class InvoicesService {
   }
 
   private async assertCanAccessInvoice(tenantId: string, inv: any, user: any) {
-    if (user?.role !== Role.CUSTOMER) return;
+    if (!actorIsCustomerAdmin(user)) return;
     const customerCompanyId = this.getCustomerCompanyIdOrThrow(user);
     const allowed = await this.invoiceBelongsToCustomerCompany(
       tenantId,
@@ -1183,7 +1186,7 @@ export class InvoicesService {
     );
 
     const where: any = { tenantId };
-    const isCustomer = user?.role === Role.CUSTOMER;
+    const isCustomer = actorIsCustomerAdmin(user);
     const customerCompanyId = isCustomer
       ? this.getCustomerCompanyIdOrThrow(user)
       : null;
@@ -2143,7 +2146,11 @@ export class InvoicesService {
 
   async markInvoicePaid(tenantId: string, invoiceId: string, user: any) {
     this.assertCustomerCanOnlyRead(user);
-    if (user?.role === Role.TRANSPORT_STAFF) {
+    if (
+      hasRole(user?.roles ?? user?.role, CanonicalTenantRole.TRANSPORT_ADMIN) &&
+      !hasRole(user?.roles ?? user?.role, CanonicalTenantRole.TENANT_ADMIN) &&
+      !hasRole(user?.roles ?? user?.role, CanonicalTenantRole.FINANCE_ADMIN)
+    ) {
       throw new ForbiddenException("Only Admin or Finance can mark invoices Paid");
     }
     const paidAt = new Date();

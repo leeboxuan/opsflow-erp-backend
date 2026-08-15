@@ -21,6 +21,7 @@ describe("TenantUserProvisioningService", () => {
       },
       user: {
         findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
         upsert: jest.fn(),
         update: jest.fn(),
       },
@@ -30,6 +31,13 @@ describe("TenantUserProvisioningService", () => {
         upsert: jest.fn(),
         update: jest.fn(),
       },
+      tenantMembershipRole: {
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      drivers: { findFirst: jest.fn().mockResolvedValue(null) },
       customer_companies: { upsert: jest.fn() },
       customer_contacts: { upsert: jest.fn() },
     };
@@ -180,7 +188,7 @@ describe("TenantUserProvisioningService", () => {
         },
         { mode: "platform-admin" },
       ),
-    ).rejects.toThrow(/TRANSPORT_STAFF/);
+    ).rejects.toThrow(/TRANSPORT_ADMIN/);
   });
 
   it("compensates newly created auth identity when Prisma fails", async () => {
@@ -415,9 +423,9 @@ describe("TenantUserProvisioningService", () => {
     }
   });
 
-  it("rejects duplicate username in tenant", async () => {
+  it("rejects a globally duplicate username", async () => {
     const { service, prisma } = makeService();
-    prisma.tenantMembership.findFirst.mockResolvedValue({ id: "m-clash" });
+    prisma.user.findFirst.mockResolvedValue({ id: "u-clash" });
 
     await expect(
       service.createTenantUser(
@@ -462,6 +470,7 @@ describe("TenantUserProvisioningService", () => {
       id: "m1",
       role: Role.ADMIN,
       status: MembershipStatus.Suspended,
+      membershipRoles: [{ role: "TENANT_ADMIN" }],
     });
 
     const result = await service.updateTenantUser(
@@ -478,6 +487,159 @@ describe("TenantUserProvisioningService", () => {
         data: { status: MembershipStatus.Suspended },
       }),
     );
+  });
+
+  it("replaceUserRoles writes canonical rows and audits the change", async () => {
+    const { service, prisma } = makeService();
+    prisma.tenantMembership.findUnique.mockResolvedValue({
+      id: "m1",
+      role: Role.TRANSPORT_STAFF,
+      status: MembershipStatus.Active,
+      membershipRoles: [{ role: "TRANSPORT_ADMIN" }],
+      user: {
+        id: "u1",
+        email: "a@example.com",
+        username: null,
+        name: "A",
+        phone: null,
+        customerCompanyId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+
+    const _result = await service.replaceUserRoles(
+      "t1",
+      "u1",
+      ["TRANSPORT_ADMIN", "FINANCE_ADMIN"],
+      {
+        actorRoles: ["TENANT_ADMIN"],
+        actorUserId: "actor-1",
+      },
+    );
+
+    expect(prisma.tenantMembershipRole.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({ role: "FINANCE_ADMIN" }),
+        ]),
+      }),
+    );
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "ROLE_ASSIGN",
+          metadata: expect.objectContaining({
+            previousRoles: ["TRANSPORT_ADMIN"],
+            newRoles: ["TRANSPORT_ADMIN", "FINANCE_ADMIN"],
+            changedBy: "actor-1",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("TRANSPORT_ADMIN cannot assign TENANT_ADMIN", async () => {
+    const { service, prisma } = makeService();
+    prisma.tenantMembership.findUnique.mockResolvedValue({
+      id: "m1",
+      role: Role.TRANSPORT_STAFF,
+      membershipRoles: [{ role: "TRANSPORT_ADMIN" }],
+      user: {
+        id: "u1",
+        email: "a@example.com",
+        username: null,
+        name: "A",
+        phone: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    await expect(
+      service.replaceUserRoles("t1", "u1", ["TENANT_ADMIN"], {
+        actorRoles: ["TRANSPORT_ADMIN"],
+        actorUserId: "actor-1",
+      }),
+    ).rejects.toThrow(/Cannot assign role/);
+  });
+
+  it("TRANSPORT_ADMIN cannot reset a TENANT_ADMIN password", async () => {
+    const { service, prisma } = makeService();
+    prisma.tenantMembership.findUnique.mockResolvedValue({
+      id: "m1",
+      role: Role.ADMIN,
+      membershipRoles: [{ role: "TENANT_ADMIN" }],
+      user: {
+        id: "u1",
+        email: "admin@example.com",
+        username: null,
+        authUserId: "auth-1",
+      },
+    });
+    await expect(
+      service.resetTenantUserPassword("t1", "u1", "newpass12", {
+        allowOfficeReset: false,
+        actorRoles: ["TRANSPORT_ADMIN"],
+      }),
+    ).rejects.toThrow(/Transport Admin can only manage/);
+  });
+
+  it("lets PlatformAdmin operating a tenant assign all roles without a membership", async () => {
+    const { service, prisma } = makeService();
+    prisma.tenantMembership.findUnique.mockResolvedValue({
+      id: "m1",
+      role: Role.TRANSPORT_STAFF,
+      status: MembershipStatus.Active,
+      membershipRoles: [{ role: "TRANSPORT_ADMIN" }],
+      user: {
+        id: "u1",
+        email: "a@example.com",
+        username: null,
+        name: "A",
+        phone: null,
+        customerCompanyId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    await service.replaceUserRoles("t1", "u1", ["TENANT_ADMIN", "FINANCE_ADMIN"], {
+      tenantContext: {
+        isPlatformAdmin: true,
+        authMode: "PLATFORM_TENANT_OPERATION",
+      },
+      actorUserId: "platform-actor",
+    });
+    expect(prisma.tenantMembershipRole.createMany).toHaveBeenCalled();
+    expect(prisma.tenantMembership.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenantId_userId: { tenantId: "t1", userId: "u1" } },
+      }),
+    );
+  });
+
+  it("rejects CUSTOMER_ADMIN without customerCompanyId", async () => {
+    const { service, prisma } = makeService();
+    prisma.tenantMembership.findUnique.mockResolvedValue({
+      id: "m1",
+      role: Role.CUSTOMER,
+      membershipRoles: [],
+      user: {
+        id: "u1",
+        email: "c@example.com",
+        username: null,
+        name: "C",
+        phone: null,
+        customerCompanyId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    await expect(
+      service.replaceUserRoles("t1", "u1", ["CUSTOMER_ADMIN"], {
+        actorRoles: ["TENANT_ADMIN"],
+        actorUserId: "actor-1",
+      }),
+    ).rejects.toThrow(/customerCompanyId/);
   });
 
   it("reset rejects when membership not in tenant", async () => {

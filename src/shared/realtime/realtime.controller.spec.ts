@@ -1,8 +1,9 @@
-import { Role } from "@prisma/client";
+import { CanonicalTenantRole, Role } from "@prisma/client";
 import { PATH_METADATA, METHOD_METADATA } from "@nestjs/common/constants";
 import { RequestMethod } from "@nestjs/common/enums/request-method.enum";
 import { Reflector } from "@nestjs/core";
 import { RoleGuard, Roles } from "../auth/guards/role.guard";
+import { INTERNAL_STAFF_ROLES } from "../auth/canonical-tenant-role";
 import { RealtimeController } from "./realtime.controller";
 
 describe("RealtimeController", () => {
@@ -23,7 +24,7 @@ describe("RealtimeController", () => {
     expect(method).toBe(RequestMethod.GET);
   });
 
-  it("restricts SSE to ADMIN, OPS, FINANCE, DRIVER (not CUSTOMER)", () => {
+  it("restricts SSE to internal staff plus TRANSPORT_DRIVER (not CUSTOMER)", () => {
     const classRoles = Reflect.getMetadata("roles", RealtimeController);
     const handlerRoles = Reflect.getMetadata(
       "roles",
@@ -31,12 +32,11 @@ describe("RealtimeController", () => {
     );
     for (const roles of [classRoles, handlerRoles]) {
       expect(roles).toEqual([
-        Role.ADMIN,
-        Role.TRANSPORT_STAFF,
-        Role.FINANCE,
-        Role.DRIVER,
+        ...INTERNAL_STAFF_ROLES,
+        CanonicalTenantRole.TRANSPORT_DRIVER,
       ]);
       expect(roles).not.toContain(Role.CUSTOMER);
+      expect(roles).not.toContain(CanonicalTenantRole.CUSTOMER_ADMIN);
     }
   });
 });

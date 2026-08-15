@@ -21,7 +21,7 @@ import { StatisticsFinanceService } from "./statistics-finance.service";
 @Controller("statistics")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.FINANCE)
-@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+@Roles(Role.ADMIN)
 @ApiBearerAuth("JWT-auth")
 export class StatisticsFinanceController {
   constructor(

@@ -1,16 +1,15 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Role } from '@prisma/client';
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 import { ListQueryBaseDto } from "../../shared/common/dto";
 
 export class AdminListQueryDto extends ListQueryBaseDto {
-  @ApiPropertyOptional({ description: 'Filter by a single tenant membership role' })
+  @ApiPropertyOptional({ description: 'Filter by a single tenant membership role (legacy or canonical)' })
   @IsOptional()
-  @IsEnum(Role)
-  role?: Role;
+  @IsString()
+  role?: string;
 
   @ApiPropertyOptional({
-    description: 'Comma-separated tenant membership roles, e.g. OPS,WAREHOUSE',
+    description: 'Comma-separated tenant membership roles, e.g. TENANT_ADMIN,TRANSPORT_ADMIN',
   })
   @IsOptional()
   @IsString()

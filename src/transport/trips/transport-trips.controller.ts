@@ -9,12 +9,15 @@ import {
   RequiresTenantModule,
 } from "../../shared/auth/guards/module-entitlement.guard";
 import { TransportJobsService } from "../jobs/transport-jobs.service";
+import { AccessSurface } from "../../shared/auth/guards/access-surface.guard";
+import { accessActorFromRequest } from "../../shared/auth/access-actor";
 
 @ApiTags("ops-trips")
 @Controller("trips")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT)
 @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
+@AccessSurface("portal")
 @ApiBearerAuth("JWT-auth")
 export class TransportTripsController {
   constructor(private readonly jobs: TransportJobsService) {}
@@ -26,11 +29,7 @@ export class TransportTripsController {
   })
   async getTripDetail(@Req() req: any, @Param("tripId") tripId: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.getTripDetail(tenantId, tripId, accessUser);
   }
 }

@@ -29,7 +29,7 @@ import { StatisticsTenantRequest } from "./statistics.controller";
 @ApiTags("Statistics")
 @Controller("statistics")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
-@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+@Roles(Role.ADMIN)
 @ApiBearerAuth("JWT-auth")
 export class StatisticsExportController {
   constructor(private readonly exports: StatisticsExportService) {}

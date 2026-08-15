@@ -10,6 +10,7 @@ import {
   NotFoundException,
   BadRequestException,
   Patch,
+  Put,
   Delete,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
@@ -19,7 +20,7 @@ import { RoleGuard } from "../shared/auth/guards/role.guard";
 import { Roles } from "../shared/auth/guards/role.guard";
 import { PrismaService } from "../shared/prisma/prisma.service";
 import { LocationService } from "../transport/drivers/location/location.service";
-import { Role, MembershipStatus } from "@prisma/client";
+import { Role, MembershipStatus, CanonicalTenantRole } from "@prisma/client";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../shared/common/pagination";
 import { buildOrderBy } from "../shared/common/listing/listing.sort";
 import { applyQSearch } from "../shared/common/listing/listing.search";
@@ -31,10 +32,13 @@ import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { UserDto } from "./dto/user.dto";
 import { ResetUserPasswordDto } from "./dto/reset-user-password.dto";
+import { ReplaceUserRolesDto } from "./dto/replace-user-roles.dto";
 import { AdminListQueryDto } from "./dto/list-query.dto";
 import { listTenantUsers } from "./admin-users.list";
 import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
 import { TenantUserProvisioningService } from "./tenant-user-provisioning.service";
+import { actorRolesFromTenantContext, assertActorCanAdministerTarget, hasRole } from "../shared/auth/tenant-role-assignment";
+import { resolveCanonicalRoles } from "../shared/auth/canonical-tenant-role";
 import { DestructiveActionGuard } from "../shared/auth/guards/destructive-action.guard";
 import { DestructiveAction } from "../shared/auth/guards/destructive-action.decorator";
 
@@ -57,8 +61,19 @@ export class AdminController {
     @Request() req: any,
     @Query() query: AdminListQueryDto,
   ): Promise<{ data: UserDto[]; meta: { page: number; pageSize: number; total: number } }> {
+    const actorRoles = actorRolesFromTenantContext(req.tenant);
+    const transportAdminOnly =
+      hasRole(actorRoles, CanonicalTenantRole.TRANSPORT_ADMIN) &&
+      !hasRole(actorRoles, CanonicalTenantRole.TENANT_ADMIN);
     return listTenantUsers(this.prisma, req.tenant.tenantId, query, {
       excludeDriver: true,
+      ...(transportAdminOnly
+        ? {
+            restrictToExactlyCanonicalRoles: [
+              CanonicalTenantRole.CUSTOMER_ADMIN,
+            ],
+          }
+        : {}),
     });
   }
 
@@ -73,13 +88,19 @@ export class AdminController {
         name: dto.name,
         phone: dto.phone,
         role: dto.role,
+        roles: dto.roles,
         sendInvite: dto.sendInvite,
         password: dto.password,
+        customerCompanyId: dto.customerCompanyId,
         customerCompanyName: dto.customerCompanyName,
         customerContactName: dto.customerContactName,
         customerContactEmail: dto.customerContactEmail,
       },
-      { mode: "tenant-admin" },
+      {
+        mode: "tenant-admin",
+        actorUserId: req.user?.userId ?? null,
+        tenantContext: req.tenant,
+      },
     );
   }
 
@@ -98,9 +119,32 @@ export class AdminController {
         phone: dto.phone,
         username: dto.username,
         role: dto.role,
+        roles: dto.roles,
         status: dto.status,
       },
-      { allowUsernameEdit: true },
+      {
+        allowUsernameEdit: true,
+        actorUserId: req.user?.userId ?? null,
+        tenantContext: req.tenant,
+      },
+    );
+  }
+
+  @Put("users/:userId/roles")
+  @ApiOperation({ summary: "Replace the canonical role set for a tenant user" })
+  async replaceUserRoles(
+    @Request() req: any,
+    @Param("userId") userId: string,
+    @Body() dto: ReplaceUserRolesDto,
+  ): Promise<UserDto> {
+    return this.tenantUsers.replaceUserRoles(
+      req.tenant.tenantId,
+      userId,
+      dto.roles,
+      {
+        actorUserId: req.user?.userId ?? null,
+        tenantContext: req.tenant,
+      },
     );
   }
 
@@ -116,7 +160,7 @@ export class AdminController {
       req.tenant.tenantId,
       userId,
       dto.password,
-      { allowOfficeReset: false },
+      { allowOfficeReset: false, tenantContext: req.tenant },
     );
   }
 
@@ -132,8 +176,14 @@ export class AdminController {
 
     const membership = await this.prisma.tenantMembership.findUnique({
       where: { tenantId_userId: { tenantId, userId } },
+      include: { membershipRoles: { select: { role: true } } },
     });
     if (!membership) throw new NotFoundException("User not found");
+
+    assertActorCanAdministerTarget(
+      actorRolesFromTenantContext(req.tenant),
+      resolveCanonicalRoles(membership),
+    );
 
     // safer than deleting user globally
     await this.prisma.tenantMembership.delete({ where: { id: membership.id } });
@@ -246,10 +296,15 @@ export class AdminController {
 
     const membership = await this.prisma.tenantMembership.findUnique({
       where: { tenantId_userId: { tenantId, userId } },
-      include: { user: true },
+      include: { user: true, membershipRoles: { select: { role: true } } },
     });
     if (!membership)
       throw new NotFoundException("User not found in this tenant");
+
+    assertActorCanAdministerTarget(
+      actorRolesFromTenantContext(req.tenant),
+      resolveCanonicalRoles(membership),
+    );
 
     const email = membership.user.email;
     const supabase = this.supabaseService.getClient();

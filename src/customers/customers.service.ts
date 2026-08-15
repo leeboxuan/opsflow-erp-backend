@@ -7,6 +7,7 @@ import {
 } from "@nestjs/common";
 import {
   MembershipStatus,
+  CanonicalTenantRole,
   QuotationVersionStatus,
   Role,
   TenantModule,
@@ -15,6 +16,7 @@ import {
 import { PrismaService } from "../shared/prisma/prisma.service";
 import { SupabaseService } from "../shared/auth/supabase.service";
 import { AuditService } from "../shared/audit/audit.service";
+import { syncMembershipRoleRows } from "../shared/auth/membership-roles";
 import {
   CreateCustomerCompanyUserDto,
   CustomerCompanyDocumentDto,
@@ -477,8 +479,15 @@ export class CustomersService {
     const memberships = await this.prisma.tenantMembership.findMany({
       where: {
         tenantId,
-        role: Role.CUSTOMER,
         user: { customerCompanyId: companyId },
+        OR: [
+          { role: Role.CUSTOMER },
+          {
+            membershipRoles: {
+              some: { role: CanonicalTenantRole.CUSTOMER_ADMIN },
+            },
+          },
+        ],
       },
       include: { user: true },
       orderBy: { user: { email: "asc" } },
@@ -561,6 +570,19 @@ export class CustomersService {
           status: MembershipStatus.Active,
         },
       });
+
+      const membership = await tx.tenantMembership.findUnique({
+        where: { tenantId_userId: { tenantId, userId: u.id } },
+        select: { id: true },
+      });
+      if (membership) {
+        await syncMembershipRoleRows(
+          tx,
+          membership.id,
+          [CanonicalTenantRole.CUSTOMER_ADMIN],
+          null,
+        );
+      }
 
       return u;
     });
@@ -750,7 +772,14 @@ export class CustomersService {
         where: {
           tenantId,
           userId: { in: userIds },
-          role: Role.CUSTOMER,
+          OR: [
+            { role: Role.CUSTOMER },
+            {
+              membershipRoles: {
+                some: { role: CanonicalTenantRole.CUSTOMER_ADMIN },
+              },
+            },
+          ],
         },
         data: {
           status: isActive ? MembershipStatus.Active : MembershipStatus.Suspended,
@@ -792,7 +821,14 @@ export class CustomersService {
       where: {
         tenantId,
         userId: targetUserId,
-        role: Role.CUSTOMER,
+        OR: [
+          { role: Role.CUSTOMER },
+          {
+            membershipRoles: {
+              some: { role: CanonicalTenantRole.CUSTOMER_ADMIN },
+            },
+          },
+        ],
       },
       select: { id: true },
     });

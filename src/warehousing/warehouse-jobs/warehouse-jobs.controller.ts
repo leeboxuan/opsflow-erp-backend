@@ -21,7 +21,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { Role, WarehouseJobDocumentType, TenantModule } from '@prisma/client';
+import { CanonicalTenantRole, WarehouseJobDocumentType, TenantModule } from '@prisma/client';
 import { AuthGuard } from '../../shared/auth/guards/auth.guard';
 import { TenantGuard } from '../../shared/auth/guards/tenant.guard';
 import { RoleGuard, Roles } from '../../shared/auth/guards/role.guard';
@@ -55,10 +55,23 @@ import { CreateWarehouseJobCargoLineDto } from './dto/create-warehouse-job-cargo
 import { UpdateWarehouseJobCargoLineDto } from './dto/update-warehouse-job-cargo-line.dto';
 import { ListWarehousingUsersQueryDto } from './dto/list-warehousing-users-query.dto';
 import { WarehouseJobCargoLinesService } from './warehouse-job-cargo-lines.service';
+import { actorRolesFromRequest } from '../../shared/auth/access-actor';
+import { warehouseLegacyRoleFromCanonical } from './warehouse-job-access';
 
-const READ_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.WAREHOUSE];
-const MUTATE_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF];
-const FLOOR_ROLES = [Role.ADMIN, Role.TRANSPORT_STAFF, Role.WAREHOUSE];
+const READ_ROLES = [
+  CanonicalTenantRole.TENANT_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_STAFF,
+];
+const MUTATE_ROLES = [
+  CanonicalTenantRole.TENANT_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_ADMIN,
+];
+const FLOOR_ROLES = [
+  CanonicalTenantRole.TENANT_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_STAFF,
+];
 
 @ApiTags('warehouse-jobs')
 @Controller('warehouse-jobs')
@@ -107,7 +120,7 @@ export class WarehouseJobsController {
     @Query() query: ListWarehouseJobsQueryDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const actorRole = req.tenant.role as Role;
+    const actorRole = warehouseLegacyRoleFromCanonical(actorRolesFromRequest(req));
     const actorUserId = req.user?.userId as string | undefined;
     return this.warehouseJobsService.list(tenantId, query, actorRole, actorUserId);
   }
@@ -118,7 +131,7 @@ export class WarehouseJobsController {
   })
   async reportPreview(@Request() req: any, @Param('id') id: string) {
     const tenantId = req.tenant.tenantId;
-    const actorRole = req.tenant.role as Role;
+    const actorRole = warehouseLegacyRoleFromCanonical(actorRolesFromRequest(req));
     const actorUserId = req.user?.userId as string | undefined;
     return this.warehouseJobReportPreviewService.getReportPreview(
       tenantId,
@@ -131,7 +144,7 @@ export class WarehouseJobsController {
   @ApiOperation({ summary: 'List warehouse job documents' })
   async listDocuments(@Request() req: any, @Param('id') id: string) {
     const tenantId = req.tenant.tenantId;
-    const actorRole = req.tenant.role as Role;
+    const actorRole = warehouseLegacyRoleFromCanonical(actorRolesFromRequest(req));
     const actorUserId = req.user?.userId as string | undefined;
     return this.warehouseJobDocumentsService.list(
       tenantId,
@@ -149,7 +162,7 @@ export class WarehouseJobsController {
     @Param('documentId') documentId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const actorRole = req.tenant.role as Role;
+    const actorRole = warehouseLegacyRoleFromCanonical(actorRolesFromRequest(req));
     const actorUserId = req.user?.userId as string | undefined;
     return this.warehouseJobDocumentsService.getSignedUrl(
       tenantId,
@@ -186,7 +199,7 @@ export class WarehouseJobsController {
     if (!file) throw new BadRequestException('file is required');
     if (!type) throw new BadRequestException('type is required');
     const tenantId = req.tenant.tenantId;
-    const actorRole = req.tenant.role as Role;
+    const actorRole = warehouseLegacyRoleFromCanonical(actorRolesFromRequest(req));
     const actorUserId = req.user?.userId as string | undefined;
     return this.warehouseJobDocumentsService.upload(
       tenantId,
@@ -284,7 +297,7 @@ export class WarehouseJobsController {
     @Body() dto: UpdateWarehouseJobExecutionDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const actorRole = req.tenant.role as Role;
+    const actorRole = warehouseLegacyRoleFromCanonical(actorRolesFromRequest(req));
     const actorUserId = req.user?.userId as string | undefined;
     return this.warehouseJobsService.updateExecution(
       tenantId,
@@ -344,7 +357,7 @@ export class WarehouseJobsController {
   @ApiOperation({ summary: 'Generate delivery order / manifest PDF for warehouse job' })
   async generateDeliveryOrder(@Request() req: any, @Param('id') id: string) {
     const tenantId = req.tenant.tenantId;
-    const actorRole = req.tenant.role as Role;
+    const actorRole = warehouseLegacyRoleFromCanonical(actorRolesFromRequest(req));
     const actorUserId = req.user?.userId as string | undefined;
     return this.warehouseJobsService.generateDeliveryOrder(
       tenantId,
@@ -546,7 +559,7 @@ export class WarehouseJobsController {
   @ApiOperation({ summary: 'Get warehouse job detail' })
   async getById(@Request() req: any, @Param('id') id: string) {
     const tenantId = req.tenant.tenantId;
-    const actorRole = req.tenant.role as Role;
+    const actorRole = warehouseLegacyRoleFromCanonical(actorRolesFromRequest(req));
     const actorUserId = req.user?.userId as string | undefined;
     return this.warehouseJobsService.getById(tenantId, id, actorRole, actorUserId);
   }
@@ -578,7 +591,7 @@ export class WarehouseJobsController {
   @ApiOperation({ summary: 'Transition warehouse job OPEN -> IN_PROGRESS' })
   async start(@Request() req: any, @Param('id') id: string) {
     const tenantId = req.tenant.tenantId;
-    const actorRole = req.tenant.role as Role;
+    const actorRole = warehouseLegacyRoleFromCanonical(actorRolesFromRequest(req));
     const actorUserId = req.user?.userId as string | undefined;
     return this.warehouseJobsService.start(
       tenantId,
@@ -593,7 +606,7 @@ export class WarehouseJobsController {
   @ApiOperation({ summary: 'Transition warehouse job IN_PROGRESS -> COMPLETED' })
   async complete(@Request() req: any, @Param('id') id: string) {
     const tenantId = req.tenant.tenantId;
-    const actorRole = req.tenant.role as Role;
+    const actorRole = warehouseLegacyRoleFromCanonical(actorRolesFromRequest(req));
     const actorUserId = req.user?.userId as string | undefined;
     return this.warehouseJobsService.complete(
       tenantId,

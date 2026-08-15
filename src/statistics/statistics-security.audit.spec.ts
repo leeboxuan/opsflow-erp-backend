@@ -105,8 +105,6 @@ describe("Statistics V1 security and integration audit", () => {
         ]);
         expect(Reflect.getMetadata("roles", controller)).toEqual([
           Role.ADMIN,
-          Role.TRANSPORT_STAFF,
-          Role.FINANCE,
         ]);
         expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(_path);
         expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(

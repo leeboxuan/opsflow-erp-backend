@@ -702,7 +702,7 @@ export class PlatformService {
       page?: string | number;
       pageSize?: string | number;
       filter?: string;
-      role?: Role;
+      role?: Role | string;
       roles?: string;
       sortBy?: string;
       sortDir?: "asc" | "desc";

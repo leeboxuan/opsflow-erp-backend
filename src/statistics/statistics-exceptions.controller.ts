@@ -24,7 +24,7 @@ import { StatisticsExceptionsService } from "./statistics-exceptions.service";
 @Controller("statistics")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT, TenantModule.FINANCE)
-@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+@Roles(Role.ADMIN)
 @ApiBearerAuth("JWT-auth")
 export class StatisticsExceptionsController {
   constructor(

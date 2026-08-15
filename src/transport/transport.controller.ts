@@ -34,6 +34,11 @@ import { ListOrdersQueryDto } from "./dto/list-orders-query.dto";
 import { OrderDto } from "./dto/order.dto";
 import { TripDto } from "./dto/trip.dto";
 import { RoleGuard, Roles } from "@/shared/auth/guards/role.guard";
+import { TRANSPORT_OPS_ROLES } from "../shared/auth/canonical-tenant-role";
+import {
+  accessActorFromRequest,
+  actorIsCustomerAdmin,
+} from "../shared/auth/access-actor";
 import { UpdateOrderDto } from "./dto/update-order.dto";
 
 import { ReplaceOrderItemsDto } from "./dto/replace-order-items.dto";
@@ -41,8 +46,9 @@ import { UpdateDoDto } from "./dto/update-do.dto";
 
 @ApiTags("transport")
 @Controller("transport/orders")
-@UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT)
+@Roles(...TRANSPORT_OPS_ROLES)
 @ApiBearerAuth("JWT-auth")
 export class TransportController {
   constructor(private readonly transportService: TransportService) {}
@@ -111,10 +117,10 @@ export class TransportController {
     @Query() query: ListOrdersQueryDto,
   ): Promise<{ data: OrderDto[]; meta: { page: number; pageSize: number; total: number } }> {
     const tenantId = req.tenant.tenantId;
-    const customerCompanyId =
-      req.tenant.role === Role.CUSTOMER
-        ? req.tenant.customerCompanyId
-        : undefined;
+    const actor = accessActorFromRequest(req);
+    const customerCompanyId = actorIsCustomerAdmin(actor)
+      ? actor.customerCompanyId
+      : undefined;
     return this.transportService.listOrders(tenantId, query, customerCompanyId);
   }
 
@@ -139,10 +145,10 @@ export class TransportController {
     @Param("id") id: string,
   ): Promise<OrderDto> {
     const tenantId = req.tenant.tenantId;
-    const customerCompanyId =
-      req.tenant.role === Role.CUSTOMER
-        ? req.tenant.customerCompanyId
-        : undefined;
+    const actor = accessActorFromRequest(req);
+    const customerCompanyId = actorIsCustomerAdmin(actor)
+      ? actor.customerCompanyId
+      : undefined;
     const order = await this.transportService.getOrderById(
       tenantId,
       id,

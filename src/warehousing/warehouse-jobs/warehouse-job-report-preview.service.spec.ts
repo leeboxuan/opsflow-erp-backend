@@ -163,7 +163,7 @@ describe('WarehouseJobReportPreviewService', () => {
 
     const result = await service.getReportPreview(
       tenantId,
-      { role: Role.TRANSPORT_STAFF, userId: 'ops-1' },
+      { role: Role.ADMIN, userId: 'ops-1' },
       warehouseJobId,
     );
 
@@ -177,7 +177,7 @@ describe('WarehouseJobReportPreviewService', () => {
 
     const result = await service.getReportPreview(
       tenantId,
-      { role: Role.FINANCE, userId: 'fin-1' },
+      { role: Role.WAREHOUSE, userId: 'wh-1' },
       warehouseJobId,
     );
 

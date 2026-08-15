@@ -27,6 +27,8 @@ import {
   RequiresTenantModule,
 } from "../shared/auth/guards/module-entitlement.guard";
 import { TenantModule } from "@prisma/client";
+import { RoleGuard, Roles } from "../shared/auth/guards/role.guard";
+import { TRANSPORT_OPS_ROLES } from "../shared/auth/canonical-tenant-role";
 
 import { PodService } from "./pod.service";
 import { StopService } from "./stop.service";
@@ -36,8 +38,9 @@ import { PodDto, StopDto } from "./dto/trip.dto";
 
 @ApiTags("transport")
 @Controller("transport/stops")
-@UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT)
+@Roles(...TRANSPORT_OPS_ROLES)
 @ApiBearerAuth("JWT-auth")
 export class PodController {
   constructor(

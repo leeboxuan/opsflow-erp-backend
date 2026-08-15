@@ -71,4 +71,24 @@ describe("notifications.visibility", () => {
       ),
     ).toBe(true);
   });
+
+  it("mixed DRIVER + TRANSPORT_ADMIN sees both driver and office audiences", () => {
+    const where = buildNotificationVisibilityWhere({
+      tenantId: "t1",
+      userId: "mix-1",
+      role: Role.TRANSPORT_STAFF,
+      roles: ["TRANSPORT_DRIVER", "TRANSPORT_ADMIN"],
+    });
+    expect(where.OR).toEqual(
+      expect.arrayContaining([
+        { audience: NotificationAudience.USER, userId: "mix-1" },
+        { audience: NotificationAudience.ROLE, role: Role.DRIVER },
+        {
+          audience: NotificationAudience.ROLE,
+          role: { in: [Role.TRANSPORT_STAFF, Role.OPS] },
+        },
+        { audience: NotificationAudience.TENANT },
+      ]),
+    );
+  });
 });

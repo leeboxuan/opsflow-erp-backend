@@ -1,20 +1,40 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
 } from "@nestjs/common";
-import { MembershipStatus, Prisma, Role } from "@prisma/client";
+import { MembershipStatus, Prisma, Role, CanonicalTenantRole } from "@prisma/client";
 import { PrismaService } from "../shared/prisma/prisma.service";
 import { SupabaseService } from "../shared/auth/supabase.service";
-import { toPersistedMembershipRole } from "../shared/auth/role-compat";
 import {
   assertValidUsername,
   buildInternalAuthEmail,
   normalizeUsername,
 } from "../shared/auth/auth-internal-email";
-import { assertRoleAllowedByModuleEntitlement } from "../shared/auth/module-role-entitlement";
+import {
+  assertUsernameGloballyAvailable,
+  rethrowUsernameUniqueConflict,
+} from "../shared/auth/username-uniqueness";
+import {
+  isTransportDriverRole,
+  toCanonicalTenantRole,
+} from "../shared/auth/canonical-tenant-role";
+import {
+  actorRolesFromTenantContext,
+  assertActorCanAdministerTarget,
+  assertActorCanAssignRoles,
+  assertModulesEnabledForRoles,
+  assertValidRoleCombination,
+  parseCanonicalRoleList,
+} from "../shared/auth/tenant-role-assignment";
+import {
+  legacyRoleForCanonicalSet,
+  syncMembershipRoleRows,
+} from "../shared/auth/membership-roles";
+import { clearTenantContextCache } from "../shared/auth/tenant-context.cache";
 import {
   isUsernamePasswordOperationalUser,
   mapTenantMembershipToPublicUserDto,
@@ -24,12 +44,13 @@ import {
 const MIN_PASSWORD_LENGTH = 8;
 
 /** Roles that may be created via Administration / Platform tenant-user APIs. */
-export const TENANT_USER_CREATE_ROLES: readonly Role[] = [
-  Role.ADMIN,
-  Role.TRANSPORT_STAFF,
-  Role.FINANCE,
-  Role.WAREHOUSE,
-  Role.CUSTOMER,
+export const TENANT_USER_CREATE_ROLES: readonly CanonicalTenantRole[] = [
+  CanonicalTenantRole.TENANT_ADMIN,
+  CanonicalTenantRole.TRANSPORT_ADMIN,
+  CanonicalTenantRole.FINANCE_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_ADMIN,
+  CanonicalTenantRole.WAREHOUSE_STAFF,
+  CanonicalTenantRole.CUSTOMER_ADMIN,
 ] as const;
 
 export type CreateTenantUserInput = {
@@ -37,10 +58,13 @@ export type CreateTenantUserInput = {
   username?: string;
   name: string;
   phone?: string;
-  role: Role;
+  /** @deprecated Prefer `roles`. */
+  role?: Role | string;
+  roles?: string[] | CanonicalTenantRole[];
   /** When false, provision with password instead of invite (office). */
   sendInvite?: boolean;
   password?: string;
+  customerCompanyId?: string;
   customerCompanyName?: string;
   customerContactName?: string;
   customerContactEmail?: string;
@@ -50,7 +74,9 @@ export type UpdateTenantUserInput = {
   name?: string;
   phone?: string | null;
   username?: string;
-  role?: Role;
+  /** @deprecated Prefer replaceUserRoles. */
+  role?: Role | string;
+  roles?: string[] | CanonicalTenantRole[];
   status?: MembershipStatus;
 };
 
@@ -60,16 +86,29 @@ export type CreateTenantUserOptions = {
    * `tenant-admin`: preserve invite / password dual path.
    */
   mode: "tenant-admin" | "platform-admin";
+  actorRoles?: Array<Role | CanonicalTenantRole | string>;
+  actorUserId?: string | null;
+  tenantContext?: {
+    roles?: Array<Role | CanonicalTenantRole | string>;
+    role?: Role | string;
+    isPlatformAdmin?: boolean;
+    authMode?: string;
+  };
 };
 
 export type UpdateTenantUserOptions = {
   /** Platform Admin MVP forbids username edits (synthetic email sync). */
   allowUsernameEdit: boolean;
+  actorRoles?: Array<Role | CanonicalTenantRole | string>;
+  actorUserId?: string | null;
+  tenantContext?: CreateTenantUserOptions["tenantContext"];
 };
 
 export type ResetTenantUserPasswordOptions = {
   /** Tenant Admin: warehouse-only. Platform Admin: warehouse + office. */
   allowOfficeReset: boolean;
+  actorRoles?: Array<Role | CanonicalTenantRole | string>;
+  tenantContext?: CreateTenantUserOptions["tenantContext"];
 };
 
 /**
@@ -105,28 +144,52 @@ export class TenantUserProvisioningService {
     dto: CreateTenantUserInput,
     options: CreateTenantUserOptions,
   ): Promise<PublicAdminUserDto> {
-    if (dto.role === Role.DRIVER) {
-      throw new BadRequestException("Use /admin/drivers to create drivers");
-    }
-    if (dto.role === Role.OPS) {
+    const canonicalRoles = this.resolveRequestedRoles(dto);
+    if (canonicalRoles.some((role) => isTransportDriverRole(role))) {
       throw new BadRequestException(
-        "Cannot create OPS memberships; use TRANSPORT_STAFF",
+        "Use /admin/drivers to create TRANSPORT_DRIVER users so a Driver profile is provisioned",
       );
     }
-    if (!TENANT_USER_CREATE_ROLES.includes(dto.role)) {
+    if (String(dto.role ?? "").toUpperCase() === Role.OPS) {
       throw new BadRequestException(
-        `Unsupported role for user creation: ${dto.role}`,
+        "Cannot create OPS memberships; use TRANSPORT_ADMIN",
+      );
+    }
+    const unsupported = canonicalRoles.filter(
+      (role) => !TENANT_USER_CREATE_ROLES.includes(role),
+    );
+    if (unsupported.length) {
+      throw new BadRequestException(
+        `Unsupported role for user creation: ${unsupported.join(", ")}`,
       );
     }
 
-    await assertRoleAllowedByModuleEntitlement(this.prisma, tenantId, dto.role);
+    assertValidRoleCombination(canonicalRoles);
+    const actorRoles = this.resolveActorRoles(options);
+    assertActorCanAssignRoles(actorRoles, canonicalRoles);
+    await assertModulesEnabledForRoles(this.prisma, tenantId, canonicalRoles);
 
-    const persistedRole = toPersistedMembershipRole(dto.role);
+    if (canonicalRoles.includes(CanonicalTenantRole.CUSTOMER_ADMIN)) {
+      const companyId = dto.customerCompanyId?.trim();
+      const companyName = dto.customerCompanyName?.trim();
+      if (!companyId && !companyName) {
+        throw new BadRequestException(
+          "customerCompanyId is required for CUSTOMER_ADMIN",
+        );
+      }
+    }
+
+    const persistedRole = legacyRoleForCanonicalSet(canonicalRoles, dto.role);
     const usernameRaw = dto.username?.trim();
     const isUsernameUser = Boolean(usernameRaw);
     const platformMode = options.mode === "platform-admin";
+    const warehouseUsernameAllowed = canonicalRoles.every(
+      (role) =>
+        role === CanonicalTenantRole.WAREHOUSE_STAFF ||
+        role === CanonicalTenantRole.WAREHOUSE_ADMIN,
+    );
 
-    if (isUsernameUser && persistedRole !== Role.WAREHOUSE) {
+    if (isUsernameUser && !warehouseUsernameAllowed) {
       throw new BadRequestException(
         "Username login is only supported for warehouse mobile users",
       );
@@ -143,16 +206,7 @@ export class TenantUserProvisioningService {
         throw new BadRequestException(e?.message || "Invalid username");
       }
 
-      const existingInTenant = await this.prisma.tenantMembership.findFirst({
-        where: {
-          tenantId,
-          user: { username: normalizedUsername },
-        },
-        select: { id: true },
-      });
-      if (existingInTenant) {
-        throw new ConflictException("Username is already taken in this tenant");
-      }
+      await assertUsernameGloballyAvailable(this.prisma, normalizedUsername);
 
       const tenant = await this.prisma.tenant.findUnique({
         where: { id: tenantId },
@@ -211,7 +265,7 @@ export class TenantUserProvisioningService {
         where: {
           tenantId_userId: { tenantId, userId: existingUser.id },
         },
-        include: { user: true },
+        include: { user: true, membershipRoles: { select: { role: true } } },
       });
       if (existingMembership) {
         // Idempotent retry: return existing membership (no duplicate).
@@ -258,7 +312,7 @@ export class TenantUserProvisioningService {
           },
         });
 
-        if (dto.role === Role.CUSTOMER) {
+        if (canonicalRoles.includes(CanonicalTenantRole.CUSTOMER_ADMIN)) {
           await this.upsertCustomerLinks(tx, tenantId, user.id, dto, authEmail);
         }
 
@@ -281,7 +335,14 @@ export class TenantUserProvisioningService {
           },
         });
 
-        return { user, membership };
+        await syncMembershipRoleRows(
+          tx,
+          membership.id,
+          canonicalRoles,
+          options.actorUserId ?? null,
+        );
+
+        return { user, membership, canonicalRoles };
       });
 
       if (!isUsernameUser && sendInvite) {
@@ -298,12 +359,14 @@ export class TenantUserProvisioningService {
         id: result.membership.id,
         role: result.membership.role,
         status: result.membership.status,
+        membershipRoles: canonicalRoles.map((role) => ({ role })),
         user: {
           id: result.user.id,
           email: result.user.email,
           username: result.user.username,
           name: result.user.name,
           phone: result.user.phone,
+          customerCompanyId: result.user.customerCompanyId,
           createdAt: result.user.createdAt,
           updatedAt: result.user.updatedAt,
         },
@@ -312,6 +375,7 @@ export class TenantUserProvisioningService {
       if (newlyCreatedAuthUserId) {
         await this.compensateDeleteAuthUser(newlyCreatedAuthUserId);
       }
+      rethrowUsernameUniqueConflict(err);
       throw err;
     }
   }
@@ -324,51 +388,44 @@ export class TenantUserProvisioningService {
   ): Promise<PublicAdminUserDto> {
     const membership = await this.prisma.tenantMembership.findUnique({
       where: { tenantId_userId: { tenantId, userId } },
-      include: { user: true },
+      include: {
+        user: true,
+        membershipRoles: { select: { role: true } },
+      },
     });
     if (!membership) {
       throw new NotFoundException("User not found in this tenant");
     }
 
-    if (membership.role === Role.DRIVER || dto.role === Role.DRIVER) {
-      throw new BadRequestException("Drivers are managed under Drivers");
-    }
+    const actorRoles = this.resolveActorRoles({
+      mode: "tenant-admin",
+      actorRoles: options.actorRoles,
+      tenantContext: options.tenantContext,
+    });
+    assertActorCanAdministerTarget(
+      actorRoles,
+      this.rolesFromMembership(membership),
+    );
 
-    if (dto.role === Role.OPS) {
+    if (String(dto.role ?? "").toUpperCase() === Role.OPS) {
       throw new BadRequestException(
-        "Cannot assign OPS; use TRANSPORT_STAFF",
+        "Cannot assign OPS; use TRANSPORT_ADMIN",
       );
     }
 
-    const persistedRole =
-      dto.role !== undefined ? toPersistedMembershipRole(dto.role) : undefined;
+    const nextRoles =
+      dto.roles !== undefined
+        ? parseCanonicalRoleList(dto.roles)
+        : dto.role !== undefined
+          ? this.resolveRequestedRoles({ role: dto.role })
+          : undefined;
 
-    if (persistedRole !== undefined) {
-      if (
-        !TENANT_USER_CREATE_ROLES.includes(persistedRole) &&
-        persistedRole !== Role.TRANSPORT_STAFF
-      ) {
-        // TRANSPORT_STAFF is in TENANT_USER_CREATE_ROLES; legacy OPS display only.
-        throw new BadRequestException(`Unsupported role: ${dto.role}`);
-      }
-
-      await assertRoleAllowedByModuleEntitlement(
-        this.prisma,
-        tenantId,
-        persistedRole,
-      );
-
-      const currentIsOperational = isUsernamePasswordOperationalUser({
-        role: membership.role,
-        username: membership.user.username,
-        email: membership.user.email,
+    if (nextRoles) {
+      await this.replaceUserRoles(tenantId, userId, nextRoles, {
+        actorRoles: options.actorRoles,
+        actorUserId: options.actorUserId,
+        tenantContext: options.tenantContext,
       });
-      const nextIsWarehouse = persistedRole === Role.WAREHOUSE;
-      if (currentIsOperational !== nextIsWarehouse) {
-        throw new BadRequestException(
-          "Cannot change between username/password operational roles and email/invite office roles on the same user",
-        );
-      }
     }
 
     let nextUsername: string | undefined;
@@ -384,50 +441,167 @@ export class TenantUserProvisioningService {
       } catch (e: any) {
         throw new BadRequestException(e?.message || "Invalid username");
       }
-      const clash = await this.prisma.tenantMembership.findFirst({
-        where: {
-          tenantId,
-          userId: { not: userId },
-          user: { username: nextUsername },
-        },
-        select: { id: true },
-      });
-      if (clash) {
-        throw new ConflictException("Username is already taken in this tenant");
-      }
+      await assertUsernameGloballyAvailable(this.prisma, nextUsername, userId);
     }
 
-    const user = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        ...(dto.name !== undefined && { name: dto.name }),
-        ...(dto.phone !== undefined && { phone: dto.phone }),
-        ...(nextUsername !== undefined && { username: nextUsername }),
-      },
-    });
+    let user;
+    try {
+      user = await this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          ...(dto.name !== undefined && { name: dto.name }),
+          ...(dto.phone !== undefined && { phone: dto.phone }),
+          ...(nextUsername !== undefined && { username: nextUsername }),
+        },
+      });
+    } catch (err) {
+      rethrowUsernameUniqueConflict(err);
+      throw err;
+    }
 
     const updatedMembership = await this.prisma.tenantMembership.update({
       where: { id: membership.id },
       data: {
-        ...(persistedRole !== undefined && { role: persistedRole }),
         ...(dto.status !== undefined && { status: dto.status }),
       },
+      include: { membershipRoles: { select: { role: true } } },
     });
 
     return mapTenantMembershipToPublicUserDto({
       id: updatedMembership.id,
       role: updatedMembership.role,
       status: updatedMembership.status,
+      membershipRoles: updatedMembership.membershipRoles,
       user: {
         id: user.id,
         email: user.email,
         username: user.username,
         name: user.name,
         phone: user.phone,
+        customerCompanyId: user.customerCompanyId,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       },
     });
+  }
+
+  async replaceUserRoles(
+    tenantId: string,
+    userId: string,
+    rolesInput: readonly string[],
+    options: {
+      actorRoles?: Array<Role | CanonicalTenantRole | string>;
+      actorUserId?: string | null;
+      tenantContext?: CreateTenantUserOptions["tenantContext"];
+    } = {},
+  ): Promise<PublicAdminUserDto> {
+    const nextRoles = parseCanonicalRoleList(rolesInput);
+    assertValidRoleCombination(nextRoles);
+    const actorRoles = this.resolveActorRoles({
+      mode: "tenant-admin",
+      actorRoles: options.actorRoles,
+      tenantContext: options.tenantContext,
+    });
+    assertActorCanAssignRoles(actorRoles, nextRoles);
+    await assertModulesEnabledForRoles(this.prisma, tenantId, nextRoles);
+
+    const membership = await this.prisma.tenantMembership.findUnique({
+      where: { tenantId_userId: { tenantId, userId } },
+      include: {
+        user: true,
+        membershipRoles: { select: { role: true } },
+      },
+    });
+    if (!membership) {
+      throw new NotFoundException("User not found in this tenant");
+    }
+
+    const previousRoles = this.rolesFromMembership(membership);
+    assertActorCanAdministerTarget(actorRoles, previousRoles);
+
+    if (nextRoles.includes(CanonicalTenantRole.TRANSPORT_DRIVER)) {
+      const driver = await this.prisma.drivers.findFirst({
+        where: { tenantId, userId },
+        select: { id: true },
+      });
+      if (!driver) {
+        throw new BadRequestException(
+          "Use /admin/drivers to create TRANSPORT_DRIVER users so a Driver profile is provisioned",
+        );
+      }
+    }
+
+    if (nextRoles.includes(CanonicalTenantRole.CUSTOMER_ADMIN)) {
+      if (!membership.user.customerCompanyId) {
+        throw new BadRequestException(
+          "customerCompanyId is required for CUSTOMER_ADMIN",
+        );
+      }
+    }
+
+    const currentIsOperational = isUsernamePasswordOperationalUser({
+      role: membership.role,
+      roles: previousRoles,
+      username: membership.user.username,
+      email: membership.user.email,
+    });
+    const nextIsWarehouseUsername =
+      nextRoles.includes(CanonicalTenantRole.WAREHOUSE_STAFF) &&
+      nextRoles.every(
+        (role) =>
+          role === CanonicalTenantRole.WAREHOUSE_STAFF ||
+          role === CanonicalTenantRole.WAREHOUSE_ADMIN,
+      );
+    if (currentIsOperational !== nextIsWarehouseUsername && currentIsOperational !== nextRoles.includes(CanonicalTenantRole.WAREHOUSE_STAFF)) {
+      throw new BadRequestException(
+        "Cannot change between username/password operational roles and email/invite office roles on the same user",
+      );
+    }
+
+    const persistedRole = legacyRoleForCanonicalSet(nextRoles, membership.role);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.tenantMembership.update({
+        where: { id: membership.id },
+        data: { role: persistedRole },
+      });
+      await syncMembershipRoleRows(
+        tx,
+        membership.id,
+        nextRoles,
+        options.actorUserId ?? null,
+      );
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        tenantId,
+        actorUserId: options.actorUserId ?? null,
+        entityType: "TenantMembership",
+        entityId: membership.id,
+        action: "ROLE_ASSIGN",
+        metadata: {
+          previousRoles,
+          newRoles: nextRoles,
+          changedBy: options.actorUserId ?? null,
+          timestamp: new Date().toISOString(),
+        },
+      },
+    });
+
+    clearTenantContextCache(userId, tenantId);
+
+    const updated = await this.prisma.tenantMembership.findUnique({
+      where: { id: membership.id },
+      include: {
+        user: true,
+        membershipRoles: { select: { role: true } },
+      },
+    });
+    if (!updated) {
+      throw new NotFoundException("User not found in this tenant");
+    }
+    return mapTenantMembershipToPublicUserDto(updated);
   }
 
   async resetTenantUserPassword(
@@ -440,13 +614,28 @@ export class TenantUserProvisioningService {
 
     const membership = await this.prisma.tenantMembership.findUnique({
       where: { tenantId_userId: { tenantId, userId } },
-      include: { user: true },
+      include: {
+        user: true,
+        membershipRoles: { select: { role: true } },
+      },
     });
     if (!membership) {
       throw new NotFoundException("User not found in this tenant");
     }
 
-    if (membership.role === Role.DRIVER) {
+    const targetRoles = this.rolesFromMembership(membership);
+    if (options.actorRoles || options.tenantContext) {
+      assertActorCanAdministerTarget(
+        this.resolveActorRoles({
+          mode: "tenant-admin",
+          actorRoles: options.actorRoles,
+          tenantContext: options.tenantContext,
+        }),
+        targetRoles,
+      );
+    }
+
+    if (targetRoles.includes(CanonicalTenantRole.TRANSPORT_DRIVER)) {
       throw new BadRequestException(
         "Drivers are managed under Drivers",
       );
@@ -457,8 +646,11 @@ export class TenantUserProvisioningService {
       username: membership.user.username,
       email: membership.user.email,
     });
+    const isCustomerAdmin = targetRoles.includes(
+      CanonicalTenantRole.CUSTOMER_ADMIN,
+    );
 
-    if (!isOperational && !options.allowOfficeReset) {
+    if (!isOperational && !options.allowOfficeReset && !isCustomerAdmin) {
       throw new BadRequestException(
         "Password reset is only supported for username/password operational users",
       );
@@ -585,9 +777,10 @@ export class TenantUserProvisioningService {
     authEmail: string,
   ) {
     const companyName = String(dto.customerCompanyName ?? "").trim();
-    if (!companyName) {
+    const companyIdRaw = String(dto.customerCompanyId ?? "").trim();
+    if (!companyName && !companyIdRaw) {
       throw new BadRequestException(
-        "customerCompanyName is required for CUSTOMER users",
+        "customerCompanyId is required for CUSTOMER_ADMIN",
       );
     }
 
@@ -597,21 +790,30 @@ export class TenantUserProvisioningService {
       dto.customerContactEmail ?? authEmail,
     );
 
-    const company = await tx.customer_companies.upsert({
-      where: {
-        tenantId_normalizedName: {
-          tenantId,
-          normalizedName: this.normalizeCompanyName(companyName),
-        },
-      },
-      update: { name: companyName },
-      create: {
-        tenantId,
-        name: companyName,
-        normalizedName: this.normalizeCompanyName(companyName),
-      },
-      select: { id: true },
-    });
+    const company = companyIdRaw
+      ? await tx.customer_companies.findFirst({
+          where: { id: companyIdRaw, tenantId },
+          select: { id: true },
+        })
+      : await tx.customer_companies.upsert({
+          where: {
+            tenantId_normalizedName: {
+              tenantId,
+              normalizedName: this.normalizeCompanyName(companyName),
+            },
+          },
+          update: { name: companyName },
+          create: {
+            tenantId,
+            name: companyName,
+            normalizedName: this.normalizeCompanyName(companyName),
+          },
+          select: { id: true },
+        });
+
+    if (!company) {
+      throw new BadRequestException("Customer company not found in this tenant");
+    }
 
     const contact = await tx.customer_contacts.upsert({
       where: {
@@ -640,5 +842,49 @@ export class TenantUserProvisioningService {
         customerContactId: contact.id,
       },
     });
+  }
+
+  private resolveRequestedRoles(dto: {
+    role?: Role | string;
+    roles?: string[] | CanonicalTenantRole[];
+  }): CanonicalTenantRole[] {
+    if (dto.roles?.length) {
+      return parseCanonicalRoleList(dto.roles);
+    }
+    const mapped = toCanonicalTenantRole(dto.role);
+    if (!mapped) {
+      throw new BadRequestException("roles is required");
+    }
+    return [mapped];
+  }
+
+  private resolveActorRoles(options: {
+    mode?: "tenant-admin" | "platform-admin";
+    actorRoles?: Array<Role | CanonicalTenantRole | string>;
+    tenantContext?: CreateTenantUserOptions["tenantContext"];
+  }): CanonicalTenantRole[] {
+    if (options.mode === "platform-admin") {
+      return [CanonicalTenantRole.TENANT_ADMIN];
+    }
+    if (options.actorRoles?.length) {
+      return parseCanonicalRoleList(options.actorRoles);
+    }
+    if (options.tenantContext) {
+      return actorRolesFromTenantContext(options.tenantContext);
+    }
+    return [CanonicalTenantRole.TENANT_ADMIN];
+  }
+
+  private rolesFromMembership(membership: {
+    role?: Role | string | null;
+    membershipRoles?: Array<{ role?: CanonicalTenantRole | string }> | null;
+  }): CanonicalTenantRole[] {
+    if (membership.membershipRoles?.length) {
+      return parseCanonicalRoleList(
+        membership.membershipRoles.map((row) => String(row.role)),
+      );
+    }
+    const mapped = toCanonicalTenantRole(membership.role);
+    return mapped ? [mapped] : [];
   }
 }

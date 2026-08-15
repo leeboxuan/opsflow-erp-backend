@@ -6,18 +6,21 @@ import {
   ApiProduces,
   ApiTags,
 } from "@nestjs/swagger";
-import { Role } from "@prisma/client";
+import { CanonicalTenantRole, Role } from "@prisma/client";
 import type { MessageEvent } from "@nestjs/common";
 import { Observable } from "rxjs";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { RoleGuard, Roles } from "../auth/guards/role.guard";
 import { TenantGuard } from "../auth/guards/tenant.guard";
+import { AccessSurface } from "../auth/guards/access-surface.guard";
+import { INTERNAL_STAFF_ROLES } from "../auth/canonical-tenant-role";
 import { RealtimeEventsService } from "./realtime-events.service";
 
 @ApiTags("realtime")
 @Controller("realtime")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard)
-@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.DRIVER)
+@Roles(...INTERNAL_STAFF_ROLES, CanonicalTenantRole.TRANSPORT_DRIVER)
+@AccessSurface("member")
 @ApiBearerAuth("JWT-auth")
 @ApiHeader({
   name: "x-tenant-id",
@@ -29,7 +32,7 @@ export class RealtimeController {
 
   @Get("events")
   @Sse()
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.DRIVER)
+  @Roles(...INTERNAL_STAFF_ROLES, CanonicalTenantRole.TRANSPORT_DRIVER)
   @ApiOperation({
     summary: "Tenant-scoped Server-Sent Events stream (metadata only, no full records)",
   })

@@ -25,6 +25,7 @@ import { PrismaService } from "../../shared/prisma/prisma.service";
 import { LocationService } from "../drivers/location/location.service";
 import { DriverMvpService } from "./driver-mvp.service";
 import { Role } from "@prisma/client";
+import { AccessSurface } from "../../shared/auth/guards/access-surface.guard";
 import { AssignVehicleDto } from "../trips/dto/assign-vehicle.dto";
 import { UpdateLocationDto } from "../drivers/location/dto/update-location.dto";
 import { LocationDto } from "../drivers/location/dto/location.dto";
@@ -44,6 +45,7 @@ import { ScanReturnGoodsDto } from "./dto/scan-return-goods.dto";
 @UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT)
 @Roles(Role.DRIVER)
+@AccessSurface("driver")
 @ApiBearerAuth("JWT-auth")
 export class DriverController {
   constructor(

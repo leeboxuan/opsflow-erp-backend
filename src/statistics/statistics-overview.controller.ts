@@ -24,7 +24,7 @@ import { StatisticsOverviewService } from "./statistics-overview.service";
 @Controller("statistics")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT)
-@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+@Roles(Role.ADMIN)
 @ApiBearerAuth("JWT-auth")
 export class StatisticsOverviewController {
   constructor(

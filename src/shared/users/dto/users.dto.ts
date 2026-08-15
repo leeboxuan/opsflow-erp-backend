@@ -5,8 +5,11 @@ export class UserMeDto {
   @ApiProperty()
   id: string;
 
-  @ApiProperty()
-  email: string;
+  @ApiPropertyOptional({ nullable: true })
+  email: string | null;
+
+  @ApiPropertyOptional({ nullable: true })
+  username?: string | null;
 
   @ApiPropertyOptional({ nullable: true })
   name?: string | null;

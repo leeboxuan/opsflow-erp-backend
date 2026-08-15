@@ -5,7 +5,7 @@ import {
   PATH_METADATA,
 } from "@nestjs/common/constants";
 import { Reflector } from "@nestjs/core";
-import { Role, TenantModule } from "@prisma/client";
+import { CanonicalTenantRole, TenantModule } from "@prisma/client";
 import { AuthGuard } from "../../shared/auth/guards/auth.guard";
 import { DestructiveActionGuard } from "../../shared/auth/guards/destructive-action.guard";
 import {
@@ -16,27 +16,17 @@ import { RoleGuard } from "../../shared/auth/guards/role.guard";
 import { TenantGuard } from "../../shared/auth/guards/tenant.guard";
 import { InvoicesController } from "./invoices.controller";
 
-const OFFICE_INVOICE_READ_ROLES = [
-  Role.ADMIN,
-  Role.TRANSPORT_STAFF,
-  Role.FINANCE,
-  Role.CUSTOMER,
+const FINANCE_INVOICE_ROLES = [
+  CanonicalTenantRole.TENANT_ADMIN,
+  CanonicalTenantRole.FINANCE_ADMIN,
 ] as const;
-
-const OFFICE_INVOICE_WRITE_ROLES = [
-  Role.ADMIN,
-  Role.TRANSPORT_STAFF,
-  Role.FINANCE,
-] as const;
-
-const PAID_ROLES = [Role.ADMIN, Role.FINANCE] as const;
 
 describe("InvoicesController Finance RBAC", () => {
   const reflector = new Reflector();
 
-  function handlerRoles(method: keyof InvoicesController): Role[] {
+  function handlerRoles(method: keyof InvoicesController): string[] {
     return (
-      reflector.getAllAndOverride<Role[]>("roles", [
+      reflector.getAllAndOverride<string[]>("roles", [
         InvoicesController.prototype[method],
         InvoicesController,
       ]) ?? []
@@ -62,20 +52,20 @@ describe("InvoicesController Finance RBAC", () => {
     ).toEqual([TenantModule.FINANCE]);
   });
 
-  it("lets FINANCE list, get, create, issue, and generate invoices", () => {
-    expect(handlerRoles("list")).toEqual([...OFFICE_INVOICE_READ_ROLES]);
-    expect(handlerRoles("get")).toEqual([...OFFICE_INVOICE_READ_ROLES]);
-    expect(handlerRoles("create")).toEqual([...OFFICE_INVOICE_WRITE_ROLES]);
-    expect(handlerRoles("createDraft")).toEqual([...OFFICE_INVOICE_WRITE_ROLES]);
-    expect(handlerRoles("draftFromJobs")).toEqual([...OFFICE_INVOICE_WRITE_ROLES]);
-    expect(handlerRoles("updateDraft")).toEqual([...OFFICE_INVOICE_WRITE_ROLES]);
-    expect(handlerRoles("patchDraft")).toEqual([...OFFICE_INVOICE_WRITE_ROLES]);
-    expect(handlerRoles("issue")).toEqual([...OFFICE_INVOICE_WRITE_ROLES]);
-    expect(handlerRoles("generate")).toEqual([...OFFICE_INVOICE_WRITE_ROLES]);
-    expect(handlerRoles("uploadPdf")).toEqual([...OFFICE_INVOICE_WRITE_ROLES]);
-    expect(handlerRoles("getDownloadUrl")).toEqual([...OFFICE_INVOICE_READ_ROLES]);
-    expect(handlerRoles("voidInvoice")).toEqual([...OFFICE_INVOICE_WRITE_ROLES]);
-    expect(handlerRoles("revertToDraft")).toEqual([...OFFICE_INVOICE_WRITE_ROLES]);
+  it("lets TENANT_ADMIN and FINANCE_ADMIN list, get, create, issue, and generate invoices", () => {
+    expect(handlerRoles("list")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("get")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("create")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("createDraft")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("draftFromJobs")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("updateDraft")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("patchDraft")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("issue")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("generate")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("uploadPdf")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("getDownloadUrl")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("voidInvoice")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("revertToDraft")).toEqual([...FINANCE_INVOICE_ROLES]);
     for (const method of [
       "create",
       "createDraft",
@@ -83,19 +73,26 @@ describe("InvoicesController Finance RBAC", () => {
       "generate",
       "markPaid",
     ] as const) {
-      expect(handlerRoles(method)).not.toContain(Role.CUSTOMER);
-      expect(handlerRoles(method)).toContain(Role.FINANCE);
+      expect(handlerRoles(method)).not.toContain(CanonicalTenantRole.CUSTOMER_ADMIN);
+      expect(handlerRoles(method)).not.toContain(CanonicalTenantRole.TRANSPORT_ADMIN);
+      expect(handlerRoles(method)).toContain(CanonicalTenantRole.FINANCE_ADMIN);
     }
   });
 
-  it("keeps Mark Paid as Admin or Finance only", () => {
-    expect(handlerRoles("markPaid")).toEqual([...PAID_ROLES]);
-    expect(handlerRoles("markPaid")).not.toContain(Role.TRANSPORT_STAFF);
-    expect(handlerRoles("markPaid")).not.toContain(Role.CUSTOMER);
-    expect(handlerRoles("markPaid")).not.toContain(Role.DRIVER);
+  it("keeps Mark Paid as Tenant Admin or Finance Admin only", () => {
+    expect(handlerRoles("markPaid")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(handlerRoles("markPaid")).not.toContain(
+      CanonicalTenantRole.TRANSPORT_ADMIN,
+    );
+    expect(handlerRoles("markPaid")).not.toContain(
+      CanonicalTenantRole.CUSTOMER_ADMIN,
+    );
+    expect(handlerRoles("markPaid")).not.toContain(
+      CanonicalTenantRole.TRANSPORT_DRIVER,
+    );
   });
 
-  it("does not grant DRIVER invoice access", () => {
+  it("does not grant DRIVER or TRANSPORT_ADMIN invoice access", () => {
     for (const method of [
       "list",
       "get",
@@ -103,7 +100,12 @@ describe("InvoicesController Finance RBAC", () => {
       "issue",
       "markPaid",
     ] as const) {
-      expect(handlerRoles(method)).not.toContain(Role.DRIVER);
+      expect(handlerRoles(method)).not.toContain(
+        CanonicalTenantRole.TRANSPORT_DRIVER,
+      );
+      expect(handlerRoles(method)).not.toContain(
+        CanonicalTenantRole.TRANSPORT_ADMIN,
+      );
     }
   });
 

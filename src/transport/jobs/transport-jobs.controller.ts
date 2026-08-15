@@ -35,7 +35,7 @@ import {
 } from "../../shared/auth/guards/module-entitlement.guard";
 import { DestructiveActionGuard } from "../../shared/auth/guards/destructive-action.guard";
 import { DestructiveAction } from "../../shared/auth/guards/destructive-action.decorator";
-import { Role, JobType, TripPendingState, TenantModule } from "@prisma/client";
+import { Role, JobType, TripPendingState, TenantModule, CanonicalTenantRole } from "@prisma/client";
 import { TransportJobsService } from "./transport-jobs.service";
 import { InvoicesService } from "../finance/invoices.service";
 import { CreateJobDto } from "./dto/create-job.dto";
@@ -75,6 +75,8 @@ import {
   JobTripResponseDto,
 } from "./dto/job.dto";
 import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
+import { accessActorFromRequest } from "../../shared/auth/access-actor";
+import { AccessSurface } from "../../shared/auth/guards/access-surface.guard";
 
 @ApiTags("transport-jobs")
 @Controller("jobs")
@@ -86,7 +88,12 @@ import { SignTripDocumentDto } from "../documents/dto/sign-trip-document.dto";
   DestructiveActionGuard,
 )
 @RequiresTenantModule(TenantModule.TRANSPORT)
-@Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+@Roles(
+  CanonicalTenantRole.TENANT_ADMIN,
+  CanonicalTenantRole.TRANSPORT_ADMIN,
+  CanonicalTenantRole.CUSTOMER_ADMIN,
+)
+@AccessSurface("portal")
 @ApiBearerAuth("JWT-auth")
 @ApiExtraModels(JobDocumentDto)
 export class TransportJobsController {
@@ -98,18 +105,14 @@ export class TransportJobsController {
 
   @Get(":jobId/documents/:documentId/signed-url")
   @ApiOperation({ summary: "Get signed preview/download URLs for a job document" })
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async getJobDocumentSignedUrl(
     @Req() req: any,
     @Param("jobId") jobId: string,
     @Param("documentId") documentId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.getJobDocumentSignedUrl(
       tenantId,
       jobId,
@@ -120,7 +123,7 @@ export class TransportJobsController {
 
   @Get(":jobId/trips/:tripId/documents/:documentId/signed-url")
   @ApiOperation({ summary: "Get signed preview/download URLs for a trip document" })
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async getTripDocumentSignedUrl(
     @Req() req: any,
     @Param("jobId") jobId: string,
@@ -128,11 +131,7 @@ export class TransportJobsController {
     @Param("documentId") documentId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.getTripDocumentSignedUrl(
       tenantId,
       jobId,
@@ -144,14 +143,10 @@ export class TransportJobsController {
 
   @Get()
   @ApiOperation({ summary: "List jobs with filters (slim rows for table view)" })
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async list(@Req() req: any, @Query() query: JobListQueryDto) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.list(tenantId, query, accessUser);
   }
 
@@ -175,11 +170,7 @@ export class TransportJobsController {
   })
   async create(@Req() req: any, @Body() dto: CreateJobDto) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.create(tenantId, dto, accessUser);
   }
 
@@ -210,11 +201,7 @@ export class TransportJobsController {
   })
   async importConfirm(@Req() req: any, @Body() dto: ImportConfirmRequestDto) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.importConfirm(tenantId, dto.rows, accessUser);
   }
 
@@ -359,11 +346,7 @@ export class TransportJobsController {
     @Body() dto: JobBatchImportConfirmRequestDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.batchImportConfirm(tenantId, dto, accessUser);
   }
 
@@ -426,64 +409,44 @@ export class TransportJobsController {
     @Body() dto: LclImportConfirmRequestDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.lclImportConfirm(tenantId, dto, accessUser);
   }
 
   @Get("tracking/live")
   @ApiOperation({ summary: "List live trip tracking rows for active/published trips" })
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async listLiveTracking(@Req() req: any) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.listLiveTripTracking(tenantId, accessUser);
   }
 
   @Get(":jobId/details")
   @ApiOperation({ summary: "Get complete job operational and payout details" })
   @ApiOkResponse({ type: JobDetailsDto })
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async getDetails(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.getDetails(tenantId, jobId, accessUser);
   }
 
   @Get(":jobId")
   @ApiOperation({ summary: "Get job by id" })
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async getOne(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.getOne(tenantId, jobId, accessUser);
   }
 
   @Get(":jobId/invoice-prefill")
   @ApiOperation({ summary: "Build create-invoice prefill payload from job" })
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
   async invoicePrefill(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.invoices.getInvoicePrefillFromJob(tenantId, jobId, accessUser);
   }
 
@@ -495,11 +458,7 @@ export class TransportJobsController {
     @Body() dto: UpdateJobDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.update(tenantId, jobId, dto, accessUser);
   }
 
@@ -511,11 +470,7 @@ export class TransportJobsController {
     @Body() dto: AssignJobDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.assign(tenantId, jobId, dto, accessUser);
   }
 
@@ -530,11 +485,7 @@ export class TransportJobsController {
     @Body() dto: CancelJobDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.cancel(tenantId, jobId, dto, accessUser);
   }
 
@@ -545,11 +496,7 @@ export class TransportJobsController {
   })
   async delete(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     await this.jobs.delete(tenantId, jobId, accessUser);
   }
 
@@ -559,11 +506,7 @@ export class TransportJobsController {
   })
   async verifyDepot(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.verifyDepot(tenantId, jobId, accessUser);
   }
 
@@ -587,11 +530,7 @@ export class TransportJobsController {
   ) {
     if (!file) throw new BadRequestException("file is required");
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.uploadQuotation(tenantId, jobId, file, accessUser);
   }
 
@@ -615,11 +554,7 @@ export class TransportJobsController {
   ) {
     if (!file) throw new BadRequestException("file is required");
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.uploadOtherDocument(tenantId, jobId, file, accessUser);
   }
 
@@ -655,14 +590,10 @@ export class TransportJobsController {
       ],
     },
   })
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async listDocuments(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.listDocuments(tenantId, jobId, accessUser);
   }
 
@@ -720,31 +651,23 @@ export class TransportJobsController {
       ],
     },
   })
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async getActivity(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.getActivity(tenantId, jobId, accessUser);
   }
 
   @Get(":jobId/audit")
   @ApiOperation({ summary: "Get audit log for job" })
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async getAudit(
     @Req() req: any,
     @Param("jobId") jobId: string,
     @Query("limit") limit?: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.getAudit(
       tenantId,
       jobId,
@@ -755,14 +678,10 @@ export class TransportJobsController {
 
   @Get(":jobId/tracking")
   @ApiOperation({ summary: "Get job tracking (last location, driver, vehicle)" })
-  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE, Role.CUSTOMER)
+  @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async getTracking(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.getTracking(tenantId, jobId, accessUser);
   }
 
@@ -772,11 +691,7 @@ export class TransportJobsController {
   @Roles(Role.ADMIN, Role.TRANSPORT_STAFF, Role.CUSTOMER)
   async listTrips(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.listTrips(tenantId, jobId, accessUser);
   }
 
@@ -790,11 +705,7 @@ export class TransportJobsController {
     @Param("jobId") jobId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.getBillingChargeOptionsForJob(tenantId, jobId, accessUser);
   }
 
@@ -808,11 +719,7 @@ export class TransportJobsController {
     @Param("jobId") jobId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.getBillingChargeOptionsForJob(tenantId, jobId, accessUser);
   }
 
@@ -824,11 +731,7 @@ export class TransportJobsController {
     @Body() dto: SaveJobChargesDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.saveJobCharges(tenantId, jobId, dto, accessUser);
   }
 
@@ -840,11 +743,7 @@ export class TransportJobsController {
     @Body() dto: AppendJobTripDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.appendTrip(tenantId, jobId, dto, accessUser);
   }
 
@@ -856,11 +755,7 @@ export class TransportJobsController {
     @Param("tripId") tripId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.deleteTrip(tenantId, jobId, tripId, accessUser);
   }
 
@@ -872,11 +767,7 @@ export class TransportJobsController {
     @Body() dto: ReorderJobTripsDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.reorderTrips(tenantId, jobId, dto, accessUser);
   }
 
@@ -888,11 +779,7 @@ export class TransportJobsController {
     @Body() dto: SuggestJobTripOrderDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.suggestTripOrder(tenantId, jobId, dto, accessUser);
   }
 
@@ -904,11 +791,7 @@ export class TransportJobsController {
     @Body() dto: PublishJobTripRouteDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.publishTripRoute(tenantId, jobId, dto, accessUser);
   }
 
@@ -925,11 +808,7 @@ export class TransportJobsController {
     @Body() dto: PatchTripDocumentRequirementDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.patchTripDocumentRequirement(
       tenantId,
       jobId,
@@ -952,11 +831,7 @@ export class TransportJobsController {
     @Body() dto: PatchTripDetailsDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.patchTripDetails(tenantId, jobId, tripId, dto, accessUser);
   }
 
@@ -969,11 +844,7 @@ export class TransportJobsController {
     @Body() dto: PatchJobTripDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.patchTrip(tenantId, jobId, tripId, dto, accessUser);
   }
 
@@ -986,11 +857,7 @@ export class TransportJobsController {
     @Body() dto: AssignJobTripDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.assignTrip(tenantId, jobId, tripId, dto, accessUser);
   }
 
@@ -1006,11 +873,7 @@ export class TransportJobsController {
     @Param("tripId") tripId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.publishTrip(tenantId, jobId, tripId, accessUser);
   }
 
@@ -1025,11 +888,7 @@ export class TransportJobsController {
     @Param("tripId") tripId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.unpublishTrip(tenantId, jobId, tripId, accessUser);
   }
 
@@ -1041,11 +900,7 @@ export class TransportJobsController {
     @Param("tripId") tripId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.markTripDone(tenantId, jobId, tripId, accessUser);
   }
 
@@ -1061,11 +916,7 @@ export class TransportJobsController {
     },
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     const pendingState = String(body?.pendingState ?? "").trim() as TripPendingState;
     if (!Object.values(TripPendingState).includes(pendingState)) {
       throw new BadRequestException(
@@ -1124,11 +975,7 @@ export class TransportJobsController {
     @Param("tripId") tripId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.listTripDocuments(tenantId, jobId, tripId, accessUser);
   }
 
@@ -1158,11 +1005,7 @@ export class TransportJobsController {
   ) {
     if (!file) throw new BadRequestException("file is required");
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.uploadTripDocument(
       tenantId,
       jobId,
@@ -1212,11 +1055,7 @@ export class TransportJobsController {
     @Param("tripId") tripId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.generateTripDeliveryDoDocument(
       tenantId,
       jobId,
@@ -1236,11 +1075,7 @@ export class TransportJobsController {
     @Body() body: SignTripDocumentDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.signTripDocument(
       tenantId,
       jobId,
@@ -1259,11 +1094,7 @@ export class TransportJobsController {
     @Param("tripId") tripId: string,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.listTripPayoutLines(tenantId, jobId, tripId, accessUser);
   }
 
@@ -1276,11 +1107,7 @@ export class TransportJobsController {
     @Body() dto: PutTripPayoutLinesDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.replaceTripPayoutLines(
       tenantId,
       jobId,
@@ -1299,11 +1126,7 @@ export class TransportJobsController {
     @Body() dto: PatchTripPayoutDto,
   ) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.saveTripPayoutDraft(
       tenantId,
       jobId,
@@ -1321,11 +1144,7 @@ export class TransportJobsController {
   @ApiOkResponse({ type: JobDto })
   async sendToInvoice(@Req() req: any, @Param("jobId") jobId: string) {
     const tenantId = req.tenant.tenantId;
-    const accessUser = {
-      ...req.user,
-      role: req.tenant.role,
-      customerCompanyId: req.tenant.customerCompanyId,
-    };
+    const accessUser = accessActorFromRequest(req);
     return this.jobs.sendJobToInvoice(tenantId, jobId, accessUser);
   }
 

@@ -89,6 +89,30 @@ describe("UsersService", () => {
     });
   });
 
+  it("hides synthetic auth email from /users/me", async () => {
+    const { service } = makeService({
+      user: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "u-driver",
+          email: "acme.ahmad@auth.opsflow.app",
+          username: "ahmad",
+          name: "Ahmad",
+          displayName: "Ahmad",
+          role: "USER",
+          avatarKey: null,
+          avatarUpdatedAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }),
+        update: jest.fn(),
+      },
+    });
+    const profile = await service.getMyProfile("t1", "u-driver");
+    expect(profile.email).toBeNull();
+    expect(profile.username).toBe("ahmad");
+    expect(JSON.stringify(profile)).not.toContain("auth.opsflow.app");
+  });
+
   it("admin can access own profile like other roles", async () => {
     const { service } = makeService({
       user: {

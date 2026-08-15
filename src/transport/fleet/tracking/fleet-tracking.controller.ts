@@ -18,6 +18,8 @@ import {
   RequiresTenantModule,
 } from "../../../shared/auth/guards/module-entitlement.guard";
 import { TenantModule } from "@prisma/client";
+import { RoleGuard, Roles } from "../../../shared/auth/guards/role.guard";
+import { TRANSPORT_OPS_ROLES } from "../../../shared/auth/canonical-tenant-role";
 import { AssignGpsDeviceChassisDto } from "./dto/assign-gps-device-chassis.dto";
 import { ChassisHistoryQueryDto } from "./dto/chassis-history-query.dto";
 import { CreateChassisDto } from "./dto/create-chassis.dto";
@@ -30,8 +32,9 @@ import { FleetTrackingService } from "./fleet-tracking.service";
 
 @ApiTags("fleet-tracking")
 @Controller("fleet-tracking")
-@UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
+@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT)
+@Roles(...TRANSPORT_OPS_ROLES)
 @ApiBearerAuth("JWT-auth")
 export class FleetTrackingController {
   constructor(private readonly fleetTracking: FleetTrackingService) {}

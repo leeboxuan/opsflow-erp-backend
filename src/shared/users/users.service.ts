@@ -8,6 +8,7 @@ import {
   UserMeDto,
 } from "./dto/users.dto";
 import { getUserAvatarSignedUrl } from "./user-avatar";
+import { publicEmailOrNull } from "../auth/auth-internal-email";
 
 const USER_PROFILE_PICTURES_BUCKET = "user-profile-pictures";
 const MAX_AVATAR_FILE_SIZE_BYTES = 5 * 1024 * 1024;
@@ -148,11 +149,14 @@ export class UsersService {
 
   private async toMeDto(tenantId: string, user: any): Promise<UserMeDto> {
     const avatarUrl = await this.getUserAvatarSignedUrl(user.avatarKey);
+    const publicEmail = publicEmailOrNull(user.email);
     return {
       id: user.id,
-      email: user.email,
+      email: publicEmail,
+      username: user.username ?? null,
       name: user.name ?? null,
-      displayName: user.displayName ?? user.name ?? user.email,
+      displayName:
+        user.displayName ?? user.name ?? user.username ?? publicEmail,
       role: user.role,
       tenantId,
       avatarUrl,

@@ -61,6 +61,13 @@ describe('AdminController users', () => {
       },
       customer_companies: { upsert: jest.fn() },
       customer_contacts: { upsert: jest.fn() },
+      tenantMembershipRole: {
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      drivers: { findFirst: jest.fn().mockResolvedValue(null) },
     };
 
     const supabaseService: any = {
@@ -94,6 +101,17 @@ describe('AdminController users', () => {
     return { controller, prisma, supabaseService };
   }
 
+  function tenantAdminReq(extra: Record<string, unknown> = {}) {
+    return {
+      tenant: {
+        tenantId: 'tenant-1',
+        role: 'ADMIN',
+        roles: ['TENANT_ADMIN'],
+        ...extra,
+      },
+    } as any;
+  }
+
   it('lists users filtered by OPS,WAREHOUSE (expands to include TRANSPORT_STAFF)', async () => {
     const { controller, prisma } = makeController();
 
@@ -106,8 +124,10 @@ describe('AdminController users', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           tenantId: 'tenant-1',
-          role: { in: [Role.WAREHOUSE, Role.TRANSPORT_STAFF, Role.OPS] },
-          NOT: { role: Role.DRIVER },
+          OR: expect.any(Array),
+          NOT: expect.objectContaining({
+            AND: expect.any(Array),
+          }),
         }),
       }),
     );
@@ -135,15 +155,12 @@ describe('AdminController users', () => {
       status: MembershipStatus.Invited,
     });
 
-    const result = await controller.createUser(
-      { tenant: { tenantId: 'tenant-1' } } as any,
-      {
+    const result = await controller.createUser(tenantAdminReq(), {
         email: 'floor@example.com',
         name: 'Floor User',
         role: Role.WAREHOUSE,
         sendInvite: true,
-      },
-    );
+      });
 
     expect(result.role).toBe(Role.WAREHOUSE);
     expect(prisma.tenantMembership.upsert).toHaveBeenCalledWith(
@@ -170,14 +187,11 @@ describe('AdminController users', () => {
       status: MembershipStatus.Invited,
     });
 
-    const result = await controller.createUser(
-      { tenant: { tenantId: 'tenant-1' } } as any,
-      {
+    const result = await controller.createUser(tenantAdminReq(), {
         email: 'cs@example.com',
         name: 'CS User',
         role: Role.TRANSPORT_STAFF,
-      },
-    );
+      });
 
     expect(result.role).toBe(Role.TRANSPORT_STAFF);
     expect(prisma.tenantMembership.upsert).toHaveBeenCalledWith(
@@ -192,14 +206,11 @@ describe('AdminController users', () => {
     const { controller } = makeController();
 
     await expect(
-      controller.createUser(
-        { tenant: { tenantId: 'tenant-1' } } as any,
-        {
+      controller.createUser(tenantAdminReq(), {
           email: 'driver@example.com',
           name: 'Driver',
           role: Role.DRIVER,
-        },
-      ),
+        }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -247,7 +258,7 @@ describe('AdminController users', () => {
     });
 
     const result = await controller.updateUser(
-      { tenant: { tenantId: 'tenant-1' } } as any,
+      tenantAdminReq(),
       'u-ops',
       { status: MembershipStatus.Suspended },
     );
@@ -279,11 +290,9 @@ describe('AdminController users', () => {
     });
 
     await expect(
-      controller.updateUser(
-        { tenant: { tenantId: 'tenant-1' } } as any,
-        'u-wh',
-        { role: Role.TRANSPORT_STAFF },
-      ),
+      controller.updateUser(tenantAdminReq(), 'u-wh', {
+          role: Role.TRANSPORT_STAFF,
+        }),
     ).rejects.toThrow(/username\/password operational roles/);
   });
 
@@ -302,11 +311,9 @@ describe('AdminController users', () => {
     });
 
     await expect(
-      controller.resetUserPassword(
-        { tenant: { tenantId: 'tenant-1' } } as any,
-        'u-ops',
-        { password: 'newpass123' },
-      ),
+      controller.resetUserPassword(tenantAdminReq(), 'u-ops', {
+          password: 'newpass123',
+        }),
     ).rejects.toThrow(/username\/password operational users/);
   });
 
@@ -325,7 +332,7 @@ describe('AdminController users', () => {
     });
 
     const result = await controller.resetUserPassword(
-      { tenant: { tenantId: 'tenant-1' } } as any,
+      tenantAdminReq(),
       'u-wh',
       { password: 'newpass123' },
     );

@@ -1,5 +1,5 @@
-import { IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
-import { MembershipStatus, Role } from '@prisma/client';
+import { IsArray, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
+import { MembershipStatus } from '@prisma/client';
 
 export class UpdateUserDto {
   @IsOptional()
@@ -15,9 +15,15 @@ export class UpdateUserDto {
   @MinLength(2)
   username?: string;
 
+  /** @deprecated Prefer PUT /admin/users/:userId/roles. */
   @IsOptional()
-  @IsEnum(Role)
-  role?: Role;
+  @IsString()
+  role?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  roles?: string[];
 
   @IsOptional()
   @IsEnum(MembershipStatus)

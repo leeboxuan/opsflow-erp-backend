@@ -20,12 +20,18 @@ import {
 } from "../../shared/auth/guards/module-entitlement.guard";
 import { InvoicesService } from "./invoices.service";
 import { PortalInvoiceDto } from "./dto/portal-invoice.dto";
+import { AccessSurface } from "../../shared/auth/guards/access-surface.guard";
+import {
+  accessActorFromRequest,
+  actorIsCustomerAdmin,
+} from "../../shared/auth/access-actor";
 
 @ApiTags("Portal - Invoices")
 @Controller("portal/invoices")
 @UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.FINANCE)
 @Roles(Role.CUSTOMER, Role.ADMIN, Role.TRANSPORT_STAFF, Role.FINANCE)
+@AccessSurface("portal")
 @ApiBearerAuth("JWT-auth")
 export class PortalInvoicesController {
   constructor(private readonly invoices: InvoicesService) {}
@@ -37,10 +43,10 @@ export class PortalInvoicesController {
   async list(@Request() req: any): Promise<PortalInvoiceDto[]> {
     const tenantId = req.tenant.tenantId as string | null;
     if (!tenantId) throw new BadRequestException("X-Tenant-Id is required");
-    const customerCompanyId =
-      req.tenant.role === Role.CUSTOMER
-        ? (req.tenant.customerCompanyId as string)
-        : undefined;
+    const actor = accessActorFromRequest(req);
+    const customerCompanyId = actorIsCustomerAdmin(actor)
+      ? (actor.customerCompanyId as string)
+      : undefined;
 
     return this.invoices.listPortalInvoices(tenantId, customerCompanyId);
   }
@@ -54,10 +60,10 @@ export class PortalInvoicesController {
   ) {
     const tenantId = req.tenant.tenantId as string | null;
     if (!tenantId) throw new BadRequestException("X-Tenant-Id is required");
-    const customerCompanyId =
-      req.tenant.role === Role.CUSTOMER
-        ? (req.tenant.customerCompanyId as string)
-        : undefined;
+    const actor = accessActorFromRequest(req);
+    const customerCompanyId = actorIsCustomerAdmin(actor)
+      ? (actor.customerCompanyId as string)
+      : undefined;
 
     const { pdfBuffer, filename } = await this.invoices.downloadPortalInvoicePdf(
       tenantId,

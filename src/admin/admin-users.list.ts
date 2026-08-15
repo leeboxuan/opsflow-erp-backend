@@ -1,9 +1,9 @@
-import { MembershipStatus, Prisma, Role } from '@prisma/client';
+import { CanonicalTenantRole, MembershipStatus, Prisma, Role } from '@prisma/client';
 import { parsePaginationFromQuery, buildPaginationMeta } from '../shared/common/pagination';
 import { applyMappedFilter } from '../shared/common/listing/listing.filters';
 import { buildOrderBy } from '../shared/common/listing/listing.sort';
 import { PrismaService } from '../shared/prisma/prisma.service';
-import { parseTenantRoleFilter } from './admin-users.util';
+import { parseTenantRoleListFilter, tenantRoleFilterWhere } from './admin-users.util';
 import {
   mapTenantMembershipToPublicUserDto,
   type PublicAdminUserDto,
@@ -16,7 +16,7 @@ export type ListTenantUsersQuery = {
   filter?: string;
   sortBy?: string;
   sortDir?: 'asc' | 'desc';
-  role?: Role;
+  role?: Role | string;
   roles?: string;
 };
 
@@ -25,6 +25,11 @@ export type ListTenantUsersOptions = {
   forcedRoles?: readonly Role[];
   /** Exclude DRIVER from admin users list (default true for canonical admin list). */
   excludeDriver?: boolean;
+  /**
+   * Transport Admin user list: only memberships whose canonical set is a subset
+   * of these roles (no privileged/internal extras).
+   */
+  restrictToExactlyCanonicalRoles?: readonly CanonicalTenantRole[];
 };
 
 /**
@@ -44,10 +49,59 @@ export async function listTenantUsers(
 
   const where: Prisma.TenantMembershipWhereInput = {
     tenantId,
-    ...(excludeDriver && !options.forcedRoles?.length
-      ? { NOT: { role: Role.DRIVER } }
-      : {}),
   };
+
+  if (options.restrictToExactlyCanonicalRoles?.length) {
+    const allowed = [...options.restrictToExactlyCanonicalRoles];
+    const forbidden = (
+      Object.values(CanonicalTenantRole) as CanonicalTenantRole[]
+    ).filter((role) => !allowed.includes(role));
+    where.AND = [
+      {
+        membershipRoles: {
+          some: { role: { in: allowed } },
+        },
+      },
+      forbidden.length
+        ? {
+            membershipRoles: {
+              none: { role: { in: forbidden } },
+            },
+          }
+        : {},
+    ];
+  } else if (excludeDriver && !options.forcedRoles?.length) {
+    where.NOT = {
+      AND: [
+        {
+          OR: [
+            { role: Role.DRIVER },
+            {
+              membershipRoles: {
+                some: { role: CanonicalTenantRole.TRANSPORT_DRIVER },
+              },
+            },
+          ],
+        },
+        {
+          membershipRoles: {
+            none: {
+              role: {
+                in: [
+                  CanonicalTenantRole.TENANT_ADMIN,
+                  CanonicalTenantRole.TRANSPORT_ADMIN,
+                  CanonicalTenantRole.FINANCE_ADMIN,
+                  CanonicalTenantRole.WAREHOUSE_ADMIN,
+                  CanonicalTenantRole.WAREHOUSE_STAFF,
+                  CanonicalTenantRole.CUSTOMER_ADMIN,
+                ],
+              },
+            },
+          },
+        },
+      ],
+    };
+  }
 
   const q = query.q?.trim();
   if (q) {
@@ -67,11 +121,15 @@ export async function listTenantUsers(
   });
 
   if (options.forcedRoles?.length) {
-    where.role = { in: [...options.forcedRoles] };
+    const parsedForced = parseTenantRoleListFilter(
+      undefined,
+      options.forcedRoles.join(','),
+    );
+    Object.assign(where, parsedForced ? tenantRoleFilterWhere(parsedForced) : {});
   } else {
-    const roleFilter = parseTenantRoleFilter(query.role, query.roles);
-    if (roleFilter?.length) {
-      where.role = { in: roleFilter };
+    const parsed = parseTenantRoleListFilter(query.role, query.roles);
+    if (parsed) {
+      Object.assign(where, tenantRoleFilterWhere(parsed));
     }
   }
 
@@ -93,7 +151,10 @@ export async function listTenantUsers(
     prisma.tenantMembership.count({ where }),
     prisma.tenantMembership.findMany({
       where,
-      include: { user: true },
+      include: {
+        user: true,
+        membershipRoles: { select: { role: true } },
+      },
       orderBy: orderBy as Prisma.TenantMembershipOrderByWithRelationInput,
       skip,
       take,

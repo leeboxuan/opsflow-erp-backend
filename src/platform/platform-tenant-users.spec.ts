@@ -103,11 +103,13 @@ describe("PlatformService tenant users (Phase 2)", () => {
       expect.objectContaining({
         where: expect.objectContaining({
           tenantId: "t1",
-          NOT: { role: Role.DRIVER },
+          NOT: expect.objectContaining({
+            AND: expect.any(Array),
+          }),
         }),
       }),
     );
-    expect(result.data[0]?.role).toBe(Role.OPS);
+    expect(result.data[0]?.role).toBe(Role.TRANSPORT_STAFF);
   });
 
   it("creates user and audits without password", async () => {

@@ -170,11 +170,9 @@ describe("StatisticsController route contracts", () => {
     ]);
   });
 
-  it("allows only staff roles at the controller boundary", () => {
+  it("allows only Tenant Admin at the controller boundary", () => {
     expect(Reflect.getMetadata("roles", StatisticsController)).toEqual([
       Role.ADMIN,
-      Role.TRANSPORT_STAFF,
-      Role.FINANCE,
     ]);
   });
 
@@ -259,27 +257,33 @@ describe("StatisticsController authorization behavior", () => {
   }
 
   it.each(["getOverview", "getDrivers"] as StatisticsHandlerName[])(
-    "allows Transport-authorized staff on %s",
+    "allows Tenant Admin on %s",
     async (handlerName) => {
-      await expectAuthorized(handlerName, Role.TRANSPORT_STAFF, [
+      await expectAuthorized(handlerName, Role.ADMIN, [
         TenantModule.TRANSPORT,
       ]);
     },
   );
 
   it("requires both Transport and Finance for Exceptions", async () => {
-    await expectAuthorized("getExceptions", Role.TRANSPORT_STAFF, [
+    await expectAuthorized("getExceptions", Role.ADMIN, [
       TenantModule.TRANSPORT,
       TenantModule.FINANCE,
     ]);
   });
 
-  it("allows finance staff only when Finance is entitled", async () => {
-    await expectAuthorized("getFinance", Role.FINANCE, [TenantModule.FINANCE]);
+  it("allows Tenant Admin on Finance only when Finance is entitled", async () => {
+    await expectAuthorized("getFinance", Role.ADMIN, [TenantModule.FINANCE]);
   });
 
-  it.each([Role.DRIVER, Role.CUSTOMER, Role.WAREHOUSE])(
-    "denies non-reporting role %s",
+  it.each([
+    Role.DRIVER,
+    Role.CUSTOMER,
+    Role.WAREHOUSE,
+    Role.TRANSPORT_STAFF,
+    Role.FINANCE,
+  ])(
+    "denies non-tenant-admin role %s",
     (role) => {
       expect(() =>
         roleGuard.canActivate(
