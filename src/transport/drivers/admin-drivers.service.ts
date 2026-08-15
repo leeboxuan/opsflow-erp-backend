@@ -1,14 +1,16 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from "@nestjs/common";
-import { MembershipStatus, Role, StopStatus, TripStatus, UserRole } from "@prisma/client";
+import { CanonicalTenantRole, MembershipStatus, Role, StopStatus, TripStatus, UserRole } from "@prisma/client";
 import { PrismaService } from "../../shared/prisma/prisma.service";
 import { SupabaseService } from "../../shared/auth/supabase.service";
 import { UsersService } from "../../shared/users/users.service";
+import { syncMembershipRoleRows } from "../../shared/auth/membership-roles";
+import { isTransportDriverRole } from "../../shared/auth/canonical-tenant-role";
 import {
   parsePaginationFromQuery,
   buildPaginationMeta,
@@ -40,6 +42,10 @@ import {
   normalizeUsername,
   publicEmailOrNull,
 } from "../../shared/auth/auth-internal-email";
+import {
+  assertUsernameGloballyAvailable,
+  rethrowUsernameUniqueConflict,
+} from "../../shared/auth/username-uniqueness";
 
 function firstNonEmptyText(...values: Array<unknown>): string | null {
   for (const value of values) {
@@ -73,6 +79,8 @@ function driverDisplayFallback(user: {
 
 @Injectable()
 export class AdminDriversService {
+  private readonly logger = new Logger(AdminDriversService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
@@ -101,7 +109,14 @@ export class AdminDriversService {
 
     const where: any = {
       tenantId,
-      role: Role.DRIVER,
+      OR: [
+        { role: Role.DRIVER },
+        {
+          membershipRoles: {
+            some: { role: CanonicalTenantRole.TRANSPORT_DRIVER },
+          },
+        },
+      ],
       status: { in: [MembershipStatus.Active, MembershipStatus.Suspended] },
     };
     applyMappedFilter(where, query?.filter, {
@@ -271,49 +286,29 @@ export class AdminDriversService {
     }
 
     const usernameRaw = dto.username?.trim() ?? "";
-    const emailRaw = dto.email?.trim() ?? "";
-    if (usernameRaw && emailRaw) {
-      throw new BadRequestException("Provide a username or an email, not both");
-    }
-    if (!usernameRaw && !emailRaw) {
-      throw new BadRequestException("Username or email is required");
+    if (!usernameRaw) {
+      throw new BadRequestException("Username is required");
     }
 
-    let authEmail: string;
-    let normalizedUsername: string | null = null;
-
-    if (usernameRaw) {
-      normalizedUsername = normalizeUsername(usernameRaw);
-      try {
-        assertValidUsername(normalizedUsername);
-      } catch (e: any) {
-        throw new BadRequestException(e?.message || "Invalid username");
-      }
-
-      const existingInTenant = await this.prisma.tenantMembership.findFirst({
-        where: {
-          tenantId,
-          user: { username: normalizedUsername },
-        },
-        select: { id: true },
-      });
-      if (existingInTenant) {
-        throw new ConflictException("Username is already taken in this tenant");
-      }
-
-      const tenant = await this.prisma.tenant.findUnique({
-        where: { id: tenantId },
-        select: { slug: true },
-      });
-      if (!tenant?.slug) {
-        throw new BadRequestException(
-          "Tenant slug is required for username users",
-        );
-      }
-      authEmail = buildInternalAuthEmail(tenant.slug, normalizedUsername);
-    } else {
-      authEmail = emailRaw.toLowerCase();
+    const normalizedUsername = normalizeUsername(usernameRaw);
+    try {
+      assertValidUsername(normalizedUsername);
+    } catch (e: any) {
+      throw new BadRequestException(e?.message || "Invalid username");
     }
+
+    await assertUsernameGloballyAvailable(this.prisma, normalizedUsername);
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { slug: true },
+    });
+    if (!tenant?.slug) {
+      throw new BadRequestException(
+        "Tenant slug is required for username users",
+      );
+    }
+    const authEmail = buildInternalAuthEmail(tenant.slug, normalizedUsername);
 
     const supabase = this.supabaseService.getClient();
     const { data, error } = await supabase.auth.admin.createUser({
@@ -322,9 +317,9 @@ export class AdminDriversService {
       email_confirm: true,
       user_metadata: {
         name: dto.name ?? undefined,
-        username: normalizedUsername ?? undefined,
+        username: normalizedUsername,
         tenantId,
-        role: "DRIVER",
+        role: "TRANSPORT_DRIVER",
       },
     });
 
@@ -337,7 +332,9 @@ export class AdminDriversService {
       throw new BadRequestException("Failed to create auth user");
     }
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    let result: { user: any; membership: any };
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.upsert({
         where: { email: authEmail },
         update: {
@@ -366,6 +363,13 @@ export class AdminDriversService {
           status: MembershipStatus.Active,
         },
       });
+
+      await syncMembershipRoleRows(
+        tx,
+        membership.id,
+        [CanonicalTenantRole.TRANSPORT_DRIVER],
+        null,
+      );
 
       const name =
         (dto.name ?? user.name ?? "").trim() ||
@@ -396,6 +400,11 @@ export class AdminDriversService {
 
       return { user, membership };
     });
+    } catch (e) {
+      await this.compensateDeleteAuthUser(authUserId);
+      rethrowUsernameUniqueConflict(e);
+      throw e;
+    }
 
     rt.publishDriverEvent(
       this.realtime,
@@ -439,10 +448,16 @@ export class AdminDriversService {
   ): Promise<AdminDriverDto> {
     const membership = await this.prisma.tenantMembership.findUnique({
       where: { tenantId_userId: { tenantId, userId: driverUserId } },
-      include: { user: true },
+      include: { user: true, membershipRoles: { select: { role: true } } },
     });
 
-    if (!membership || membership.role !== Role.DRIVER) {
+    if (
+      !membership ||
+      (!isTransportDriverRole(membership.role) &&
+        !membership.membershipRoles.some((row) =>
+          isTransportDriverRole(row.role),
+        ))
+    ) {
       throw new NotFoundException("Driver not found");
     }
 
@@ -656,9 +671,15 @@ export class AdminDriversService {
   private async requireDriverMembership(tenantId: string, driverUserId: string) {
     const membership = await this.prisma.tenantMembership.findUnique({
       where: { tenantId_userId: { tenantId, userId: driverUserId } },
-      include: { user: true },
+      include: { user: true, membershipRoles: { select: { role: true } } },
     });
-    if (!membership || membership.role !== Role.DRIVER) {
+    if (
+      !membership ||
+      (!isTransportDriverRole(membership.role) &&
+        !membership.membershipRoles.some((row) =>
+          isTransportDriverRole(row.role),
+        ))
+    ) {
       throw new NotFoundException("Driver not found");
     }
     return membership;
@@ -1034,5 +1055,32 @@ export class AdminDriversService {
       driverUserId,
       query,
     );
+  }
+
+  /**
+   * Compensating delete for an auth identity created in this request only.
+   * Driver creation must not leave an unusable auth user if Prisma provisioning fails.
+   */
+  private async compensateDeleteAuthUser(authUserId: string): Promise<void> {
+    try {
+      const supabase = this.supabaseService.getClient();
+      const { error } = await supabase.auth.admin.deleteUser(authUserId);
+      if (error) {
+        this.logger.error(
+          `Compensation deleteUser failed for newly created driver auth identity (id redacted length=${authUserId.length}): ${error.message}`,
+        );
+        throw new BadRequestException(
+          "Driver provisioning failed and auth compensation also failed; contact support",
+        );
+      }
+    } catch (e) {
+      if (e instanceof BadRequestException) throw e;
+      this.logger.error(
+        "Compensation deleteUser threw for newly created driver auth identity",
+      );
+      throw new BadRequestException(
+        "Driver provisioning failed and auth compensation also failed; contact support",
+      );
+    }
   }
 }

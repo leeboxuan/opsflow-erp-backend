@@ -16,6 +16,10 @@ describe("DriverTripEarningsService (canonical mobile wallet SoT)", () => {
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
       },
+      drivers: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       $transaction: jest.fn(async (arg: any) => {
         if (Array.isArray(arg)) return Promise.all(arg);
         return arg(prisma);
@@ -217,5 +221,108 @@ describe("DriverTripEarningsService (canonical mobile wallet SoT)", () => {
     const lifetime = await svc.getLifetimeTotals("tenant-1", "driver-1");
     expect(lifetime.lifetimeCents).toBe(0);
     expect(lifetime.completedTripCount).toBe(0);
+  });
+
+  it("summarizes Finance Driver Incentives from COMPLETED/DONE payout lines", async () => {
+    const { prisma, svc } = makeService({
+      drivers: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            userId: "driver-1",
+            name: "Ahmad",
+            assignedVehicle: { plateNo: "SBA1234A" },
+            assignedFleetVehicle: null,
+            users: { name: "Ahmad", displayName: "Ahmad" },
+          },
+        ]),
+        findFirst: jest.fn(),
+      },
+      trip: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            assignedDriverUserId: "driver-1",
+            driverEarningCents: 1,
+            payoutLines: [
+              { totalCents: 12000, isSelectableForTripEarning: true },
+            ],
+          },
+          {
+            assignedDriverUserId: "driver-1",
+            driverEarningCents: 1,
+            payoutLines: [
+              { totalCents: 8000, isSelectableForTripEarning: true },
+            ],
+          },
+        ]),
+      },
+    });
+
+    const res = await svc.listTenantDriverIncentiveSummaries("tenant-1", {
+      month: "2026-05",
+    });
+    expect(res.month).toBe("2026-05");
+    expect(res.data).toEqual([
+      {
+        driverId: "driver-1",
+        driverName: "Ahmad",
+        monthCents: 20000,
+        completedTripCount: 2,
+        averageCents: 10000,
+        vehiclePlate: "SBA1234A",
+      },
+    ]);
+    expect(prisma.trip.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: { in: [TripStatus.COMPLETED, TripStatus.DONE] },
+        }),
+      }),
+    );
+  });
+
+  it("returns Finance Driver history without CUIDs and using wallet resolver rows", async () => {
+    const { prisma, svc } = makeService({
+      drivers: {
+        findMany: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue({
+          userId: "driver-1",
+          name: "Ahmad",
+          assignedVehicle: null,
+          assignedFleetVehicle: { plateNo: "SGF8888Z" },
+          users: { name: "Ahmad", displayName: "Ahmad" },
+        }),
+      },
+    });
+    prisma.trip.findMany.mockResolvedValue([
+      {
+        id: "clxxxxxxxxxxxxxxxxxxxxxx",
+        jobId: "job-1",
+        title: "Port haul",
+        status: TripStatus.COMPLETED,
+        closedAt: new Date("2026-05-08T02:00:00.000Z"),
+        updatedAt: new Date("2026-05-08T02:00:00.000Z"),
+        driverEarningCents: 500,
+        earningLabelSnapshot: "A-1 haul",
+        payoutLines: [{ totalCents: 4500, isSelectableForTripEarning: true }],
+        job: { internalRef: "JOB-88" },
+      },
+    ]);
+
+    const detail = await svc.getDriverIncentiveDetail(
+      "tenant-1",
+      "driver-1",
+      "2026-05",
+    );
+    expect(detail.driverName).toBe("Ahmad");
+    expect(detail.totalCents).toBe(4500);
+    expect(detail.completedTripCount).toBe(1);
+    expect(detail.averageCents).toBe(4500);
+    expect(detail.trips[0]).toMatchObject({
+      tripDisplayRef: "JOB-88",
+      payoutLabel: "A-1 haul",
+      amountCents: 4500,
+      jobRef: "JOB-88",
+    });
+    expect(JSON.stringify(detail.trips)).not.toContain("clxxxxxxxx");
   });
 });

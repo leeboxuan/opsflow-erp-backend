@@ -7,6 +7,10 @@ import {
 
 @Injectable()
 export class FinanceService {
+  /**
+   * Legacy driver_wallet_transactions ledger. Not canonical Driver Incentives.
+   * Canonical earnings: DriverTripEarningsService / GET /finance/driver-incentives.
+   */
   constructor(private prisma: PrismaService) {}
 
   async getDriverWalletSummaries(

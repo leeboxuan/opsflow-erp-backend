@@ -34,6 +34,7 @@ describe("AdminDriversService", () => {
           id: "m1",
           role: Role.DRIVER,
           status: "Active",
+          membershipRoles: [{ role: "TRANSPORT_DRIVER" }],
           user: {
             id: "u-driver",
             email: "driver@demo.com",
@@ -53,6 +54,7 @@ describe("AdminDriversService", () => {
           createdAt: new Date("2026-05-08T00:00:00.000Z"),
           updatedAt: new Date("2026-05-08T00:00:00.000Z"),
         }),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       drivers: {
         findMany: jest.fn().mockResolvedValue([
@@ -76,6 +78,14 @@ describe("AdminDriversService", () => {
       fleetVehicle: {
         findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
+      },
+      tenant: {
+        findUnique: jest.fn().mockResolvedValue({ slug: "acme" }),
+      },
+      tenantMembershipRole: {
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
       },
       ...overrides,
     };
@@ -169,6 +179,7 @@ describe("AdminDriversService", () => {
           id: "m1",
           role: Role.DRIVER,
           status: "Active",
+          membershipRoles: [{ role: "TRANSPORT_DRIVER" }],
           user: {
             id: "u-driver",
             email: "driver@demo.com",
@@ -195,6 +206,7 @@ describe("AdminDriversService", () => {
           id: "m1",
           role: Role.DRIVER,
           status: "Active",
+          membershipRoles: [{ role: "TRANSPORT_DRIVER" }],
           user: {
             id: "u-driver",
             email: "driver@demo.com",
@@ -272,5 +284,92 @@ describe("AdminDriversService", () => {
     expect(result.username).toBe("ahmad");
     expect(result.userEmail).toBeNull();
     expect(JSON.stringify(result)).not.toContain("auth.opsflow.app");
+    expect(prisma.tenantMembership.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ role: Role.DRIVER }),
+      }),
+    );
+    expect(prisma.tenantMembershipRole.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [
+          expect.objectContaining({
+            role: "TRANSPORT_DRIVER",
+          }),
+        ],
+      }),
+    );
+    expect(prisma.drivers.upsert).toHaveBeenCalled();
+  });
+
+  it("rejects a globally duplicate driver username", async () => {
+    const { service, prisma, supabaseService } = makeService();
+    prisma.user.findFirst = jest.fn().mockResolvedValue({ id: "u-other" });
+    const createUser = jest.fn();
+    supabaseService.getClient.mockReturnValue({
+      auth: { admin: { createUser } },
+    });
+
+    await expect(
+      service.createDriver("t1", {
+        username: "Ahmad",
+        name: "Ahmad",
+        phone: "+6590000001",
+        password: "StrongPass123",
+      }),
+    ).rejects.toThrow("Username is already taken");
+    expect(createUser).not.toHaveBeenCalled();
+  });
+
+  it("maps Prisma username unique races to 409 without leaking synthetic email", async () => {
+    const createUser = jest.fn().mockResolvedValue({
+      data: { user: { id: "auth-1" } },
+      error: null,
+    });
+    const deleteUser = jest.fn().mockResolvedValue({ error: null });
+    const { service, prisma, supabaseService } = makeService();
+    supabaseService.getClient.mockReturnValue({
+      auth: { admin: { createUser, deleteUser } },
+    });
+    prisma.tenant = {
+      findUnique: jest.fn().mockResolvedValue({ slug: "acme" }),
+    };
+    prisma.$transaction = jest.fn().mockRejectedValue({
+      code: "P2002",
+      meta: { target: ["username"] },
+      message: "Unique constraint failed on acme.ahmad@auth.opsflow.app",
+    });
+
+    await expect(
+      service.createDriver("t1", {
+        username: "Ahmad",
+        name: "Ahmad",
+        phone: "+6590000001",
+        password: "StrongPass123",
+      }),
+    ).rejects.toThrow("Username is already taken");
+    expect(deleteUser).toHaveBeenCalledWith("auth-1");
+  });
+
+  it("compensates the auth user if driver provisioning fails", async () => {
+    const createUser = jest.fn().mockResolvedValue({
+      data: { user: { id: "auth-1" } },
+      error: null,
+    });
+    const deleteUser = jest.fn().mockResolvedValue({ error: null });
+    const { service, prisma, supabaseService } = makeService();
+    supabaseService.getClient.mockReturnValue({
+      auth: { admin: { createUser, deleteUser } },
+    });
+    prisma.$transaction = jest.fn().mockRejectedValue(new Error("db down"));
+
+    await expect(
+      service.createDriver("t1", {
+        username: "ahmad",
+        name: "Ahmad",
+        phone: "+6590000001",
+        password: "StrongPass123",
+      }),
+    ).rejects.toThrow("db down");
+    expect(deleteUser).toHaveBeenCalledWith("auth-1");
   });
 });

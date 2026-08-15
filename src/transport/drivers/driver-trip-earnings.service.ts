@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from "@nestjs/common";
+import { Injectable, BadRequestException, NotFoundException } from "@nestjs/common";
 import { TripStatus } from "@prisma/client";
 import { PrismaService } from "../../shared/prisma/prisma.service";
 import {
@@ -16,6 +16,7 @@ import {
   parseCalendarMonthToUtcRangeInTimeZone,
   resolveDriverTripEarningCents,
   sumWalletTripRowsCents,
+  humanTripDisplayRef,
 } from "./driver-trip-earnings.helpers";
 
 const TENANT_TIMEZONE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -40,6 +41,36 @@ export type DriverEarningsTransactionDto = {
   tripId: string;
   jobId: string | null;
   jobInternalRef: string | null;
+};
+
+export type DriverIncentiveSummaryRow = {
+  driverId: string;
+  driverName: string;
+  monthCents: number;
+  completedTripCount: number;
+  averageCents: number;
+  vehiclePlate: string | null;
+};
+
+export type DriverIncentiveTripRow = {
+  date: Date | null;
+  tripDisplayRef: string;
+  payoutLabel: string | null;
+  amountCents: number;
+  jobRef: string | null;
+};
+
+export type DriverIncentiveDetail = {
+  driverId: string;
+  driverName: string;
+  month: string;
+  totalCents: number;
+  completedTripCount: number;
+  averageCents: number;
+  vehiclePlate: string | null;
+  currency: string;
+  timeZone: string;
+  trips: DriverIncentiveTripRow[];
 };
 
 /**
@@ -284,6 +315,179 @@ export class DriverTripEarningsService {
       meta: buildPaginationMeta(page, pageSize, total),
       month: monthKey,
       currency: DEFAULT_DRIVER_EARNING_CURRENCY,
+    };
+  }
+
+  /**
+   * Tenant-wide Finance Driver Incentives summary for a calendar month.
+   * Arithmetic is the same COMPLETED/DONE + TripPayoutLine resolver as wallet.
+   */
+  async listTenantDriverIncentiveSummaries(
+    tenantId: string,
+    query?: { month?: string | null; q?: string | null },
+  ): Promise<{
+    month: string;
+    currency: string;
+    timeZone: string;
+    data: DriverIncentiveSummaryRow[];
+  }> {
+    const monthKey = await this.resolveMonthKey(tenantId, query?.month);
+    const tz = await this.getTenantTimeZone(tenantId);
+    const range = parseCalendarMonthToUtcRangeInTimeZone(monthKey, tz);
+    const q = String(query?.q ?? "").trim();
+
+    const drivers = await this.prisma.drivers.findMany({
+      where: {
+        tenantId,
+        userId: { not: null },
+        ...(q
+          ? {
+              OR: [
+                { name: { contains: q, mode: "insensitive" } },
+                {
+                  users: {
+                    OR: [
+                      { name: { contains: q, mode: "insensitive" } },
+                      { displayName: { contains: q, mode: "insensitive" } },
+                      { username: { contains: q, mode: "insensitive" } },
+                    ],
+                  },
+                },
+              ],
+            }
+          : {}),
+      },
+      select: {
+        userId: true,
+        name: true,
+        assignedVehicle: { select: { plateNo: true } },
+        assignedFleetVehicle: { select: { plateNo: true } },
+        users: { select: { name: true, displayName: true } },
+      },
+      orderBy: { name: "asc" },
+    });
+
+    const userIds = drivers
+      .map((driver) => driver.userId)
+      .filter((id): id is string => Boolean(id));
+
+    const trips =
+      userIds.length === 0
+        ? []
+        : await this.prisma.trip.findMany({
+            where: {
+              tenantId,
+              assignedDriverUserId: { in: userIds },
+              status: { in: [TripStatus.COMPLETED, TripStatus.DONE] },
+              OR: [
+                { closedAt: { gte: range.gte, lt: range.lt } },
+                { closedAt: null, updatedAt: { gte: range.gte, lt: range.lt } },
+              ],
+            },
+            select: {
+              assignedDriverUserId: true,
+              driverEarningCents: true,
+              payoutLines: { select: CANONICAL_TRIP_PAYOUT_LINE_SELECT },
+            },
+          });
+
+    const totals = new Map<string, { cents: number; trips: number }>();
+    for (const trip of trips) {
+      const driverId = trip.assignedDriverUserId;
+      if (!driverId) continue;
+      const current = totals.get(driverId) ?? { cents: 0, trips: 0 };
+      current.cents += resolveDriverTripEarningCents(trip) ?? 0;
+      current.trips += 1;
+      totals.set(driverId, current);
+    }
+
+    const data: DriverIncentiveSummaryRow[] = drivers
+      .filter((driver) => driver.userId)
+      .map((driver) => {
+        const driverId = driver.userId as string;
+        const earned = totals.get(driverId) ?? { cents: 0, trips: 0 };
+        const driverName =
+          driver.name?.trim() ||
+          driver.users?.displayName?.trim() ||
+          driver.users?.name?.trim() ||
+          "Driver";
+        return {
+          driverId,
+          driverName,
+          monthCents: earned.cents,
+          completedTripCount: earned.trips,
+          averageCents:
+            earned.trips > 0 ? Math.round(earned.cents / earned.trips) : 0,
+          vehiclePlate:
+            driver.assignedFleetVehicle?.plateNo?.trim() ||
+            driver.assignedVehicle?.plateNo?.trim() ||
+            null,
+        };
+      });
+
+    return {
+      month: monthKey,
+      currency: DEFAULT_DRIVER_EARNING_CURRENCY,
+      timeZone: tz,
+      data,
+    };
+  }
+
+  async getDriverIncentiveDetail(
+    tenantId: string,
+    driverUserId: string,
+    month?: string | null,
+  ): Promise<DriverIncentiveDetail> {
+    const driver = await this.prisma.drivers.findFirst({
+      where: { tenantId, userId: driverUserId },
+      select: {
+        userId: true,
+        name: true,
+        assignedVehicle: { select: { plateNo: true } },
+        assignedFleetVehicle: { select: { plateNo: true } },
+        users: { select: { name: true, displayName: true } },
+      },
+    });
+    if (!driver?.userId) {
+      throw new NotFoundException("Driver not found");
+    }
+
+    const monthKey = await this.resolveMonthKey(tenantId, month);
+    const tz = await this.getTenantTimeZone(tenantId);
+    const summary = await this.getWalletSummaryByMonth(
+      tenantId,
+      driverUserId,
+      monthKey,
+    );
+    const driverName =
+      driver.name?.trim() ||
+      driver.users?.displayName?.trim() ||
+      driver.users?.name?.trim() ||
+      "Driver";
+
+    return {
+      driverId: driver.userId,
+      driverName,
+      month: monthKey,
+      totalCents: summary.totalCents,
+      completedTripCount: summary.completedTripCount,
+      averageCents:
+        summary.completedTripCount > 0
+          ? Math.round(summary.totalCents / summary.completedTripCount)
+          : 0,
+      vehiclePlate:
+        driver.assignedFleetVehicle?.plateNo?.trim() ||
+        driver.assignedVehicle?.plateNo?.trim() ||
+        null,
+      currency: DEFAULT_DRIVER_EARNING_CURRENCY,
+      timeZone: tz,
+      trips: summary.trips.map((trip) => ({
+        date: trip.completedAt,
+        tripDisplayRef: humanTripDisplayRef(trip),
+        payoutLabel: trip.earningLabelSnapshot,
+        amountCents: trip.driverEarningCents ?? 0,
+        jobRef: trip.jobInternalRef,
+      })),
     };
   }
 }

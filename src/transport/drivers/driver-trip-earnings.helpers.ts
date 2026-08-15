@@ -155,3 +155,15 @@ export function mapTripsToWalletSummaryRows(
 export function sumWalletTripRowsCents(rows: DriverWalletSummaryTripRow[]): number {
   return rows.reduce((sum, row) => sum + (row.driverEarningCents ?? 0), 0);
 }
+
+/** Human-readable Trip label for Finance/boss output. Never falls back to a CUID. */
+export function humanTripDisplayRef(trip: {
+  jobInternalRef?: string | null;
+  title?: string | null;
+}): string {
+  const jobRef = String(trip.jobInternalRef ?? "").trim();
+  if (jobRef) return jobRef;
+  const title = String(trip.title ?? "").trim();
+  if (title) return title;
+  return "Trip";
+}

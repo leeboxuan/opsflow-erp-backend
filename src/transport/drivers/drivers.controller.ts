@@ -23,6 +23,7 @@ import { Role } from '@prisma/client';
 import { UpdateDriverDto } from './dto/update-driver.dto';
 import { UsersService } from '../../shared/users/users.service';
 import { publicEmailOrNull } from '../../shared/auth/auth-internal-email';
+import { AccessSurface } from '../../shared/auth/guards/access-surface.guard';
 
 export interface DriverDto {
   id: string;
@@ -46,6 +47,7 @@ export interface DriverDto {
 @Controller('drivers')
 @UseGuards(AuthGuard, TenantGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.TRANSPORT)
+@AccessSurface('driver')
 @ApiBearerAuth('JWT-auth')
 export class DriversController {
   constructor(
