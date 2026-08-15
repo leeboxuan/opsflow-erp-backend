@@ -12,7 +12,7 @@
  *   auth mode with ADMIN-class effective permissions (no fake TenantMembership).
  */
 
-import { Role, TenantStatus } from "@prisma/client";
+import { CanonicalTenantRole, Role, TenantStatus } from "@prisma/client";
 
 export const REQUEST_CONTEXT_KIND = {
   TENANT_USER: "TENANT_USER",
@@ -55,10 +55,12 @@ type RequestContextBase = AuthIdentity & {
   actorType: ActorType;
   authMode: AuthMode;
   /**
-   * Effective tenant Role used by RoleGuard for this request.
-   * Platform tenant operation → ADMIN. Membership path → membership role.
+   * @deprecated Singular compatibility projection.
+   * Platform tenant operation → ADMIN. Membership path → legacy membership role.
    */
   effectiveRole?: Role | null;
+  /** Canonical tenant roles for this request. Platform tenant operation → [TENANT_ADMIN]. */
+  effectiveRoles?: CanonicalTenantRole[] | null;
   /** Selected tenant from X-Tenant-Id after TenantGuard (may be unset before guard). */
   tenantId?: string | null;
   tenantStatus?: TenantStatus | string | null;
@@ -141,6 +143,7 @@ export function buildRequestContext(params: {
   platformTenantOperation?: boolean;
   /** Membership role for ordinary users (ignored for platform ops). */
   membershipRole?: Role | null;
+  membershipRoles?: CanonicalTenantRole[] | null;
 }): RequestContext {
   const legacy =
     params.legacySuperadminAsPlatformAdmin !== false &&
@@ -172,6 +175,7 @@ export function buildRequestContext(params: {
         ? AUTH_MODE.PLATFORM_TENANT_OPERATION
         : AUTH_MODE.PLATFORM_CONTROL,
       effectiveRole: operating ? Role.ADMIN : null,
+      effectiveRoles: operating ? [CanonicalTenantRole.TENANT_ADMIN] : null,
       tenantId,
       tenantStatus,
       tenantSuspended,
@@ -190,6 +194,7 @@ export function buildRequestContext(params: {
     platformAdminId: null,
     authMode: AUTH_MODE.MEMBERSHIP,
     effectiveRole: params.membershipRole ?? null,
+    effectiveRoles: params.membershipRoles ?? null,
     tenantId,
     tenantStatus,
     tenantSuspended,

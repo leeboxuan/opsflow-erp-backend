@@ -19,7 +19,7 @@ export class LoginDto {
   @ApiPropertyOptional({
     example: 'floor1',
     description:
-      'Username login (warehouse or driver mobile). Mutually exclusive with email.',
+      'Username login. Driver Mobile requires this field (not email). Warehouse mobile may also use username. Mutually exclusive with email for staff/web.',
   })
   @ValidateIf((o: LoginDto) => !o.email)
   @IsString()
@@ -29,7 +29,7 @@ export class LoginDto {
   @ApiPropertyOptional({
     example: 'acme',
     description:
-      'Tenant slug when logging in with username (required if the username exists in multiple tenants).',
+      'Optional tenant slug membership filter. Usernames are globally unique after canonical normalize; slug is not a uniqueness domain.',
   })
   @IsOptional()
   @IsString()
@@ -38,7 +38,7 @@ export class LoginDto {
   @ApiPropertyOptional({
     example: 'web',
     description:
-      "Optional client hint: 'web' | 'mobile'. Mobile rejects platform-only accounts.",
+      "Optional client hint: 'web' | 'staff' | 'mobile' | 'driver_mobile' | 'warehouse_mobile'. Driver Mobile requires TRANSPORT_DRIVER. Staff web rejects TRANSPORT_DRIVER-only accounts.",
   })
   @IsOptional()
   @IsString()

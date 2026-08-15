@@ -1,11 +1,14 @@
-import { MembershipStatus, Role, TenantStatus } from "@prisma/client";
+import { CanonicalTenantRole, MembershipStatus, Role, TenantStatus } from "@prisma/client";
 
 /** Short TTL so suspension / company deactivation propagates quickly. */
 export const TENANT_CONTEXT_CACHE_TTL_MS = 45_000;
 
 export type CachedTenantContext = {
   tenantId: string;
+  /** @deprecated Compatibility projection. Authorization uses `roles`. */
   role: Role;
+  /** Canonical tenant roles (union). Platform tenant operation → [TENANT_ADMIN]. */
+  roles: CanonicalTenantRole[];
   isSuperadmin: boolean;
   isPlatformAdmin?: boolean;
   /** True when Platform Admin entered a SUSPENDED tenant (ordinary users blocked). */
@@ -52,6 +55,24 @@ export function writeTenantContextCache(
     context,
     expiresAtMs: Date.now() + TENANT_CONTEXT_CACHE_TTL_MS,
   });
+}
+
+export function clearTenantContextCache(
+  userId?: string,
+  tenantId?: string,
+): void {
+  if (userId && tenantId) {
+    cache.delete(tenantContextCacheKey(userId, tenantId));
+    return;
+  }
+  if (userId) {
+    const prefix = `${userId}:`;
+    for (const key of cache.keys()) {
+      if (key.startsWith(prefix)) cache.delete(key);
+    }
+    return;
+  }
+  cache.clear();
 }
 
 export function clearTenantContextCacheForTests(): void {

@@ -90,10 +90,18 @@ describe("AuthController getMe", () => {
       {
         tenantId: "t1",
         role: "ADMIN",
+        roles: ["TENANT_ADMIN"],
         status: "Active",
-        tenant: { id: "t1", name: "Tenant One", status: "ACTIVE" },
+        tenant: {
+          id: "t1",
+          name: "Tenant One",
+          status: "ACTIVE",
+          timezone: "Pacific/Auckland",
+          modules: [],
+        },
       },
     ]);
+    expect(res.roles).toEqual(["TENANT_ADMIN"]);
   });
 
   it("returns WAREHOUSE tenant membership in getMe", async () => {
@@ -120,7 +128,11 @@ describe("AuthController getMe", () => {
     } as any);
 
     expect(res.tenantMemberships).toEqual([
-      expect.objectContaining({ role: "WAREHOUSE", status: "Active" }),
+      expect.objectContaining({
+        role: "WAREHOUSE",
+        roles: ["WAREHOUSE_STAFF"],
+        status: "Active",
+      }),
     ]);
   });
 

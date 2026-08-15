@@ -19,6 +19,7 @@ describe("tenant-context.cache", () => {
     writeTenantContextCache(key, {
       tenantId: "t1",
       role: Role.TRANSPORT_STAFF,
+      roles: [],
       isSuperadmin: false,
     });
 
@@ -34,6 +35,7 @@ describe("tenant-context.cache", () => {
     writeTenantContextCache(key, {
       tenantId: "t1",
       role: Role.TRANSPORT_STAFF,
+      roles: [],
       isSuperadmin: false,
     });
 

@@ -141,6 +141,9 @@ describe('AuthController.login', () => {
     expect(result.user.username).toBe('floor1');
     expect(result.activeTenantTimezone).toBe('Australia/Perth');
     expect(JSON.stringify(result)).not.toContain(AUTH_INTERNAL_EMAIL_DOMAIN);
+    expect(result.user.roles).toEqual(['WAREHOUSE_STAFF']);
+    expect(result.user.role).toBe(Role.WAREHOUSE);
+    expect(result.tenantMemberships?.[0]?.roles).toEqual(['WAREHOUSE_STAFF']);
   });
 
   it('normalizes username before lookup', async () => {
@@ -159,7 +162,7 @@ describe('AuthController.login', () => {
     );
   });
 
-  it('allows the same username in different tenants via tenantSlug', async () => {
+  it('treats tenantSlug as an optional membership filter, not a uniqueness domain', async () => {
     const emailB = `tenant-b.floor1@${AUTH_INTERNAL_EMAIL_DOMAIN}`;
     prisma.user.findMany.mockResolvedValue([
       {
@@ -206,6 +209,30 @@ describe('AuthController.login', () => {
     await expect(
       controller.login({ username: 'floor1', password: 'wrong' }),
     ).rejects.toThrow('Invalid username or password');
+  });
+
+  it('fail-closes if pre-migration duplicate usernames still resolve to multiple users', async () => {
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'user-a',
+        email: `tenant-a.floor1@${AUTH_INTERNAL_EMAIL_DOMAIN}`,
+        memberships: [
+          { status: MembershipStatus.Active, tenant: { slug: 'tenant-a' } },
+        ],
+      },
+      {
+        id: 'user-b',
+        email: `tenant-b.floor1@${AUTH_INTERNAL_EMAIL_DOMAIN}`,
+        memberships: [
+          { status: MembershipStatus.Active, tenant: { slug: 'tenant-b' } },
+        ],
+      },
+    ]);
+
+    await expect(
+      controller.login({ username: 'floor1', password: 'secret123' }),
+    ).rejects.toThrow('Invalid username or password');
+    expect(mockSignIn).not.toHaveBeenCalled();
   });
 
   it('rejects unknown username with generic error', async () => {
@@ -367,34 +394,294 @@ describe('AuthController.login', () => {
   });
 
   it('rejects platform-only admin on mobile clientApp', async () => {
-    mockSignIn.mockResolvedValue({
-      data: {
-        session: {
-          access_token: 'access',
-          refresh_token: 'refresh',
-          expires_at: 123,
-        },
-      },
-      error: null,
-    });
-    authService.verifyToken.mockResolvedValue({
-      userId: 'pa-user',
-      email: 'pa@opsflow.io',
-      role: 'SUPERADMIN',
-      isSuperadmin: true,
-    });
-    prisma.platformAdmin.findUnique.mockResolvedValue({
-      id: 'pa-1',
-      status: 'ACTIVE',
-    });
-    prisma.tenantMembership.findMany.mockResolvedValue([]);
-
     await expect(
       controller.login({
         email: 'pa@opsflow.io',
         password: 'secret123',
         clientApp: 'mobile',
       }),
-    ).rejects.toThrow(/mobile/i);
+    ).rejects.toThrow('Invalid username or password');
+    expect(mockSignIn).not.toHaveBeenCalled();
+  });
+
+  it('lets TRANSPORT_DRIVER log into Driver Mobile with username and password', async () => {
+    const internalEmail = `tenant-a.ahmad@${AUTH_INTERNAL_EMAIL_DOMAIN}`;
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'user-driver',
+        email: internalEmail,
+        memberships: [
+          { status: MembershipStatus.Active, tenant: { slug: 'tenant-a' } },
+        ],
+      },
+    ]);
+    mockSuccessfulSession('user-driver', internalEmail);
+    prisma.tenantMembership.findMany.mockResolvedValue([
+      {
+        tenantId: tenantA.id,
+        role: Role.DRIVER,
+        status: MembershipStatus.Active,
+        membershipRoles: [{ role: 'TRANSPORT_DRIVER' }],
+        tenant: {
+          id: tenantA.id,
+          name: tenantA.name,
+          status: 'ACTIVE',
+          timezone: tenantA.timezone,
+        },
+      },
+    ]);
+    prisma.user.findUnique.mockResolvedValue({
+      email: internalEmail,
+      username: 'ahmad',
+    });
+
+    const result = await controller.login({
+      username: 'Ahmad',
+      password: 'secret123',
+      clientApp: 'driver_mobile',
+    });
+
+    expect(mockSignIn).toHaveBeenCalledWith({
+      email: internalEmail,
+      password: 'secret123',
+    });
+    expect(result.user.username).toBe('ahmad');
+    expect(result.user.email).toBeNull();
+    expect(JSON.stringify(result)).not.toContain(AUTH_INTERNAL_EMAIL_DOMAIN);
+    expect(result.user.roles).toEqual(['TRANSPORT_DRIVER']);
+  });
+
+  it('keeps legacy DRIVER compatible on Driver Mobile', async () => {
+    const internalEmail = `tenant-a.legacy@${AUTH_INTERNAL_EMAIL_DOMAIN}`;
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'user-legacy',
+        email: internalEmail,
+        memberships: [
+          { status: MembershipStatus.Active, tenant: { slug: 'tenant-a' } },
+        ],
+      },
+    ]);
+    mockSuccessfulSession('user-legacy', internalEmail);
+    prisma.tenantMembership.findMany.mockResolvedValue([
+      {
+        tenantId: tenantA.id,
+        role: Role.DRIVER,
+        status: MembershipStatus.Active,
+        tenant: {
+          id: tenantA.id,
+          name: tenantA.name,
+          status: 'ACTIVE',
+          timezone: tenantA.timezone,
+        },
+      },
+    ]);
+    prisma.user.findUnique.mockResolvedValue({
+      email: internalEmail,
+      username: 'legacy',
+    });
+
+    const result = await controller.login({
+      username: 'legacy',
+      password: 'secret123',
+      clientApp: 'mobile',
+    });
+    expect(result.user.roles).toEqual(['TRANSPORT_DRIVER']);
+  });
+
+  it('does not accept email-only Driver Mobile login', async () => {
+    await expect(
+      controller.login({
+        email: 'driver@example.com',
+        password: 'secret123',
+        clientApp: 'driver_mobile',
+      }),
+    ).rejects.toThrow('Invalid username or password');
+    expect(mockSignIn).not.toHaveBeenCalled();
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+  });
+
+  it('denies TRANSPORT_DRIVER-only users on staff web', async () => {
+    const internalEmail = `tenant-a.ahmad@${AUTH_INTERNAL_EMAIL_DOMAIN}`;
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'user-driver',
+        email: internalEmail,
+        memberships: [
+          { status: MembershipStatus.Active, tenant: { slug: 'tenant-a' } },
+        ],
+      },
+    ]);
+    mockSuccessfulSession('user-driver', internalEmail);
+    prisma.tenantMembership.findMany.mockResolvedValue([
+      {
+        tenantId: tenantA.id,
+        role: Role.DRIVER,
+        status: MembershipStatus.Active,
+        membershipRoles: [{ role: 'TRANSPORT_DRIVER' }],
+        tenant: {
+          id: tenantA.id,
+          name: tenantA.name,
+          status: 'ACTIVE',
+          timezone: tenantA.timezone,
+        },
+      },
+    ]);
+
+    await expect(
+      controller.login({
+        username: 'ahmad',
+        password: 'secret123',
+        clientApp: 'web',
+      }),
+    ).rejects.toThrow('This account is for the Driver app only');
+  });
+
+  it('denies TRANSPORT_ADMIN-only users on Driver Mobile', async () => {
+    mockSuccessfulSession('user-ta', 'ops@example.com');
+    prisma.tenantMembership.findMany.mockResolvedValue([
+      {
+        tenantId: tenantA.id,
+        role: Role.TRANSPORT_STAFF,
+        status: MembershipStatus.Active,
+        membershipRoles: [{ role: 'TRANSPORT_ADMIN' }],
+        tenant: {
+          id: tenantA.id,
+          name: tenantA.name,
+          status: 'ACTIVE',
+          timezone: tenantA.timezone,
+        },
+      },
+    ]);
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'user-ta',
+        email: 'ops@example.com',
+        memberships: [
+          { status: MembershipStatus.Active, tenant: { slug: 'tenant-a' } },
+        ],
+      },
+    ]);
+
+    await expect(
+      controller.login({
+        username: 'ops',
+        password: 'secret123',
+        clientApp: 'driver_mobile',
+      }),
+    ).rejects.toThrow('Driver Mobile is only available to Transport Drivers');
+  });
+
+  it('denies TENANT_ADMIN-only users on Driver Mobile', async () => {
+    mockSuccessfulSession('user-admin', 'admin@example.com');
+    prisma.tenantMembership.findMany.mockResolvedValue([
+      {
+        tenantId: tenantA.id,
+        role: Role.ADMIN,
+        status: MembershipStatus.Active,
+        membershipRoles: [{ role: 'TENANT_ADMIN' }],
+        tenant: {
+          id: tenantA.id,
+          name: tenantA.name,
+          status: 'ACTIVE',
+          timezone: tenantA.timezone,
+        },
+      },
+    ]);
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'user-admin',
+        email: 'admin@example.com',
+        memberships: [
+          { status: MembershipStatus.Active, tenant: { slug: 'tenant-a' } },
+        ],
+      },
+    ]);
+
+    await expect(
+      controller.login({
+        username: 'admin',
+        password: 'secret123',
+        clientApp: 'driver_mobile',
+      }),
+    ).rejects.toThrow('Driver Mobile is only available to Transport Drivers');
+  });
+
+  it('lets TRANSPORT_DRIVER + TRANSPORT_ADMIN access Driver Mobile and staff web', async () => {
+    const internalEmail = `tenant-a.lead@${AUTH_INTERNAL_EMAIL_DOMAIN}`;
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'user-both',
+        email: internalEmail,
+        memberships: [
+          { status: MembershipStatus.Active, tenant: { slug: 'tenant-a' } },
+        ],
+      },
+    ]);
+    mockSuccessfulSession('user-both', internalEmail);
+    prisma.tenantMembership.findMany.mockResolvedValue([
+      {
+        tenantId: tenantA.id,
+        role: Role.TRANSPORT_STAFF,
+        status: MembershipStatus.Active,
+        membershipRoles: [
+          { role: 'TRANSPORT_DRIVER' },
+          { role: 'TRANSPORT_ADMIN' },
+        ],
+        tenant: {
+          id: tenantA.id,
+          name: tenantA.name,
+          status: 'ACTIVE',
+          timezone: tenantA.timezone,
+        },
+      },
+    ]);
+    prisma.user.findUnique.mockResolvedValue({
+      email: internalEmail,
+      username: 'lead',
+    });
+
+    const mobile = await controller.login({
+      username: 'lead',
+      password: 'secret123',
+      clientApp: 'driver_mobile',
+    });
+    expect(mobile.user.roles).toEqual(
+      expect.arrayContaining(['TRANSPORT_DRIVER', 'TRANSPORT_ADMIN']),
+    );
+
+    const web = await controller.login({
+      username: 'lead',
+      password: 'secret123',
+      clientApp: 'web',
+    });
+    expect(web.user.roles).toEqual(
+      expect.arrayContaining(['TRANSPORT_DRIVER', 'TRANSPORT_ADMIN']),
+    );
+  });
+
+  it('rejects suspended TRANSPORT_DRIVER on Driver Mobile', async () => {
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'user-suspended',
+        email: `tenant-a.ahmad@${AUTH_INTERNAL_EMAIL_DOMAIN}`,
+        memberships: [
+          {
+            status: MembershipStatus.Suspended,
+            tenant: { slug: 'tenant-a' },
+          },
+        ],
+      },
+    ]);
+
+    await expect(
+      controller.login({
+        username: 'ahmad',
+        password: 'secret123',
+        clientApp: 'driver_mobile',
+      }),
+    ).rejects.toThrow('Invalid username or password');
+    expect(mockSignIn).not.toHaveBeenCalled();
   });
 });
+

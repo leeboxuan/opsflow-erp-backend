@@ -1,30 +1,24 @@
 import { BadRequestException, ForbiddenException } from "@nestjs/common";
-import { Role, TenantModule } from "@prisma/client";
+import { CanonicalTenantRole, Role, TenantModule } from "@prisma/client";
+import {
+  moduleRequiredForCanonicalRole,
+  toCanonicalTenantRole,
+} from "./canonical-tenant-role";
+import { assertModulesEnabledForRoles } from "./tenant-role-assignment";
 
 /**
  * Map membership roles to the tenant module required to assign them.
  *
- * CUSTOMER: portal role — not bound to TRANSPORT/WAREHOUSING/FINANCE.
- * ADMIN: tenant administration — not module-bound (still needs TenantGuard).
- * DRIVER: provisioned via /admin/drivers (TRANSPORT domain) — not this helper.
+ * CUSTOMER / CUSTOMER_ADMIN: portal role — not bound to a tenant module.
+ * ADMIN / TENANT_ADMIN: tenant administration — not module-bound.
+ * DRIVER / TRANSPORT_DRIVER: provisioned via /admin/drivers (TRANSPORT).
  */
-export function moduleRequiredForRole(role: Role): TenantModule | null {
-  switch (role) {
-    case Role.TRANSPORT_STAFF:
-    case Role.OPS:
-      return TenantModule.TRANSPORT;
-    case Role.WAREHOUSE:
-      return TenantModule.WAREHOUSING;
-    case Role.FINANCE:
-      return TenantModule.FINANCE;
-    case Role.ADMIN:
-    case Role.CUSTOMER:
-      return null;
-    case Role.DRIVER:
-      return TenantModule.TRANSPORT;
-    default:
-      return null;
-  }
+export function moduleRequiredForRole(
+  role: Role | CanonicalTenantRole | string,
+): TenantModule | null {
+  const canonical = toCanonicalTenantRole(role);
+  if (!canonical) return null;
+  return moduleRequiredForCanonicalRole(canonical);
 }
 
 export type ModuleEntitlementLookup = {
@@ -38,39 +32,25 @@ export type ModuleEntitlementLookup = {
  * Reject role create/assign when the required module is disabled for the tenant.
  */
 export async function assertRoleAllowedByModuleEntitlement(
-  // PrismaService (or test doubles) — typed loosely for client version skew.
   prisma: any,
   tenantId: string,
-  role: Role,
+  role: Role | CanonicalTenantRole | string,
 ): Promise<void> {
-  const module = moduleRequiredForRole(role);
-  if (!module) return;
-
-  const lookup = prisma?.tenantModuleEntitlement as ModuleEntitlementLookup | undefined;
-  if (!lookup?.findUnique) {
-    throw new ForbiddenException(
-      `Cannot assign role ${role}: tenant module entitlement lookup unavailable`,
-    );
+  const canonical = toCanonicalTenantRole(role);
+  if (!canonical) {
+    throw new BadRequestException(`Unsupported role: ${String(role)}`);
   }
-
-  const row = await lookup.findUnique({
-    where: { tenantId_module: { tenantId, module } },
-    select: { enabled: true },
-  });
-  if (!row?.enabled) {
-    throw new ForbiddenException(
-      `Cannot assign role ${role}: tenant module ${module} is not enabled`,
-    );
-  }
+  await assertModulesEnabledForRoles(prisma, tenantId, [canonical]);
 }
 
-export function assertSupportedCreateRole(role: Role): void {
-  if (role === Role.DRIVER) {
+export function assertSupportedCreateRole(role: Role | string): void {
+  const canonical = toCanonicalTenantRole(role);
+  if (canonical === CanonicalTenantRole.TRANSPORT_DRIVER) {
     throw new BadRequestException("Use /admin/drivers to create drivers");
   }
-  if (role === Role.OPS) {
+  if (String(role).toUpperCase() === Role.OPS) {
     throw new BadRequestException(
-      "Cannot create OPS memberships; use TRANSPORT_STAFF",
+      "Cannot create OPS memberships; use TRANSPORT_ADMIN",
     );
   }
 }

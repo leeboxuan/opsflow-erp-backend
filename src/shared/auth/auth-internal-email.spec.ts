@@ -6,8 +6,8 @@ import {
 
 describe('auth-internal-email', () => {
   it('normalizes username casing and whitespace', () => {
-    expect(normalizeUsername('  Lee.Bo  ')).toBe('lee.bo');
-    expect(normalizeUsername('Lee Bo')).toBe('leebo');
+    expect(normalizeUsername('Driver.One')).toBe('driver.one');
+    expect(normalizeUsername('driver one')).toBe('driverone');
   });
 
   it('builds deterministic internal auth email', () => {

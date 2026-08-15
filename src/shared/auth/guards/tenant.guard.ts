@@ -21,6 +21,12 @@ import {
   buildRequestContext,
   readCorrelationId,
 } from "../request-context";
+import {
+  CanonicalTenantRole,
+  hasRole,
+  resolveCanonicalRoles,
+  toLegacyCompatibilityRole,
+} from "../canonical-tenant-role";
 
 /**
  * Resolves X-Tenant-Id into request.tenant for ordinary tenant APIs.
@@ -35,7 +41,7 @@ import {
  *   tenantSuspended: true + tenantStatus on request context.
  * - SETUP / ACTIVE: Platform Admin may operate; ordinary Active members allowed.
  * - ARCHIVED / unknown: rejected for operational routes.
- * - Effective role for Platform Admin ops is always ADMIN (RoleGuard centralizes).
+ * - Effective role for Platform Admin ops is always TENANT_ADMIN (RoleGuard centralizes).
  */
 @Injectable()
 export class TenantGuard implements CanActivate {
@@ -115,8 +121,9 @@ export class TenantGuard implements CanActivate {
 
       const tenantContext: CachedTenantContext = {
         tenantId: tenantIdHeader,
-        // ADMIN-class for RoleGuard; not a persisted membership.
+        // TENANT_ADMIN-class for RoleGuard; not a persisted membership.
         role: Role.ADMIN,
+        roles: [CanonicalTenantRole.TENANT_ADMIN],
         isSuperadmin: true,
         isPlatformAdmin: true,
         tenantSuspended,
@@ -153,6 +160,7 @@ export class TenantGuard implements CanActivate {
       },
       include: {
         tenant: true,
+        membershipRoles: { select: { role: true } },
       },
     });
 
@@ -183,9 +191,14 @@ export class TenantGuard implements CanActivate {
       throw new ForbiddenException("Tenant is archived");
     }
 
+    const canonicalRoles = resolveCanonicalRoles(membership);
+
     const tenantContext: CachedTenantContext = {
       tenantId: tenantIdHeader,
-      role: membership.role,
+      role:
+        toLegacyCompatibilityRole(canonicalRoles, membership.role) ??
+        membership.role,
+      roles: canonicalRoles,
       isSuperadmin: false,
       isPlatformAdmin: false,
       tenantSuspended: false,
@@ -193,7 +206,7 @@ export class TenantGuard implements CanActivate {
       authMode: AUTH_MODE.MEMBERSHIP,
     };
 
-    if (membership.role === Role.CUSTOMER) {
+    if (hasRole(canonicalRoles, CanonicalTenantRole.CUSTOMER_ADMIN)) {
       const u = await this.prisma.user.findUnique({
         where: { id: user.userId },
         select: { customerCompanyId: true, customerContactId: true },
@@ -201,7 +214,7 @@ export class TenantGuard implements CanActivate {
 
       if (!u?.customerCompanyId) {
         throw new ForbiddenException(
-          "CUSTOMER user is missing customerCompanyId. Admin must link them to a customer company.",
+          "CUSTOMER_ADMIN user is missing customerCompanyId. Admin must link them to a customer company.",
         );
       }
 
@@ -278,6 +291,7 @@ export class TenantGuard implements CanActivate {
       correlationId,
       platformTenantOperation: isPa && !!tenant.tenantId,
       membershipRole: isPa ? null : tenant.role,
+      membershipRoles: isPa ? [CanonicalTenantRole.TENANT_ADMIN] : tenant.roles,
     });
     attachRequestContext(request, ctx);
   }

@@ -6,25 +6,27 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { Role } from '@prisma/client';
-import { roleSatisfiesRequirement } from '../role-compat';
+import { CanonicalTenantRole, Role } from '@prisma/client';
+import { hasAnyRole, toCanonicalTenantRoles } from '../canonical-tenant-role';
 import {
   AUTH_MODE,
   isPlatformTenantOperation,
   readRequestContext,
 } from '../request-context';
 
-export const Roles = (...roles: Role[]) => SetMetadata('roles', roles);
+export type RoleRequirement = Role | CanonicalTenantRole | string;
+
+export const Roles = (...roles: RoleRequirement[]) => SetMetadata('roles', roles);
 
 /**
  * Role / permission guard for tenant-scoped routes.
  *
- * Phase 3: ACTIVE Platform Admin with a validated selected tenant receives
- * ADMIN-class effective permissions centrally here (and via request context
- * authMode=PLATFORM_TENANT_OPERATION). Controllers must not scatter
- * `platformAdmin || role` checks.
+ * Multi-role: @Roles(A, B) is ANY/OR — passes if the actor has either role.
+ * Legacy aliases (ADMIN≡TENANT_ADMIN, DRIVER≡TRANSPORT_DRIVER, …) are
+ * resolved centrally via hasAnyRole.
  *
- * Ordinary tenant-user authorization is unchanged (membership role only).
+ * Platform Admin operating a tenant receives TENANT_ADMIN-class authority
+ * without a synthetic TenantMembership.
  */
 @Injectable()
 export class RoleGuard implements CanActivate {
@@ -35,11 +37,11 @@ export class RoleGuard implements CanActivate {
     const requiredRoles = this.getRoles(context);
 
     if (!requiredRoles || requiredRoles.length === 0) {
-      return true; // No roles required
+      return true;
     }
 
     const tenant = request.tenant;
-    if (!tenant || !tenant.role) {
+    if (!tenant || (!tenant.role && !tenant.roles?.length)) {
       throw new ForbiddenException(
         'Tenant context not found. TenantGuard must be applied first.',
       );
@@ -52,12 +54,13 @@ export class RoleGuard implements CanActivate {
         !!tenant.tenantId &&
         tenant.authMode === AUTH_MODE.PLATFORM_TENANT_OPERATION);
 
-    // Centralized ADMIN-class effective role for platform tenant operation.
-    const userRole: Role = platformOps
-      ? Role.ADMIN
-      : (tenant.role as Role);
+    const userRoles = platformOps
+      ? [CanonicalTenantRole.TENANT_ADMIN]
+      : tenant.roles?.length
+        ? toCanonicalTenantRoles(tenant.roles)
+        : toCanonicalTenantRoles([tenant.role]);
 
-    if (!roleSatisfiesRequirement(userRole, requiredRoles)) {
+    if (!hasAnyRole(userRoles, requiredRoles)) {
       throw new ForbiddenException(
         `Required role: ${requiredRoles.join(' or ')}`,
       );
@@ -66,9 +69,9 @@ export class RoleGuard implements CanActivate {
     return true;
   }
 
-  private getRoles(context: ExecutionContext): Role[] {
+  private getRoles(context: ExecutionContext): RoleRequirement[] {
     return (
-      this.reflector.getAllAndOverride<Role[]>('roles', [
+      this.reflector.getAllAndOverride<RoleRequirement[]>('roles', [
         context.getHandler(),
         context.getClass(),
       ]) ?? []

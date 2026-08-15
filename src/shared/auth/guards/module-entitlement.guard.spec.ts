@@ -55,4 +55,27 @@ describe("ModuleEntitlementGuard", () => {
       ForbiddenException,
     );
   });
+
+  it("blocks disabled module even for Platform Admin operating a tenant", async () => {
+    const reflector = {
+      getAllAndOverride: () => [TenantModule.TRANSPORT],
+    } as any;
+    prisma.tenantModuleEntitlement.findUnique.mockResolvedValue({
+      enabled: false,
+    });
+    const guard = new ModuleEntitlementGuard(prisma, reflector);
+    const request = {
+      tenant: {
+        tenantId: "t1",
+        isPlatformAdmin: true,
+        authMode: "PLATFORM_TENANT_OPERATION",
+      },
+    };
+    const ctx = {
+      switchToHttp: () => ({ getRequest: () => request }),
+      getHandler: () => ({}),
+      getClass: () => ({}),
+    } as any;
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+  });
 });

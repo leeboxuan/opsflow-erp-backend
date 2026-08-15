@@ -94,7 +94,11 @@ model User {
   /// Supabase Auth user id (auth.users.id, UUID). Links JWT sub to this row; not the same as id (cuid).
   authUserId String? @unique
   email      String  @unique
-  /// Optional login username (warehouse / driver mobile). Uniqueness enforced per tenant in app logic.
+  /// Optional login username (warehouse / driver mobile).
+  /// Application persists canonical form via normalizeUsername (trim, lowercase, strip \s+).
+  /// Global uniqueness is NOT Prisma @unique on the raw column. PostgreSQL enforces
+  /// users_username_normalized_key: unique(lower(regexp_replace(username, '[[:space:]]+', '', 'g')))
+  /// WHERE username IS NOT NULL AND the expression is non-empty. Multiple NULLs remain valid.
   username   String?
   name       String?
   displayName String?
@@ -111,6 +115,7 @@ model User {
   drivers     drivers[]
   profiles    profiles?
   memberships TenantMembership[]
+  membershipRolesCreated TenantMembershipRole[] @relation("TenantMembershipRoleCreatedBy")
   platformAdmin PlatformAdmin?
   platformAdminsCreated PlatformAdmin[] @relation("PlatformAdminCreatedBy")
   platformAuditLogsAsActor PlatformAuditLog[] @relation("PlatformAuditActorUser")
@@ -150,7 +155,6 @@ model User {
   @@index([customerContactId])
   @@index([email])
   @@index([authUserId])
-  @@index([username])
   @@map("users")
 }
 
@@ -238,17 +242,36 @@ model TenantMembership {
   id        String           @id @default(cuid())
   tenantId  String
   userId    String
+  /// Transitional/legacy single-role column. Canonical authorization uses membershipRoles.
   role      Role
   status    MembershipStatus @default(Active)
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
   tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  membershipRoles TenantMembershipRole[]
 
   @@unique([tenantId, userId])
   @@index([tenantId, status])
   @@index([userId])
   @@map("tenant_memberships")
+}
+
+/// Canonical tenant authorization roles. A membership may hold many rows.
+/// PLATFORM_ADMIN is not a tenant membership role.
+model TenantMembershipRole {
+  id                 String              @id @default(cuid())
+  tenantMembershipId String
+  role               CanonicalTenantRole
+  createdAt          DateTime            @default(now())
+  createdByUserId    String?
+  membership         TenantMembership    @relation(fields: [tenantMembershipId], references: [id], onDelete: Cascade)
+  createdBy          User?               @relation("TenantMembershipRoleCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantMembershipId, role])
+  @@index([tenantMembershipId])
+  @@index([role])
+  @@map("tenant_membership_roles")
 }
 
 model TransportOrder {
@@ -1604,6 +1627,8 @@ model profiles {
   @@index([userId])
 }
 
+/// Legacy TenantMembership.role values. Transitional compatibility only.
+/// New authorization writes go to TenantMembershipRole + CanonicalTenantRole.
 enum Role {
   ADMIN
   // Deprecated compatibility alias for TRANSPORT_STAFF — do not assign to new memberships.
@@ -1613,6 +1638,17 @@ enum Role {
   DRIVER
   CUSTOMER
   WAREHOUSE
+}
+
+/// Canonical tenant RBAC roles stored on TenantMembershipRole.
+enum CanonicalTenantRole {
+  TENANT_ADMIN
+  TRANSPORT_ADMIN
+  TRANSPORT_DRIVER
+  FINANCE_ADMIN
+  WAREHOUSE_ADMIN
+  WAREHOUSE_STAFF
+  CUSTOMER_ADMIN
 }
 
 enum MembershipStatus {

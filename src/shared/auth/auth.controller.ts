@@ -23,10 +23,18 @@ import { PrismaService } from '../prisma/prisma.service';
 import { getUserAvatarSignedUrl } from '../users/user-avatar';
 import { SkipTenantGuard } from './guards/skip-tenant-guard.decorator';
 import {
-  normalizeUsername,
   publicEmailOrNull,
 } from './auth-internal-email';
+import { findUsernameLoginCandidates } from './username-uniqueness';
 import { getSafeTenantTimezone } from '../common/tenant-timezone';
+import { toMembershipAuthDto } from './membership-auth-payload';
+import {
+  canAccessDriverMobile,
+  canAccessStaffWeb,
+  isDriverMobileClientApp,
+  isStaffWebClientApp,
+} from './access-surface';
+import { resolveCanonicalRoles } from './canonical-tenant-role';
 
 const USERNAME_LOGIN_ERROR = 'Invalid username or password';
 const EMAIL_LOGIN_ERROR = 'Invalid email or password';
@@ -54,10 +62,17 @@ export class AuthController {
       throw new UnauthorizedException('Supabase configuration is missing. SUPABASE_ANON_KEY is required for login.');
     }
 
+    const clientApp = (dto.clientApp ?? '').trim().toLowerCase();
+    const isDriverMobile = isDriverMobileClientApp(clientApp);
     const usernameRaw = dto.username?.trim();
-    const emailRaw = dto.email?.trim();
+    const emailRaw = isDriverMobile ? undefined : dto.email?.trim();
     const isUsernameLogin = Boolean(usernameRaw) && !emailRaw;
-    const loginError = isUsernameLogin ? USERNAME_LOGIN_ERROR : EMAIL_LOGIN_ERROR;
+
+    if (isDriverMobile && !usernameRaw) {
+      throw new UnauthorizedException(USERNAME_LOGIN_ERROR);
+    }
+
+    const loginError = isUsernameLogin || isDriverMobile ? USERNAME_LOGIN_ERROR : EMAIL_LOGIN_ERROR;
 
     if (!usernameRaw && !emailRaw) {
       throw new UnauthorizedException(loginError);
@@ -123,8 +138,10 @@ export class AuthController {
             name: true,
             status: true,
             timezone: true,
+            moduleEntitlements: { select: { module: true, enabled: true } },
           },
         },
+        membershipRoles: { select: { role: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -153,16 +170,35 @@ export class AuthController {
     }
 
     // Platform-only (zero memberships): allowed for web; rejected for mobile clients.
-    const clientApp = (dto.clientApp ?? '').trim().toLowerCase();
     if (
       isPlatformAdmin &&
       visibleMemberships.length === 0 &&
-      (clientApp === 'mobile' ||
-        clientApp === 'driver_mobile' ||
+      (isDriverMobile ||
         clientApp === 'warehouse_mobile')
     ) {
       throw new UnauthorizedException(
         'Platform admin accounts are not available on mobile apps',
+      );
+    }
+
+    const sessionRoles = visibleMemberships.flatMap((membership) =>
+      resolveCanonicalRoles(membership),
+    );
+
+    if (isDriverMobile && !canAccessDriverMobile(sessionRoles)) {
+      throw new UnauthorizedException(
+        'Driver Mobile is only available to Transport Drivers',
+      );
+    }
+
+    if (
+      isStaffWebClientApp(clientApp) &&
+      !isPlatformAdmin &&
+      sessionRoles.length > 0 &&
+      !canAccessStaffWeb(sessionRoles)
+    ) {
+      throw new UnauthorizedException(
+        'This account is for the Driver app only',
       );
     }
 
@@ -173,11 +209,16 @@ export class AuthController {
       select: { email: true, username: true },
     });
 
+    const activeAuth = activeMembership
+      ? toMembershipAuthDto(activeMembership)
+      : null;
+
     const user = {
       id: authUser.userId,
       email: publicEmailOrNull(dbUser?.email ?? authUser.email),
       username: dbUser?.username ?? null,
-      role: activeMembership?.role ?? null,
+      role: activeAuth?.role ?? null,
+      roles: activeAuth?.roles ?? [],
       tenantId: activeMembership?.tenantId ?? undefined,
     };
 
@@ -190,15 +231,9 @@ export class AuthController {
       activeTenantTimezone: activeMembership
         ? getSafeTenantTimezone(activeMembership.tenant.timezone)
         : null,
-      tenantMemberships: visibleMemberships.map((membership) => ({
-        tenantId: membership.tenantId,
-        role: membership.role,
-        status: membership.status,
-        tenant: {
-          id: membership.tenant.id,
-          name: membership.tenant.name,
-        },
-      })),
+      tenantMemberships: visibleMemberships.map((membership) =>
+        toMembershipAuthDto(membership),
+      ),
       platformAdmin: platformAdminPayload,
     };
   }
@@ -226,40 +261,14 @@ export class AuthController {
     usernameRaw: string,
     tenantSlug?: string,
   ): Promise<{ authEmail: string; userId: string } | null> {
-    const username = normalizeUsername(usernameRaw);
-    if (!username) return null;
-
-    const slug = tenantSlug?.trim().toLowerCase() || null;
-
-    const candidates = await this.prisma.user.findMany({
-      where: {
-        username,
-        memberships: {
-          some: {
-            ...(slug
-              ? { tenant: { slug } }
-              : {}),
-          },
-        },
-      },
-      select: {
-        id: true,
-        email: true,
-        memberships: {
-          where: slug
-            ? { tenant: { slug } }
-            : undefined,
-          select: {
-            status: true,
-            tenant: { select: { slug: true } },
-          },
-        },
-      },
-      take: 5,
-    });
+    const candidates = await findUsernameLoginCandidates(
+      this.prisma,
+      usernameRaw,
+      tenantSlug,
+    );
 
     if (candidates.length === 0) return null;
-    if (!slug && candidates.length > 1) return null;
+    if (!tenantSlug?.trim() && candidates.length > 1) return null;
 
     const user = candidates[0];
     const membership = user.memberships[0];
@@ -366,23 +375,18 @@ export class AuthController {
             name: true,
             status: true,
             timezone: true,
+            moduleEntitlements: { select: { module: true, enabled: true } },
           },
         },
+        membershipRoles: { select: { role: true } },
       },
       orderBy: {
         createdAt: 'desc',
       },
     });
-    const tenantMemberships = memberships.map((membership) => ({
-      tenantId: membership.tenantId,
-      role: membership.role,
-      status: membership.status,
-      tenant: {
-        id: membership.tenant.id,
-        name: membership.tenant.name,
-        status: (membership.tenant as any).status ?? undefined,
-      },
-    }));
+    const tenantMemberships = memberships.map((membership) =>
+      toMembershipAuthDto(membership),
+    );
 
     const avatarUrl = await getUserAvatarSignedUrl({
       supabaseService: this.supabaseService,
@@ -409,6 +413,16 @@ export class AuthController {
         publicEmailOrNull(user.email) ??
         null,
       role: effectiveRole,                // global app role, never null
+      roles:
+        tenantMemberships.find(
+          (m) =>
+            m.tenantId ===
+            (typeof req.headers?.['x-tenant-id'] === 'string'
+              ? req.headers['x-tenant-id']
+              : tenantMemberships[0]?.tenantId),
+        )?.roles ??
+        tenantMemberships[0]?.roles ??
+        [],
       authUserId: (user as any).authUserId, // Supabase auth user id
       tenantId: undefined,
       avatarUrl,

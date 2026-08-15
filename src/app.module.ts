@@ -30,6 +30,7 @@ import { FleetTrackingModule } from "./transport/fleet/tracking/fleet-tracking.m
 import { PlatformModule } from "./platform/platform.module";
 import { PlatformTenantMutationAuditInterceptor } from "./shared/audit/platform-tenant-mutation-audit.interceptor";
 import { RejectUntrustedTenantIdInterceptor } from "./shared/auth/reject-untrusted-tenant-id.interceptor";
+import { AccessSurfaceInterceptor } from "./shared/auth/guards/access-surface.guard";
 import { StatisticsModule } from "./statistics/statistics.module";
 
 @Module({
@@ -71,6 +72,10 @@ import { StatisticsModule } from "./statistics/statistics.module";
     {
       provide: APP_INTERCEPTOR,
       useClass: RejectUntrustedTenantIdInterceptor,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: AccessSurfaceInterceptor,
     },
     {
       provide: APP_INTERCEPTOR,

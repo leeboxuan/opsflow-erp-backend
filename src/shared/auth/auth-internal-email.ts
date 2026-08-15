@@ -4,8 +4,12 @@ export const AUTH_INTERNAL_EMAIL_DOMAIN = 'auth.opsflow.app';
 const USERNAME_PATTERN = /^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$/;
 
 /**
- * Normalize a login username: trim, lowercase, collapse internal whitespace to none.
- * Allowed chars after normalize: a-z, 0-9, `.`, `_`, `-` (no leading/trailing separators).
+ * Canonical form used for create, login, uniqueness, and audit SQL:
+ * trim, lowercase, strip every JS `\s+` run (spaces, tabs, newlines, and other
+ * JS whitespace). PostgreSQL enforces the same practical ASCII identity with
+ * `lower(regexp_replace(username, '[[:space:]]+', '', 'g'))`.
+ * JS `\s` includes additional Unicode separators (e.g. NBSP) that POSIX
+ * `[[:space:]]` may not; OpsFlow usernames are ASCII `[a-z0-9._-]`.
  */
 export function normalizeUsername(raw: string): string {
   return String(raw ?? '')

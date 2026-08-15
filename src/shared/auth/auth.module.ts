@@ -8,6 +8,7 @@ import { RoleGuard } from './guards/role.guard';
 import { PlatformAdminGuard } from './guards/platform-admin.guard';
 import { ModuleEntitlementGuard } from './guards/module-entitlement.guard';
 import { DestructiveActionGuard } from './guards/destructive-action.guard';
+import { StaffWebGuard } from './guards/staff-web.guard';
 import { PrismaModule } from '../prisma/prisma.module';
 
 /**
@@ -35,6 +36,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     PlatformAdminGuard,
     ModuleEntitlementGuard,
     DestructiveActionGuard,
+    StaffWebGuard,
   ],
   exports: [
     AuthService,
@@ -45,6 +47,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     PlatformAdminGuard,
     ModuleEntitlementGuard,
     DestructiveActionGuard,
+    StaffWebGuard,
   ],
 })
 export class AuthModule {}

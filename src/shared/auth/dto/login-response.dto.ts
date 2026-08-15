@@ -16,7 +16,9 @@ export class LoginResponseDto {
     id: string;
     email: string | null;
     username?: string | null;
+    /** @deprecated Singular compatibility projection. Use `roles`. */
     role: Role | null;
+    roles?: string[];
     tenantId?: string;
   };
 
@@ -36,6 +38,7 @@ export class LoginResponseDto {
   tenantMemberships?: Array<{
     tenantId: string;
     role: Role;
+    roles?: string[];
     status: string;
     tenant: {
       id: string;
