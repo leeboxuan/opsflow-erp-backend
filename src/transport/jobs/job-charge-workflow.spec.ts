@@ -1652,7 +1652,9 @@ describe("job charge workflow hardening", () => {
           subtotalCents: 1000,
           taxCents: 90,
           totalCents: 1090,
-          status: "Draft",
+          status: "GENERATED",
+          pdfKey: "invoices/inv1.pdf",
+          pdfGeneratedAt: new Date("2026-04-29T00:30:00.000Z"),
           snapshot: { orderIds: [], sourceJobIds: ["job1"] },
           lineItems: [{ jobChargeId: "jc1" }],
         }),
@@ -1667,7 +1669,7 @@ describe("job charge workflow hardening", () => {
           subtotalCents: 1000,
           taxCents: 90,
           totalCents: 1090,
-          status: "Sent",
+          status: "ISSUED",
           snapshot: { orderIds: [], sourceJobIds: ["job1"] },
           lineItems: [{ jobChargeId: "jc1" }],
           orders: [],
@@ -1685,7 +1687,7 @@ describe("job charge workflow hardening", () => {
       invoiceChargeReservation: {
         findMany: jest.fn().mockImplementation((args: any) => {
           if (args?.where?.invoiceId?.not) return [];
-          return [{ jobChargeId: "jc1", invoice: { status: "Sent" } }];
+          return [{ jobChargeId: "jc1", invoice: { status: "ISSUED" } }];
         }),
         createMany: jest.fn().mockResolvedValue({ count: 1 }),
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),

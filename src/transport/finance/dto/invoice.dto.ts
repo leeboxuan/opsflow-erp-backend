@@ -187,7 +187,8 @@ export class InvoiceDto {
   @ApiPropertyOptional() paidByUserId?: string | null;
   @ApiPropertyOptional() templateCode?: string;
   @ApiProperty() currency: string;
-  @ApiProperty() status: string;
+  @ApiProperty({ enum: ["DRAFT", "GENERATED", "ISSUED", "PAID", "VOID"] })
+  status: string;
 
   @ApiProperty() issueDate: Date;
   @ApiPropertyOptional() dueDate?: Date | null;
@@ -218,6 +219,10 @@ export class InvoiceDto {
   @ApiPropertyOptional() confirmedAt?: Date | null;
   @ApiPropertyOptional() confirmedByUserId?: string | null;
   @ApiPropertyOptional() confirmedByName?: string | null;
+
+  @ApiPropertyOptional() issuedAt?: Date | null;
+  @ApiPropertyOptional() issuedByUserId?: string | null;
+  @ApiPropertyOptional() issuedByName?: string | null;
 
   @ApiPropertyOptional() markedAsSentAt?: Date | null;
   @ApiPropertyOptional() markedAsSentByUserId?: string | null;

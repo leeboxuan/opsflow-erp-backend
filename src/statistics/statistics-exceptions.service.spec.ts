@@ -355,7 +355,7 @@ describe("StatisticsExceptionsService categories", () => {
     expect(prisma.invoice.findMany.mock.calls[0][0].where).toMatchObject({
       tenantId: "tenant-1",
       sourceJobId: { in: ["job-open", "job-invoiced"] },
-      status: { in: ["Sent", "Issued", "Paid"] },
+      status: { in: ["ISSUED", "PAID"] },
     });
   });
 

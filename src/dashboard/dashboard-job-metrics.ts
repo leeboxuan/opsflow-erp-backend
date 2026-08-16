@@ -1,10 +1,10 @@
 import { JobStatus, Prisma } from "@prisma/client";
 
-/** Invoice statuses that mean the job has a generated/saved invoice (see finance InvoicesService). */
-export const INVOICED_INVOICE_STATUSES = ["Sent", "Issued", "Paid"] as const;
+/** Officially invoiced: ISSUED or PAID. GENERATED is frozen but not issued. */
+export const INVOICED_INVOICE_STATUSES = ["ISSUED", "PAID"] as const;
 
 /**
- * Shared READY_FOR_INVOICE − Sent/Issued/Paid predicate (tenant-scoped on job and invoice).
+ * Shared READY_FOR_INVOICE − ISSUED/PAID predicate (tenant-scoped on job and invoice).
  * Used by Phase 1 KPI count and Phase 2 attention list.
  */
 export function readyForInvoiceNotInvoicedCountSql(tenantId: string) {

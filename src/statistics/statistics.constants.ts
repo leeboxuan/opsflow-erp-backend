@@ -12,23 +12,11 @@ export const ACTIVE_TRIP_STATUSES = [
   TripStatus.ONGOING,
 ] as const satisfies readonly TripStatus[];
 
-/**
- * Product knob: keep Issued explicit until product confirms whether it remains
- * a live status alongside Sent. The default matches the current dashboard and
- * invoice service behavior.
- */
-export const INCLUDE_ISSUED_IN_RECOGNIZED_INVOICE_STATUSES = true;
-export const ISSUED_INVOICE_STATUS = "Issued" as const;
-export const RECOGNIZED_INVOICE_STATUSES_WITHOUT_ISSUED = [
-  "Sent",
-  "Paid",
-] as const;
+export const ISSUED_INVOICE_STATUS = "ISSUED" as const;
 export const RECOGNIZED_INVOICE_STATUSES: readonly string[] =
-  INCLUDE_ISSUED_IN_RECOGNIZED_INVOICE_STATUSES
-    ? INVOICED_INVOICE_STATUSES
-    : RECOGNIZED_INVOICE_STATUSES_WITHOUT_ISSUED;
+  INVOICED_INVOICE_STATUSES;
 
-export const EXCLUDED_INVOICE_STATUSES = ["Draft", "Void"] as const;
+export const EXCLUDED_INVOICE_STATUSES = ["DRAFT", "GENERATED", "VOID"] as const;
 
 export const DEFAULT_PAYOUT_CURRENCY = DEFAULT_DRIVER_EARNING_CURRENCY;
 

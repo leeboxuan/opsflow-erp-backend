@@ -65,7 +65,10 @@ describe("InvoicesController Finance RBAC", () => {
     expect(handlerRoles("uploadPdf")).toEqual([...FINANCE_INVOICE_ROLES]);
     expect(handlerRoles("getDownloadUrl")).toEqual([...FINANCE_INVOICE_ROLES]);
     expect(handlerRoles("voidInvoice")).toEqual([...FINANCE_INVOICE_ROLES]);
-    expect(handlerRoles("revertToDraft")).toEqual([...FINANCE_INVOICE_ROLES]);
+    expect(InvoicesController.prototype).not.toHaveProperty("revertToDraft");
+    expect(
+      Object.getOwnPropertyNames(InvoicesController.prototype).join(" "),
+    ).not.toMatch(/revert/i);
     for (const method of [
       "create",
       "createDraft",

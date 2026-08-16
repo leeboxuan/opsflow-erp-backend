@@ -143,7 +143,7 @@ describe("DashboardService Attention (Phase 2)", () => {
           entityId: "job-ready",
           title: "Ready to invoice",
           reason:
-            "Job is ready for invoice but has no Sent, Issued, or Paid invoice.",
+            "Job is ready for invoice but has no ISSUED or PAID invoice.",
           occurredAt: "2026-08-01T00:00:00.000Z",
           dueAt: null,
           href: "/invoices/create?jobId=job-ready",
@@ -245,7 +245,7 @@ describe("DashboardService Attention (Phase 2)", () => {
       String(call[0]?.strings?.join("") ?? "").includes('j."invoiceReadyAt"'),
     );
     expect(listCalls).toHaveLength(1);
-    expect([...INVOICED_INVOICE_STATUSES]).toEqual(["Sent", "Issued", "Paid"]);
+    expect([...INVOICED_INVOICE_STATUSES]).toEqual(["ISSUED", "PAID"]);
   });
 
   it("keeps exact totals when returned items are capped", async () => {

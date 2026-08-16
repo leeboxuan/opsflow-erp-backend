@@ -3,7 +3,6 @@ import { JobStatus } from "@prisma/client";
 import { InvoicesService } from "./invoices.service";
 import {
   canMarkInvoicePaid,
-  canRevertInvoiceToDraft,
   INVOICE_STATUS,
   isInvoiceDraft,
   isInvoicePaid,
@@ -14,19 +13,19 @@ import {
 } from "./invoice-integrity";
 
 describe("invoice integrity helpers", () => {
-  it("classifies runtime statuses without treating Issued as gone", () => {
-    expect(isInvoiceDraft("Draft")).toBe(true);
-    expect(isInvoiceRecognized("Sent")).toBe(true);
-    expect(isInvoiceRecognized("Issued")).toBe(true);
-    expect(isInvoiceRecognized("Paid")).toBe(true);
-    expect(isInvoiceRecognized("Draft")).toBe(false);
-    expect(isInvoiceReserving("Draft")).toBe(true);
-    expect(isInvoiceReserving("Void")).toBe(false);
-    expect(isInvoicePaid("Paid")).toBe(true);
-    expect(isInvoiceVoid("Void")).toBe(true);
-    expect(canMarkInvoicePaid("Sent")).toBe(true);
-    expect(canMarkInvoicePaid("Draft")).toBe(false);
-    expect(canRevertInvoiceToDraft("Paid")).toBe(false);
+  it("classifies canonical statuses without Sent", () => {
+    expect(isInvoiceDraft("DRAFT")).toBe(true);
+    expect(isInvoiceRecognized("ISSUED")).toBe(true);
+    expect(isInvoiceRecognized("PAID")).toBe(true);
+    expect(isInvoiceRecognized("GENERATED")).toBe(false);
+    expect(isInvoiceRecognized("DRAFT")).toBe(false);
+    expect(isInvoiceReserving("DRAFT")).toBe(true);
+    expect(isInvoiceReserving("VOID")).toBe(false);
+    expect(isInvoicePaid("PAID")).toBe(true);
+    expect(isInvoiceVoid("VOID")).toBe(true);
+    expect(canMarkInvoicePaid("ISSUED")).toBe(true);
+    expect(canMarkInvoicePaid("GENERATED")).toBe(false);
+    expect(canMarkInvoicePaid("DRAFT")).toBe(false);
   });
 });
 
@@ -52,7 +51,7 @@ describe("InvoicesService charge-level integrity", () => {
     const createdInvoice = {
       id: "inv-1",
       invoiceNo: "INV-202608-0001",
-      status: "Draft",
+      status: "DRAFT",
       sourceJobId: "job-a",
       sourceCustomerQuotationId: "qt-1",
       snapshot: { sourceJobIds: ["job-a"] },
@@ -303,11 +302,11 @@ describe("InvoicesService charge-level integrity", () => {
     });
   });
 
-  it("voids a Sent invoice and releases JobCharge reservations", async () => {
+  it("voids an ISSUED invoice and releases JobCharge reservations", async () => {
     const inv = {
       id: "inv-1",
       invoiceNo: "INV-1",
-      status: "Sent",
+      status: "ISSUED",
       sourceJobId: "job-a",
       snapshot: { sourceJobIds: ["job-a"] },
       lineItems: [{ jobChargeId: "jc-a" }],
@@ -317,7 +316,7 @@ describe("InvoicesService charge-level integrity", () => {
         findFirst: jest.fn().mockResolvedValue(inv),
         update: jest.fn().mockResolvedValue({
           ...inv,
-          status: "Void",
+          status: "VOID",
           lineItems: inv.lineItems,
           orders: [],
         }),
@@ -332,38 +331,14 @@ describe("InvoicesService charge-level integrity", () => {
       "INVOICE_VOIDED",
       "INVOICE",
       "inv-1",
-      expect.objectContaining({ previousStatus: "Sent", status: "Void" }),
+      expect.objectContaining({ previousStatus: "ISSUED", status: "VOID" }),
       "u1",
     );
   });
 
-  it("keeps charge reservations when reverting Sent to Draft", async () => {
-    const inv = {
-      id: "inv-1",
-      invoiceNo: "INV-1",
-      status: "Sent",
-      sourceJobId: "job-a",
-      issuedByUserId: "u1",
-      snapshot: { sourceJobIds: ["job-a"], orderIds: [] },
-      lineItems: [{ jobChargeId: "jc-a" }],
-      orders: [],
-    };
-    const { svc, prisma } = makeService({
-      invoice: {
-        findFirst: jest.fn().mockResolvedValue(inv),
-        update: jest.fn().mockResolvedValue({
-          ...inv,
-          status: "Draft",
-          lineItems: inv.lineItems,
-          orders: [],
-        }),
-      },
-      transportOrder: { updateMany: jest.fn() },
-    });
-    await svc.revertInvoiceToDraft("t1", "inv-1", actor);
-    expect(prisma.invoiceChargeReservation.createMany).toHaveBeenCalledWith({
-      data: [{ tenantId: "t1", invoiceId: "inv-1", jobChargeId: "jc-a" }],
-    });
+  it("rejects GENERATED/ISSUED revert because the service method is retired", () => {
+    const { svc } = makeService();
+    expect((svc as any).revertInvoiceToDraft).toBeUndefined();
   });
 
   it("rejects Draft → Paid and Void → Paid", async () => {
@@ -371,21 +346,21 @@ describe("InvoicesService charge-level integrity", () => {
       invoice: {
         findFirst: jest.fn().mockResolvedValue({
           id: "inv-1",
-          status: "Draft",
+          status: "DRAFT",
           lineItems: [],
         }),
       },
     });
     await expect(svc.markInvoicePaid("t1", "inv-1", actor)).rejects.toThrow(
-      "Only Sent/Issued invoices can be marked Paid",
+      "Only ISSUED invoices can be marked PAID",
     );
   });
 
-  it("marks Sent invoices Paid with paidAt and audit", async () => {
+  it("marks ISSUED invoices Paid with paidAt and audit", async () => {
     const inv = {
       id: "inv-1",
       invoiceNo: "INV-1",
-      status: "Sent",
+      status: "ISSUED",
       lineItems: [{ jobChargeId: "jc-a" }],
     };
     const { svc, prisma, audit } = makeService({
@@ -411,8 +386,8 @@ describe("InvoicesService charge-level integrity", () => {
       "INVOICE",
       "inv-1",
       expect.objectContaining({
-        previousStatus: "Sent",
-        status: "Paid",
+        previousStatus: "ISSUED",
+        status: "PAID",
         actorUserId: "u1",
       }),
       "u1",
@@ -429,19 +404,175 @@ describe("InvoicesService charge-level integrity", () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it("rejects reverting a Paid invoice to Draft", async () => {
+  it("rejects GENERATED without frozen PDF metadata on issue", async () => {
     const { svc } = makeService({
       invoice: {
         findFirst: jest.fn().mockResolvedValue({
           id: "inv-1",
-          status: "Paid",
+          status: "GENERATED",
+          pdfKey: null,
+          pdfGeneratedAt: null,
           lineItems: [],
-          orders: [],
         }),
       },
     });
-    await expect(svc.revertInvoiceToDraft("t1", "inv-1", actor)).rejects.toThrow(
-      "Paid invoices cannot be reverted to Draft",
+    await expect(svc.issueInvoice("t1", "inv-1", actor)).rejects.toThrow(
+      "Invoice GENERATED status is missing consistent frozen PDF metadata",
     );
+  });
+
+  it("rejects DRAFT → ISSUED without generation and GENERATED → PAID without issue", async () => {
+    const { svc } = makeService({
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "inv-1",
+          status: "DRAFT",
+          lineItems: [],
+        }),
+      },
+    });
+    await expect(svc.issueInvoice("t1", "inv-1", actor)).rejects.toThrow(
+      "Invoice must be GENERATED before it can be ISSUED",
+    );
+    const generated = makeService({
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "inv-1",
+          status: "GENERATED",
+          lineItems: [],
+        }),
+      },
+    });
+    await expect(generated.svc.markInvoicePaid("t1", "inv-1", actor)).rejects.toThrow(
+      "Only ISSUED invoices can be marked PAID",
+    );
+  });
+
+  it("rejects PAID → VOID", async () => {
+    const { svc } = makeService({
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "inv-1",
+          status: "PAID",
+          lineItems: [],
+        }),
+      },
+    });
+    await expect(svc.voidInvoice("t1", "inv-1", actor)).rejects.toThrow(
+      "Paid invoices cannot be voided in this phase",
+    );
+  });
+
+  it("rejects issue from PAID and VOID", async () => {
+    for (const status of ["PAID", "VOID"]) {
+      const { svc } = makeService({
+        invoice: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "inv-1",
+            status,
+            pdfKey: "frozen.pdf",
+            pdfGeneratedAt: new Date(),
+            lineItems: [],
+          }),
+        },
+      });
+      await expect(svc.issueInvoice("t1", "inv-1", actor)).rejects.toThrow(
+        "Invoice must be GENERATED before it can be ISSUED",
+      );
+    }
+  });
+
+  it("issues GENERATED invoices with a frozen PDF and is idempotent when already ISSUED", async () => {
+    const generated = {
+      id: "inv-1",
+      invoiceNo: "INV-1",
+      status: "GENERATED",
+      pdfKey: "invoices/inv-1.pdf",
+      pdfGeneratedAt: new Date(),
+      sourceJobId: "job-a",
+      snapshot: { orderIds: [], sourceJobIds: ["job-a"] },
+      lineItems: [{ jobChargeId: "jc-a" }],
+    };
+    const { svc, prisma, audit } = makeService({
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(generated),
+        update: jest.fn().mockImplementation(({ data }: any) => ({
+          ...generated,
+          ...data,
+          orders: [],
+        })),
+      },
+    });
+    await svc.issueInvoice("t1", "inv-1", actor);
+    expect(prisma.invoice.update.mock.calls[0][0].data.status).toBe("ISSUED");
+    expect(prisma.invoice.update.mock.calls[0][0].data.sentAt).toBeUndefined();
+    expect(audit.log).toHaveBeenCalledWith(
+      "t1",
+      "INVOICE_ISSUED",
+      "INVOICE",
+      "inv-1",
+      expect.objectContaining({
+        previousStatus: "GENERATED",
+        status: "ISSUED",
+      }),
+      "u1",
+    );
+
+    const issuedSvc = makeService();
+    issuedSvc.prisma.invoice.findFirst.mockResolvedValue({
+      ...generated,
+      status: "ISSUED",
+    });
+    await issuedSvc.svc.issueInvoice("t1", "inv-1", actor);
+    expect(issuedSvc.prisma.invoice.update).not.toHaveBeenCalled();
+    expect(issuedSvc.audit.log).not.toHaveBeenCalled();
+  });
+
+  it("rejects edits after DRAFT", async () => {
+    for (const status of ["GENERATED", "ISSUED", "PAID", "VOID"]) {
+      const { svc } = makeService({
+        invoice: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: "inv-1",
+            status,
+            snapshot: {},
+            lineItems: [],
+            orders: [],
+          }),
+        },
+      });
+      await expect(
+        svc.updateDraftInvoice(
+          "t1",
+          "inv-1",
+          { customerName: "Acme", lineItems: [] } as any,
+          actor,
+        ),
+      ).rejects.toThrow("Only DRAFT invoices can be updated");
+    }
+  });
+
+  it("is idempotent for paid and void repeats", async () => {
+    const paidSvc = makeService();
+    paidSvc.prisma.invoice.findFirst.mockResolvedValue({
+      id: "inv-1",
+      invoiceNo: "INV-1",
+      status: "PAID",
+      lineItems: [],
+    });
+    await paidSvc.svc.markInvoicePaid("t1", "inv-1", actor);
+    expect(paidSvc.prisma.invoice.update).not.toHaveBeenCalled();
+    expect(paidSvc.audit.log).not.toHaveBeenCalled();
+
+    const voidSvc = makeService();
+    voidSvc.prisma.invoice.findFirst.mockResolvedValue({
+      id: "inv-1",
+      invoiceNo: "INV-1",
+      status: "VOID",
+      lineItems: [],
+    });
+    await voidSvc.svc.voidInvoice("t1", "inv-1", actor);
+    expect(voidSvc.prisma.invoice.update).not.toHaveBeenCalled();
+    expect(voidSvc.audit.log).not.toHaveBeenCalled();
   });
 });

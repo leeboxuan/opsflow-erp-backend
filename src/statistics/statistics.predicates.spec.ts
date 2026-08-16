@@ -579,7 +579,7 @@ describe("Statistics V1 canonical predicates", () => {
   });
 
   it("keeps recommended invoice status knobs named and unchanged", () => {
-    expect(RECOGNIZED_INVOICE_STATUSES).toEqual(["Sent", "Issued", "Paid"]);
-    expect(EXCLUDED_INVOICE_STATUSES).toEqual(["Draft", "Void"]);
+    expect(RECOGNIZED_INVOICE_STATUSES).toEqual(["ISSUED", "PAID"]);
+    expect(EXCLUDED_INVOICE_STATUSES).toEqual(["DRAFT", "GENERATED", "VOID"]);
   });
 });

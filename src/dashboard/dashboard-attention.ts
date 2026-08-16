@@ -129,7 +129,7 @@ export function buildReadyNotInvoicedItem(input: {
     entityId: input.id,
     title: "Ready to invoice",
     reason:
-      "Job is ready for invoice but has no Sent, Issued, or Paid invoice.",
+      "Job is ready for invoice but has no ISSUED or PAID invoice.",
     occurredAt,
     dueAt: null,
     href: `/invoices/create?jobId=${input.id}`,

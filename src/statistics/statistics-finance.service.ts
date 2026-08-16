@@ -436,7 +436,7 @@ export class StatisticsFinanceService {
           by: ["currency"],
           where: {
             tenantId,
-            status: "Paid",
+            status: "PAID",
             paidAt: { gte: range.gte, lt: range.lt },
             ...sourceJobWhere,
           },

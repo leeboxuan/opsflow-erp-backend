@@ -705,7 +705,7 @@ async function createInvoiceForClosedOrders(params: {
       invoiceNo,
       customerName: orders[0]?.customerName ?? "Demo Customer",
       currency: "SGD",
-      status: "Issued",
+      status: "ISSUED",
       subtotalCents,
       taxCents,
       totalCents,

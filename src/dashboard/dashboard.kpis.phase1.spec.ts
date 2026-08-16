@@ -206,7 +206,7 @@ describe("DashboardService KPIs (Phase 1)", () => {
     });
   });
 
-  it("ready-to-invoice raw SQL uses Sent/Issued/Paid and tenantId on jobs and invoices", async () => {
+  it("ready-to-invoice raw SQL uses ISSUED/PAID and tenantId on jobs and invoices", async () => {
     const prisma: any = createPrismaMock();
     const svc = new DashboardService(prisma);
     await svc.getSummary("tenant-a");
@@ -225,7 +225,7 @@ describe("DashboardService KPIs (Phase 1)", () => {
     expect(sqlValues).toEqual(
       expect.arrayContaining([...INVOICED_INVOICE_STATUSES]),
     );
-    expect([...INVOICED_INVOICE_STATUSES]).toEqual(["Sent", "Issued", "Paid"]);
+    expect([...INVOICED_INVOICE_STATUSES]).toEqual(["ISSUED", "PAID"]);
     expect([...INVOICED_INVOICE_STATUSES]).not.toContain("Draft");
     expect([...INVOICED_INVOICE_STATUSES]).not.toContain("Void");
   });

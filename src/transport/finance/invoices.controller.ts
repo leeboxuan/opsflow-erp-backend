@@ -211,19 +211,6 @@ export class InvoicesController {
     return this.invoices.markInvoicePaid(tenantId, id, accessUser);
   }
 
-  @Post(":id/revert")
-  @Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
-  @DestructiveAction({ resource: "INVOICE", action: "REVERT" })
-  async revertToDraft(
-    @Request() req: any,
-    @Param("id") id: string,
-    @Body() body?: { reason?: string },
-  ) {
-    const tenantId = req.tenant.tenantId;
-    const accessUser = accessActorFromRequest(req);
-    return this.invoices.revertInvoiceToDraft(tenantId, id, accessUser);
-  }
-
   @Post(":id/pdf")
   @ApiConsumes("multipart/form-data")
   @ApiBody({

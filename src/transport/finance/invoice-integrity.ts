@@ -1,54 +1,20 @@
-export const INVOICE_STATUS = {
-  DRAFT: "Draft",
-  SENT: "Sent",
-  ISSUED: "Issued",
-  PAID: "Paid",
-  VOID: "Void",
-} as const;
-
-export type InvoiceStatusValue =
-  (typeof INVOICE_STATUS)[keyof typeof INVOICE_STATUS];
-
-export function isInvoiceDraft(status?: string | null): boolean {
-  return status === INVOICE_STATUS.DRAFT;
-}
-
-export function isInvoiceRecognized(status?: string | null): boolean {
-  return (
-    status === INVOICE_STATUS.SENT ||
-    status === INVOICE_STATUS.ISSUED ||
-    status === INVOICE_STATUS.PAID
-  );
-}
-
-export function isInvoicePaid(status?: string | null): boolean {
-  return status === INVOICE_STATUS.PAID;
-}
-
-export function isInvoiceVoid(status?: string | null): boolean {
-  return status === INVOICE_STATUS.VOID;
-}
-
-/** Draft/Sent/Issued/Paid reserve JobCharges on their lines. Void releases them. */
-export function isInvoiceReserving(status?: string | null): boolean {
-  return isInvoiceDraft(status) || isInvoiceRecognized(status);
-}
-
-export function isInvoiceIssuedLike(status?: string | null): boolean {
-  return status === INVOICE_STATUS.SENT || status === INVOICE_STATUS.ISSUED;
-}
-
-export function canMarkInvoicePaid(status?: string | null): boolean {
-  return isInvoiceIssuedLike(status);
-}
-
-export function canRevertInvoiceToDraft(status?: string | null): boolean {
-  return isInvoiceIssuedLike(status);
-}
-
-export function canVoidInvoice(status?: string | null): boolean {
-  return isInvoiceDraft(status) || isInvoiceIssuedLike(status);
-}
+export {
+  INVOICE_STATUS,
+  type InvoiceStatusValue,
+  isInvoiceDraft,
+  isInvoiceGenerated,
+  isInvoiceIssued,
+  isInvoicePaid,
+  isInvoiceVoid,
+  isInvoiceRecognized,
+  isInvoiceReserving,
+  isInvoiceFrozen,
+  isInvoiceEditable,
+  canGenerateInvoice,
+  canIssueInvoice,
+  canMarkInvoicePaid,
+  canVoidInvoice,
+} from "./invoice-status";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)

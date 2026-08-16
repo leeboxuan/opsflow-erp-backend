@@ -197,7 +197,7 @@ Verify after rollback: ordinary login, job list, warehouse, invoices, no `/contr
 - Platform control-plane: tenant create/update/suspend/reactivate/setModules via `$transaction` + `appendInTx`
 
 ### Post-commit interceptor (ambiguous if audit fails)
-- `@DestructiveAction` operational routes under PA tenant operation (job cancel/delete, invoice issue/revert, warehouse cancel, admin password reset/remove, …)  
+- `@DestructiveAction` operational routes under PA tenant operation (job cancel/delete, invoice issue/void, warehouse cancel, admin password reset/remove, …)
 - On audit failure → HTTP 503 `PLATFORM_AUDIT_RECONCILIATION_REQUIRED`  
 - Clients must refresh/reconcile; no blind retry  
 

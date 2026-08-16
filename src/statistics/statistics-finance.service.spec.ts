@@ -216,7 +216,7 @@ describe("StatisticsFinanceService", () => {
     const paidWhere = prisma.invoice.groupBy.mock.calls[1][0].where;
     expect(paidWhere).toMatchObject({
       tenantId: "tenant-1",
-      status: "Paid",
+      status: "PAID",
       paidAt: { gte, lt },
     });
     const readyWhere = prisma.job.findMany.mock.calls[1][0].where;

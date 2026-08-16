@@ -37,19 +37,30 @@ import { RealtimeEventsService } from "../../shared/realtime/realtime-events.ser
 import * as rt from "../../shared/realtime/realtime-publish";
 import {
   canMarkInvoicePaid,
-  canRevertInvoiceToDraft,
   canVoidInvoice,
   INVOICE_STATUS,
   isInvoiceDraft,
+  isInvoiceEditable,
+  isInvoiceGenerated,
+  isInvoiceIssued,
   isInvoicePaid,
   isInvoiceRecognized,
   isInvoiceReserving,
+  isInvoiceVoid,
   jobChargeAlreadyBilledMessage,
   mixedQuotationMessage,
   quotationMismatchMessage,
   resolveInvoiceSourceJobIds,
   uniqueNonEmptyIds,
 } from "./invoice-integrity";
+import {
+  assertGeneratedFrozenArtifact,
+  canIssueInvoice,
+  invoiceCannotGenerateFromStatusMessage,
+  invoiceMustGenerateBeforeIssueMessage,
+  invoiceMustIssueBeforePaidMessage,
+  paidInvoicesCannotBeVoidedMessage,
+} from "./invoice-status";
 
 const INVOICE_DOCUMENTS_BUCKET = "invoice-documents";
 
@@ -975,7 +986,7 @@ export class InvoicesService {
     }
 
     const existingDraft = await this.prisma.invoice.findFirst({
-      where: { tenantId, sourceJobId: jobId, status: "Draft" },
+      where: { tenantId, sourceJobId: jobId, status: INVOICE_STATUS.DRAFT },
       include: { lineItems: true },
       orderBy: { createdAt: "desc" },
     });
@@ -1171,6 +1182,7 @@ export class InvoicesService {
     query?: {
       q?: string;
       filter?: string;
+      status?: string;
       sortBy?: string;
       sortDir?: string;
       page?: unknown;
@@ -1191,11 +1203,17 @@ export class InvoicesService {
       ? this.getCustomerCompanyIdOrThrow(user)
       : null;
     applyQSearch(where, query?.q?.trim(), ["invoiceNo", "customerName"]);
-    applyMappedFilter(where, query?.filter, {
-      Draft: { status: "Draft" },
-      Sent: { status: "Sent" },
-      Paid: { status: "Paid" },
-      Void: { status: "Void" },
+    applyMappedFilter(where, query?.filter ?? (query as { status?: string })?.status, {
+      Draft: { status: INVOICE_STATUS.DRAFT },
+      DRAFT: { status: INVOICE_STATUS.DRAFT },
+      Generated: { status: INVOICE_STATUS.GENERATED },
+      GENERATED: { status: INVOICE_STATUS.GENERATED },
+      Issued: { status: INVOICE_STATUS.ISSUED },
+      ISSUED: { status: INVOICE_STATUS.ISSUED },
+      Paid: { status: INVOICE_STATUS.PAID },
+      PAID: { status: INVOICE_STATUS.PAID },
+      Void: { status: INVOICE_STATUS.VOID },
+      VOID: { status: INVOICE_STATUS.VOID },
     });
 
     const orderBy = buildOrderBy(
@@ -1515,6 +1533,11 @@ export class InvoicesService {
       sourceCustomerQuotationId: (inv as any).sourceCustomerQuotationId ?? null,
       paidAt: inv.paidAt ?? null,
       paidByUserId: inv.paidByUserId ?? null,
+      issuedAt: inv.issuedAt ?? null,
+      issuedByUserId: inv.issuedByUserId ?? null,
+      issuedByName: inv.issuedByUserId
+        ? (nameById.get(inv.issuedByUserId) ?? null)
+        : null,
       templateCode: (inv as any).templateCode ?? "DB_WISDOM",
       currency: inv.currency,
       status: inv.status,
@@ -1857,8 +1880,13 @@ export class InvoicesService {
       });
 
       if (!inv) throw new BadRequestException("Invoice not found");
-      if (!isInvoiceDraft(inv.status))
-        throw new BadRequestException("Invoice is not Draft");
+      if (isInvoiceIssued(inv.status)) {
+        return { invoice: inv, idempotent: true };
+      }
+      if (!canIssueInvoice(inv.status)) {
+        throw new BadRequestException(invoiceMustGenerateBeforeIssueMessage());
+      }
+      assertGeneratedFrozenArtifact(inv);
 
       const rawOrderIds = (inv.snapshot as any)?.orderIds;
       const orderIds: string[] = Array.isArray(rawOrderIds)
@@ -1873,7 +1901,6 @@ export class InvoicesService {
       }> = [];
 
       if (orderIds.length > 0) {
-        // Re-validate eligibility and link transport orders to this invoice.
         const found = await tx.transportOrder.findMany({
           where: { tenantId, id: { in: orderIds } },
           select: {
@@ -1934,7 +1961,7 @@ export class InvoicesService {
       );
 
       const finalSnapshot = {
-        stage: "Sent",
+        stage: INVOICE_STATUS.ISSUED,
         orderIds,
         sourceJobIds,
         invoice: {
@@ -1961,132 +1988,35 @@ export class InvoicesService {
       const locked = await tx.invoice.update({
         where: { id: inv.id },
         data: {
-          status: "Sent",
+          status: INVOICE_STATUS.ISSUED,
           issuedAt,
           issuedByUserId: issuedByUserId ?? null,
           lockedAt: issuedAt,
           snapshot: finalSnapshot,
-          sentAt: new Date(),
-          sentByUserId: issuedByUserId ?? null,
         },
         include: { lineItems: true, orders: { select: { id: true } } },
       });
       await this.syncJobsAfterChargeReservationChange(tx, tenantId, sourceJobIds);
 
-      return locked;
+      return { invoice: locked, idempotent: false };
     });
 
-    await this.audit.log(
-      tenantId,
-      "INVOICE_ISSUED",
-      "INVOICE",
-      invoiceId,
-      {
-        invoiceNo: result.invoiceNo,
-        previousStatus: INVOICE_STATUS.DRAFT,
-        status: INVOICE_STATUS.SENT,
-      },
-      user?.userId ?? null,
-    );
-
-    // Invoice PDF is generated on the frontend and uploaded via POST .../pdf.
-    return this.toDtoWithNames(result);
-  }
-
-  async revertInvoiceToDraft(tenantId: string, invoiceId: string, user: any) {
-    this.assertCustomerCanOnlyRead(user);
-    const userId: string | null = user?.userId ?? null;
-    const now = new Date();
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const inv = await tx.invoice.findFirst({
-        where: { tenantId, id: invoiceId },
-        include: { orders: { select: { id: true } }, lineItems: true },
-      });
-
-      if (!inv) throw new BadRequestException("Invoice not found");
-      if (isInvoicePaid(inv.status)) {
-        throw new BadRequestException("Paid invoices cannot be reverted to Draft");
-      }
-      if (!canRevertInvoiceToDraft(inv.status)) {
-        throw new BadRequestException("Only Sent/Issued invoices can be reverted");
-      }
-
-      const linkedOrderIds = inv.orders.map((o) => o.id);
-
-      // unlink orders (make them "awaiting invoice" again)
-      await tx.transportOrder.updateMany({
-        where: { tenantId, id: { in: linkedOrderIds }, invoiceId: inv.id },
-        data: { invoiceId: null },
-      });
-
-      const prevSnap = inv.snapshot as any;
-      const draftMeta = extractDraftMeta(prevSnap);
-
-      const nextSnapshot = {
-        ...(prevSnap ?? {}),
-        stage: "Draft",
-        orderIds: linkedOrderIds,
-        // keep original confirm info if it existed
-        confirmedAt: draftMeta.confirmedAt
-          ? draftMeta.confirmedAt.toISOString()
-          : (prevSnap?.confirmedAt ?? null),
-        confirmedByUserId:
-          draftMeta.confirmedByUserId ?? prevSnap?.confirmedByUserId ?? null,
-        // optional audit
-        revertedAt: now.toISOString(),
-        revertedByUserId: userId ?? null,
-      };
-
-      const inv2 = await tx.invoice.update({
-        where: { id: inv.id },
-        data: {
-          status: "Draft",
-          issuedAt: null,
-          issuedByUserId: null,
-          lockedAt: null,
-          snapshot: nextSnapshot,
+    if (!result.idempotent) {
+      await this.audit.log(
+        tenantId,
+        "INVOICE_ISSUED",
+        "INVOICE",
+        invoiceId,
+        {
+          invoiceNo: result.invoice.invoiceNo,
+          previousStatus: INVOICE_STATUS.GENERATED,
+          status: INVOICE_STATUS.ISSUED,
         },
-        include: { lineItems: true, orders: { select: { id: true } } }, // now empty
-      });
-
-      const jobChargeIds = uniqueNonEmptyIds(
-        (inv.lineItems ?? []).map((l: any) => l.jobChargeId),
+        user?.userId ?? null,
       );
-      await this.syncInvoiceChargeReservations(
-        tx,
-        tenantId,
-        inv.id,
-        jobChargeIds,
-      );
-      await this.syncJobsAfterChargeReservationChange(
-        tx,
-        tenantId,
-        resolveInvoiceSourceJobIds({
-          sourceJobId: (inv as any).sourceJobId,
-          snapshot: nextSnapshot,
-        }),
-      );
-      return inv2;
-    });
+    }
 
-    await this.audit.log(
-      tenantId,
-      "INVOICE_REVERTED",
-      "INVOICE",
-      invoiceId,
-      {
-        invoiceNo: updated.invoiceNo,
-        previousStatus: INVOICE_STATUS.SENT,
-        status: INVOICE_STATUS.DRAFT,
-      },
-      user?.userId ?? null,
-    );
-
-    // invoice has no linked orders now; return with snapshot orderIds for UI continuity
-    const snap = updated.snapshot as any;
-    const snapshotOrderIds = Array.isArray(snap?.orderIds) ? snap.orderIds : [];
-    return await this.toDtoWithNames(updated, snapshotOrderIds);
+    return this.toDtoWithNames(result.invoice);
   }
 
   async voidInvoice(tenantId: string, invoiceId: string, user: any) {
@@ -2097,11 +2027,14 @@ export class InvoicesService {
         include: { lineItems: true },
       });
       if (!inv) throw new BadRequestException("Invoice not found");
+      if (isInvoiceVoid(inv.status)) {
+        return { voided: inv, previousStatus: inv.status, idempotent: true };
+      }
       if (isInvoicePaid(inv.status)) {
-        throw new BadRequestException("Paid invoices cannot be voided in this phase");
+        throw new BadRequestException(paidInvoicesCannotBeVoidedMessage());
       }
       if (!canVoidInvoice(inv.status)) {
-        throw new BadRequestException("Only Draft or Sent/Issued invoices can be voided");
+        throw new BadRequestException("Only DRAFT, GENERATED, or ISSUED invoices can be voided");
       }
       const previousStatus = inv.status;
       const jobIds = resolveInvoiceSourceJobIds({
@@ -2127,20 +2060,22 @@ export class InvoicesService {
         include: { lineItems: true, orders: { select: { id: true } } },
       });
       await this.syncJobsAfterChargeReservationChange(tx, tenantId, jobIds);
-      return { voided, previousStatus };
+      return { voided, previousStatus, idempotent: false };
     });
-    await this.audit.log(
-      tenantId,
-      "INVOICE_VOIDED",
-      "INVOICE",
-      invoiceId,
-      {
-        invoiceNo: updated.voided.invoiceNo,
-        previousStatus: updated.previousStatus,
-        status: INVOICE_STATUS.VOID,
-      },
-      user?.userId ?? null,
-    );
+    if (!updated.idempotent) {
+      await this.audit.log(
+        tenantId,
+        "INVOICE_VOIDED",
+        "INVOICE",
+        invoiceId,
+        {
+          invoiceNo: updated.voided.invoiceNo,
+          previousStatus: updated.previousStatus,
+          status: INVOICE_STATUS.VOID,
+        },
+        user?.userId ?? null,
+      );
+    }
     return this.toDtoWithNames(updated.voided);
   }
 
@@ -2160,8 +2095,11 @@ export class InvoicesService {
         include: { lineItems: true },
       });
       if (!inv) throw new BadRequestException("Invoice not found");
+      if (isInvoicePaid(inv.status)) {
+        return { paid: inv, previousStatus: inv.status, idempotent: true };
+      }
       if (!canMarkInvoicePaid(inv.status)) {
-        throw new BadRequestException("Only Sent/Issued invoices can be marked Paid");
+        throw new BadRequestException(invoiceMustIssueBeforePaidMessage());
       }
       const previousStatus = inv.status;
       const paid = await tx.invoice.update({
@@ -2179,28 +2117,30 @@ export class InvoicesService {
         },
         include: { lineItems: true, orders: { select: { id: true } } },
       });
-      return { paid, previousStatus };
+      return { paid, previousStatus, idempotent: false };
     });
-    await this.audit.log(
-      tenantId,
-      "INVOICE_PAID",
-      "INVOICE",
-      invoiceId,
-      {
-        invoiceNo: updated.paid.invoiceNo,
-        previousStatus: updated.previousStatus,
-        status: INVOICE_STATUS.PAID,
-        paidAt: paidAt.toISOString(),
-        actorUserId: user?.userId ?? null,
-      },
-      user?.userId ?? null,
-    );
+    if (!updated.idempotent) {
+      await this.audit.log(
+        tenantId,
+        "INVOICE_PAID",
+        "INVOICE",
+        invoiceId,
+        {
+          invoiceNo: updated.paid.invoiceNo,
+          previousStatus: updated.previousStatus,
+          status: INVOICE_STATUS.PAID,
+          paidAt: paidAt.toISOString(),
+          actorUserId: user?.userId ?? null,
+        },
+        user?.userId ?? null,
+      );
+    }
     return this.toDtoWithNames(updated.paid);
   }
 
   // Update an existing Draft invoice: replaces line items; snapshot orderIds are
   // optional (omit dto.orderIds to keep existing; send [] to clear).
-  // NOTE: Sent invoices must be reverted first.
+  // GENERATED/ISSUED/PAID/VOID invoices are not editable and cannot revert to DRAFT.
   async updateDraftInvoice(
     tenantId: string,
     invoiceId: string,
@@ -2215,8 +2155,8 @@ export class InvoicesService {
     });
 
     if (!inv) throw new BadRequestException("Invoice not found");
-    if (inv.status !== "Draft") {
-      throw new BadRequestException("Only Draft invoices can be updated");
+    if (!isInvoiceEditable(inv.status)) {
+      throw new BadRequestException("Only DRAFT invoices can be updated");
     }
 
     const prevSnapEarly = inv.snapshot as any;
@@ -2325,7 +2265,7 @@ export class InvoicesService {
 
     const nextSnapshot = {
       ...(prevSnap ?? {}),
-      stage: "Draft",
+      stage: INVOICE_STATUS.DRAFT,
       orderIds,
       sourceJobIds: normalizedSourceJobIds,
       confirmedAt:
@@ -2709,6 +2649,11 @@ export class InvoicesService {
       actorUserId,
       pdfBuffer,
     } = params;
+    if (!isInvoiceDraft(invoice.status)) {
+      throw new BadRequestException(
+        invoiceCannotGenerateFromStatusMessage(invoice.status),
+      );
+    }
     const fileName = this.buildInvoicePdfFileName(
       sourceJobInternalRef,
       invoice.invoiceNo,
@@ -2810,6 +2755,18 @@ export class InvoicesService {
           data: {
             pdfKey: storageKey,
             pdfGeneratedAt: generatedAt,
+            ...(isInvoiceDraft(invoice.status)
+              ? {
+                  status: INVOICE_STATUS.GENERATED,
+                  lockedAt: generatedAt,
+                  snapshot: {
+                    ...((invoice.snapshot as any) ?? {}),
+                    stage: INVOICE_STATUS.GENERATED,
+                    generatedAt: generatedAt.toISOString(),
+                    generatedByUserId: actorUserId ?? null,
+                  },
+                }
+              : {}),
           },
           include: {
             lineItems: true,
@@ -2841,6 +2798,52 @@ export class InvoicesService {
     });
     if (!inv) throw new BadRequestException("Invoice not found");
     await this.assertCanAccessInvoice(tenantId, inv, user);
+    if (isInvoiceIssued(inv.status) || isInvoicePaid(inv.status) || isInvoiceVoid(inv.status)) {
+      throw new BadRequestException(invoiceCannotGenerateFromStatusMessage(inv.status));
+    }
+    if (isInvoiceGenerated(inv.status)) {
+      const existingDocument = await this.prisma.customerCompanyDocument.findFirst({
+        where: {
+          tenantId,
+          sourceInvoiceId: inv.id,
+          type: { in: ["INVOICE", "COMPANY_INVOICE"] },
+          status: "ACTIVE",
+        },
+        include: { generatedBy: { select: { name: true, email: true } } },
+        orderBy: { createdAt: "desc" },
+      });
+      assertGeneratedFrozenArtifact({
+        ...inv,
+        documentStorageKey: existingDocument?.storageKey ?? null,
+      });
+      const dto = await this.toDtoWithNames(inv);
+      return {
+        ...dto,
+        invoiceId: inv.id,
+        document: existingDocument
+          ? {
+              id: existingDocument.id,
+              customerCompanyId: existingDocument.customerCompanyId,
+              sourceJobId: existingDocument.sourceJobId,
+              invoiceId: existingDocument.sourceInvoiceId,
+              documentType: existingDocument.type,
+              fileName: existingDocument.fileName,
+              mimeType: existingDocument.mimeType,
+              storageKey: existingDocument.storageKey,
+              generatedByUserId: existingDocument.generatedByUserId,
+              generatedByName:
+                existingDocument.generatedBy?.name ??
+                existingDocument.generatedBy?.email ??
+                null,
+              generatedAt: existingDocument.generatedAt,
+              createdAt: existingDocument.createdAt,
+            }
+          : null,
+      };
+    }
+    if (!isInvoiceDraft(inv.status)) {
+      throw new BadRequestException(invoiceCannotGenerateFromStatusMessage(inv.status));
+    }
     const missing = (inv.lineItems ?? []).find((li: any) =>
       li.requiresManualAmount && (!li.unitPriceCents || li.unitPriceCents <= 0));
     if (missing) throw new BadRequestException("Missing manual invoice amount");
@@ -2866,7 +2869,24 @@ export class InvoicesService {
       jobId: renderData.sourceJobId ?? null,
     });
 
+    if (isInvoiceDraft(inv.status) && isInvoiceGenerated(updatedInvoice.status)) {
+      await this.audit.log(
+        tenantId,
+        "INVOICE_GENERATED",
+        "INVOICE",
+        inv.id,
+        {
+          invoiceNo: updatedInvoice.invoiceNo,
+          previousStatus: INVOICE_STATUS.DRAFT,
+          status: INVOICE_STATUS.GENERATED,
+        },
+        actorUserId,
+      );
+    }
+
+    const dto = await this.toDtoWithNames(updatedInvoice);
     return {
+      ...dto,
       invoiceId: inv.id,
       status: updatedInvoice.status,
       document: {
@@ -2912,6 +2932,10 @@ export class InvoicesService {
 
     await this.assertCanAccessInvoice(tenantId, inv, user);
 
+    if (!isInvoiceDraft(inv.status)) {
+      throw new BadRequestException(invoiceCannotGenerateFromStatusMessage(inv.status));
+    }
+
     if (!inv.customerCompanyId) {
       throw new BadRequestException(
         "Invoice must have a customerCompanyId before uploading a PDF",
@@ -2951,6 +2975,7 @@ export class InvoicesService {
     const where: any = {
       tenantId: params.tenantId,
       ...(params.invoiceId ? { id: params.invoiceId } : {}),
+      status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PAID] },
       pdfKey: { not: null },
       ...(params.requireGeneratedAt ? { pdfGeneratedAt: { not: null } } : {}),
     };

@@ -1808,6 +1808,14 @@ enum JobStatus {
   CANCELLED
 }
 
+enum InvoiceStatus {
+  DRAFT
+  GENERATED
+  ISSUED
+  PAID
+  VOID
+}
+
 enum JobDocumentType {
   QUOTATION
   OTHER
@@ -2382,7 +2390,9 @@ model Invoice {
   dueDate   DateTime?
 
   notes  String?
-  status String  @default("Draft") // Draft | Sent | Issued (legacy) | Paid | Void
+  /// Canonical lifecycle: DRAFT → GENERATED → ISSUED → PAID, plus VOID.
+  /// pdfGeneratedAt is a snapshot timestamp, not a status. Sent is not stored.
+  status InvoiceStatus @default(DRAFT)
 
   subtotalCents Int
   taxCents      Int
