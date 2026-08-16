@@ -4,6 +4,10 @@
  */
 import { JobTripTemplate, JobType, Role } from "@prisma/client";
 import { TransportJobsService } from "./transport-jobs.service";
+import {
+  CANONICAL_JOB_CREATE_TX_MAX_WAIT_MS,
+  CANONICAL_JOB_CREATE_TX_TIMEOUT_MS,
+} from "./create-job-interactive-tx";
 import { withInteractiveTransaction } from "../test-utils/prisma-interactive-transaction.mock";
 import { CANONICAL_AUTO_TRIP_TEMPLATES } from "../workflows/job-workflow.helpers";
 
@@ -214,6 +218,47 @@ describe("canonical auto-trip creation", () => {
     expect(linkedItemIdsForTrip(prisma, depotToCustomer.id)).toEqual(itemIds);
     expect(linkedItemIdsForTrip(prisma, customerToPort.id)).toEqual(itemIds);
     expect(linkedItemIdsForTrip(prisma, portToDepot.id)).toEqual([]);
+    expect(prisma.$transaction.mock.calls[0][1]).toEqual({
+      maxWait: CANONICAL_JOB_CREATE_TX_MAX_WAIT_MS,
+      timeout: CANONICAL_JOB_CREATE_TX_TIMEOUT_MS,
+    });
+  });
+
+  it("does not run post-commit finalization when the interactive transaction throws P2028", async () => {
+    const prisma = makeStatefulPrisma();
+    prisma.$transaction = jest.fn(async () => {
+      const err: any = new Error(
+        "Transaction already closed: A query cannot be executed on an expired transaction. The timeout for this transaction was 5000 ms, however 5170 ms passed. failing query: prisma.tripJobItem.findMany()",
+      );
+      err.code = "P2028";
+      err.name = "PrismaClientKnownRequestError";
+      throw err;
+    });
+    const svc = makeSvc(prisma);
+    const finalize = jest.spyOn(svc, "finalizeCanonicalJobCreate");
+
+    await expect(
+      svc.create(
+        "t1",
+        {
+          jobType: JobType.EXPORT,
+          customerCompanyId: "comp1",
+          pickupAddress1: "7 Gul Circle",
+          deliveryAddress1: "20 Gul Way",
+          receiverName: "PIC",
+          receiverPhone: "91234567",
+          exportDetails: { exportPortAddress1: "Pasir Panjang Terminal" },
+          items: [{ containerNumber: "MSCU1234567" }],
+        } as any,
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
+      ),
+    ).rejects.toMatchObject({ code: "P2028" });
+
+    expect(finalize).not.toHaveBeenCalled();
+    expect(prisma.$transaction.mock.calls[0][1]).toEqual({
+      maxWait: CANONICAL_JOB_CREATE_TX_MAX_WAIT_MS,
+      timeout: CANONICAL_JOB_CREATE_TX_TIMEOUT_MS,
+    });
   });
 
   it("IMPORT creates exactly 2 trips and links every container JobItem onto both legs", async () => {

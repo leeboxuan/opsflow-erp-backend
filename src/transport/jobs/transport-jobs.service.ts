@@ -182,6 +182,8 @@ import {
 import {
   assertCreateJobInteractiveTxClient,
   assertPrismaInteractiveTransactionAvailable,
+  CANONICAL_JOB_CREATE_TX_MAX_WAIT_MS,
+  CANONICAL_JOB_CREATE_TX_TIMEOUT_MS,
 } from "./create-job-interactive-tx";
 import {
   applyExportDetailsPatch,
@@ -2722,7 +2724,10 @@ export class TransportJobsService {
 
     const job = options?.tx
       ? await createJobWithTripsAndLinks(options.tx)
-      : await this.prisma.$transaction(createJobWithTripsAndLinks);
+      : await this.prisma.$transaction(createJobWithTripsAndLinks, {
+          maxWait: CANONICAL_JOB_CREATE_TX_MAX_WAIT_MS,
+          timeout: CANONICAL_JOB_CREATE_TX_TIMEOUT_MS,
+        });
 
     return { id: job.id, internalRef: job.internalRef ?? null };
   }

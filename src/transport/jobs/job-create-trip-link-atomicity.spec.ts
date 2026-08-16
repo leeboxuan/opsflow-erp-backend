@@ -6,6 +6,8 @@ import { TransportJobsService } from "./transport-jobs.service";
 import {
   assertCreateJobInteractiveTxClient,
   assertPrismaInteractiveTransactionAvailable,
+  CANONICAL_JOB_CREATE_TX_MAX_WAIT_MS,
+  CANONICAL_JOB_CREATE_TX_TIMEOUT_MS,
 } from "./create-job-interactive-tx";
 import {
   buildInteractiveTxClient,
@@ -304,6 +306,7 @@ describe("create-job interactive transaction contract", () => {
     const supabaseService = { getClient: jest.fn() } as any;
     const svc = new TransportJobsService(prisma, audit, supabaseService);
     jest.spyOn(svc as any, "getNextInternalRef").mockResolvedValue("IMP-1");
+    const finalize = jest.spyOn(svc, "finalizeCanonicalJobCreate");
 
     await expect(
       svc.create(
@@ -326,5 +329,106 @@ describe("create-job interactive transaction contract", () => {
 
     expect(committed).toBe(false);
     expect(audit.log).not.toHaveBeenCalled();
+    expect(finalize).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalledWith(
+      expect.any(Function),
+      {
+        maxWait: CANONICAL_JOB_CREATE_TX_MAX_WAIT_MS,
+        timeout: CANONICAL_JOB_CREATE_TX_TIMEOUT_MS,
+      },
+    );
+  });
+
+  it("passes explicit maxWait and timeout on the canonical create transaction", async () => {
+    const txJobCreate = jest.fn().mockResolvedValue({
+      id: "job1",
+      internalRef: "EXP-1",
+      items: [{ id: "it1", itemCode: "CONT1" }],
+      customerCompany: { id: "comp1", name: "C" },
+      assignedDriver: null,
+    });
+    const tx = buildInteractiveTxClient(
+      {},
+      {
+        job: { create: txJobCreate } as any,
+        trip: {
+          createMany: jest.fn().mockResolvedValue({ count: 3 }),
+          findMany: jest.fn().mockResolvedValue([
+            { id: "t1", status: TripStatus.DRAFT, containerNumber: "CONT1", jobTripTemplate: "DEPOT_TO_DELIVERY" },
+            { id: "t2", status: TripStatus.DRAFT, containerNumber: "CONT1", jobTripTemplate: "DELIVERY_TO_PORT" },
+            { id: "t3", status: TripStatus.DRAFT, containerNumber: null, jobTripTemplate: "PORT_TO_DEPOT" },
+          ]),
+          update: jest.fn().mockResolvedValue({}),
+        } as any,
+        jobItem: {
+          findMany: jest.fn().mockResolvedValue([
+            {
+              id: "it1",
+              itemCode: "CONT1",
+              description: null,
+              sealNo: null,
+              pickupReference: null,
+              qty: null,
+            },
+          ]),
+        } as any,
+        tripJobItem: {
+          findMany: jest.fn().mockResolvedValue([]),
+          createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        } as any,
+      },
+    );
+
+    const prisma: any = {
+      customer_companies: {
+        findFirst: jest.fn().mockResolvedValue({ id: "comp1", name: "C" }),
+      },
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          internalRef: "EXP-1",
+          jobType: JobType.EXPORT,
+          customerCompany: { id: "comp1", name: "C" },
+          assignedDriver: null,
+          createdBy: { id: "u1", name: "Ops", email: "o@e.com" },
+          items: [{ id: "it1", itemCode: "CONT1" }],
+          trips: [],
+          charges: [],
+          documents: [],
+        }),
+      },
+      trip: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      $transaction: jest.fn(async (fn: any) => fn(tx)),
+    };
+
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const svc = new TransportJobsService(prisma, audit, { getClient: jest.fn() } as any);
+    jest.spyOn(svc as any, "getNextInternalRef").mockResolvedValue("EXP-1");
+    jest.spyOn(svc as any, "generateTripDeliveryDoDocument").mockResolvedValue({});
+    jest.spyOn(svc as any, "syncJobInvoiceReadinessForJob").mockResolvedValue(undefined);
+    jest.spyOn(svc as any, "attachTripAssignedDriverNamesForJobs").mockResolvedValue(undefined);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.EXPORT,
+        customerCompanyId: "comp1",
+        pickupAddress1: "Depot",
+        deliveryAddress1: "Stuffing",
+        exportDetails: { exportPortAddress1: "Port" },
+        items: [{ itemCode: "CONT1" }],
+      } as any,
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
+    );
+
+    expect(prisma.$transaction).toHaveBeenCalledWith(
+      expect.any(Function),
+      {
+        maxWait: CANONICAL_JOB_CREATE_TX_MAX_WAIT_MS,
+        timeout: CANONICAL_JOB_CREATE_TX_TIMEOUT_MS,
+      },
+    );
   });
 });

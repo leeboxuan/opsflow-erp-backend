@@ -1,7 +1,13 @@
 /**
  * Fail-closed validation for the interactive Prisma transaction client used by
  * TransportJobsService.create (job + items + trips + TripJobItem links).
+ *
+ * Interactive `$transaction` defaults to timeout 5000ms. Canonical EXPORT create
+ * exceeded that on UAT (P2028 at tripJobItem.findMany, elapsed 5170ms). These
+ * bounds match message-import confirm, which already wraps createCanonicalJob.
  */
+export const CANONICAL_JOB_CREATE_TX_MAX_WAIT_MS = 10_000;
+export const CANONICAL_JOB_CREATE_TX_TIMEOUT_MS = 20_000;
 
 export function assertCreateJobInteractiveTxClient(tx: unknown): void {
   const client = tx as {
