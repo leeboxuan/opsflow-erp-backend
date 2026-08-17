@@ -253,7 +253,7 @@ export function truckingSummarySheet(
   summary: StatisticsTruckingSummaryDto,
 ): StatisticsExcelSheet<SummaryExcelRow> {
   return {
-    name: "Summary",
+    name: "Operational Summary",
     columns: SUMMARY_COLUMNS,
     rows: [
       { metric: "Unique containers", value: summary.uniqueContainers },
@@ -275,7 +275,7 @@ export function overviewSummarySheet(
   overview: StatisticsOverviewDto,
 ): StatisticsExcelSheet<SummaryExcelRow> {
   return {
-    name: "Summary",
+    name: "Management Summary",
     columns: SUMMARY_COLUMNS,
     rows: [
       { metric: "Jobs completed", value: overview.operationallyCompletedJobs },

@@ -1,6 +1,8 @@
 import {
   ConflictException,
   Injectable,
+  InternalServerErrorException,
+  Logger,
   PayloadTooLargeException,
 } from "@nestjs/common";
 import { PrismaService } from "../shared/prisma/prisma.service";
@@ -52,6 +54,8 @@ export type StatisticsCsvExport = StatisticsFileExport;
 
 @Injectable()
 export class StatisticsExportService {
+  private readonly logger = new Logger(StatisticsExportService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly drivers: StatisticsDriversService,
@@ -93,7 +97,7 @@ export class StatisticsExportService {
       }
     }
     const meta = await this.workbookMeta(tenantId, query, "OpsFlow — Drivers Report");
-    const body = await buildStatisticsExcelWorkbook(
+    const body = await this.writeWorkbook(
       workbookInput({
         ...meta,
         limitations: first.limitations,
@@ -114,7 +118,7 @@ export class StatisticsExportService {
   ): Promise<StatisticsFileExport> {
     const response = await this.finance.getFinance(tenantId, query);
     const meta = await this.workbookMeta(tenantId, query, "OpsFlow — Finance Report");
-    const body = await buildStatisticsExcelWorkbook(
+    const body = await this.writeWorkbook(
       workbookInput({
         ...meta,
         limitations: response.limitations,
@@ -140,7 +144,7 @@ export class StatisticsExportService {
     );
     this.assertWithinLimit(response.meta.total);
     const meta = await this.workbookMeta(tenantId, query, "OpsFlow — Exceptions Report");
-    const body = await buildStatisticsExcelWorkbook(
+    const body = await this.writeWorkbook(
       workbookInput({
         ...meta,
         limitations: response.limitations,
@@ -172,7 +176,7 @@ export class StatisticsExportService {
     ]);
     this.assertWithinLimit(movements.length);
     const meta = await this.workbookMeta(tenantId, query, "OpsFlow — Trucking Report");
-    const body = await buildStatisticsExcelWorkbook(
+    const body = await this.writeWorkbook(
       workbookInput({
         ...meta,
         limitations: summary.limitations,
@@ -204,7 +208,7 @@ export class StatisticsExportService {
     const rows = await this.customers.getAllCustomers(tenantId, query);
     this.assertWithinLimit(rows.length);
     const meta = await this.workbookMeta(tenantId, query, "OpsFlow — Customers Report");
-    const body = await buildStatisticsExcelWorkbook(
+    const body = await this.writeWorkbook(
       workbookInput({
         ...meta,
         limitations: [...new Set(rows.flatMap(() => []))],
@@ -288,7 +292,7 @@ export class StatisticsExportService {
       query,
       "OpsFlow — Management Report",
     );
-    const body = await buildStatisticsExcelWorkbook(
+    const body = await this.writeWorkbook(
       workbookInput({
         ...meta,
         limitations: Array.from(new Set(limitations)),
@@ -305,6 +309,22 @@ export class StatisticsExportService {
       rowCount: movements.length,
       contentType: XLSX_CONTENT_TYPE,
     };
+  }
+
+  private async writeWorkbook(
+    input: Parameters<typeof buildStatisticsExcelWorkbook>[0],
+  ): Promise<Buffer> {
+    try {
+      return await buildStatisticsExcelWorkbook(input);
+    } catch (error) {
+      this.logger.error(
+        "Failed to build Statistics workbook",
+        error instanceof Error ? error.stack : String(error),
+      );
+      throw new InternalServerErrorException(
+        "Failed to build Statistics workbook",
+      );
+    }
   }
 
   private assertWithinLimit(total: number): void {

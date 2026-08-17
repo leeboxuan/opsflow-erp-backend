@@ -1,9 +1,10 @@
-import { ValidationPipe } from "@nestjs/common";
+import { ForbiddenException, ValidationPipe } from "@nestjs/common";
 import {
   GUARDS_METADATA,
   METHOD_METADATA,
   PATH_METADATA,
 } from "@nestjs/common/constants";
+import { Reflector } from "@nestjs/core";
 import { Role, TenantModule } from "@prisma/client";
 import { AuthGuard } from "../shared/auth/guards/auth.guard";
 import {
@@ -12,6 +13,7 @@ import {
 } from "../shared/auth/guards/module-entitlement.guard";
 import { RoleGuard } from "../shared/auth/guards/role.guard";
 import { TenantGuard } from "../shared/auth/guards/tenant.guard";
+import { AUTH_MODE } from "../shared/auth/request-context";
 import {
   StatisticsDriversExportQueryDto,
   StatisticsExceptionsExportQueryDto,
@@ -24,6 +26,9 @@ describe("StatisticsExportController", () => {
     exportDrivers: jest.fn(),
     exportFinance: jest.fn(),
     exportExceptions: jest.fn(),
+    exportTrucking: jest.fn(),
+    exportCustomers: jest.fn(),
+    exportManagement: jest.fn(),
   };
   const controller = new StatisticsExportController(exportsService as any);
 
@@ -53,6 +58,21 @@ describe("StatisticsExportController", () => {
       "exceptions/export",
       StatisticsExportController.prototype.exportExceptions,
       [TenantModule.TRANSPORT, TenantModule.FINANCE],
+    ],
+    [
+      "trucking/export",
+      StatisticsExportController.prototype.exportTrucking,
+      [TenantModule.TRANSPORT],
+    ],
+    [
+      "customers/export",
+      StatisticsExportController.prototype.exportCustomers,
+      [TenantModule.TRANSPORT],
+    ],
+    [
+      "export",
+      StatisticsExportController.prototype.exportManagement,
+      [TenantModule.TRANSPORT],
     ],
   ] as const)(
     "registers GET %s with exact entitlements",
@@ -123,5 +143,87 @@ describe("StatisticsExportController", () => {
         { type: "query", metatype },
       ),
     ).rejects.toThrow();
+  });
+
+  it("allows Tenant Admin and operating Platform Admin on management export", () => {
+    const guard = new RoleGuard(new Reflector());
+    const handler = StatisticsExportController.prototype.exportManagement;
+    expect(
+      guard.canActivate({
+        switchToHttp: () => ({
+          getRequest: () => ({
+            tenant: {
+              tenantId: "trusted-tenant",
+              role: Role.ADMIN,
+            },
+          }),
+        }),
+        getHandler: () => handler,
+        getClass: () => StatisticsExportController,
+      } as any),
+    ).toBe(true);
+    expect(
+      guard.canActivate({
+        switchToHttp: () => ({
+          getRequest: () => ({
+            tenant: {
+              tenantId: "trusted-tenant",
+              role: Role.ADMIN,
+              isPlatformAdmin: true,
+              authMode: AUTH_MODE.PLATFORM_TENANT_OPERATION,
+            },
+          }),
+        }),
+        getHandler: () => handler,
+        getClass: () => StatisticsExportController,
+      } as any),
+    ).toBe(true);
+  });
+
+  it("denies Finance Admin on Statistics export", () => {
+    const guard = new RoleGuard(new Reflector());
+    expect(Reflect.getMetadata("roles", StatisticsExportController)).toEqual([
+      Role.ADMIN,
+    ]);
+    expect(Reflect.getMetadata("roles", StatisticsExportController)).not.toContain(
+      Role.FINANCE,
+    );
+    expect(() =>
+      guard.canActivate({
+        switchToHttp: () => ({
+          getRequest: () => ({
+            tenant: {
+              tenantId: "trusted-tenant",
+              role: Role.FINANCE,
+            },
+          }),
+        }),
+        getHandler: () => StatisticsExportController.prototype.exportManagement,
+        getClass: () => StatisticsExportController,
+      } as any),
+    ).toThrow(ForbiddenException);
+  });
+
+  it("forwards only request tenant identity to management export", async () => {
+    exportsService.exportManagement.mockResolvedValue({
+      body: Buffer.from("PK"),
+      filename: "OpsFlow-Management-Report-2026-07-20-to-2026-08-18.xlsx",
+      rowCount: 0,
+      contentType:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const response = {
+      setHeader: jest.fn(),
+      send: jest.fn().mockReturnThis(),
+    };
+    await controller.exportManagement(
+      { tenant: { tenantId: "trusted-tenant", role: "ADMIN" } } as any,
+      { from: "2026-07-20", to: "2026-08-18", tenantId: "foreign" } as any,
+      response as any,
+    );
+    expect(exportsService.exportManagement).toHaveBeenCalledWith(
+      "trusted-tenant",
+      { from: "2026-07-20", to: "2026-08-18", tenantId: "foreign" },
+    );
   });
 });

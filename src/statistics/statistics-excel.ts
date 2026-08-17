@@ -1,4 +1,8 @@
 import ExcelJS from "exceljs";
+import {
+  createExcelWorksheetNameAllocator,
+  type ExcelWorksheetNameAllocator,
+} from "./statistics-excel-sheet-names";
 import { statisticsLimitationNote } from "./statistics-limitation-copy";
 import {
   basisPointsToRatio,
@@ -81,12 +85,13 @@ export async function buildStatisticsExcelWorkbook(
   workbook.creator = "OpsFlow";
   workbook.created = input.generatedAt;
   workbook.modified = input.generatedAt;
+  const sheetNames = createExcelWorksheetNameAllocator();
 
   for (const sheet of input.sheets) {
     assertManagementExcelHeaders(sheet.columns.map((column) => column.header));
-    addDataSheet(workbook, input, sheet);
+    addDataSheet(workbook, input, sheet, sheetNames);
   }
-  addNotesSheet(workbook, input);
+  addNotesSheet(workbook, input, sheetNames);
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
@@ -115,8 +120,9 @@ function addDataSheet<Row>(
   workbook: ExcelJS.Workbook,
   input: StatisticsExcelWorkbookInput,
   sheet: StatisticsExcelSheet<Row>,
+  sheetNames: ExcelWorksheetNameAllocator,
 ): void {
-  const worksheet = workbook.addWorksheet(sheet.name, {
+  const worksheet = workbook.addWorksheet(sheetNames.allocate(sheet.name), {
     views: [{ state: "frozen", ySplit: 7, activeCell: "A8" }],
   });
   worksheet.addRow([input.title]);
@@ -212,8 +218,9 @@ function addDataSheet<Row>(
 function addNotesSheet(
   workbook: ExcelJS.Workbook,
   input: StatisticsExcelWorkbookInput,
+  sheetNames: ExcelWorksheetNameAllocator,
 ): void {
-  const sheet = workbook.addWorksheet("Notes");
+  const sheet = workbook.addWorksheet(sheetNames.allocate("Notes"));
   sheet.getColumn(1).width = 92;
   const title = sheet.addRow(["Report notes"]);
   title.font = { bold: true, size: 14 };
