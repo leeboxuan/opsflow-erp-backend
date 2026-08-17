@@ -1,4 +1,5 @@
 import { CustomersService } from "./customers.service";
+import { IdempotencyService } from "../shared/idempotency/idempotency.service";
 import { QuotationVersionStatus } from "@prisma/client";
 
 describe("CustomersService quotation upload behavior", () => {
@@ -393,6 +394,10 @@ describe("CustomersService createCompany quotation base seed", () => {
     const prisma: any = {
       customer_companies: {
         findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue({
+          ...companyRow,
+          _count: { contacts: 0, users: 0 },
+        }),
         upsert: jest.fn(),
       },
       $transaction: jest.fn(async (fn: any) => {
@@ -411,17 +416,60 @@ describe("CustomersService createCompany quotation base seed", () => {
       publishDispatchAndDashboard: jest.fn(),
     };
     const { supabaseService, configService } = infra();
+    const idempotencyRecords: any[] = [];
+    const prismaWithIdempotency: any = {
+      ...prisma,
+      idempotencyRecord: {
+        findUnique: jest.fn(async ({ where }: any) =>
+          idempotencyRecords.find(
+            (row) =>
+              row.tenantId === where.tenantId_scope_operationKey.tenantId &&
+              row.scope === where.tenantId_scope_operationKey.scope &&
+              row.operationKey ===
+                where.tenantId_scope_operationKey.operationKey,
+          ) ?? null,
+        ),
+        create: jest.fn(async ({ data }: any) => {
+          idempotencyRecords.push({ id: `rec-${idempotencyRecords.length + 1}`, ...data });
+          return idempotencyRecords[idempotencyRecords.length - 1];
+        }),
+        update: jest.fn(async ({ where, data }: any) => {
+          const row = idempotencyRecords.find((entry) => entry.id === where.id);
+          if (!row) throw new Error("missing record");
+          Object.assign(row, data);
+          return row;
+        }),
+      },
+    };
+    prismaWithIdempotency.$transaction = jest.fn(async (fn: any) => {
+      try {
+        return await fn({
+          ...prismaWithIdempotency,
+          ...tx,
+          idempotencyRecord: prismaWithIdempotency.idempotencyRecord,
+          customer_companies: {
+            ...prismaWithIdempotency.customer_companies,
+            ...tx.customer_companies,
+          },
+        });
+      } catch (err) {
+        committed.company = false;
+        throw err;
+      }
+    });
+    const idempotency = new IdempotencyService(prismaWithIdempotency);
     const svc = new CustomersService(
-      prisma,
+      prismaWithIdempotency,
       supabaseService,
       configService,
       audit as any,
       realtime as any,
       { seedFromCurrentQuotationBase } as any,
+      idempotency,
     );
     return {
       svc,
-      prisma,
+      prisma: prismaWithIdempotency,
       tx,
       txCreate,
       seedFromCurrentQuotationBase,
@@ -446,7 +494,11 @@ describe("CustomersService createCompany quotation base seed", () => {
       "c-new",
       "u1",
       "Acme",
-      { client: tx },
+      expect.objectContaining({
+        client: expect.objectContaining({
+          customer_companies: expect.any(Object),
+        }),
+      }),
     );
     expect(res.seededCustomerRateTemplate).toEqual({
       id: "tpl-seed",
@@ -550,8 +602,46 @@ describe("CustomersService createCompany quotation base seed", () => {
       "c-new",
       "u1",
       "Acme",
-      { client: tx, rows },
+      expect.objectContaining({
+        client: expect.objectContaining({
+          customer_companies: expect.any(Object),
+        }),
+        rows,
+      }),
     );
     expect("customerQuotation" in tx).toBe(false);
+  });
+
+  it("skips customer rate template seeding when skipDefaultRateTemplate is true", async () => {
+    const { svc, seedFromCurrentQuotationBase, audit } = makeNewCompanyService({
+      seedImpl: async () => seededTemplate,
+    });
+
+    const res = await svc.createCompany(
+      "t1",
+      { name: "Acme", skipDefaultRateTemplate: true },
+      "u1",
+    );
+
+    expect(seedFromCurrentQuotationBase).not.toHaveBeenCalled();
+    expect(res.seededCustomerRateTemplate).toBeNull();
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it("returns the same customer for repeated onboarding operation keys", async () => {
+    const { svc, txCreate } = makeNewCompanyService({
+      seedImpl: async () => null,
+    });
+
+    const dto = {
+      name: "Acme",
+      skipDefaultRateTemplate: true,
+      onboardingOperationKey: "onboard-op-12345678",
+    };
+    const first = await svc.createCompany("t1", dto as any, "u1");
+    const second = await svc.createCompany("t1", dto as any, "u1");
+
+    expect(first.id).toBe(second.id);
+    expect(txCreate).toHaveBeenCalledTimes(1);
   });
 });

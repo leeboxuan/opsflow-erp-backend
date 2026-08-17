@@ -69,6 +69,15 @@ export class CreateBlankCustomerQuotationDto {
   @IsOptional()
   @IsString()
   validUntil?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Stable client operation key for idempotent first-quotation blank draft create/retries.",
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(8)
+  onboardingQuotationKey?: string;
 }
 
 export class CreateCustomerQuotationFromTemplateDto {
@@ -258,6 +267,15 @@ export class ReplaceCustomerQuotationLinesDto {
   @ValidateNested({ each: true })
   @Type(() => CustomerQuotationLineInputDto)
   lines: CustomerQuotationLineInputDto[];
+
+  @ApiPropertyOptional({
+    description:
+      "Stable client operation key for idempotent first-quotation line snapshot replace/retries.",
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(8)
+  onboardingLinesKey?: string;
 }
 
 export class AcceptCustomerQuotationDto {

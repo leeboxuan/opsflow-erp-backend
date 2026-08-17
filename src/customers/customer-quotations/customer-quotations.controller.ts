@@ -216,6 +216,7 @@ export class CustomerQuotationsController {
       id,
       dto.lines ?? [],
       req.user?.userId ?? null,
+      dto.onboardingLinesKey,
     );
   }
 

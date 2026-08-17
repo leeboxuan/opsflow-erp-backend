@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AuthModule } from './shared/auth/auth.module';
 import { PrismaModule } from './shared/prisma/prisma.module';
+import { IdempotencyModule } from './shared/idempotency/idempotency.module';
 import { TenantsModule } from './shared/tenants/tenants.module';
 import { HealthModule } from './shared/health/health.module';
 import { TransportModule } from './transport/transport.module';
@@ -40,6 +41,7 @@ import { StatisticsModule } from "./statistics/statistics.module";
       envFilePath: ['.env.local', '.env'],
     }),
     PrismaModule,
+    IdempotencyModule,
     AuthModule,
     TenantsModule,
     HealthModule,

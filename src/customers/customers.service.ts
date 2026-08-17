@@ -1,6 +1,7 @@
 import { ConfigService } from "@nestjs/config";
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   Optional,
@@ -31,9 +32,13 @@ import { createClient } from "@supabase/supabase-js";
 import { applyMappedFilter } from "../shared/common/listing/listing.filters";
 import { buildOrderBy } from "../shared/common/listing/listing.sort";
 import { applyQSearch } from "../shared/common/listing/listing.search";
+import { runToleratedSideEffect } from "../shared/side-effects/tolerated-side-effects";
 import { RealtimeEventsService } from "../shared/realtime/realtime-events.service";
 import * as rt from "../shared/realtime/realtime-publish";
 import { RateTemplatesService } from "./rate-templates/rate-templates.service";
+import { IdempotencyService } from "../shared/idempotency/idempotency.service";
+import { IDEMPOTENCY_SCOPES } from "../shared/idempotency/idempotency.util";
+import { hashCustomerOnboardingPayload } from "./onboarding-idempotency.util";
 
 const COMPANY_DOCS_BUCKET = "job-documents";
 const INVOICE_DOCUMENTS_BUCKET = "invoice-documents";
@@ -51,6 +56,7 @@ export class CustomersService {
     private readonly audit: AuditService,
     @Optional() private readonly realtime?: RealtimeEventsService,
     @Optional() private readonly rateTemplates?: RateTemplatesService,
+    @Optional() private readonly idempotency?: IdempotencyService,
   ) {
     const supabaseUrl =
       this.configService.get<string>("SUPABASE_PROJECT_URL") ||
@@ -336,6 +342,16 @@ export class CustomersService {
     dto: CreateCustomerCompanyDto,
     actorUserId: string | null = null,
   ) {
+    const operationKey = dto.onboardingOperationKey?.trim();
+    if (operationKey) {
+      return this.createCompanyIdempotent(
+        tenantId,
+        dto,
+        operationKey,
+        actorUserId,
+      );
+    }
+
     const companyName = String(dto.name ?? "").trim();
     if (!companyName) throw new BadRequestException("name is required");
 
@@ -393,20 +409,21 @@ export class CustomersService {
           data: payload.create,
           select,
         });
-        const seededTemplate = this.rateTemplates
-          ? await this.rateTemplates.seedFromCurrentQuotationBase(
-              tenantId,
-              created.id,
-              actorUserId,
-              created.name,
-              {
-                client: tx,
-                ...(dto.defaultRateRows !== undefined
-                  ? { rows: dto.defaultRateRows }
-                  : {}),
-              },
-            )
-          : null;
+        const seededTemplate =
+          this.rateTemplates && !dto.skipDefaultRateTemplate
+            ? await this.rateTemplates.seedFromCurrentQuotationBase(
+                tenantId,
+                created.id,
+                actorUserId,
+                created.name,
+                {
+                  client: tx,
+                  ...(dto.defaultRateRows !== undefined
+                    ? { rows: dto.defaultRateRows }
+                    : {}),
+                },
+              )
+            : null;
         return { company: created, seeded: seededTemplate, wasCreate: true };
       },
     );
@@ -443,6 +460,152 @@ export class CustomersService {
         ? this.mapSeededRateTemplate(seeded)
         : null,
     };
+  }
+
+  private async loadCustomerCompanyResponse(
+    tenantId: string,
+    companyId: string,
+    seededCustomerRateTemplate: ReturnType<
+      CustomersService["mapSeededRateTemplate"]
+    > | null = null,
+  ) {
+    const company = await this.prisma.customer_companies.findFirst({
+      where: { id: companyId, tenantId },
+      select: this.companyWriteSelect(),
+    });
+    if (!company) {
+      throw new NotFoundException("Customer company not found");
+    }
+    return {
+      ...company,
+      contactCount: company._count.contacts,
+      userCount: company._count.users,
+      seededCustomerRateTemplate,
+    };
+  }
+
+  private async createCompanyIdempotent(
+    tenantId: string,
+    dto: CreateCustomerCompanyDto,
+    operationKey: string,
+    actorUserId: string | null,
+  ) {
+    if (!this.idempotency) {
+      throw new BadRequestException("Idempotency service unavailable");
+    }
+
+    const companyName = String(dto.name ?? "").trim();
+    if (!companyName) throw new BadRequestException("name is required");
+
+    const normalizedName = this.normalizeCompanyName(companyName);
+    const payload = this.companyWritePayload(
+      tenantId,
+      dto,
+      companyName,
+      normalizedName,
+    );
+    const select = this.companyWriteSelect();
+    const requestHash = hashCustomerOnboardingPayload(dto);
+
+    let seededTemplateSideEffect: {
+      id: string;
+      meta: Record<string, unknown>;
+    } | null = null;
+
+    const { result, outcome } = await this.idempotency.execute({
+      tenantId,
+      scope: IDEMPOTENCY_SCOPES.CUSTOMER_ONBOARDING,
+      operationKey,
+      requestHash,
+      load: (resourceId) =>
+        this.loadCustomerCompanyResponse(tenantId, resourceId, null),
+      execute: async (tx) => {
+        const raced = await tx.customer_companies.findUnique({
+          where: { tenantId_normalizedName: { tenantId, normalizedName } },
+          select: { id: true },
+        });
+        if (raced) {
+          throw new ConflictException({
+            message:
+              "A customer with this name already exists for a different onboarding operation",
+            code: "CUSTOMER_NAME_CONFLICT",
+          });
+        }
+
+        const created = await tx.customer_companies.create({
+          data: payload.create,
+          select,
+        });
+        const seededTemplate =
+          this.rateTemplates && !dto.skipDefaultRateTemplate
+            ? await this.rateTemplates.seedFromCurrentQuotationBase(
+                tenantId,
+                created.id,
+                actorUserId,
+                created.name,
+                {
+                  client: tx,
+                  ...(dto.defaultRateRows !== undefined
+                    ? { rows: dto.defaultRateRows }
+                    : {}),
+                },
+              )
+            : null;
+
+        if (seededTemplate) {
+          seededTemplateSideEffect = {
+            id: seededTemplate.id,
+            meta: {
+              customerCompanyId: created.id,
+              fromMasterDatasetId: seededTemplate.sourceMasterDatasetId,
+              versionNo: seededTemplate.sourceMasterDatasetVersionNo,
+              rowCount: seededTemplate.rows?.length ?? 0,
+              seededOnCustomerCreate: true,
+            },
+          };
+        }
+
+        const response = {
+          ...created,
+          contactCount: created._count.contacts,
+          userCount: created._count.users,
+          seededCustomerRateTemplate: seededTemplate
+            ? this.mapSeededRateTemplate(seededTemplate)
+            : null,
+        };
+
+        return {
+          resourceType: "customer_companies",
+          resourceId: created.id,
+          result: response,
+        };
+      },
+    });
+
+    if (outcome === "created") {
+      if (seededTemplateSideEffect) {
+        await runToleratedSideEffect("customer rate template audit", () =>
+          this.audit.log(
+            tenantId,
+            "CREATE",
+            "CustomerRateTemplate",
+            seededTemplateSideEffect!.id,
+            seededTemplateSideEffect!.meta,
+            actorUserId,
+          ),
+        );
+      }
+      await runToleratedSideEffect("customer.created realtime", async () => {
+        rt.publishCustomerEvent(
+          this.realtime,
+          "customer.created",
+          tenantId,
+          result.id,
+        );
+      });
+    }
+
+    return result;
   }
 
   async createContact(

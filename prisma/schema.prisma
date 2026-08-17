@@ -53,6 +53,7 @@ model Tenant {
   customerRateTemplates        CustomerRateTemplate[]
   customerRateTemplateRows     CustomerRateTemplateRow[]
   customerQuotations           CustomerQuotation[]
+  idempotencyRecords           IdempotencyRecord[]
   customerQuotationLines       CustomerQuotationLine[]
   quotationNoCounters          quotation_no_counters[]
   masterFiles                  MasterFile[]
@@ -2880,4 +2881,31 @@ enum CustomerQuotationAcceptanceMethod {
   PHONE
   SIGNED_DOCUMENT
   OTHER
+}
+
+/// Stores idempotent create outcomes for safe client retries.
+enum IdempotencyRecordStatus {
+  PENDING
+  COMPLETED
+}
+
+model IdempotencyRecord {
+  id           String                  @id @default(cuid())
+  tenantId     String
+  scope        String                  @db.VarChar(64)
+  operationKey String                  @db.VarChar(128)
+  requestHash  String                  @db.VarChar(64)
+  status       IdempotencyRecordStatus @default(PENDING)
+  resourceType String?                 @db.VarChar(64)
+  resourceId   String?                 @db.VarChar(128)
+  claimedAt    DateTime                @default(now())
+  completedAt  DateTime?
+  createdAt    DateTime                @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, scope, operationKey])
+  @@index([tenantId, resourceType, resourceId])
+  @@index([tenantId, status, claimedAt])
+  @@map("idempotency_records")
 }

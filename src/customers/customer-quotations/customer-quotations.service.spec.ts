@@ -5,6 +5,7 @@ import {
   MasterRateDatasetType,
 } from "@prisma/client";
 import { CustomerQuotationsService } from "./customer-quotations.service";
+import { IdempotencyService } from "../../shared/idempotency/idempotency.service";
 import * as quotationParseHelpers from "../quotation-parse.helpers";
 
 jest.mock("./customer-quotation-pdf", () => ({
@@ -32,16 +33,29 @@ describe("CustomerQuotationsService", () => {
           },
         }),
       } as any);
-    const prismaWithUsers = {
+    const prismaWithUsers: any = {
       ...prisma,
+      idempotencyRecord: prisma.idempotencyRecord ?? {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockImplementation(async ({ data }: any) => data),
+      },
       user:
         prisma.user ??
         ({
           findMany: jest.fn().mockResolvedValue([]),
         } as any),
     };
+    prismaWithUsers.$transaction =
+      prisma.$transaction ??
+      jest.fn(async (fn: (tx: any) => Promise<unknown>) => fn(prismaWithUsers));
+    const idempotency = extras.idempotency ?? new IdempotencyService(prismaWithUsers);
     return {
-      svc: new CustomerQuotationsService(prismaWithUsers, audit, supabaseService),
+      svc: new CustomerQuotationsService(
+        prismaWithUsers,
+        audit,
+        supabaseService,
+        idempotency,
+      ),
       audit,
       prisma: prismaWithUsers,
     };

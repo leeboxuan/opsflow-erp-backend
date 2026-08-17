@@ -313,6 +313,24 @@ export class CreateCustomerCompanyDto {
   @ValidateNested({ each: true })
   @Type(() => RateTemplateRowInputDto)
   defaultRateRows?: RateTemplateRowInputDto[];
+
+  @ApiPropertyOptional({
+    description:
+      "Compatibility flag: when true, customer create skips seeding a legacy CustomerRateTemplate. Required for the first-quotation onboarding flow; does not affect Job Charge sourcing from accepted quotations.",
+  })
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  skipDefaultRateTemplate?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      "Stable client operation key for idempotent customer onboarding create/retries.",
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(8)
+  onboardingOperationKey?: string;
 }
 
 export class UpdateCustomerCompanyDto {

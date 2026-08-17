@@ -35,6 +35,13 @@ import {
   type ParsedQuotationRateLineInput,
   type QuotationReconciliationSummary,
 } from "../quotation-parse.helpers";
+import { IdempotencyService } from "../../shared/idempotency/idempotency.service";
+import { IDEMPOTENCY_SCOPES } from "../../shared/idempotency/idempotency.util";
+import { runToleratedSideEffect } from "../../shared/side-effects/tolerated-side-effects";
+import {
+  hashFirstQuotationBlankPayload,
+  hashFirstQuotationLinesPayload,
+} from "../onboarding-idempotency.util";
 
 const QUOTATION_PDF_BUCKET = "job-documents";
 const PDF_SIGNED_URL_TTL_SECONDS = 60 * 60;
@@ -72,6 +79,7 @@ export class CustomerQuotationsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly supabaseService: SupabaseService,
+    private readonly idempotency: IdempotencyService,
   ) {}
 
   private async assertCustomerCompany(
@@ -443,6 +451,17 @@ export class CustomerQuotationsService {
     dto: CreateBlankCustomerQuotationDto,
     actorUserId: string | null,
   ) {
+    const operationKey = dto.onboardingQuotationKey?.trim();
+    if (operationKey) {
+      return this.createBlankIdempotent(
+        tenantId,
+        customerId,
+        dto,
+        operationKey,
+        actorUserId,
+      );
+    }
+
     const company = await this.assertCustomerCompany(tenantId, customerId);
 
     const created = await this.prisma.$transaction(async (tx) => {
@@ -475,6 +494,85 @@ export class CustomerQuotationsService {
       actorUserId,
     );
     return created;
+  }
+
+  private async createBlankIdempotent(
+    tenantId: string,
+    customerId: string,
+    dto: CreateBlankCustomerQuotationDto,
+    operationKey: string,
+    actorUserId: string | null,
+  ) {
+    await this.assertCustomerCompany(tenantId, customerId);
+    const requestHash = hashFirstQuotationBlankPayload(dto);
+
+    const { result, outcome } = await this.idempotency.execute({
+      tenantId,
+      scope: IDEMPOTENCY_SCOPES.CUSTOMER_FIRST_QUOTATION,
+      operationKey,
+      requestHash,
+      load: async (resourceId) => {
+        const quotation = await this.prisma.customerQuotation.findFirst({
+          where: { id: resourceId, tenantId, customerCompanyId: customerId },
+          include: { lines: true },
+        });
+        if (!quotation) {
+          throw new NotFoundException("Customer quotation not found");
+        }
+        return quotation;
+      },
+      execute: async (tx) => {
+        const company = await tx.customer_companies.findFirst({
+          where: { id: customerId, tenantId },
+          select: { name: true },
+        });
+        if (!company) throw new NotFoundException("Customer company not found");
+
+        const quotationNo = await this.allocateQuotationNo(tenantId, tx);
+        const created = await tx.customerQuotation.create({
+          data: {
+            tenantId,
+            customerCompanyId: customerId,
+            quotationNo,
+            title: dto.title?.trim() || null,
+            status: CustomerQuotationStatus.DRAFT,
+            currency: dto.currency?.trim() || "SGD",
+            notes: dto.notes ?? null,
+            validFrom: this.parseOptionalDate(dto.validFrom) ?? null,
+            validUntil: this.parseOptionalDate(dto.validUntil) ?? null,
+            customerNameSnapshot: company.name,
+            createdByUserId: actorUserId,
+            updatedByUserId: actorUserId,
+          },
+          include: { lines: true },
+        });
+
+        return {
+          resourceType: "CustomerQuotation",
+          resourceId: created.id,
+          result: created,
+        };
+      },
+    });
+
+    if (outcome === "created") {
+      await runToleratedSideEffect("customer quotation create audit", () =>
+        this.audit.log(
+          tenantId,
+          "CREATE",
+          "CustomerQuotation",
+          result.id,
+          {
+            quotationNo: result.quotationNo,
+            customerCompanyId: customerId,
+            onboardingQuotationKey: operationKey,
+          },
+          actorUserId,
+        ),
+      );
+    }
+
+    return result;
   }
 
   async createFromTemplate(
@@ -1152,6 +1250,90 @@ export class CustomerQuotationsService {
     id: string,
     lines: CustomerQuotationLineInputDto[],
     actorUserId: string | null,
+    onboardingLinesKey?: string,
+  ) {
+    const operationKey = onboardingLinesKey?.trim();
+    if (operationKey) {
+      return this.replaceLinesIdempotent(
+        tenantId,
+        customerId,
+        id,
+        lines,
+        operationKey,
+        actorUserId,
+      );
+    }
+
+    return this.replaceLinesUnlocked(
+      tenantId,
+      customerId,
+      id,
+      lines,
+      actorUserId,
+    );
+  }
+
+  private async replaceLinesIdempotent(
+    tenantId: string,
+    customerId: string,
+    id: string,
+    lines: CustomerQuotationLineInputDto[],
+    operationKey: string,
+    actorUserId: string | null,
+  ) {
+    const requestHash = hashFirstQuotationLinesPayload(lines);
+
+    const { result, outcome } = await this.idempotency.execute({
+      tenantId,
+      scope: IDEMPOTENCY_SCOPES.CUSTOMER_FIRST_QUOTATION_LINES,
+      operationKey,
+      requestHash,
+      load: (resourceId) => this.getById(tenantId, customerId, resourceId),
+      execute: async (tx) => {
+        const updated = await this.replaceLinesUnlocked(
+          tenantId,
+          customerId,
+          id,
+          lines,
+          actorUserId,
+          tx,
+          { skipAudit: true },
+        );
+        return {
+          resourceType: "CustomerQuotation",
+          resourceId: updated.id,
+          result: updated,
+        };
+      },
+    });
+
+    if (outcome === "created") {
+      await runToleratedSideEffect("customer quotation replace-lines audit", () =>
+        this.audit.log(
+          tenantId,
+          "UPDATE",
+          "CustomerQuotation",
+          result.id,
+          {
+            action: "REPLACE_LINES",
+            lineCount: result.lines?.length ?? 0,
+          },
+          actorUserId,
+        ),
+      );
+    }
+
+    return result;
+  }
+
+  private async replaceLinesUnlocked(
+    tenantId: string,
+    customerId: string,
+    id: string,
+    lines: CustomerQuotationLineInputDto[],
+    actorUserId: string | null,
+    txClient?: Prisma.TransactionClient,
+    options?: { skipAudit?: boolean },
   ) {
     const quotation = await this.getById(tenantId, customerId, id);
     if (quotation.status !== CustomerQuotationStatus.DRAFT) {
@@ -1159,7 +1341,7 @@ export class CustomerQuotationsService {
     }
     const totals = this.computeLineTotals(lines, quotation.currency);
 
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const run = async (tx: Prisma.TransactionClient) => {
       await tx.customerQuotationLine.deleteMany({
         where: { tenantId, quotationId: quotation.id },
       });
@@ -1199,16 +1381,22 @@ export class CustomerQuotationsService {
           lines: { orderBy: [{ sortOrder: "asc" }, { id: "asc" }] },
         },
       });
-    });
+    };
 
-    await this.audit.log(
-      tenantId,
-      "UPDATE",
-      "CustomerQuotation",
-      quotation.id,
-      { action: "REPLACE_LINES", lineCount: totals.normalized.length, totals },
-      actorUserId,
-    );
+    const updated = txClient
+      ? await run(txClient)
+      : await this.prisma.$transaction(run);
+
+    if (!txClient && !options?.skipAudit) {
+      await this.audit.log(
+        tenantId,
+        "UPDATE",
+        "CustomerQuotation",
+        quotation.id,
+        { action: "REPLACE_LINES", lineCount: totals.normalized.length, totals },
+        actorUserId,
+      );
+    }
     return updated;
   }
 
