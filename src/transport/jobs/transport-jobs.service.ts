@@ -197,6 +197,7 @@ import {
   type ActiveCustomerRateTemplateRow,
   type BoundCustomerQuotationLine,
   buildCustomerQuotationChargeSnapshot,
+  formatAcceptedQuotationCatalogueLabel,
   jobChargeProvenanceLabel,
   jobChargeQtyFromQuotationQty,
   mapCustomerQuotationLinesToChargeOptions,
@@ -1383,21 +1384,87 @@ export class TransportJobsService {
       const quotationLineIds = dto.charges
         .filter((c) => c.sourceType === JobChargeSourceType.CUSTOMER_QUOTATION)
         .map((c) => normalizeOptionalId(c.sourceCustomerQuotationLineId));
-      if (quotationLineIds.some((id) => id) && !job.sourceCustomerQuotationId) {
+      const uniqueLineIds = [
+        ...new Set(quotationLineIds.filter((id): id is string => !!id)),
+      ];
+
+      const templateRowIds = dto.charges
+        .filter(
+          (c) =>
+            c.sourceType === JobChargeSourceType.MANUAL &&
+            typeof c.sourceRefId === "string" &&
+            c.sourceRefId.trim().length > 0,
+        )
+        .map((c) => c.sourceRefId!.trim());
+
+      if (uniqueLineIds.length > 0 && templateRowIds.length > 0) {
+        throw new BadRequestException(
+          "Cannot mix accepted quotation lines with legacy customer rate template lines in one save",
+        );
+      }
+
+      let effectiveBoundQuotationId = job.sourceCustomerQuotationId;
+      if (uniqueLineIds.length > 0 && !effectiveBoundQuotationId) {
+        const candidateLines = await tx.customerQuotationLine.findMany({
+          where: {
+            tenantId,
+            id: { in: uniqueLineIds },
+          },
+          include: {
+            quotation: {
+              select: {
+                id: true,
+                quotationNo: true,
+                title: true,
+                status: true,
+                customerCompanyId: true,
+              },
+            },
+          },
+        });
+        if (candidateLines.length !== uniqueLineIds.length) {
+          throw new BadRequestException(
+            "One or more quotation lines were not found for this tenant",
+          );
+        }
+        const quotationIds = new Set(
+          candidateLines.map((line) => line.quotationId),
+        );
+        if (quotationIds.size !== 1) {
+          throw new BadRequestException(
+            "CUSTOMER_QUOTATION charges must come from a single accepted quotation",
+          );
+        }
+        const acceptedQuotation = candidateLines[0]!.quotation;
+        if (
+          !acceptedQuotation ||
+          acceptedQuotation.customerCompanyId !== job.customerCompanyId ||
+          acceptedQuotation.status !== CustomerQuotationStatus.ACCEPTED
+        ) {
+          throw new BadRequestException(
+            "Quotation lines must belong to an ACCEPTED customer quotation",
+          );
+        }
+        await tx.job.update({
+          where: { id: jobId, tenantId },
+          data: { sourceCustomerQuotationId: acceptedQuotation.id },
+        });
+        effectiveBoundQuotationId = acceptedQuotation.id;
+      } else if (
+        quotationLineIds.some((id) => id) &&
+        !effectiveBoundQuotationId
+      ) {
         throw new BadRequestException(
           "Job has no bound accepted quotation for CUSTOMER_QUOTATION charges",
         );
       }
 
-      const uniqueLineIds = [
-        ...new Set(quotationLineIds.filter((id): id is string => !!id)),
-      ];
       const quotationLines = uniqueLineIds.length
         ? await tx.customerQuotationLine.findMany({
             where: {
               tenantId,
               id: { in: uniqueLineIds },
-              quotationId: job.sourceCustomerQuotationId ?? undefined,
+              quotationId: effectiveBoundQuotationId ?? undefined,
             },
             include: {
               quotation: {
@@ -1427,7 +1494,7 @@ export class TransportJobsService {
         const boundQuotation = quotationLines[0]?.quotation;
         if (
           !boundQuotation ||
-          boundQuotation.id !== job.sourceCustomerQuotationId ||
+          boundQuotation.id !== effectiveBoundQuotationId ||
           boundQuotation.customerCompanyId !== job.customerCompanyId ||
           boundQuotation.status !== CustomerQuotationStatus.ACCEPTED
         ) {
@@ -1451,14 +1518,12 @@ export class TransportJobsService {
         }
       }
 
-      const templateRowIds = dto.charges
-        .filter(
-          (c) =>
-            c.sourceType === JobChargeSourceType.MANUAL &&
-            typeof c.sourceRefId === "string" &&
-            c.sourceRefId.trim().length > 0,
-        )
-        .map((c) => c.sourceRefId!.trim());
+      if (effectiveBoundQuotationId && templateRowIds.length > 0) {
+        throw new BadRequestException(
+          "Legacy customer rate template lines are not allowed on a quotation-bound job",
+        );
+      }
+
       const templateRows = templateRowIds.length
         ? await tx.customerRateTemplateRow.findMany({
             where: {
@@ -4335,6 +4400,21 @@ export class TransportJobsService {
       title: string | null;
       status: string;
     } | null;
+    acceptedQuotations: Array<{
+      id: string;
+      quotationNo: string;
+      title: string | null;
+      status: string;
+      acceptedAt: string | null;
+      validUntil: string | null;
+      pickerGroup: string;
+      lines: any[];
+    }>;
+    legacyTemplate: {
+      id: string;
+      name: string;
+      lines: any[];
+    } | null;
     quotationLines: any[];
     dhcReferences: any[];
     existingSnapshot: any[];
@@ -4354,6 +4434,21 @@ export class TransportJobsService {
     let quotationSource: "CUSTOMER_QUOTATION" | "CUSTOMER_RATE_TEMPLATE" | "NONE" =
       "NONE";
     let quotationLines: any[] = [];
+    let acceptedQuotations: Array<{
+      id: string;
+      quotationNo: string;
+      title: string | null;
+      status: string;
+      acceptedAt: string | null;
+      validUntil: string | null;
+      pickerGroup: string;
+      lines: any[];
+    }> = [];
+    let legacyTemplate: {
+      id: string;
+      name: string;
+      lines: any[];
+    } | null = null;
     const bound = job.sourceCustomerQuotation;
     const boundQuotation = bound
       ? {
@@ -4364,34 +4459,88 @@ export class TransportJobsService {
         }
       : null;
 
+    const toCatalogueEntry = (
+      quotation: {
+        id: string;
+        quotationNo: string;
+        title?: string | null;
+        status: string;
+        acceptedAt?: Date | null;
+        validUntil?: Date | null;
+      },
+      lines: any[],
+    ) => ({
+      id: quotation.id,
+      quotationNo: quotation.quotationNo,
+      title: quotation.title ?? null,
+      status: quotation.status,
+      acceptedAt: quotation.acceptedAt?.toISOString() ?? null,
+      validUntil: quotation.validUntil?.toISOString() ?? null,
+      pickerGroup: formatAcceptedQuotationCatalogueLabel(quotation),
+      lines,
+    });
+
     if (bound?.status === CustomerQuotationStatus.ACCEPTED) {
       const lines = await this.prisma.customerQuotationLine.findMany({
         where: { tenantId, quotationId: bound.id },
         orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       });
-      quotationLines = mapCustomerQuotationLinesToChargeOptions(lines, bound);
+      const mapped = mapCustomerQuotationLinesToChargeOptions(lines, bound);
+      quotationLines = mapped;
+      acceptedQuotations = [toCatalogueEntry(bound, mapped)];
       quotationSource = "CUSTOMER_QUOTATION";
     } else if (!job.sourceCustomerQuotationId) {
-      const template = await this.prisma.customerRateTemplate.findFirst({
+      const acceptedList = await this.prisma.customerQuotation.findMany({
         where: {
           tenantId,
           customerCompanyId: job.customerCompanyId,
-          status: CustomerRateTemplateStatus.ACTIVE,
+          status: CustomerQuotationStatus.ACCEPTED,
         },
-        orderBy: [{ updatedAt: "desc" }],
-        include: {
-          rows: {
-            where: { isActive: true },
-            orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
-          },
-        },
+        orderBy: [{ acceptedAt: "asc" }, { quotationNo: "asc" }],
       });
-      if (template) {
-        quotationLines = mapCustomerRateTemplateRowsToChargeOptions(
-          template.rows,
-          template,
+
+      if (acceptedList.length > 0) {
+        acceptedQuotations = await Promise.all(
+          acceptedList.map(async (quotation) => {
+            const lines = await this.prisma.customerQuotationLine.findMany({
+              where: { tenantId, quotationId: quotation.id },
+              orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+            });
+            const mapped = mapCustomerQuotationLinesToChargeOptions(
+              lines,
+              quotation,
+            );
+            return toCatalogueEntry(quotation, mapped);
+          }),
         );
-        quotationSource = "CUSTOMER_RATE_TEMPLATE";
+        quotationLines = acceptedQuotations.flatMap((entry) => entry.lines);
+        quotationSource = "CUSTOMER_QUOTATION";
+      } else {
+        const template = await this.prisma.customerRateTemplate.findFirst({
+          where: {
+            tenantId,
+            customerCompanyId: job.customerCompanyId,
+            status: CustomerRateTemplateStatus.ACTIVE,
+          },
+          orderBy: [{ updatedAt: "desc" }],
+          include: {
+            rows: {
+              where: { isActive: true },
+              orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { id: "asc" }],
+            },
+          },
+        });
+        if (template) {
+          legacyTemplate = {
+            id: template.id,
+            name: template.name,
+            lines: mapCustomerRateTemplateRowsToChargeOptions(
+              template.rows,
+              template,
+            ),
+          };
+          quotationSource = "NONE";
+        }
       }
     }
 
@@ -4437,6 +4586,8 @@ export class TransportJobsService {
     return {
       quotationSource,
       boundQuotation,
+      acceptedQuotations,
+      legacyTemplate,
       quotationLines,
       dhcReferences,
       existingSnapshot: (job.charges ?? []).map((c) => ({

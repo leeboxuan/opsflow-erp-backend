@@ -437,6 +437,7 @@ describe("job charge workflow hardening", () => {
         }),
       },
       customerRateTemplate: { findFirst: jest.fn().mockResolvedValue(null) },
+      customerQuotation: { findMany: jest.fn().mockResolvedValue([]) },
       masterRateDataset: {
         findFirst: jest.fn().mockResolvedValue(null),
       },
@@ -455,11 +456,112 @@ describe("job charge workflow hardening", () => {
 
     expect(result.quotationSource).toBe("NONE");
     expect(result.quotationLines).toEqual([]);
+    expect(result.acceptedQuotations).toEqual([]);
     expect(prisma.masterRateDataset.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ type: "DHC_RATES" }),
       }),
     );
+  });
+
+  it("exposes all accepted customer quotation catalogues when no legacy rate template exists", async () => {
+    const prisma: any = {
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "comp1",
+          sourceCustomerQuotationId: null,
+          status: "ONGOING",
+          charges: [],
+        }),
+      },
+      customerQuotation: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "q-accepted",
+            quotationNo: "QT-202608-0007",
+            title: "First quote",
+            status: "ACCEPTED",
+            customerCompanyId: "comp1",
+            acceptedAt: new Date("2026-08-01"),
+            validUntil: null,
+          },
+        ]),
+      },
+      customerQuotationLine: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "ql-1",
+            code: "A",
+            label: "Line A",
+            unitPriceCents: 10000,
+            currency: "SGD",
+            requiresManualAmount: false,
+            qty: 1,
+          },
+        ]),
+      },
+      customerRateTemplate: { findFirst: jest.fn().mockResolvedValue(null) },
+      masterRateDataset: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      masterRateDatasetRow: {
+        findMany: jest.fn(),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
+
+    const result = await svc.getBillingChargeOptionsForJob("t1", "job1", {
+      userId: "u1",
+      role: Role.TRANSPORT_STAFF,
+    });
+
+    expect(result.quotationSource).toBe("CUSTOMER_QUOTATION");
+    expect(result.boundQuotation).toBeNull();
+    expect(result.acceptedQuotations).toHaveLength(1);
+    expect(result.acceptedQuotations[0]?.id).toBe("q-accepted");
+    expect(result.quotationLines).toHaveLength(1);
+    expect(prisma.customerQuotation.findMany).toHaveBeenCalled();
+  });
+
+  it("does not expose draft quotations as charge options", async () => {
+    const prisma: any = {
+      job: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job1",
+          tenantId: "t1",
+          customerCompanyId: "comp1",
+          sourceCustomerQuotationId: null,
+          status: "ONGOING",
+          charges: [],
+        }),
+      },
+      customerQuotation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      customerRateTemplate: { findFirst: jest.fn().mockResolvedValue(null) },
+      masterRateDataset: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      masterRateDatasetRow: {
+        findMany: jest.fn(),
+      },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
+
+    const result = await svc.getBillingChargeOptionsForJob("t1", "job1", {
+      userId: "u1",
+      role: Role.TRANSPORT_STAFF,
+    });
+
+    expect(result.quotationSource).toBe("NONE");
+    expect(result.quotationLines).toEqual([]);
   });
 
   it("billing charge options resolve DHC refs from tenant DHC dataset with fixed/multiple/manual states", async () => {
@@ -475,6 +577,7 @@ describe("job charge workflow hardening", () => {
         }),
       },
       customerRateTemplate: { findFirst: jest.fn().mockResolvedValue(null) },
+      customerQuotation: { findMany: jest.fn().mockResolvedValue([]) },
       masterRateDataset: {
         findFirst: jest.fn().mockResolvedValue({ id: "ds-dhc" }),
       },

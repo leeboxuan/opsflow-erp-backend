@@ -94,6 +94,29 @@ export function jobChargeProvenanceLabel(input: {
   return "Manual";
 }
 
+function formatCatalogueDate(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+export function formatAcceptedQuotationCatalogueLabel(quotation: {
+  quotationNo: string;
+  title?: string | null;
+  acceptedAt?: Date | string | null;
+  validUntil?: Date | string | null;
+}): string {
+  const parts = [quotation.quotationNo.trim()];
+  const title = quotation.title?.trim();
+  if (title) parts.push(title);
+  const accepted = formatCatalogueDate(quotation.acceptedAt);
+  if (accepted) parts.push(`Accepted ${accepted}`);
+  const validUntil = formatCatalogueDate(quotation.validUntil);
+  if (validUntil) parts.push(`Valid until ${validUntil}`);
+  return parts.join(" · ");
+}
+
 export function mapCustomerQuotationLinesToChargeOptions(
   lines: Array<{
     id: string;

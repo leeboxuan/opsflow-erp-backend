@@ -188,7 +188,10 @@ describe("Job commercial quotation binding", () => {
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
       },
-      customerQuotation: { findFirst: jest.fn().mockResolvedValue(null) },
+      customerQuotation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     };
     const svc = new TransportJobsService(
       prisma,
@@ -345,11 +348,12 @@ describe("Job billing charge options", () => {
     );
   });
 
-  it("falls back to the customer's ACTIVE rate template when unbound", async () => {
+  it("falls back to the customer's ACTIVE rate template when unbound and no accepted quotation exists", async () => {
     const prisma: any = {
       job: {
         findFirst: jest.fn().mockResolvedValue(ongoingJob()),
       },
+      customerQuotation: { findMany: jest.fn().mockResolvedValue([]) },
       customerRateTemplate: {
         findFirst: jest.fn().mockResolvedValue({
           id: "tmpl-1",
@@ -368,11 +372,12 @@ describe("Job billing charge options", () => {
       { getClient: jest.fn() } as any,
     );
     const result = await svc.getBillingChargeOptionsForJob("t1", "job1", actor);
-    expect(result.quotationSource).toBe("CUSTOMER_RATE_TEMPLATE");
-    expect(result.quotationLines[0]).toMatchObject({
+    expect(result.quotationSource).toBe("NONE");
+    expect(result.legacyTemplate?.lines[0]).toMatchObject({
       id: "row-1",
       source: "CUSTOMER_RATE_TEMPLATE",
     });
+    expect(result.quotationLines).toEqual([]);
     expect(prisma.customerRateTemplate.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
@@ -386,6 +391,7 @@ describe("Job billing charge options", () => {
   it("keeps DHC options separate from quotation lines", async () => {
     const prisma: any = {
       job: { findFirst: jest.fn().mockResolvedValue(ongoingJob()) },
+      customerQuotation: { findMany: jest.fn().mockResolvedValue([]) },
       customerRateTemplate: { findFirst: jest.fn().mockResolvedValue(null) },
       masterRateDataset: { findFirst: jest.fn().mockResolvedValue({ id: "ds-dhc" }) },
       masterRateDatasetRow: {
