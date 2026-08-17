@@ -256,7 +256,10 @@ describe("IdempotencyRecord schema and migration", () => {
     expect(migration).toContain(
       'CREATE INDEX IF NOT EXISTS "idempotency_records_tenantId_status_claimedAt_idx"',
     );
+    expect(migration).toContain('REFERENCES "tenants"("id")');
+    expect(migration).not.toContain('REFERENCES "Tenant"("id")');
     expect(migration).toContain("ON DELETE CASCADE");
+    expect(migration).toContain("ON UPDATE CASCADE");
     expect(migration).not.toMatch(/requestPayload|responsePayload|payloadJson/i);
   });
 

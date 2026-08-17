@@ -27,4 +27,4 @@ CREATE INDEX IF NOT EXISTS "idempotency_records_tenantId_status_claimedAt_idx"
 
 ALTER TABLE "idempotency_records"
   ADD CONSTRAINT "idempotency_records_tenantId_fkey"
-  FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  FOREIGN KEY ("tenantId") REFERENCES "tenants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
