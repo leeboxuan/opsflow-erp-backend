@@ -46,9 +46,7 @@ import {
   buildPaginationMeta,
   type PaginatedResponse,
 } from "../../shared/common/pagination";
-import { applyMappedFilter } from "../../shared/common/listing/listing.filters";
 import { buildOrderBy } from "../../shared/common/listing/listing.sort";
-import { applyQSearch } from "../../shared/common/listing/listing.search";
 import { buildDocumentFileDisplayFields } from "../documents/document-file-display";
 import {
   buildDocumentSignedUrlResponse,
@@ -89,6 +87,18 @@ import {
   syncJobInvoiceReadiness,
   type JobInvoiceSyncPrisma,
 } from "./job-invoice-readiness";
+import {
+  JOB_LIST_SORT_FIELDS,
+  indexLatestInvoicesByJobId,
+  jobListFilteredCountSql,
+  jobListFilteredPageIdsSql,
+  jobListPageInvoiceQuery,
+  jobListPrismaWhere,
+  tripProgressFromTrips,
+  type JobListInvoiceRef,
+  type JobListQueryConstraints,
+  type JobListTripProgress,
+} from "./job-list-progress";
 import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
 import * as rt from "../../shared/realtime/realtime-publish";
 import { tripDocumentTypeLabel } from "../../shared/notifications/document-type-label";
@@ -336,9 +346,39 @@ function normalizeExternalRef(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+const JOB_LIST_ITEM_SELECT = {
+  id: true,
+  tenantId: true,
+  customerCompanyId: true,
+  internalRef: true,
+  externalRef: true,
+  jobType: true,
+  collectionType: true,
+  status: true,
+  pickupDate: true,
+  createdAt: true,
+  updatedAt: true,
+  customerCompany: { select: { name: true } },
+  _count: {
+    select: {
+      items: true,
+      trips: true,
+      documents: { where: { isActive: true } },
+    },
+  },
+  trips: {
+    where: { status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] } },
+    orderBy: [{ tripSequence: "asc" as const }, { createdAt: "asc" as const }],
+    take: 1,
+    select: { assignedDriverUserId: true },
+  },
+} as const;
+
 function toJobListItemDto(
   j: any,
   driverNameByUserId?: Map<string, string | null>,
+  tripProgress?: JobListTripProgress,
+  invoice?: JobListInvoiceRef | null,
 ): JobListItemDto {
   const primaryTrip = Array.isArray(j.trips) ? j.trips[0] : null;
   const assignedDriverId = primaryTrip?.assignedDriverUserId ?? null;
@@ -361,6 +401,14 @@ function toJobListItemDto(
     tripCount: j._count?.trips ?? 0,
     itemCount: j._count?.items ?? 0,
     documentCount: j._count?.documents ?? 0,
+    tripProgress: tripProgress ?? {
+      completed: 0,
+      total: 0,
+      isComplete: false,
+    },
+    invoice: invoice
+      ? { id: invoice.id, status: invoice.status }
+      : null,
   };
 }
 
@@ -2197,146 +2245,130 @@ export class TransportJobsService {
     }
   }
 
+  private buildJobListConstraints(
+    tenantId: string,
+    query: JobListQueryDto,
+    user: any,
+  ): JobListQueryConstraints {
+    const access = this.applyJobAccessFilter(tenantId, user);
+    return {
+      tenantId,
+      companyScopeId: actorIsCustomerAdmin(user)
+        ? access.customerCompanyId
+        : query.companyId?.trim() || undefined,
+      search: (query.q ?? query.search)?.trim() || undefined,
+      jobStatus: query.status?.trim() || undefined,
+      legacyFilter: query.filter?.trim() || undefined,
+      tripProgress: query.tripProgress,
+      invoiceStatus: query.invoiceStatus,
+      date: query.date?.trim() || undefined,
+      dateFrom:
+        query.dateFrom?.trim() || query.pickupDateFrom?.trim() || undefined,
+      dateTo: query.dateTo?.trim() || query.pickupDateTo?.trim() || undefined,
+      sortBy: query.sortBy,
+      sortDir: query.sortDir,
+    };
+  }
+
   async list(
     tenantId: string,
     query: JobListQueryDto,
     user: any,
   ): Promise<PaginatedResponse<JobListItemDto>> {
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
-
-    const where: any = this.applyJobAccessFilter(tenantId, user);
-
-    if (query.status) {
-      where.status = query.status as JobStatus;
-    }
-
-    // CUSTOMER users can't choose other customerCompanyIds.
-    if (query.companyId && !actorIsCustomerAdmin(user)) {
-      where.customerCompanyId = query.companyId;
-    }
-
-    const day = query.date?.trim();
-    const from = query.dateFrom?.trim() || query.pickupDateFrom?.trim();
-    const to = query.dateTo?.trim() || query.pickupDateTo?.trim();
-
-    if (day) {
-      const dayStart = new Date(day + "T00:00:00.000Z");
-      const dayEnd = new Date(day + "T23:59:59.999Z");
-      where.OR = [
-        { pickupDate: { gte: dayStart, lte: dayEnd } },
-        {
-          trips: {
-            some: {
-              plannedStartAt: { gte: dayStart, lte: dayEnd },
-            },
-          },
-        },
-      ];
-    } else if (from || to) {
-      const pickupRange: any = {};
-      const tripRange: any = {};
-      if (from) {
-        const gte = new Date(from + "T00:00:00.000Z");
-        pickupRange.gte = gte;
-        tripRange.gte = gte;
-      }
-      if (to) {
-        const lte = new Date(to + "T23:59:59.999Z");
-        pickupRange.lte = lte;
-        tripRange.lte = lte;
-      }
-      where.OR = [
-        { pickupDate: pickupRange },
-        { trips: { some: { plannedStartAt: tripRange } } },
-      ];
-    }
-
-    const q = (query.q ?? query.search)?.trim();
-    applyQSearch(where, q, [
-      "internalRef",
-      "pickupAddress1",
-      "deliveryAddress1",
-      "receiverName",
-      "receiverPhone",
-      "externalRef",
-    ]);
-
-    applyMappedFilter(where, query.filter, {
-      ONGOING: { status: JobStatus.ONGOING },
-      READY_FOR_INVOICE: { status: JobStatus.READY_FOR_INVOICE },
-      COMPLETED: { status: JobStatus.COMPLETED },
-      CANCELLED: { status: JobStatus.CANCELLED },
-    });
-
-    if (query.status) {
-      where.status = query.status as JobStatus;
-    }
-
+    const constraints = this.buildJobListConstraints(tenantId, query, user);
+    const where = jobListPrismaWhere(constraints);
     const orderBy = buildOrderBy(
       query.sortBy,
       query.sortDir,
-      [
-        "createdAt",
-        "updatedAt",
-        "pickupDate",
-        "startedAt",
-        "internalRef",
-        "externalRef",
-        "status",
-      ],
+      JOB_LIST_SORT_FIELDS,
       { createdAt: "desc" },
     );
 
-    const [total, jobs] = await this.prisma.$transaction([
-      this.prisma.job.count({ where }),
-      this.prisma.job.findMany({
-        where,
-        orderBy,
-        skip,
-        take,
-        select: {
-          id: true,
-          tenantId: true,
-          customerCompanyId: true,
-          internalRef: true,
-          externalRef: true,
-          jobType: true,
-          collectionType: true,
-          status: true,
-          pickupDate: true,
-          createdAt: true,
-          updatedAt: true,
-          customerCompany: { select: { name: true } },
-          _count: {
-            select: {
-              items: true,
-              trips: true,
-              documents: { where: { isActive: true } },
+    let total: number;
+    let jobs: any[];
+    if (constraints.invoiceStatus) {
+      const [countRows, idRows] = await Promise.all([
+        this.prisma.$queryRaw(jobListFilteredCountSql(constraints)) as Promise<
+          Array<{ count: bigint }>
+        >,
+        this.prisma.$queryRaw(
+          jobListFilteredPageIdsSql(constraints, skip, take),
+        ) as Promise<Array<{ id: string }>>,
+      ]);
+      total = Number(countRows[0]?.count ?? 0);
+      const pageIds = idRows.map((row) => row.id);
+      const unordered = pageIds.length
+        ? await this.prisma.job.findMany({
+            where: {
+              AND: [
+                this.applyJobAccessFilter(tenantId, user),
+                { id: { in: pageIds } },
+              ],
             },
-          },
-          trips: {
-            where: { status: { notIn: [TripStatus.DRAFT, TripStatus.CANCELLED] } },
-            orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
-            take: 1,
-            select: { assignedDriverUserId: true },
-          },
-        },
-      }),
-    ]);
+            select: JOB_LIST_ITEM_SELECT,
+          })
+        : [];
+      const byId = new Map(unordered.map((job) => [job.id, job]));
+      jobs = pageIds
+        .map((id) => byId.get(id))
+        .filter((job): job is NonNullable<typeof job> => Boolean(job));
+    } else {
+      const [count, rows] = await this.prisma.$transaction([
+        this.prisma.job.count({ where }),
+        this.prisma.job.findMany({
+          where,
+          orderBy,
+          skip,
+          take,
+          select: JOB_LIST_ITEM_SELECT,
+        }),
+      ]);
+      total = count;
+      jobs = rows;
+    }
 
-    const driverNameMap = await this.buildUserNameMapByIds(
-      tenantId,
-      Array.from(
-        new Set(
-          jobs
-            .map((j) => j.trips?.[0]?.assignedDriverUserId)
-            .filter(Boolean) as string[],
+    const jobIds = jobs.map((job) => job.id);
+    const [driverNameMap, tripRows, pageInvoices] = await Promise.all([
+      this.buildUserNameMapByIds(
+        tenantId,
+        Array.from(
+          new Set(
+            jobs
+              .map((j) => j.trips?.[0]?.assignedDriverUserId)
+              .filter(Boolean) as string[],
+          ),
         ),
       ),
-    );
+      jobIds.length
+        ? this.prisma.trip.findMany({
+            where: { tenantId, jobId: { in: jobIds } },
+            select: { jobId: true, status: true },
+          })
+        : Promise.resolve([]),
+      jobIds.length
+        ? this.prisma.invoice.findMany(jobListPageInvoiceQuery(tenantId, jobIds))
+        : Promise.resolve([]),
+    ]);
+
+    const tripsByJobId = new Map<string, Array<{ status: TripStatus }>>();
+    for (const trip of tripRows) {
+      const list = tripsByJobId.get(trip.jobId) ?? [];
+      list.push({ status: trip.status });
+      tripsByJobId.set(trip.jobId, list);
+    }
+
+    const invoiceByJobId = indexLatestInvoicesByJobId(pageInvoices);
 
     return {
-      data: jobs.map((j) => toJobListItemDto(j, driverNameMap)),
+      data: jobs.map((j) =>
+        toJobListItemDto(
+          j,
+          driverNameMap,
+          tripProgressFromTrips(tripsByJobId.get(j.id) ?? []),
+          invoiceByJobId.get(j.id) ?? null,
+        ),
+      ),
       meta: buildPaginationMeta(page, pageSize, total),
     };
   }

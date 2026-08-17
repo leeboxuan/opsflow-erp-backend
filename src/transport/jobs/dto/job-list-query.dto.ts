@@ -1,6 +1,10 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsOptional, IsString } from "class-validator";
+import { IsIn, IsOptional, IsString } from "class-validator";
 import { ListQueryBaseDto } from "../../../shared/common/dto";
+import {
+  JOB_LIST_INVOICE_STATUS_VALUES,
+  JOB_LIST_TRIP_PROGRESS_VALUES,
+} from "../job-list-progress";
 
 export class JobListQueryDto extends ListQueryBaseDto {
   @ApiPropertyOptional({
@@ -19,6 +23,24 @@ export class JobListQueryDto extends ListQueryBaseDto {
   @IsOptional()
   @IsString()
   companyId?: string;
+
+  @ApiPropertyOptional({
+    enum: JOB_LIST_TRIP_PROGRESS_VALUES,
+    description:
+      "Trip progress: incomplete, complete, none (no operational trips), cancelled (job-level)",
+  })
+  @IsOptional()
+  @IsIn([...JOB_LIST_TRIP_PROGRESS_VALUES])
+  tripProgress?: (typeof JOB_LIST_TRIP_PROGRESS_VALUES)[number];
+
+  @ApiPropertyOptional({
+    enum: JOB_LIST_INVOICE_STATUS_VALUES,
+    description:
+      "Invoice column filter: not_available, waiting, or a canonical InvoiceStatus",
+  })
+  @IsOptional()
+  @IsIn([...JOB_LIST_INVOICE_STATUS_VALUES])
+  invoiceStatus?: (typeof JOB_LIST_INVOICE_STATUS_VALUES)[number];
 
   @ApiPropertyOptional({ description: "Pickup date from (YYYY-MM-DD)" })
   @IsOptional()

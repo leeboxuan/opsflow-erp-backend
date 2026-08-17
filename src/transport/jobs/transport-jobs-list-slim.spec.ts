@@ -25,6 +25,15 @@ describe("TransportJobsService.list (slim)", () => {
           },
         ]),
       },
+      trip: {
+        findMany: jest.fn().mockResolvedValue([
+          { jobId: "job1", status: TripStatus.COMPLETED },
+          { jobId: "job1", status: TripStatus.PUBLISHED },
+        ]),
+      },
+      invoice: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       tenantMembership: {
         findMany: jest.fn().mockResolvedValue([
           { userId: "driver-1", user: { name: "Driver One", email: "d@example.com" } },
@@ -45,6 +54,8 @@ describe("TransportJobsService.list (slim)", () => {
         documentCount: 1,
         assignedDriverId: "driver-1",
         assignedDriverName: "Driver One",
+        tripProgress: { completed: 1, total: 2, isComplete: false },
+        invoice: null,
       }),
     );
     expect(res.data[0]).not.toHaveProperty("trips");

@@ -5,6 +5,7 @@ import {
   JobStatus,
   JobTripTemplate,
   JobChargeSourceType,
+  InvoiceStatus,
 } from "@prisma/client";
 
 export class JobDocumentDto {
@@ -312,6 +313,25 @@ export class JobChargeResponseDto {
 }
 
 /** Slim row for GET /api/jobs list (table view). Full detail: GET /api/jobs/:id. */
+export class JobListTripProgressDto {
+  @ApiProperty()
+  completed!: number;
+
+  @ApiProperty()
+  total!: number;
+
+  @ApiProperty()
+  isComplete!: boolean;
+}
+
+export class JobListInvoiceDto {
+  @ApiProperty()
+  id!: string;
+
+  @ApiProperty({ enum: InvoiceStatus })
+  status!: InvoiceStatus;
+}
+
 export class JobListItemDto {
   id!: string;
   tenantId!: string;
@@ -332,6 +352,8 @@ export class JobListItemDto {
   itemCount!: number;
   /** Active job-level documents (quotation/other); trip photos are separate. */
   documentCount!: number;
+  tripProgress!: JobListTripProgressDto;
+  invoice!: JobListInvoiceDto | null;
 }
 
 export class DocumentSignedUrlDto {
