@@ -39,13 +39,9 @@ describe("workflow helpers", () => {
       {
         label: "EXPORT",
         jobType: JobType.EXPORT,
-        expectedCount: 3,
-        templates: [
-          JobTripTemplate.DEPOT_TO_DELIVERY,
-          JobTripTemplate.DELIVERY_TO_PORT,
-          JobTripTemplate.PORT_TO_DEPOT,
-        ],
-        titles: ["Depot to Customer", "Customer to Port", "Port to Depot"],
+        expectedCount: 1,
+        templates: [JobTripTemplate.DELIVERY_TO_PORT],
+        titles: ["Customer to Port"],
       },
       {
         label: "IMPORT",
@@ -101,14 +97,7 @@ describe("workflow helpers", () => {
       ).toEqual(itemIds);
     });
 
-    it("EXPORT links JobItems to Depot→Customer and Customer→Port only", () => {
-      expect(
-        jobItemIdsForCanonicalAutoTrip({
-          jobType: JobType.EXPORT,
-          jobTripTemplate: JobTripTemplate.DEPOT_TO_DELIVERY,
-          jobItemIds: itemIds,
-        }),
-      ).toEqual(itemIds);
+    it("EXPORT links JobItems to Customer→Port; historical Port→Depot still carries none", () => {
       expect(
         jobItemIdsForCanonicalAutoTrip({
           jobType: JobType.EXPORT,
@@ -202,7 +191,7 @@ describe("workflow helpers", () => {
     expect(rows[0].destinationLabel).toBe("Delivery Address");
   });
 
-  it("tripCreateManyForJob creates three EXPORT legs in order", () => {
+  it("tripCreateManyForJob creates one EXPORT Customer→Port leg", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -211,21 +200,14 @@ describe("workflow helpers", () => {
       null,
       null,
     );
-    expect(rows).toHaveLength(3);
-    expect(rows.map((r) => r.displayTitle)).toEqual([
-      "Depot to Customer",
-      "Customer to Port",
-      "Port to Depot",
-    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows.map((r) => r.displayTitle)).toEqual(["Customer to Port"]);
     expect(rows.map((r) => r.jobTripTemplate)).toEqual([
-      JobTripTemplate.DEPOT_TO_DELIVERY,
       JobTripTemplate.DELIVERY_TO_PORT,
-      JobTripTemplate.PORT_TO_DEPOT,
     ]);
     expect(rows[0].completionRuleJson).toEqual(
-      TRIP_COMPLETION_RULES[JobTripTemplate.DEPOT_TO_DELIVERY],
+      TRIP_COMPLETION_RULES[JobTripTemplate.DELIVERY_TO_PORT],
     );
-    expect(rows[2].jobTripTemplate).toBe(JobTripTemplate.PORT_TO_DEPOT);
     expect(rows.every((r) => r.status === "DRAFT")).toBe(true);
   });
 
@@ -575,11 +557,9 @@ describe("workflow helpers", () => {
       "  CONT-EXP-01  ",
       null,
     );
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(1);
     expect(rows[0].containerNumber).toBe("CONT-EXP-01");
-    expect(rows[1].containerNumber).toBe("CONT-EXP-01");
-    expect(rows[2].jobTripTemplate).toBe(JobTripTemplate.PORT_TO_DEPOT);
-    expect(rows[2].containerNumber).toBeNull();
+    expect(rows[0].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_PORT);
   });
 
   it("tripCreateManyForJob seeds shipping reference fields onto IMPORT and EXPORT trips", () => {

@@ -209,14 +209,15 @@ export class CreateJobExportDetailsDto {
 
   @ApiPropertyOptional({
     description:
-      "Optional EXPORT depot metadata (master_singapore_depots.code). Trip origin uses top-level pickup address autocomplete; not required.",
+      "Optional EXPORT empty-depot commercial/reference metadata (master depot code). Not required and does not create Trips.",
   })
   @IsOptional()
   @IsString()
   pickupDepotCode?: string;
 
   @ApiPropertyOptional({
-    description: "Container pickup source address line 1",
+    description:
+      "Optional empty-container collection address (compatibility). Ignored by create-time EXPORT topology.",
   })
   @IsOptional()
   @IsString()

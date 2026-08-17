@@ -264,13 +264,7 @@ export function validateReviewedDraft(
   }
 
   if (reviewed.movementType === JobMessageImportMovementType.EXPORT) {
-    if (!reviewed.pickupAddress1) {
-      pushBlocking(
-        "pickupAddress1",
-        "MISSING_DEPOT",
-        "Empty container depot is required.",
-      );
-    }
+    // Empty-container depot (pickupAddress1) is optional reference only.
     if (!reviewed.deliveryAddress1) {
       pushBlocking(
         "deliveryAddress1",

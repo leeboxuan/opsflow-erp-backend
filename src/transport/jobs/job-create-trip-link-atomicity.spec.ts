@@ -352,11 +352,9 @@ describe("create-job interactive transaction contract", () => {
       {
         job: { create: txJobCreate } as any,
         trip: {
-          createMany: jest.fn().mockResolvedValue({ count: 3 }),
+          createMany: jest.fn().mockResolvedValue({ count: 1 }),
           findMany: jest.fn().mockResolvedValue([
-            { id: "t1", status: TripStatus.DRAFT, containerNumber: "CONT1", jobTripTemplate: "DEPOT_TO_DELIVERY" },
-            { id: "t2", status: TripStatus.DRAFT, containerNumber: "CONT1", jobTripTemplate: "DELIVERY_TO_PORT" },
-            { id: "t3", status: TripStatus.DRAFT, containerNumber: null, jobTripTemplate: "PORT_TO_DEPOT" },
+            { id: "t1", status: TripStatus.DRAFT, containerNumber: "CONT1", jobTripTemplate: "DELIVERY_TO_PORT" },
           ]),
           update: jest.fn().mockResolvedValue({}),
         } as any,

@@ -963,7 +963,10 @@ describe("job charge workflow hardening", () => {
     expect(data.deliveryAddress1).toBe("Stuffing A1");
     expect(data.receiverName).toBe("Stuffing PIC");
     expect(data.receiverPhone).toBe("99999999");
-    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(3);
+    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(1);
+    expect(prisma.trip.createMany.mock.calls[0][0].data[0].jobTripTemplate).toBe(
+      "DELIVERY_TO_PORT",
+    );
   });
 
   it("invoice draft from jobs uses saved JobCharge rows and fails if any selected job has none", async () => {

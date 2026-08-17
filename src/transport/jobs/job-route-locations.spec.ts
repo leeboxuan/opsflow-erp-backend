@@ -6,7 +6,7 @@ import {
 } from "./job-route-locations";
 
 describe("canonical route locations", () => {
-  it("EXPORT maps depot, customer, and port without duplicating the return depot", () => {
+  it("EXPORT maps customer and port; optional depot stays reference-only", () => {
     const locations = resolveCanonicalRouteLocations({
       jobType: JobType.EXPORT,
       pickupAddress1: "PSA Empty Depot",
@@ -20,15 +20,27 @@ describe("canonical route locations", () => {
     expect(locations.customer?.address1).toBe("Nat Test Company");
     expect(locations.port?.address1).toBe("PSA Pasir Panjang Terminal");
     const snaps = canonicalAutoTripRouteSnapshots(JobType.EXPORT, locations);
-    expect(snaps[JobTripTemplate.DEPOT_TO_DELIVERY]?.originAddressLine1).toBe(
-      "PSA Empty Depot",
+    expect(Object.keys(snaps)).toEqual([JobTripTemplate.DELIVERY_TO_PORT]);
+    expect(snaps[JobTripTemplate.DELIVERY_TO_PORT]?.originAddressLine1).toBe(
+      "Nat Test Company",
     );
-    expect(snaps[JobTripTemplate.PORT_TO_DEPOT]?.destinationAddressLine1).toBe(
-      "PSA Empty Depot",
-    );
-    expect(snaps[JobTripTemplate.PORT_TO_DEPOT]?.originAddressLine1).toBe(
+    expect(snaps[JobTripTemplate.DELIVERY_TO_PORT]?.destinationAddressLine1).toBe(
       "PSA Pasir Panjang Terminal",
     );
+    expect(snaps[JobTripTemplate.DELIVERY_TO_PORT]?.tripPICName).toBe("Daniel");
+    expect(snaps[JobTripTemplate.DEPOT_TO_DELIVERY]).toBeUndefined();
+    expect(snaps[JobTripTemplate.PORT_TO_DEPOT]).toBeUndefined();
+  });
+
+  it("allows EXPORT without empty-container depot", () => {
+    const locations = resolveCanonicalRouteLocations({
+      jobType: JobType.EXPORT,
+      deliveryAddress1: "Customer",
+      exportDetails: { exportPortAddress1: "PSA Terminal" },
+    });
+    expect(() =>
+      assertCanonicalRouteLocationsForCreate(JobType.EXPORT, locations),
+    ).not.toThrow();
   });
 
   it("rejects EXPORT without export port using an operational message", () => {

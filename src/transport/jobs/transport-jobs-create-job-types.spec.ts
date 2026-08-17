@@ -149,23 +149,17 @@ describe("job create: EXPORT and COLLECTION", () => {
 
     expect(prisma.masterLogisticsLocation.findFirst).not.toHaveBeenCalled();
     const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
-    expect(tripRows).toHaveLength(3);
+    expect(tripRows).toHaveLength(1);
     expect(tripRows.map((r: any) => r.jobTripTemplate)).toEqual([
-      JobTripTemplate.DEPOT_TO_DELIVERY,
       JobTripTemplate.DELIVERY_TO_PORT,
-      JobTripTemplate.PORT_TO_DEPOT,
     ]);
-    expect(tripRows.map((r: any) => r.tripSequence)).toEqual([1, 2, 3]);
-    expect(tripRows[0].originAddressLine1).toBe("7 Gul Circle");
-    expect(tripRows[0].destinationAddressLine1).toBe("20 Gul Way #05-04");
-    expect(tripRows[0].destinationPlaceId).toBe("ChIJ-export-dest");
-    expect(tripRows[1].originAddressLine1).toBe("20 Gul Way #05-04");
-    expect(tripRows[1].destinationAddressLine1).toBe("Pasir Panjang Terminal");
-    expect(tripRows[2].originAddressLine1).toBe("Pasir Panjang Terminal");
-    expect(tripRows[2].destinationAddressLine1).toBe("7 Gul Circle");
+    expect(tripRows.map((r: any) => r.tripSequence)).toEqual([1]);
+    expect(tripRows[0].originAddressLine1).toBe("20 Gul Way #05-04");
+    expect(tripRows[0].originPlaceId).toBe("ChIJ-export-dest");
+    expect(tripRows[0].destinationAddressLine1).toBe("Pasir Panjang Terminal");
   });
 
-  it("EXPORT create without pickup address fails", async () => {
+  it("EXPORT create without empty depot still succeeds when customer and port are set", async () => {
     const prisma = makeExportCreatePrisma();
     const svc = makeSvc(prisma);
 
@@ -179,14 +173,37 @@ describe("job create: EXPORT and COLLECTION", () => {
           deliveryAddress1: "20 Gul Way",
           receiverName: "PIC",
           receiverPhone: "91234567",
+          exportDetails: { exportPortAddress1: "Pasir Panjang Terminal" },
         } as any,
         { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
-    ).rejects.toThrow(/Empty container depot is required/i);
+    ).resolves.toBeTruthy();
+    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(1);
+  });
+
+  it("EXPORT create without customer fails", async () => {
+    const prisma = makeExportCreatePrisma();
+    const svc = makeSvc(prisma);
+
+    await expect(
+      svc.create(
+        "t1",
+        {
+          jobType: JobType.EXPORT,
+          customerCompanyId: "comp1",
+          pickupAddress1: "7 Gul Circle",
+          deliveryAddress1: "  ",
+          receiverName: "PIC",
+          receiverPhone: "91234567",
+          exportDetails: { exportPortAddress1: "Pasir Panjang Terminal" },
+        } as any,
+        { userId: "u1", role: Role.TRANSPORT_STAFF },
+      ),
+    ).rejects.toThrow(/Customer \/ stuffing location is required/i);
     expect(prisma.job.create).not.toHaveBeenCalled();
   });
 
-  it("EXPORT create seeds trip destination from top-level deliveryAddress1 and deliveryPostal", async () => {
+  it("EXPORT create seeds trip origin from top-level deliveryAddress1 and deliveryPostal", async () => {
     const prisma = makeExportCreatePrisma();
     const svc = makeSvc(prisma);
 
@@ -207,14 +224,12 @@ describe("job create: EXPORT and COLLECTION", () => {
     );
 
     const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
-    expect(tripRows).toHaveLength(3);
-    expect(tripRows[0].jobTripTemplate).toBe(JobTripTemplate.DEPOT_TO_DELIVERY);
-    expect(tripRows[1].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_PORT);
-    expect(tripRows[2].jobTripTemplate).toBe(JobTripTemplate.PORT_TO_DEPOT);
-    expect(tripRows[0].destinationAddressLine1).toBe("20 Gul Way #05-04");
-    expect(tripRows[0].destinationPostalCode).toBe("629356");
-    expect(tripRows[0].destinationPlaceId).toBe("ChIJ-export-dest");
-    expect(tripRows[1].originAddressLine1).toBe("20 Gul Way #05-04");
+    expect(tripRows).toHaveLength(1);
+    expect(tripRows[0].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_PORT);
+    expect(tripRows[0].originAddressLine1).toBe("20 Gul Way #05-04");
+    expect(tripRows[0].originPostalCode).toBe("629356");
+    expect(tripRows[0].originPlaceId).toBe("ChIJ-export-dest");
+    expect(tripRows[0].destinationAddressLine1).toBe("Pasir Panjang Terminal");
   });
 
   it("EXPORT create seeds trip destination from exportDetails.stuffing fields", async () => {
@@ -242,8 +257,10 @@ describe("job create: EXPORT and COLLECTION", () => {
     );
 
     const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
-    expect(tripRows[0].destinationAddressLine1).toBe("20 Gul Way #05-04");
-    expect(tripRows[0].destinationPostalCode).toBe("629356");
+    expect(tripRows).toHaveLength(1);
+    expect(tripRows[0].originAddressLine1).toBe("20 Gul Way #05-04");
+    expect(tripRows[0].originPostalCode).toBe("629356");
+    expect(tripRows[0].destinationAddressLine1).toBe("Pasir Panjang Terminal");
   });
 
   it("EXPORT create fails when top-level delivery and stuffing destination disagree", async () => {
@@ -300,10 +317,8 @@ describe("job create: EXPORT and COLLECTION", () => {
     expect(data.returnLastDay).toBeNull();
     expect(prisma.trip.createMany).toHaveBeenCalled();
     const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
-    expect(tripRows).toHaveLength(3);
-    expect(tripRows[0].jobTripTemplate).toBe(JobTripTemplate.DEPOT_TO_DELIVERY);
-    expect(tripRows[1].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_PORT);
-    expect(tripRows[2].jobTripTemplate).toBe(JobTripTemplate.PORT_TO_DEPOT);
+    expect(tripRows).toHaveLength(1);
+    expect(tripRows[0].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_PORT);
   });
 
   it("EXPORT payload with legacy pickupDepotId, returnDepotId, exportPortId does not fail", async () => {
@@ -372,7 +387,7 @@ describe("job create: EXPORT and COLLECTION", () => {
       ),
     ).resolves.toBeTruthy();
 
-    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(3);
+    expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(1);
     expect(prisma.masterLogisticsLocation.findFirst).not.toHaveBeenCalled();
   });
 
@@ -757,14 +772,10 @@ describe("parseValidJobItemsFromInput container cargo", () => {
     expect(rows[0].qty).toBe(1);
   });
 
-  it("EXPORT trip generation creates exactly three legs", () => {
+  it("EXPORT trip generation creates exactly one Customer→Port leg", () => {
     const rows = tripCreateManyForJob("t1", "j1", JobType.EXPORT, null, null, null);
-    expect(rows).toHaveLength(3);
-    expect(rows.map((r) => r.displayTitle)).toEqual([
-      "Depot to Customer",
-      "Customer to Port",
-      "Port to Depot",
-    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows.map((r) => r.displayTitle)).toEqual(["Customer to Port"]);
   });
 });
 

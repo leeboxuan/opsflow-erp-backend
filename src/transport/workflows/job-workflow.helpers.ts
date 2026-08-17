@@ -568,11 +568,9 @@ export const CANONICAL_AUTO_TRIP_TEMPLATES: Record<
   JobType,
   JobTripTemplate[]
 > = {
-  [JobType.EXPORT]: [
-    JobTripTemplate.DEPOT_TO_DELIVERY,
-    JobTripTemplate.DELIVERY_TO_PORT,
-    JobTripTemplate.PORT_TO_DEPOT,
-  ],
+  // EXPORT: stuffed container Customer/Stuffing → Export Port only.
+  // Empty-container collection is not an OpsFlow Trip.
+  [JobType.EXPORT]: [JobTripTemplate.DELIVERY_TO_PORT],
   [JobType.IMPORT]: [
     JobTripTemplate.PICKUP_TO_DELIVERY,
     JobTripTemplate.DELIVERY_TO_DEPOT,
@@ -591,12 +589,10 @@ export const CANONICAL_AUTO_TRIP_TEMPLATES: Record<
  *   1. Port → Customer (`PICKUP_TO_DELIVERY`) — laden
  *   2. Customer → Depot (`DELIVERY_TO_DEPOT`) — empty return of the same boxes
  *
- * EXPORT — each created container JobItem on stuffing / gate-in only:
- *   1. Depot → Customer (`DEPOT_TO_DELIVERY`) — empty to stuffing
- *   2. Customer → Port (`DELIVERY_TO_PORT`) — laden to port
- *   3. Port → Depot (`PORT_TO_DEPOT`) — does not carry those JobItems
- *      (the export box remains at port; this leg is truck/empty reposition).
- *      Controllers may later link different cargo.
+ * EXPORT — each created container JobItem on the single laden leg:
+ *   1. Customer → Port (`DELIVERY_TO_PORT`) — stuffed export box to terminal
+ * Historical EXPORT `PORT_TO_DEPOT` rows (pre one-Trip topology) still do not
+ * auto-carry create-time JobItems when evaluated via this helper.
  *
  * LCL / COLLECTION — all created JobItems on the single Pickup → Delivery trip.
  */
@@ -627,7 +623,7 @@ export function jobItemIdsForCanonicalAutoTrip(input: {
 }
 
 const CANONICAL_AUTO_TRIP_TITLES: Record<JobType, string[]> = {
-  [JobType.EXPORT]: ["Depot to Customer", "Customer to Port", "Port to Depot"],
+  [JobType.EXPORT]: ["Customer to Port"],
   [JobType.IMPORT]: ["Port to Customer", "Customer to Depot"],
   [JobType.LCL]: ["Pickup to Delivery"],
   [JobType.COLLECTION]: ["Pickup to Delivery"],

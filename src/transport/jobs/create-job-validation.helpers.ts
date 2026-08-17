@@ -164,7 +164,8 @@ export function assertPickupLocationForCreate(input: {
     return;
   }
   if (input.jobType === JobType.EXPORT) {
-    throw new BadRequestException("Empty container depot is required.");
+    // Empty-container depot is optional for EXPORT; create topology does not use it.
+    return;
   }
   if (input.jobType === JobType.IMPORT) {
     throw new BadRequestException("Import port / terminal is required.");

@@ -108,7 +108,9 @@ function locationIsPresent(input?: CanonicalRouteLocation | null): boolean {
  * Reuses Job pickup and delivery columns plus nested import/export details.
  * No extra Job table.
  *
- * EXPORT: depot from pickup, customer from delivery/stuffing, port from exportDetails.
+ * EXPORT: customer from delivery/stuffing, port from exportDetails.
+ *   Optional empty-depot fields on pickup/containerPickup remain commercial
+ *   reference only and never seed auto-trips.
  * IMPORT: port from pickup, customer from delivery, returnDepot from returningDepot.
  * LCL/COLLECTION: pickup and delivery stay pickup/delivery.
  */
@@ -128,6 +130,7 @@ export function resolveCanonicalRouteLocations(
 
   if (input.jobType === JobType.EXPORT) {
     return {
+      // Optional compatibility/reference only — not part of create-time topology.
       depot: loc({
         address1:
           input.pickupAddress1 || exportDetails.containerPickupAddress1,
@@ -227,9 +230,7 @@ export function assertCanonicalRouteLocationsForCreate(
   locations: CanonicalRouteLocations,
 ): void {
   if (jobType === JobType.EXPORT) {
-    if (!locationIsPresent(locations.depot)) {
-      throw new BadRequestException("Empty container depot is required.");
-    }
+    // Empty-container depot is optional commercial/reference only.
     if (!locationIsPresent(locations.customer)) {
       throw new BadRequestException(
         "Customer / stuffing location is required.",
@@ -307,7 +308,8 @@ function tripPicFields(
 
 /**
  * Create-time Trip origin/destination snapshots from operational route roles.
- * EXPORT Trip 3 destination is the same depot as Trip 1 (not a second intake).
+ * EXPORT: Customer/Stuffing → Export Port (one Trip).
+ * Historical DEPOT_TO_DELIVERY / PORT_TO_DEPOT rows remain display-only.
  */
 export function canonicalAutoTripRouteSnapshots(
   jobType: JobType,
@@ -315,18 +317,10 @@ export function canonicalAutoTripRouteSnapshots(
 ): Partial<Record<JobTripTemplate, Partial<Prisma.TripCreateManyInput>>> {
   if (jobType === JobType.EXPORT) {
     return {
-      [JobTripTemplate.DEPOT_TO_DELIVERY]: {
-        ...originFields(locations.depot),
-        ...destinationFields(locations.customer),
-        ...tripPicFields(locations.customer),
-      },
       [JobTripTemplate.DELIVERY_TO_PORT]: {
         ...originFields(locations.customer),
         ...destinationFields(locations.port),
-      },
-      [JobTripTemplate.PORT_TO_DEPOT]: {
-        ...originFields(locations.port),
-        ...destinationFields(locations.depot),
+        ...tripPicFields(locations.customer),
       },
     };
   }

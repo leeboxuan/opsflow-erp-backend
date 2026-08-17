@@ -177,7 +177,7 @@ describe("canonical auto-trip creation", () => {
       .sort();
   }
 
-  it("EXPORT creates exactly 3 trips and links containers only on Depot→Customer and Customer→Port", async () => {
+  it("EXPORT creates exactly 1 trip Customer→Port and links all containers", async () => {
     const prisma = makeStatefulPrisma();
     const svc = makeSvc(prisma);
 
@@ -186,7 +186,6 @@ describe("canonical auto-trip creation", () => {
       {
         jobType: JobType.EXPORT,
         customerCompanyId: "comp1",
-        pickupAddress1: "7 Gul Circle",
         deliveryAddress1: "20 Gul Way",
         receiverName: "PIC",
         receiverPhone: "91234567",
@@ -197,31 +196,72 @@ describe("canonical auto-trip creation", () => {
     );
 
     expect(tripTemplates(prisma)).toEqual(CANONICAL_AUTO_TRIP_TEMPLATES[JobType.EXPORT]);
-    expect(prisma._state.trips.map((t: any) => t.tripSequence)).toEqual([1, 2, 3]);
+    expect(prisma._state.trips.map((t: any) => t.tripSequence)).toEqual([1]);
     const itemIds = prisma._state.jobItems.map((i: any) => i.id).sort();
     expect(itemIds).toHaveLength(1);
-    const [depotToCustomer, customerToPort, portToDepot] = [...prisma._state.trips].sort(
+    const [customerToPort] = [...prisma._state.trips].sort(
       (a: any, b: any) => a.tripSequence - b.tripSequence,
     );
-    expect(depotToCustomer.originAddressLine1).toBe("7 Gul Circle");
-    expect(depotToCustomer.destinationAddressLine1).toBe("20 Gul Way");
-    expect(depotToCustomer.jobTripTemplate).toBe(JobTripTemplate.DEPOT_TO_DELIVERY);
     expect(customerToPort.originAddressLine1).toBe("20 Gul Way");
     expect(customerToPort.destinationAddressLine1).toBe("Pasir Panjang Terminal");
     expect(customerToPort.jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_PORT);
-    expect(portToDepot.originAddressLine1).toBe("Pasir Panjang Terminal");
-    expect(portToDepot.destinationAddressLine1).toBe("7 Gul Circle");
-    expect(portToDepot.jobTripTemplate).toBe(JobTripTemplate.PORT_TO_DEPOT);
-    expect(depotToCustomer.tripPICName).toBe("PIC");
-    expect(customerToPort.tripPICName).toBeNull();
-    expect(portToDepot.tripPICName).toBeNull();
-    expect(linkedItemIdsForTrip(prisma, depotToCustomer.id)).toEqual(itemIds);
+    expect(customerToPort.tripPICName).toBe("PIC");
     expect(linkedItemIdsForTrip(prisma, customerToPort.id)).toEqual(itemIds);
-    expect(linkedItemIdsForTrip(prisma, portToDepot.id)).toEqual([]);
     expect(prisma.$transaction.mock.calls[0][1]).toEqual({
       maxWait: CANONICAL_JOB_CREATE_TX_MAX_WAIT_MS,
       timeout: CANONICAL_JOB_CREATE_TX_TIMEOUT_MS,
     });
+  });
+
+  it("EXPORT create succeeds without empty-container depot fields", async () => {
+    const prisma = makeStatefulPrisma();
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.EXPORT,
+        customerCompanyId: "comp1",
+        deliveryAddress1: "Stuffing Yard",
+        receiverName: "PIC",
+        receiverPhone: "91234567",
+        exportDetails: { exportPortAddress1: "Pasir Panjang Terminal" },
+        items: [{ containerNumber: "MSCU9999999" }],
+      } as any,
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
+    );
+
+    expect(prisma._state.trips).toHaveLength(1);
+    expect(prisma._state.trips[0].jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_PORT);
+  });
+
+  it("EXPORT ignores optional depot fields and still creates only one Trip", async () => {
+    const prisma = makeStatefulPrisma();
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.EXPORT,
+        customerCompanyId: "comp1",
+        pickupAddress1: "Legacy Empty Depot",
+        deliveryAddress1: "20 Gul Way",
+        receiverName: "PIC",
+        receiverPhone: "91234567",
+        exportDetails: {
+          containerPickupAddress1: "Legacy Empty Depot",
+          exportPortAddress1: "Pasir Panjang Terminal",
+        },
+        items: [{ containerNumber: "MSCU1234567", sealNo: "SL1" }],
+      } as any,
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
+    );
+
+    expect(prisma._state.trips).toHaveLength(1);
+    expect(prisma._state.trips[0].originAddressLine1).toBe("20 Gul Way");
+    expect(prisma._state.trips[0].destinationAddressLine1).toBe(
+      "Pasir Panjang Terminal",
+    );
   });
 
   it("does not run post-commit finalization when the interactive transaction throws P2028", async () => {

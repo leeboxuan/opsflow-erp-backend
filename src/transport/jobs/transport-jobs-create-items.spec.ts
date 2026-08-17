@@ -70,7 +70,7 @@ describe("create job items (LCL optional)", () => {
       expect(importPickupOriginUsesAddressFields({})).toBe(false);
     });
 
-    it("assertPickupLocationForCreate requires EXPORT pickup address or placeId", () => {
+    it("assertPickupLocationForCreate treats EXPORT empty depot as optional", () => {
       expect(() =>
         assertPickupLocationForCreate({
           jobType: JobType.EXPORT,
@@ -85,7 +85,7 @@ describe("create job items (LCL optional)", () => {
       ).not.toThrow();
       expect(() =>
         assertPickupLocationForCreate({ jobType: JobType.EXPORT }),
-      ).toThrow(/Empty container depot is required/i);
+      ).not.toThrow();
     });
   });
 
