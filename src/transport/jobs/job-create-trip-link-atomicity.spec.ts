@@ -120,16 +120,16 @@ describe("create-job interactive transaction contract", () => {
       { id: "trip1", status: TripStatus.DRAFT, containerNumber: null },
     ]);
     const txTripUpdate = jest.fn().mockResolvedValue({});
-    const txJobItemFindMany = jest.fn().mockResolvedValue([
-      {
-        id: "it1",
-        itemCode: "CONT1",
-        description: null,
-        sealNo: null,
-        pickupReference: null,
-        qty: null,
-      },
-    ]);
+    const txJobItemRow = {
+      id: "it1",
+      itemCode: "CONT1",
+      description: null,
+      sealNo: null,
+      pickupReference: null,
+      qty: null,
+    };
+    const txJobItemCreate = jest.fn().mockResolvedValue(txJobItemRow);
+    const txJobItemFindMany = jest.fn().mockResolvedValue([txJobItemRow]);
     const txTripJobItemFindMany = jest.fn().mockResolvedValue([]);
     const txTripJobItemCreateMany = jest.fn().mockResolvedValue({ count: 1 });
 
@@ -142,7 +142,7 @@ describe("create-job interactive transaction contract", () => {
           findMany: txTripFindMany,
           update: txTripUpdate,
         } as any,
-        jobItem: { findMany: txJobItemFindMany } as any,
+        jobItem: { create: txJobItemCreate, findMany: txJobItemFindMany } as any,
         tripJobItem: {
           findMany: txTripJobItemFindMany,
           createMany: txTripJobItemCreateMany,
@@ -234,6 +234,7 @@ describe("create-job interactive transaction contract", () => {
     );
 
     expect(txJobCreate).toHaveBeenCalled();
+    expect(txJobItemCreate).toHaveBeenCalled();
     expect(txTripCreateMany).toHaveBeenCalled();
     expect(txTripJobItemCreateMany).toHaveBeenCalled();
     expect(rootJobCreate).not.toHaveBeenCalled();
@@ -248,6 +249,14 @@ describe("create-job interactive transaction contract", () => {
       customerCompany: { id: "comp1", name: "C" },
       assignedDriver: null,
     });
+    const txJobItemRow = {
+      id: "it1",
+      itemCode: "CONT1",
+      description: null,
+      sealNo: null,
+      pickupReference: null,
+      qty: null,
+    };
     const tx = buildInteractiveTxClient(
       {},
       {
@@ -260,16 +269,8 @@ describe("create-job interactive transaction contract", () => {
           update: jest.fn().mockResolvedValue({}),
         } as any,
         jobItem: {
-          findMany: jest.fn().mockResolvedValue([
-            {
-              id: "it1",
-              itemCode: "CONT1",
-              description: null,
-              sealNo: null,
-              pickupReference: null,
-              qty: null,
-            },
-          ]),
+          create: jest.fn().mockResolvedValue(txJobItemRow),
+          findMany: jest.fn().mockResolvedValue([txJobItemRow]),
         } as any,
         tripJobItem: {
           findMany: jest.fn().mockResolvedValue([]),
@@ -347,6 +348,14 @@ describe("create-job interactive transaction contract", () => {
       customerCompany: { id: "comp1", name: "C" },
       assignedDriver: null,
     });
+    const txJobItemRow = {
+      id: "it1",
+      itemCode: "CONT1",
+      description: null,
+      sealNo: null,
+      pickupReference: null,
+      qty: null,
+    };
     const tx = buildInteractiveTxClient(
       {},
       {
@@ -359,16 +368,8 @@ describe("create-job interactive transaction contract", () => {
           update: jest.fn().mockResolvedValue({}),
         } as any,
         jobItem: {
-          findMany: jest.fn().mockResolvedValue([
-            {
-              id: "it1",
-              itemCode: "CONT1",
-              description: null,
-              sealNo: null,
-              pickupReference: null,
-              qty: null,
-            },
-          ]),
+          create: jest.fn().mockResolvedValue(txJobItemRow),
+          findMany: jest.fn().mockResolvedValue([txJobItemRow]),
         } as any,
         tripJobItem: {
           findMany: jest.fn().mockResolvedValue([]),

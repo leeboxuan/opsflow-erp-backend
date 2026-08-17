@@ -551,6 +551,8 @@ export type DefaultTripSeed = {
 
 export type TripCreateManyForJobOptions = {
   createdByUserId?: string | null;
+  /** COLLECTION only: one Pickup→Delivery trip per container JobItem (0 → one empty leg). */
+  collectionContainerCount?: number;
 };
 
 /**
@@ -562,7 +564,7 @@ export type TripCreateManyForJobOptions = {
  * - EXPORT: Depot → Customer, Customer → Port, Port → Depot
  * - IMPORT: Port → Customer, Customer → Depot
  * - LCL: Pickup → Delivery
- * - COLLECTION: Pickup → Delivery (same count as LCL)
+ * - COLLECTION: Pickup → Delivery — one trip per container JobItem (or one leg when no items)
  */
 export const CANONICAL_AUTO_TRIP_TEMPLATES: Record<
   JobType,
@@ -594,7 +596,9 @@ export const CANONICAL_AUTO_TRIP_TEMPLATES: Record<
  * Historical EXPORT `PORT_TO_DEPOT` rows (pre one-Trip topology) still do not
  * auto-carry create-time JobItems when evaluated via this helper.
  *
- * LCL / COLLECTION — all created JobItems on the single Pickup → Delivery trip.
+ * LCL — all created JobItems on the single Pickup → Delivery trip.
+ *
+ * COLLECTION — one container JobItem per Pickup → Delivery trip (same route on each leg).
  */
 export function canonicalAutoTripCarriesCreatedJobItems(
   jobType: JobType,
@@ -606,10 +610,15 @@ export function canonicalAutoTripCarriesCreatedJobItems(
   return true;
 }
 
+export function collectionAutoTripCount(containerCount: number): number {
+  return containerCount > 0 ? containerCount : 1;
+}
+
 export function jobItemIdsForCanonicalAutoTrip(input: {
   jobType: JobType;
   jobTripTemplate: JobTripTemplate | null | undefined;
   jobItemIds: string[];
+  tripSequence?: number;
 }): string[] {
   if (
     !canonicalAutoTripCarriesCreatedJobItems(
@@ -618,6 +627,11 @@ export function jobItemIdsForCanonicalAutoTrip(input: {
     )
   ) {
     return [];
+  }
+  if (input.jobType === JobType.COLLECTION && input.jobItemIds.length > 1) {
+    const index = Math.max(0, (input.tripSequence ?? 1) - 1);
+    const jobItemId = input.jobItemIds[index];
+    return jobItemId ? [jobItemId] : [];
   }
   return input.jobItemIds;
 }
@@ -628,6 +642,25 @@ const CANONICAL_AUTO_TRIP_TITLES: Record<JobType, string[]> = {
   [JobType.LCL]: ["Pickup to Delivery"],
   [JobType.COLLECTION]: ["Pickup to Delivery"],
 };
+
+function buildCollectionTripSeeds(
+  pickupDate: Date | null,
+  containerCount: number,
+): DefaultTripSeed[] {
+  const tripCount = collectionAutoTripCount(containerCount);
+  const title = "Pickup to Delivery";
+  return Array.from({ length: tripCount }, (_, index) => {
+    const sequence = index + 1;
+    return {
+      jobSequence: sequence,
+      tripSequence: sequence,
+      displayTitle: title,
+      jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
+      title,
+      plannedStartAt: sequence === 1 ? pickupDate : null,
+    };
+  });
+}
 
 function contiguousDefaultTripSeeds(
   jobType: JobType,
@@ -665,7 +698,14 @@ function contiguousDefaultTripSeeds(
 export function buildDefaultTripSeeds(
   jobType: JobType,
   pickupDate: Date | null,
+  options?: Pick<TripCreateManyForJobOptions, "collectionContainerCount">,
 ): DefaultTripSeed[] {
+  if (jobType === JobType.COLLECTION) {
+    return buildCollectionTripSeeds(
+      pickupDate,
+      options?.collectionContainerCount ?? 0,
+    );
+  }
   return contiguousDefaultTripSeeds(jobType, pickupDate);
 }
 
@@ -806,7 +846,9 @@ export function tripCreateManyForJob(
     containerNumber,
     shippingRefs,
   );
-  return buildDefaultTripSeeds(jobType, pickupDate).map((s) => {
+  return buildDefaultTripSeeds(jobType, pickupDate, {
+    collectionContainerCount: options?.collectionContainerCount,
+  }).map((s) => {
     const row: Prisma.TripCreateManyInput = {
       tenantId,
       jobId,

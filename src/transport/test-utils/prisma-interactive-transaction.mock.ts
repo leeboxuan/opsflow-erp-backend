@@ -10,7 +10,7 @@ export type InteractiveTxShape = {
     findMany: jest.Mock;
     update: jest.Mock;
   };
-  jobItem: { findMany: jest.Mock };
+  jobItem: { create: jest.Mock; findMany: jest.Mock };
   tripJobItem: {
     findMany: jest.Mock;
     createMany: jest.Mock;
@@ -60,6 +60,9 @@ export function buildInteractiveTxClient(
       ...(overrides?.trip ?? {}),
     },
     jobItem: {
+      create:
+        root?.jobItem?.create
+        ?? jest.fn(),
       findMany:
         root?.jobItem?.findMany
         ?? jest.fn().mockResolvedValue([]),
@@ -86,6 +89,7 @@ export function assertCreateJobInteractiveTxClientForTest(tx: any): void {
     ["trip.createMany", tx?.trip?.createMany],
     ["trip.findMany", tx?.trip?.findMany],
     ["trip.update", tx?.trip?.update],
+    ["jobItem.create", tx?.jobItem?.create],
     ["jobItem.findMany", tx?.jobItem?.findMany],
     ["tripJobItem.findMany", tx?.tripJobItem?.findMany],
     ["tripJobItem.createMany", tx?.tripJobItem?.createMany],

@@ -13,7 +13,7 @@ export function assertCreateJobInteractiveTxClient(tx: unknown): void {
   const client = tx as {
     job?: { create?: unknown };
     trip?: { createMany?: unknown; findMany?: unknown; update?: unknown };
-    jobItem?: { findMany?: unknown };
+    jobItem?: { create?: unknown; findMany?: unknown };
     tripJobItem?: { findMany?: unknown; createMany?: unknown };
   } | null;
 
@@ -22,6 +22,7 @@ export function assertCreateJobInteractiveTxClient(tx: unknown): void {
     ["trip.createMany", client?.trip?.createMany],
     ["trip.findMany", client?.trip?.findMany],
     ["trip.update", client?.trip?.update],
+    ["jobItem.create", client?.jobItem?.create],
     ["jobItem.findMany", client?.jobItem?.findMany],
     ["tripJobItem.findMany", client?.tripJobItem?.findMany],
     ["tripJobItem.createMany", client?.tripJobItem?.createMany],

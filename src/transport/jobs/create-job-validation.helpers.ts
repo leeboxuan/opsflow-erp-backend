@@ -320,3 +320,43 @@ export function assertCreateJobItemsRequiredForJobType(
     );
   }
 }
+
+export type ParsedCreateJobItem = ReturnType<typeof parseValidJobItemsFromInput>[number];
+
+/**
+ * Match persisted JobItems back to submitted container/item order by identity.
+ * Duplicate (itemCode, sealNo) rows are allowed on a Job; canonical create instead
+ * persists JobItems sequentially in submit order and uses positional IDs directly.
+ */
+export function orderCreatedJobItemIdsBySubmitOrder(
+  submittedItems: ParsedCreateJobItem[],
+  createdItems: Array<{ id: string; itemCode: string; sealNo?: string | null }>,
+): string[] {
+  const remaining = createdItems.map((item) => ({ ...item }));
+  return submittedItems.map((submitted) => {
+    const matchIndex = remaining.findIndex(
+      (created) =>
+        created.itemCode === submitted.itemCode
+        && (created.sealNo ?? null) === (submitted.sealNo ?? null),
+    );
+    if (matchIndex < 0) {
+      throw new BadRequestException(
+        "Created JobItem rows could not be matched to submitted container order",
+      );
+    }
+    const [matched] = remaining.splice(matchIndex, 1);
+    return matched.id;
+  });
+}
+
+/**
+ * COLLECTION auto-trip count uses only parsed container cargo rows.
+ * `parseValidJobItemsFromInput` already drops blank rows and requires itemCode/containerNumber.
+ */
+export function collectionContainerCountForTripGeneration(
+  jobType: JobType,
+  validItems: ParsedCreateJobItem[],
+): number | undefined {
+  if (jobType !== JobType.COLLECTION) return undefined;
+  return validItems.length;
+}

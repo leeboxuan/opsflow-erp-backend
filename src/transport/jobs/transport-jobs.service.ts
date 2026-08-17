@@ -234,6 +234,7 @@ import {
 import {
   assertCreateJobItemsRequiredForJobType,
   assertExportDestinationFieldsConsistent,
+  collectionContainerCountForTripGeneration,
   importPickupOriginUsesAddressFields,
   parseValidJobItemsFromInput,
   parseValidUpdateJobItemsFromInput,
@@ -2690,20 +2691,6 @@ export class TransportJobsService {
           returnLastDay: returnLastDay ? new Date(returnLastDay) : null,
           exportOriginDepotCode: exportOriginDepotCode || null,
           exportPortCode: exportPortCode || null,
-          ...(validItems.length > 0
-            ? {
-                items: {
-                  create: validItems.map((item) => ({
-                    tenantId,
-                    itemCode: item.itemCode,
-                    description: item.description,
-                    sealNo: item.sealNo,
-                    pickupReference: item.pickupReference,
-                    qty: item.qty,
-                  })),
-                },
-              }
-            : {}),
         },
         include: {
           customerCompany: {
@@ -2712,11 +2699,26 @@ export class TransportJobsService {
           assignedDriver: {
             select: { id: true, name: true, email: true },
           },
-          items: {
-            orderBy: { createdAt: "asc" },
-          },
         },
       });
+
+      // Create JobItems in submit order so duplicate (itemCode, sealNo) rows keep
+      // distinct identities for per-container COLLECTION trip linking.
+      const createdItemIds: string[] = [];
+      for (const item of validItems) {
+        const createdItem = await tx.jobItem.create({
+          data: {
+            tenantId,
+            jobId: createdJob.id,
+            itemCode: item.itemCode,
+            description: item.description,
+            sealNo: item.sealNo,
+            pickupReference: item.pickupReference,
+            qty: item.qty,
+          },
+        });
+        createdItemIds.push(createdItem.id);
+      }
 
       const createTripsAndLinks = async () => {
         await tx.trip.createMany({
@@ -2730,6 +2732,10 @@ export class TransportJobsService {
             autoTripRouteSnapshots,
             {
               createdByUserId: actorUserId,
+              collectionContainerCount: collectionContainerCountForTripGeneration(
+                dto.jobType,
+                validItems,
+              ),
             },
           ),
         });
@@ -2742,21 +2748,19 @@ export class TransportJobsService {
             status: true,
             containerNumber: true,
             jobTripTemplate: true,
+            tripSequence: true,
           },
         });
 
-        const createdJobItems = Array.isArray(createdJob.items)
-          ? createdJob.items
-          : [];
         // TripJobItem is cargo authority. Link per cargo-movement model
         // (jobItemIdsForCanonicalAutoTrip) — not cartesian across all legs.
-        if (createdJobItems.length > 0) {
-          const createdItemIds = createdJobItems.map((i: { id: string }) => i.id);
+        if (createdItemIds.length > 0) {
           for (const trip of createdTripsInTx) {
             const linkIds = jobItemIdsForCanonicalAutoTrip({
               jobType: dto.jobType,
               jobTripTemplate: trip.jobTripTemplate,
               jobItemIds: createdItemIds,
+              tripSequence: trip.tripSequence,
             });
             if (linkIds.length === 0) continue;
             await createTripJobItemLinksIfAbsent(tx, {

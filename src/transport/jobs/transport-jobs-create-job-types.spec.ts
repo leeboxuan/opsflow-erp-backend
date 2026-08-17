@@ -2,6 +2,8 @@ import { CollectionType, JobTripTemplate, JobType, Role } from "@prisma/client";
 import { tripCreateManyForJob } from "../workflows/job-workflow.helpers";
 import {
   assertExportDestinationFieldsConsistent,
+  collectionContainerCountForTripGeneration,
+  orderCreatedJobItemIdsBySubmitOrder,
   parseValidJobItemsFromInput,
   resolveCollectionTypeForJobCreate,
   resolveExportDestinationFields,
@@ -10,6 +12,7 @@ import { TransportJobsService } from "./transport-jobs.service";
 
 describe("job create: EXPORT and COLLECTION", () => {
   function makeExportCreatePrisma() {
+    const jobItems: any[] = [];
     const prisma: any = {
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
@@ -58,7 +61,24 @@ describe("job create: EXPORT and COLLECTION", () => {
         findMany: jest.fn().mockResolvedValue([{ id: "trip1", status: "DRAFT" }]),
         update: jest.fn().mockResolvedValue({}),
       },
-      jobItem: { findMany: jest.fn().mockResolvedValue([]) },
+      jobItem: {
+        create: jest.fn().mockImplementation(({ data }) => {
+          const item = {
+            id: `item_${jobItems.length + 1}`,
+            ...data,
+          };
+          jobItems.push(item);
+          return Promise.resolve(item);
+        }),
+        findMany: jest.fn().mockImplementation(({ where } = {}) =>
+          jobItems.filter((item) => {
+            if (where?.tenantId && item.tenantId !== where.tenantId) return false;
+            if (where?.jobId && item.jobId !== where.jobId) return false;
+            if (where?.id?.in && !where.id.in.includes(item.id)) return false;
+            return true;
+          }),
+        ),
+      },
       tripJobItem: {
         findMany: jest.fn().mockResolvedValue([]),
         createMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -642,7 +662,7 @@ describe("job create: EXPORT and COLLECTION", () => {
         id: "job1",
         jobType: JobType.COLLECTION,
         customerCompany: { id: "comp1", name: "ACME" },
-        items: data.items?.create ?? [],
+        items: [],
       }),
     );
     prisma.job.findFirst = jest.fn().mockResolvedValue({
@@ -676,7 +696,7 @@ describe("job create: EXPORT and COLLECTION", () => {
       { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
-    const itemsCreate = prisma.job.create.mock.calls[0][0].data.items.create;
+    const itemsCreate = prisma.jobItem.create.mock.calls.map((call) => call[0].data);
     expect(itemsCreate).toEqual([
       expect.objectContaining({
         itemCode: "CONT123",
@@ -776,6 +796,67 @@ describe("parseValidJobItemsFromInput container cargo", () => {
     const rows = tripCreateManyForJob("t1", "j1", JobType.EXPORT, null, null, null);
     expect(rows).toHaveLength(1);
     expect(rows.map((r) => r.displayTitle)).toEqual(["Customer to Port"]);
+  });
+
+  it("COLLECTION container count uses only parsed container cargo rows", () => {
+    const valid = parseValidJobItemsFromInput(
+      [
+        { containerNumber: "AAAU1" },
+        { containerNumber: "" },
+        { containerNumber: "ZZZU2" },
+      ],
+      JobType.COLLECTION,
+    );
+    expect(valid.map((row) => row.itemCode)).toEqual(["AAAU1", "ZZZU2"]);
+    expect(collectionContainerCountForTripGeneration(JobType.COLLECTION, valid)).toBe(2);
+    expect(collectionContainerCountForTripGeneration(JobType.LCL, valid)).toBeUndefined();
+  });
+
+  it("orderCreatedJobItemIdsBySubmitOrder matches duplicate identities by submit order", () => {
+    const submitted = parseValidJobItemsFromInput(
+      [
+        { containerNumber: "DUP", sealNo: "S1" },
+        { containerNumber: "DUP", sealNo: "S1" },
+        { containerNumber: "UNIQUE", sealNo: "S2" },
+      ],
+      JobType.COLLECTION,
+    );
+    const tiedCreatedAt = new Date("2026-01-01T00:00:00.000Z");
+    const created = [
+      { id: "id-first", itemCode: "DUP", sealNo: "S1", createdAt: tiedCreatedAt },
+      { id: "id-second", itemCode: "DUP", sealNo: "S1", createdAt: tiedCreatedAt },
+      { id: "id-unique", itemCode: "UNIQUE", sealNo: "S2", createdAt: tiedCreatedAt },
+    ];
+    expect(orderCreatedJobItemIdsBySubmitOrder(submitted, created)).toEqual([
+      "id-first",
+      "id-second",
+      "id-unique",
+    ]);
+  });
+
+  it("orderCreatedJobItemIdsBySubmitOrder preserves submitted order regardless of createdAt ties", () => {
+    const submitted = parseValidJobItemsFromInput(
+      [
+        { containerNumber: "ZZZU1000001", sealNo: "S1" },
+        { containerNumber: "AAAU2000002", sealNo: "S2" },
+        { containerNumber: "MMMU3000003", sealNo: "S3" },
+        { containerNumber: "BBBU4000004", sealNo: "S4" },
+      ],
+      JobType.COLLECTION,
+    );
+    const tiedCreatedAt = new Date("2026-01-01T00:00:00.000Z");
+    const created = [
+      { id: "id-b", itemCode: "BBBU4000004", sealNo: "S4", createdAt: tiedCreatedAt },
+      { id: "id-a", itemCode: "AAAU2000002", sealNo: "S2", createdAt: tiedCreatedAt },
+      { id: "id-m", itemCode: "MMMU3000003", sealNo: "S3", createdAt: tiedCreatedAt },
+      { id: "id-z", itemCode: "ZZZU1000001", sealNo: "S1", createdAt: tiedCreatedAt },
+    ];
+    expect(orderCreatedJobItemIdsBySubmitOrder(submitted, created)).toEqual([
+      "id-z",
+      "id-a",
+      "id-m",
+      "id-b",
+    ]);
   });
 });
 

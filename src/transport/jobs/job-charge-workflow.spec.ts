@@ -15,6 +15,7 @@ const jobInvoiceSyncRow = {
  * (job + trip + jobItem + tripJobItem). Root mocks remain the write targets.
  */
 function withCreateJobTransaction(prisma: any): any {
+  const createdItems: any[] = [];
   const enriched = {
     ...prisma,
     trip: {
@@ -24,16 +25,33 @@ function withCreateJobTransaction(prisma: any): any {
       ...(prisma.trip ?? {}),
     },
     jobItem: {
+      create: jest.fn().mockImplementation(async ({ data }: any) => {
+        const item = {
+          id: `item_${createdItems.length + 1}`,
+          itemCode: data.itemCode ?? "BOX",
+          description: data.description ?? null,
+          sealNo: data.sealNo ?? null,
+          pickupReference: data.pickupReference ?? null,
+          qty: data.qty ?? 1,
+          ...data,
+        };
+        createdItems.push(item);
+        return item;
+      }),
       findMany: jest.fn().mockImplementation(async ({ where }: any) => {
         const ids: string[] = where?.id?.in ?? [];
-        return ids.map((id) => ({
-          id,
-          itemCode: "BOX",
-          description: null,
-          sealNo: null,
-          pickupReference: null,
-          qty: 1,
-        }));
+        return ids.map((id) => {
+          const found = createdItems.find((item) => item.id === id);
+          if (found) return found;
+          return {
+            id,
+            itemCode: "BOX",
+            description: null,
+            sealNo: null,
+            pickupReference: null,
+            qty: 1,
+          };
+        });
       }),
       ...(prisma.jobItem ?? {}),
     },

@@ -120,7 +120,7 @@ describe("workflow helpers", () => {
       ).toEqual([]);
     });
 
-    it("LCL and COLLECTION link all JobItems to the single Pickup→Delivery trip", () => {
+    it("LCL links all JobItems to the single Pickup→Delivery trip", () => {
       expect(
         jobItemIdsForCanonicalAutoTrip({
           jobType: JobType.LCL,
@@ -128,13 +128,35 @@ describe("workflow helpers", () => {
           jobItemIds: itemIds,
         }),
       ).toEqual(itemIds);
+    });
+
+    it("COLLECTION links one JobItem per trip when multiple containers exist", () => {
       expect(
         jobItemIdsForCanonicalAutoTrip({
           jobType: JobType.COLLECTION,
           jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
           jobItemIds: itemIds,
+          tripSequence: 1,
         }),
-      ).toEqual(itemIds);
+      ).toEqual(["item-a"]);
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.COLLECTION,
+          jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
+          jobItemIds: itemIds,
+          tripSequence: 2,
+        }),
+      ).toEqual(["item-b"]);
+    });
+
+    it("COLLECTION with one container links that item to its single trip", () => {
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.COLLECTION,
+          jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
+          jobItemIds: ["item-a"],
+        }),
+      ).toEqual(["item-a"]);
     });
   });
 
@@ -211,7 +233,7 @@ describe("workflow helpers", () => {
     expect(rows.every((r) => r.status === "DRAFT")).toBe(true);
   });
 
-  it("tripCreateManyForJob creates one COLLECTION leg like LCL", () => {
+  it("tripCreateManyForJob creates one COLLECTION leg when no containers are provided", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -223,6 +245,24 @@ describe("workflow helpers", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].jobTripTemplate).toBe(JobTripTemplate.PICKUP_TO_DELIVERY);
     expect(rows[0].containerNumber).toBeNull();
+  });
+
+  it("tripCreateManyForJob creates one COLLECTION leg per container", () => {
+    const rows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.COLLECTION,
+      new Date("2026-03-15"),
+      null,
+      null,
+      undefined,
+      { collectionContainerCount: 4 },
+    );
+    expect(rows).toHaveLength(4);
+    expect(rows.map((r) => r.tripSequence)).toEqual([1, 2, 3, 4]);
+    expect(rows.every((r) => r.jobTripTemplate === JobTripTemplate.PICKUP_TO_DELIVERY)).toBe(
+      true,
+    );
   });
 
   it("lclPickupToDeliveryRouteSnapshot maps pickup and delivery text without geo", () => {

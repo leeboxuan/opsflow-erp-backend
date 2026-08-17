@@ -169,6 +169,16 @@ function makePrismaMemory() {
       ),
     },
     jobItem: {
+      create: jest.fn(async ({ data }: any) => {
+        const batchCreatedAt = new Date("2026-01-01T00:00:00.000Z");
+        const item = {
+          id: `item_${++seq}`,
+          createdAt: batchCreatedAt,
+          ...data,
+        };
+        jobItems.push({ ...item, job: null });
+        return item;
+      }),
       findMany: jest.fn(async ({ where }: any = {}) =>
         jobItems.filter((it) => {
           if (where?.tenantId && it.tenantId !== where.tenantId) return false;
@@ -214,18 +224,10 @@ function makePrismaMemory() {
       }),
       create: jest.fn(async ({ data }: any) => {
         const id = `job_${++seq}`;
-        const { items: itemsNested, ...jobFields } = data;
-        const items = (itemsNested?.create ?? []).map((it: any) => ({
-          id: `item_${++seq}`,
-          createdAt: new Date(),
-          ...it,
-          tenantId: data.tenantId,
-          jobId: id,
-        }));
         const job = {
           id,
-          ...jobFields,
-          items,
+          ...data,
+          items: [],
           customerCompany: companies.find((c) => c.id === data.customerCompanyId) ?? null,
           assignedDriver: null,
           createdBy: null,
@@ -234,9 +236,6 @@ function makePrismaMemory() {
           documents: [],
         };
         jobs.push(job);
-        for (const it of items) {
-          jobItems.push({ ...it, job });
-        }
         return job;
       }),
     },
@@ -1248,6 +1247,104 @@ describe("JobMessageImportService workflow", () => {
     expect(jobB.id).not.toBeUndefined();
     expect(prismaImport._state.drafts.some((d: any) => d.canonicalJobId === jobB.id)).toBe(true);
   });
+
+  it("creates equivalent COLLECTION canonical state via manual create and AI import confirm", async () => {
+    const submitOrder = ["ZZZU1000001", "AAAU2000002", "MMMU3000003", "BBBU4000004"];
+    const reviewed = normalizeReviewedDraft({
+      movementType: JobMessageImportMovementType.COLLECTION,
+      collectionType: "LOADED",
+      customerCompanyId: "comp_1",
+      pickupAddress1: "Pickup A",
+      deliveryAddress1: "Delivery B",
+      items: submitOrder.map((containerNumber, index) => ({
+        containerNumber,
+        sealNumber: `S${index + 1}`,
+        referenceNumber: null,
+        quantity: 1,
+      })),
+    });
+    const createDto = reviewedDraftToCreateJobDto({
+      reviewed,
+      timezone: "Asia/Singapore",
+    });
+
+    const prismaManual = makePrismaMemory();
+    const manualJobs = makeJobsService(prismaManual);
+    await manualJobs.create("t1", createDto, {
+      userId: "u1",
+      role: Role.TRANSPORT_STAFF,
+    });
+
+    const prismaImport = makePrismaMemory();
+    const importSvc = makeImportSvc(prismaImport, audit);
+    let preview = await importSvc.createPreviewBatch({
+      tenantId: "t1",
+      actorUserId: "u1",
+      timezone: "Asia/Singapore",
+      sourceChannel: "WHATSAPP" as any,
+      sourceText: fixtureMessage,
+    });
+    const col = preview.drafts.find((d) => d.reviewed.movementType === "COLLECTION")!;
+    preview = await importSvc.patchDraft({
+      tenantId: "t1",
+      actorUserId: "u1",
+      batchId: preview.batchId,
+      draftId: col.id,
+      patch: {
+        expectedDraftVersion: col.draftVersion,
+        customerCompanyId: "comp_1",
+        collectionType: "LOADED",
+        inclusionState: JobMessageImportDraftInclusionState.INCLUDED,
+        pickupAddress1: reviewed.pickupAddress1,
+        deliveryAddress1: reviewed.deliveryAddress1,
+        items: reviewed.items,
+      },
+    });
+    await importSvc.confirmBatch({
+      tenantId: "t1",
+      actorUserId: "u1",
+      batchId: preview.batchId,
+      drafts: confirmDraftsFromPreview(preview, {
+        ids: [col.id],
+        extra: {
+          [col.id]: {
+            pickupAddress1: reviewed.pickupAddress1,
+            deliveryAddress1: reviewed.deliveryAddress1,
+            collectionType: "LOADED",
+            items: reviewed.items,
+          },
+        },
+      }),
+    });
+
+    const assertCollectionJob = (state: typeof prismaManual._state) => {
+      expect(state.jobs).toHaveLength(1);
+      expect(state.trips).toHaveLength(4);
+      const sortedTrips = [...state.trips].sort(
+        (a, b) => a.tripSequence - b.tripSequence,
+      );
+      expect(sortedTrips.map((t) => t.tripSequence)).toEqual([1, 2, 3, 4]);
+      for (const trip of sortedTrips) {
+        expect(trip.originAddressLine1).toBe("Pickup A");
+        expect(trip.destinationAddressLine1).toBe("Delivery B");
+        expect(trip.jobTripTemplate).toBe("PICKUP_TO_DELIVERY");
+      }
+      const linkedCodesByTrip = sortedTrips.map((trip) => {
+        const links = state.tripJobItems.filter((l) => l.tripId === trip.id);
+        expect(links).toHaveLength(1);
+        const item = state.jobItems.find((i) => i.id === links[0]!.jobItemId)!;
+        return item.itemCode;
+      });
+      expect(linkedCodesByTrip).toEqual(submitOrder);
+      expect(new Set(linkedCodesByTrip)).toEqual(new Set(submitOrder));
+    };
+
+    assertCollectionJob(prismaManual._state);
+    assertCollectionJob(prismaImport._state);
+    expect(prismaManual._state.trips.map((t) => t.jobTripTemplate)).toEqual(
+      prismaImport._state.trips.map((t) => t.jobTripTemplate),
+    );
+  });
 });
 
 const threeJobMessage = [
@@ -1763,7 +1860,7 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
     const createdJobs = prisma._state.jobs;
     expect(createdJobs.some((j: { notes: string | null }) => (j.notes ?? "").includes("Call PIC 30 minutes before arrival."))).toBe(true);
     expect(createdJobs.some((j: { pickupAddress1: string }) => j.pickupAddress1 === "PSA")).toBe(true);
-    expect(createdJobs[0].items.some((it: { itemCode: string }) => it.itemCode === "ONEY1234567")).toBe(true);
+    expect(prisma._state.jobItems.some((it: { itemCode: string }) => it.itemCode === "ONEY1234567")).toBe(true);
   });
 
   it("confirms three reviewed drafts in one request from final values", async () => {

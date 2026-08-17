@@ -69,7 +69,26 @@ describe("Job commercial quotation binding", () => {
         }),
       },
       trip: { createMany: jest.fn().mockResolvedValue({ count: 0 }), findMany: jest.fn().mockResolvedValue([]) },
-      jobItem: { findMany: jest.fn().mockResolvedValue([]) },
+      jobItem: {
+        create: jest.fn().mockResolvedValue({
+          id: "item1",
+          itemCode: "BOX",
+          description: null,
+          sealNo: null,
+          pickupReference: null,
+          qty: 1,
+        }),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "item1",
+            itemCode: "BOX",
+            description: null,
+            sealNo: null,
+            pickupReference: null,
+            qty: 1,
+          },
+        ]),
+      },
       tripJobItem: { findMany: jest.fn().mockResolvedValue([]), createMany: jest.fn() },
     });
     const svc = new TransportJobsService(

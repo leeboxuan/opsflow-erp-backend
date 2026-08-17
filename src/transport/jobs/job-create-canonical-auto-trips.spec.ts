@@ -32,23 +32,14 @@ describe("canonical auto-trip creation", () => {
       job: {
         create: jest.fn(async ({ data }: any) => {
           const id = `job_${++seq}`;
-          const { items: itemsNested, ...jobFields } = data;
-          const items = (itemsNested?.create ?? []).map((it: any) => ({
-            id: `item_${++seq}`,
-            createdAt: new Date(),
-            ...it,
-            tenantId: data.tenantId,
-            jobId: id,
-          }));
           const job = {
             id,
-            ...jobFields,
-            items,
+            ...data,
+            items: [],
             customerCompany: { id: "comp1", name: "ACME" },
             assignedDriver: null,
           };
           jobs.push(job);
-          for (const it of items) jobItems.push(it);
           return job;
         }),
         findFirst: jest.fn(async ({ where }: any) => {
@@ -101,6 +92,16 @@ describe("canonical auto-trip creation", () => {
         }),
       },
       jobItem: {
+        create: jest.fn(async ({ data }: any) => {
+          const batchCreatedAt = new Date("2026-01-01T00:00:00.000Z");
+          const item = {
+            id: `item_${++seq}`,
+            createdAt: batchCreatedAt,
+            ...data,
+          };
+          jobItems.push(item);
+          return item;
+        }),
         findMany: jest.fn(async ({ where }: any = {}) => {
           const ids: string[] | undefined = where?.id?.in;
           return jobItems.filter((i) => {
@@ -369,7 +370,7 @@ describe("canonical auto-trip creation", () => {
     expect(linkedItemIdsForTrip(prisma, prisma._state.trips[0].id)).toEqual(itemIds);
   });
 
-  it("COLLECTION creates exactly 1 Pickup → Delivery trip", async () => {
+  it("COLLECTION with 1 container creates 1 Pickup → Delivery trip and 1 TripJobItem link", async () => {
     const prisma = makeStatefulPrisma();
     const svc = makeSvc(prisma);
 
@@ -386,10 +387,165 @@ describe("canonical auto-trip creation", () => {
       { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
-    expect(tripTemplates(prisma)).toEqual(CANONICAL_AUTO_TRIP_TEMPLATES[JobType.COLLECTION]);
     expect(prisma._state.trips).toHaveLength(1);
-    expect(prisma._state.trips[0].originAddressLine1).toBe("Yard A");
-    expect(prisma._state.trips[0].destinationAddressLine1).toBe("Yard B");
+    const [trip] = prisma._state.trips;
+    expect(trip.originAddressLine1).toBe("Yard A");
+    expect(trip.destinationAddressLine1).toBe("Yard B");
+    expect(trip.jobTripTemplate).toBe(JobTripTemplate.PICKUP_TO_DELIVERY);
+    const itemIds = prisma._state.jobItems.map((i: any) => i.id);
+    expect(linkedItemIdsForTrip(prisma, trip.id)).toEqual(itemIds);
+  });
+
+  it("COLLECTION with 4 containers creates 4 trips with the same route and one link each", async () => {
+    const prisma = makeStatefulPrisma();
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.COLLECTION,
+        collectionType: "LOADED",
+        customerCompanyId: "comp1",
+        pickupAddress1: "Pickup A",
+        deliveryAddress1: "Delivery B",
+        items: [
+          { containerNumber: "C1" },
+          { containerNumber: "C2" },
+          { containerNumber: "C3" },
+          { containerNumber: "C4" },
+        ],
+      } as any,
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
+    );
+
+    const sortedTrips = [...prisma._state.trips].sort(
+      (a: any, b: any) => a.tripSequence - b.tripSequence,
+    );
+    expect(sortedTrips).toHaveLength(4);
+    expect(sortedTrips.map((t: any) => t.tripSequence)).toEqual([1, 2, 3, 4]);
+    for (const trip of sortedTrips) {
+      expect(trip.originAddressLine1).toBe("Pickup A");
+      expect(trip.destinationAddressLine1).toBe("Delivery B");
+      expect(trip.jobTripTemplate).toBe(JobTripTemplate.PICKUP_TO_DELIVERY);
+    }
+
+    const itemIds = prisma._state.jobItems.map((i: any) => i.id);
+    expect(itemIds).toHaveLength(4);
+    const linksByTrip = sortedTrips.map((trip: any) =>
+      linkedItemIdsForTrip(prisma, trip.id),
+    );
+    expect(linksByTrip.flat().sort()).toEqual([...itemIds].sort());
+    expect(new Set(linksByTrip.flat())).toEqual(new Set(itemIds));
+    linksByTrip.forEach((ids) => expect(ids).toHaveLength(1));
+    const linkedCodesByTrip = linksByTrip.map((ids) =>
+      prisma._state.jobItems.find((i: any) => i.id === ids[0])!.itemCode,
+    );
+    expect(linkedCodesByTrip).toEqual(["C1", "C2", "C3", "C4"]);
+  });
+
+  it("COLLECTION preserves submitted container order when JobItem createdAt timestamps tie", async () => {
+    const prisma = makeStatefulPrisma();
+    const svc = makeSvc(prisma);
+    const submitOrder = ["ZZZU1000001", "AAAU2000002", "MMMU3000003", "BBBU4000004"];
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.COLLECTION,
+        collectionType: "LOADED",
+        customerCompanyId: "comp1",
+        pickupAddress1: "Pickup A",
+        deliveryAddress1: "Delivery B",
+        items: submitOrder.map((containerNumber, index) => ({
+          containerNumber,
+          sealNo: `S${index + 1}`,
+        })),
+      } as any,
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
+    );
+
+    const sortedTrips = [...prisma._state.trips].sort(
+      (a: any, b: any) => a.tripSequence - b.tripSequence,
+    );
+    expect(sortedTrips).toHaveLength(4);
+    expect(
+      prisma._state.jobItems.every(
+        (item: any) => item.createdAt.getTime() === prisma._state.jobItems[0].createdAt.getTime(),
+      ),
+    ).toBe(true);
+
+    const linkedCodesByTrip = sortedTrips.map((trip: any) => {
+      const [jobItemId] = linkedItemIdsForTrip(prisma, trip.id);
+      return prisma._state.jobItems.find((i: any) => i.id === jobItemId)!.itemCode;
+    });
+    expect(linkedCodesByTrip).toEqual(submitOrder);
+  });
+
+  it("COLLECTION allows duplicate container identity and links each row to its own trip in submit order", async () => {
+    const prisma = makeStatefulPrisma();
+    const svc = makeSvc(prisma);
+    const duplicateCode = "TCLU1234567";
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.COLLECTION,
+        collectionType: "LOADED",
+        customerCompanyId: "comp1",
+        pickupAddress1: "Pickup A",
+        deliveryAddress1: "Delivery B",
+        items: [
+          { containerNumber: duplicateCode, sealNo: "SEAL-1" },
+          { containerNumber: duplicateCode, sealNo: "SEAL-1" },
+          { containerNumber: "OTHER9999999", sealNo: "SEAL-2" },
+        ],
+      } as any,
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
+    );
+
+    expect(prisma._state.jobItems).toHaveLength(3);
+    expect(
+      prisma._state.jobItems.every(
+        (item: any) => item.createdAt.getTime() === prisma._state.jobItems[0].createdAt.getTime(),
+      ),
+    ).toBe(true);
+
+    const sortedTrips = [...prisma._state.trips].sort(
+      (a: any, b: any) => a.tripSequence - b.tripSequence,
+    );
+    expect(sortedTrips).toHaveLength(3);
+
+    const linkedIdsByTrip = sortedTrips.map(
+      (trip: any) => linkedItemIdsForTrip(prisma, trip.id)[0],
+    );
+    expect(new Set(linkedIdsByTrip)).toEqual(
+      new Set(prisma._state.jobItems.map((i: any) => i.id)),
+    );
+    expect(linkedIdsByTrip).toEqual([
+      prisma._state.jobItems[0].id,
+      prisma._state.jobItems[1].id,
+      prisma._state.jobItems[2].id,
+    ]);
+  });
+
+  it("COLLECTION with no containers still creates one pickup-delivery trip and no links", async () => {
+    const prisma = makeStatefulPrisma();
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.COLLECTION,
+        collectionType: "EMPTY",
+        customerCompanyId: "comp1",
+        pickupAddress1: "Yard A",
+        deliveryAddress1: "Yard B",
+      } as any,
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
+    );
+
+    expect(prisma._state.trips).toHaveLength(1);
+    expect(prisma._state.tripJobItems).toHaveLength(0);
   });
 
   it("EXPORT create fails with an operational message when export port is missing", async () => {
