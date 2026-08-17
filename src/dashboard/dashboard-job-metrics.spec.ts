@@ -1,9 +1,19 @@
-import { JobStatus } from "@prisma/client";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { JobStatus, Prisma } from "@prisma/client";
 import {
   buildDashboardJobMetrics,
   buildJobStatusCountMap,
   countReadyForInvoiceNotInvoiced,
+  invoiceStatusEnumSql,
+  INVOICED_INVOICE_STATUSES,
+  readyForInvoiceNotInvoicedCountSql,
+  readyForInvoiceNotInvoicedListSql,
 } from "./dashboard-job-metrics";
+
+function sqlFragmentText(sql: Prisma.Sql): string {
+  return sql.strings.join("?");
+}
 
 describe("dashboard job metrics", () => {
   it("buildJobStatusCountMap initializes all JobStatus keys", () => {
@@ -73,5 +83,62 @@ describe("dashboard job metrics", () => {
       readyForInvoiceBroadCount: 4,
     });
     expect(metrics.readyForInvoiceNotInvoiced).toBe(7);
+  });
+});
+
+describe("ready-for-invoice InvoiceStatus SQL enum typing", () => {
+  it("casts each ISSUED/PAID parameter as PostgreSQL InvoiceStatus", () => {
+    const typed = invoiceStatusEnumSql([...INVOICED_INVOICE_STATUSES]);
+    const text = sqlFragmentText(typed);
+    expect([...INVOICED_INVOICE_STATUSES]).toEqual(["ISSUED", "PAID"]);
+    expect(typed.values).toEqual(["ISSUED", "PAID"]);
+    expect(text).toBe('?::"InvoiceStatus",?::"InvoiceStatus"');
+    expect(text).not.toMatch(/::text/);
+  });
+
+  it.each([
+    ["count", readyForInvoiceNotInvoicedCountSql("tenant-a")],
+    ["list", readyForInvoiceNotInvoicedListSql("tenant-a", 25)],
+  ] as const)(
+    "%s SQL binds InvoiceStatus enums and keeps ISSUED/PAID-only semantics",
+    (_label, sql) => {
+      const text = sqlFragmentText(sql);
+      expect(text).toContain('i."status" IN (');
+      expect(text).toContain('::"InvoiceStatus"');
+      expect(text).not.toContain('i."status"::text');
+      expect(text).not.toContain("$queryRawUnsafe");
+      // Each status placeholder must be immediately cast — no bare text IN-list.
+      expect(text.replace(/\s+/g, " ")).toMatch(
+        /i\."status" IN \(\?::"InvoiceStatus",\?::"InvoiceStatus"\)/,
+      );
+      expect(sql.values).toEqual(
+        expect.arrayContaining(["tenant-a", JobStatus.READY_FOR_INVOICE, "ISSUED", "PAID"]),
+      );
+      expect(sql.values).not.toEqual(expect.arrayContaining(["DRAFT", "GENERATED", "VOID"]));
+      expect(sql.values.filter((value) => value === "ISSUED")).toHaveLength(1);
+      expect(sql.values.filter((value) => value === "PAID")).toHaveLength(1);
+    },
+  );
+});
+
+describe("InvoiceStatus raw-SQL contract (dashboard)", () => {
+  const source = readFileSync(join(__dirname, "dashboard-job-metrics.ts"), "utf8");
+  const migration = readFileSync(
+    join(
+      __dirname,
+      "../../prisma/migrations/20260817120000_invoice_status_enum/migration.sql",
+    ),
+    "utf8",
+  );
+
+  it("keeps dashboard invoice status filters on the real PostgreSQL enum", () => {
+    expect(migration).toContain('CREATE TYPE "InvoiceStatus" AS ENUM');
+    expect(source).toContain('::"InvoiceStatus"');
+    expect(source).toContain("invoiceStatusEnumSql");
+    expect(source).not.toMatch(
+      /i\."status"\s+IN\s*\(\s*\$\{Prisma\.join\(\[\.\.\.INVOICED_INVOICE_STATUSES\]\)\}/,
+    );
+    expect(source).not.toMatch(/i\."status"\s*::\s*text/);
+    expect(source).not.toContain("$queryRawUnsafe");
   });
 });

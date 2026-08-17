@@ -4,6 +4,18 @@ import { JobStatus, Prisma } from "@prisma/client";
 export const INVOICED_INVOICE_STATUSES = ["ISSUED", "PAID"] as const;
 
 /**
+ * Bind invoice statuses as PostgreSQL `"InvoiceStatus"` values.
+ * Plain text parameters fail with 42883 after the enum migration.
+ */
+export function invoiceStatusEnumSql(
+  statuses: readonly (typeof INVOICED_INVOICE_STATUSES)[number][],
+): Prisma.Sql {
+  return Prisma.join(
+    statuses.map((status) => Prisma.sql`${status}::"InvoiceStatus"`),
+  );
+}
+
+/**
  * Shared READY_FOR_INVOICE − ISSUED/PAID predicate (tenant-scoped on job and invoice).
  * Used by Phase 1 KPI count and Phase 2 attention list.
  */
@@ -18,7 +30,7 @@ export function readyForInvoiceNotInvoicedCountSql(tenantId: string) {
         FROM "invoices" i
         WHERE i."tenantId" = ${tenantId}
           AND i."sourceJobId" = j."id"
-          AND i."status" IN (${Prisma.join([...INVOICED_INVOICE_STATUSES])})
+          AND i."status" IN (${invoiceStatusEnumSql([...INVOICED_INVOICE_STATUSES])})
       )
   `;
 }
@@ -37,7 +49,7 @@ export function readyForInvoiceNotInvoicedListSql(
         FROM "invoices" i
         WHERE i."tenantId" = ${tenantId}
           AND i."sourceJobId" = j."id"
-          AND i."status" IN (${Prisma.join([...INVOICED_INVOICE_STATUSES])})
+          AND i."status" IN (${invoiceStatusEnumSql([...INVOICED_INVOICE_STATUSES])})
       )
     ORDER BY COALESCE(j."invoiceReadyAt", j."updatedAt") ASC, j."id" ASC
     LIMIT ${limit}

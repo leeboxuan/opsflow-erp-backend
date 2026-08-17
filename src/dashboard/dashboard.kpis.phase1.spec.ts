@@ -220,6 +220,10 @@ describe("DashboardService KPIs (Phase 1)", () => {
     const sqlValues = Array.isArray(sqlArg?.values) ? sqlArg.values : [];
     expect(sqlText).toContain('j."tenantId"');
     expect(sqlText).toContain('i."tenantId"');
+    expect(sqlText).toContain('::"InvoiceStatus"');
+    expect(sqlText.replace(/\s+/g, " ")).toMatch(
+      /i\."status" IN \(\?::"InvoiceStatus",\s*\?::"InvoiceStatus"\)/,
+    );
     expect(sqlValues).toContain("tenant-a");
     expect(sqlValues).toContain(JobStatus.READY_FOR_INVOICE);
     expect(sqlValues).toEqual(
@@ -228,6 +232,7 @@ describe("DashboardService KPIs (Phase 1)", () => {
     expect([...INVOICED_INVOICE_STATUSES]).toEqual(["ISSUED", "PAID"]);
     expect([...INVOICED_INVOICE_STATUSES]).not.toContain("Draft");
     expect([...INVOICED_INVOICE_STATUSES]).not.toContain("Void");
+    expect([...INVOICED_INVOICE_STATUSES]).not.toContain("GENERATED");
   });
 
   it("rejects service calls with only one date bound", async () => {
