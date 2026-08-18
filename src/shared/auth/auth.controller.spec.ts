@@ -101,7 +101,8 @@ describe("AuthController getMe", () => {
         },
       },
     ]);
-    expect(res.roles).toEqual(["TENANT_ADMIN"]);
+    expect(res.tenantId).toBeUndefined();
+    expect(res.roles).toEqual([]);
   });
 
   it("returns WAREHOUSE tenant membership in getMe", async () => {
@@ -270,5 +271,133 @@ describe("AuthController getMe", () => {
     } as any);
 
     expect(res.activeTenantTimezone).toBe("Asia/Singapore");
+  });
+
+  it("returns tenantId from a matching x-tenant-id membership", async () => {
+    const { controller } = makeController();
+    const res = await controller.getMe({
+      headers: { "x-tenant-id": "t1" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
+    } as any);
+
+    expect(res.tenantId).toBe("t1");
+    expect(res.roles).toEqual(["TENANT_ADMIN"]);
+  });
+
+  it("omits inactive memberships and inaccessible tenants from getMe", async () => {
+    const { controller } = makeController({
+      tenantMembership: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            tenantId: "inactive",
+            role: "ADMIN",
+            status: "Suspended",
+            tenant: { id: "inactive", name: "Inactive", status: "ACTIVE" },
+          },
+          {
+            tenantId: "suspended-tenant",
+            role: "ADMIN",
+            status: "Active",
+            tenant: { id: "suspended-tenant", name: "Suspended Co", status: "SUSPENDED" },
+          },
+          {
+            tenantId: "archived-tenant",
+            role: "ADMIN",
+            status: "Active",
+            tenant: { id: "archived-tenant", name: "Archived Co", status: "ARCHIVED" },
+          },
+          {
+            tenantId: "t1",
+            role: "ADMIN",
+            status: "Active",
+            tenant: { id: "t1", name: "Tenant One", status: "ACTIVE", timezone: "Pacific/Auckland" },
+          },
+        ]),
+      },
+    });
+
+    const res = await controller.getMe({
+      headers: { "x-tenant-id": "t1" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
+    } as any);
+
+    expect(res.tenantMemberships.map((m: { tenantId: string }) => m.tenantId)).toEqual(["t1"]);
+    expect(res.tenantId).toBe("t1");
+
+    const stale = await controller.getMe({
+      headers: { "x-tenant-id": "inactive" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
+    } as any);
+    expect(stale.tenantId).toBeUndefined();
+  });
+
+  it("returns tenantId for a valid Platform Admin operated tenant without inventing a membership", async () => {
+    const { controller, prisma } = makeController({
+      platformAdmin: {
+        findUnique: jest.fn().mockResolvedValue({ id: "pa-1", status: "ACTIVE" }),
+      },
+      tenantMembership: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      tenant: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "operated-tenant",
+          timezone: "America/New_York",
+          status: "ACTIVE",
+        }),
+      },
+    });
+    const res = await controller.getMe({
+      headers: { "x-tenant-id": "operated-tenant" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
+    } as any);
+
+    expect(res.tenantId).toBe("operated-tenant");
+    expect(res.tenantMemberships).toEqual([]);
+    expect(prisma.tenant.findUnique).toHaveBeenCalled();
+  });
+
+  it("does not silently select another membership when x-tenant-id is absent or unmatched", async () => {
+    const { controller } = makeController({
+      tenantMembership: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            tenantId: "t1",
+            role: "ADMIN",
+            status: "Active",
+            tenant: {
+              id: "t1",
+              name: "Tenant One",
+              status: "ACTIVE",
+              timezone: "Pacific/Auckland",
+            },
+          },
+          {
+            tenantId: "t2",
+            role: "ADMIN",
+            status: "Active",
+            tenant: {
+              id: "t2",
+              name: "Tenant Two",
+              status: "ACTIVE",
+              timezone: "Asia/Singapore",
+            },
+          },
+        ]),
+      },
+    });
+
+    const withoutHeader = await controller.getMe({
+      user: { sub: "auth-u1", email: "admin@demo.com" },
+    } as any);
+    expect(withoutHeader.tenantId).toBeUndefined();
+    expect(withoutHeader.roles).toEqual([]);
+
+    const unmatched = await controller.getMe({
+      headers: { "x-tenant-id": "unknown-tenant" },
+      user: { sub: "auth-u1", email: "admin@demo.com" },
+    } as any);
+    expect(unmatched.tenantId).toBeUndefined();
+    expect(unmatched.roles).toEqual([]);
   });
 });

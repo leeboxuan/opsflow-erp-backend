@@ -53,6 +53,8 @@ import {
 import {
   buildTripCargoFromLinks,
   isContainerBasedTransportJob,
+  summarizeLinkedCargoForDriverList,
+  tripJobItemWithJobItemInclude,
 } from "../jobs/trip-job-item.helpers";
 import {
   assertJobItemLinkedToTrip,
@@ -326,7 +328,14 @@ function toJobDto(j: any): JobDto {
     documents: documents.map((d: any) => toDocDto(d)),
 
     trips:
-      trips.map((t: any) => ({
+      trips.map((t: any) => {
+        const listCargo = summarizeLinkedCargoForDriverList({
+          tenantId: j.tenantId,
+          jobType: j.jobType,
+          tripJobItems: t.tripJobItems,
+          legacyContainerNumber: t.containerNumber,
+        });
+        return {
         id: t.id,
         jobId: t.jobId ?? j.id,
         jobSequence: t.jobSequence ?? null,
@@ -341,7 +350,9 @@ function toJobDto(j: any): JobDto {
         title: t.title ?? null,
         tripPICName: t.tripPICName ?? null,
         tripPICContact: t.tripPICContact ?? null,
-        containerNumber: t.containerNumber ?? null,
+        containerNumber: listCargo.containerNumber,
+        cargoSummary: listCargo.cargoSummary,
+        cargoSource: listCargo.cargoSource,
         carrier: t.carrier ?? null,
         shipper: t.shipper ?? null,
         vessel: t.vessel ?? null,
@@ -367,7 +378,8 @@ function toJobDto(j: any): JobDto {
           ? t.documentsWithUrls
           : [],
         ...buildDriverTripExecutionCard(t, j),
-      })) ?? [],
+      };
+      }) ?? [],
   };
 }
 
@@ -647,6 +659,9 @@ export class DriverJobsService {
               customerCompany: { select: { name: true } },
             },
           },
+          tripJobItems: {
+            include: tripJobItemWithJobItemInclude,
+          },
         },
       }),
     ]);
@@ -734,7 +749,14 @@ export class DriverJobsService {
           t.destinationAddressLine1,
           t.destinationAddressLine2,
           t.destinationPostalCode,
-        ) ?? firstNonEmptyText(t.job?.deliveryAddress1, t.job?.deliveryAddress2, t.job?.deliveryPostal);
+        )         ?? firstNonEmptyText(t.job?.deliveryAddress1, t.job?.deliveryAddress2, t.job?.deliveryPostal);
+
+      const listCargo = summarizeLinkedCargoForDriverList({
+        tenantId,
+        jobType: t.job?.jobType,
+        tripJobItems: t.tripJobItems,
+        legacyContainerNumber: t.containerNumber,
+      });
 
       return {
         tripId: t.id,
@@ -758,7 +780,9 @@ export class DriverJobsService {
         closedAt: t.closedAt ?? null,
         completedAt: t.closedAt ?? (isCompleted(t.status) ? (t.updatedAt ?? null) : null),
         trailerNumber: t.trailerNumber ?? null,
-        containerNumber: t.containerNumber ?? null,
+        containerNumber: listCargo.containerNumber,
+        cargoSummary: listCargo.cargoSummary,
+        cargoSource: listCargo.cargoSource,
         carrier: t.carrier ?? null,
         shipper: t.shipper ?? null,
         vessel: t.vessel ?? null,
@@ -1157,6 +1181,11 @@ export class DriverJobsService {
       trips: {
         where: tripsWhereForDriverHome,
         orderBy: [{ plannedStartAt: "asc" as const }, { createdAt: "asc" as const }],
+        include: {
+          tripJobItems: {
+            include: tripJobItemWithJobItemInclude,
+          },
+        },
       },
       documents: DRIVER_ACTIVE_JOB_DOCUMENTS_INCLUDE,
     };
@@ -1380,6 +1409,9 @@ export class DriverJobsService {
         customerCompany: { select: { name: true } },
       },
     },
+    tripJobItems: {
+      include: tripJobItemWithJobItemInclude,
+    },
   } as const;
 
   private toCalendarDate(value: Date | string | null | undefined): Date | null {
@@ -1503,10 +1535,16 @@ export class DriverJobsService {
     };
   }
 
-  private toDriverHomeTripCard(t: any, j: any) {
+  private toDriverHomeTripCard(t: any, j: any, tenantId: string) {
     const exec = buildDriverTripExecutionCard(t, j);
     const template = t.jobTripTemplate ?? null;
     const title = t.title ?? t.displayTitle ?? null;
+    const listCargo = summarizeLinkedCargoForDriverList({
+      tenantId,
+      jobType: j?.jobType ?? t.job?.jobType,
+      tripJobItems: t.tripJobItems,
+      legacyContainerNumber: t.containerNumber,
+    });
     return {
       tripId: t.id,
       jobId: t.jobId ?? j?.id ?? null,
@@ -1534,6 +1572,9 @@ export class DriverJobsService {
       deliveryAddress1: exec.deliveryAddress1,
       deliveryPostal: exec.deliveryPostal,
       trailerNumber: t.trailerNumber ?? null,
+      containerNumber: listCargo.containerNumber,
+      cargoSummary: listCargo.cargoSummary,
+      cargoSource: listCargo.cargoSource,
       driverRemarks: t.driverRemarks ?? null,
       driverEarningCents: resolveDriverTripEarningCents(t),
       driverEarningCurrency: DEFAULT_DRIVER_EARNING_CURRENCY,
@@ -1604,7 +1645,7 @@ export class DriverJobsService {
           const job = t.job;
           if (!job) continue;
           const dayKey = this.getTripCalendarDayKey(t, job, tz);
-          const card = this.toDriverHomeTripCard(t, job);
+          const card = this.toDriverHomeTripCard(t, job, tenantId);
 
           if (this.isTripOnRequestedCalendarDay(t, job, requestedDateKey, tz)) {
             todayTripCardsById.set(t.id, card);
@@ -1760,6 +1801,9 @@ export class DriverJobsService {
     const tripsHydrated = await this.prisma.trip.findMany({
       where: { id: { in: idRows.map((r) => r.id) } },
       include: {
+        tripJobItems: {
+          include: tripJobItemWithJobItemInclude,
+        },
         job: {
           include: {
             customerCompany: { select: { id: true, name: true } },
@@ -2019,6 +2063,9 @@ export class DriverJobsService {
             where: { isActive: true },
             orderBy: { createdAt: "desc" },
             include: documentUploadedByInclude,
+          },
+          tripJobItems: {
+            include: tripJobItemWithJobItemInclude,
           },
         },
       },
@@ -2947,6 +2994,7 @@ export class DriverJobsService {
       shipper: trip.shipper ?? null,
       vessel: trip.vessel ?? null,
       status: trip.status,
+      pendingState: trip.pendingState ?? TripPendingState.NONE,
       plannedStartAt: trip.plannedStartAt ?? null,
       driverRemarks: trip.driverRemarks ?? null,
       ...resolveTripNotesResponseFields(trip, trip.job),

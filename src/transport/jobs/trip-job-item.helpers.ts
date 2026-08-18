@@ -309,6 +309,88 @@ export function evaluateTripPublishLinkReadiness(input: {
   };
 }
 
+export type DriverListCargoSource =
+  | "TRIP_JOB_ITEM"
+  | "EMPTY"
+  | "LEGACY_TRIP_CONTAINER";
+
+export type DriverListCargoSummary = {
+  cargoSource: DriverListCargoSource;
+  /** Canonical linked cargo label for driver list cards. */
+  cargoSummary: string | null;
+  /**
+   * Display-only. Single linked itemCode, else cached Trip.containerNumber.
+   * Never use for authorization, uploads, completion, or cargo mutation.
+   */
+  containerNumber: string | null;
+};
+
+/**
+ * List-card cargo from explicit TripJobItem links only.
+ * Does not infer unlinked job items (including LCL — that fallback is detail-only).
+ */
+export function summarizeLinkedCargoForDriverList(input: {
+  tenantId: string;
+  jobType?: JobType | string | null;
+  tripJobItems?: Array<{
+    tenantId?: string | null;
+    containerNumberSnapshot?: string | null;
+    jobItem?: {
+      tenantId?: string | null;
+      itemCode?: string | null;
+    } | null;
+  }> | null;
+  legacyContainerNumber?: string | null;
+}): DriverListCargoSummary {
+  const tenantId = String(input.tenantId ?? "").trim();
+  const links = (input.tripJobItems ?? []).filter((link) => {
+    if (!tenantId) return false;
+    if (link.tenantId && link.tenantId !== tenantId) return false;
+    if (link.jobItem?.tenantId && link.jobItem.tenantId !== tenantId) return false;
+    return true;
+  });
+
+  const codes = links
+    .map((link) => {
+      const live = String(link.jobItem?.itemCode ?? "").trim();
+      if (live) return live;
+      return String(link.containerNumberSnapshot ?? "").trim();
+    })
+    .filter((code) => code.length > 0);
+
+  if (links.length > 0) {
+    const isContainer = isContainerCargoJobType(input.jobType as JobType);
+    const summary =
+      codes.length === 1
+        ? codes[0]
+        : codes.length > 1 && codes.length <= 3
+          ? codes.join(", ")
+          : codes.length > 3
+            ? `${codes.length} ${isContainer ? "containers" : "items"}`
+            : null;
+    return {
+      cargoSource: "TRIP_JOB_ITEM",
+      cargoSummary: summary,
+      containerNumber: codes.length === 1 ? codes[0] : null,
+    };
+  }
+
+  const legacy = String(input.legacyContainerNumber ?? "").trim();
+  if (legacy) {
+    return {
+      cargoSource: "LEGACY_TRIP_CONTAINER",
+      cargoSummary: null,
+      containerNumber: legacy,
+    };
+  }
+
+  return {
+    cargoSource: "EMPTY",
+    cargoSummary: null,
+    containerNumber: null,
+  };
+}
+
 /** Prisma include for TripJobItem with job item fields used by cargo DTO. */
 export const tripJobItemWithJobItemInclude = {
   jobItem: {

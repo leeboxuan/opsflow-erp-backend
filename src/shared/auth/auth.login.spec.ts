@@ -451,6 +451,58 @@ describe('AuthController.login', () => {
     expect(result.user.roles).toEqual(['TRANSPORT_DRIVER']);
   });
 
+  it('does not silently choose the first membership for Driver Mobile', async () => {
+    const internalEmail = `tenant-a.ahmad@${AUTH_INTERNAL_EMAIL_DOMAIN}`;
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'user-ahmad',
+        email: internalEmail,
+        memberships: [
+          { status: MembershipStatus.Active, tenant: { slug: 'tenant-a' } },
+        ],
+      },
+    ]);
+    mockSuccessfulSession('user-ahmad', internalEmail);
+    prisma.tenantMembership.findMany.mockResolvedValue([
+      {
+        tenantId: tenantA.id,
+        role: Role.DRIVER,
+        status: MembershipStatus.Active,
+        membershipRoles: [{ role: 'TRANSPORT_DRIVER' }],
+        tenant: {
+          id: tenantA.id,
+          name: tenantA.name,
+          status: 'ACTIVE',
+          timezone: tenantA.timezone,
+        },
+      },
+      {
+        tenantId: 'tenant-b',
+        role: Role.DRIVER,
+        status: MembershipStatus.Active,
+        membershipRoles: [{ role: 'TRANSPORT_DRIVER' }],
+        tenant: {
+          id: 'tenant-b',
+          name: 'Tenant B',
+          status: 'ACTIVE',
+          timezone: 'Asia/Singapore',
+        },
+      },
+    ]);
+    prisma.user.findUnique.mockResolvedValue({
+      email: internalEmail,
+      username: 'ahmad',
+    });
+
+    await expect(
+      controller.login({
+        username: 'Ahmad',
+        password: 'secret123',
+        clientApp: 'driver_mobile',
+      }),
+    ).rejects.toThrow(/more than one company/i);
+  });
+
   it('keeps legacy DRIVER compatible on Driver Mobile', async () => {
     const internalEmail = `tenant-a.legacy@${AUTH_INTERNAL_EMAIL_DOMAIN}`;
     prisma.user.findMany.mockResolvedValue([

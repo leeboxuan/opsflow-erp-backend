@@ -383,4 +383,67 @@ describe("DriverJobsService.getDriverHome", () => {
       "trip-3pm",
     ]);
   });
+
+  it("uses linked TripJobItem cargo on today and outside-today cards", async () => {
+    const today = tripRow({
+      id: "trip-today",
+      containerNumber: "CACHED-OLD",
+      tripJobItems: [
+        {
+          tenantId,
+          jobItem: { itemCode: "TLLU-LIVE" },
+        },
+      ],
+    });
+    const overdue = tripRow({
+      id: "trip-overdue",
+      plannedStartAt: new Date("2026-05-22T00:00:00.000Z"),
+      containerNumber: "CACHED-OLD",
+      tripJobItems: [
+        { tenantId, jobItem: { itemCode: "BOX-A" } },
+        { tenantId, jobItem: { itemCode: "BOX-B" } },
+      ],
+    });
+    const { svc } = makeService({
+      runSheetTrips: [today],
+      activeAssignedTrips: [today, overdue],
+    });
+
+    const res = await svc.getDriverHome(tenantId, driver1, date);
+    expect(res.today.trips[0]).toMatchObject({
+      cargoSource: "TRIP_JOB_ITEM",
+      cargoSummary: "TLLU-LIVE",
+      containerNumber: "TLLU-LIVE",
+    });
+    expect(res.assignedOutsideToday.needsAttention[0]).toMatchObject({
+      cargoSource: "TRIP_JOB_ITEM",
+      cargoSummary: "BOX-A, BOX-B",
+      containerNumber: null,
+    });
+    expect(res.today.runSheet.trips[0]).toMatchObject({
+      cargoSource: "TRIP_JOB_ITEM",
+      cargoSummary: "TLLU-LIVE",
+      containerNumber: "TLLU-LIVE",
+    });
+  });
+
+  it("does not expose another tenant's TripJobItem links on home cards", async () => {
+    const today = tripRow({
+      id: "trip-today",
+      containerNumber: null,
+      tripJobItems: [
+        { tenantId: "other-tenant", jobItem: { itemCode: "FOREIGN" } },
+      ],
+    });
+    const { svc } = makeService({
+      runSheetTrips: [today],
+      activeAssignedTrips: [today],
+    });
+    const res = await svc.getDriverHome(tenantId, driver1, date);
+    expect(res.today.trips[0]).toMatchObject({
+      cargoSource: "EMPTY",
+      cargoSummary: null,
+      containerNumber: null,
+    });
+  });
 });

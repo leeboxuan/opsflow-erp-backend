@@ -29,6 +29,11 @@ import { findUsernameLoginCandidates } from './username-uniqueness';
 import { getSafeTenantTimezone } from '../common/tenant-timezone';
 import { toMembershipAuthDto } from './membership-auth-payload';
 import {
+  filterVisibleSessionMemberships,
+  isPlatformOperatedTenantAllowed,
+  resolveRequestedMembershipTenantId,
+} from './session-tenant-access';
+import {
   canAccessDriverMobile,
   canAccessStaffWeb,
   isDriverMobileClientApp,
@@ -156,14 +161,10 @@ export class AuthController {
       authUser.isSuperadmin === true ||
       authUser.role === 'SUPERADMIN';
 
-    const visibleMemberships = isPlatformAdmin
-      ? memberships
-      : memberships.filter(
-          (m) =>
-            !m.tenant?.status ||
-            m.tenant.status === 'ACTIVE' ||
-            m.tenant.status === 'SETUP',
-        );
+    const visibleMemberships = filterVisibleSessionMemberships(
+      memberships,
+      isPlatformAdmin,
+    ) as typeof memberships;
 
     if (isUsernameLogin && visibleMemberships.length === 0) {
       throw new UnauthorizedException(USERNAME_LOGIN_ERROR);
@@ -184,6 +185,12 @@ export class AuthController {
     const sessionRoles = visibleMemberships.flatMap((membership) =>
       resolveCanonicalRoles(membership),
     );
+
+    if (isDriverMobile && visibleMemberships.length > 1) {
+      throw new UnauthorizedException(
+        'This account belongs to more than one company. Driver Mobile cannot choose a company automatically. Contact your administrator.',
+      );
+    }
 
     if (isDriverMobile && !canAccessDriverMobile(sessionRoles)) {
       throw new UnauthorizedException(
@@ -384,22 +391,46 @@ export class AuthController {
         createdAt: 'desc',
       },
     });
-    const tenantMemberships = memberships.map((membership) =>
-      toMembershipAuthDto(membership),
-    );
+    const platformAdmin = await this.resolvePlatformAdminPayload(user.id);
+    const isPlatformAdmin = platformAdmin?.status === 'ACTIVE';
+    const tenantMemberships = filterVisibleSessionMemberships(
+      memberships,
+      isPlatformAdmin,
+    ).map((membership) => toMembershipAuthDto(membership as Parameters<typeof toMembershipAuthDto>[0]));
 
     const avatarUrl = await getUserAvatarSignedUrl({
       supabaseService: this.supabaseService,
       avatarKey: (user as any).avatarKey ?? null,
     });
 
-    const platformAdmin = await this.resolvePlatformAdminPayload(user.id);
+    const requestedTenantId =
+      typeof req.headers?.['x-tenant-id'] === 'string'
+        ? req.headers['x-tenant-id'].trim()
+        : '';
     const activeTenantTimezone = await this.resolveActiveTenantTimezone({
-      requestedTenantId: req.headers?.['x-tenant-id'],
+      requestedTenantId,
       memberships,
       platformAdmin,
       requestUser: req.user,
     });
+
+    let tenantId = resolveRequestedMembershipTenantId({
+      requestedTenantId,
+      visibleMemberships: tenantMemberships,
+    });
+    if (!tenantId && isPlatformAdmin && requestedTenantId) {
+      const operated = await this.prisma.tenant.findUnique({
+        where: { id: requestedTenantId },
+        select: { id: true, status: true },
+      });
+      if (operated && isPlatformOperatedTenantAllowed(operated.status)) {
+        tenantId = requestedTenantId;
+      }
+    }
+
+    const matchingMembership = tenantId
+      ? tenantMemberships.find((m) => m.tenantId === tenantId)
+      : undefined;
 
     return {
       id: user.id,
@@ -413,18 +444,9 @@ export class AuthController {
         publicEmailOrNull(user.email) ??
         null,
       role: effectiveRole,                // global app role, never null
-      roles:
-        tenantMemberships.find(
-          (m) =>
-            m.tenantId ===
-            (typeof req.headers?.['x-tenant-id'] === 'string'
-              ? req.headers['x-tenant-id']
-              : tenantMemberships[0]?.tenantId),
-        )?.roles ??
-        tenantMemberships[0]?.roles ??
-        [],
+      roles: matchingMembership?.roles ?? [],
       authUserId: (user as any).authUserId, // Supabase auth user id
-      tenantId: undefined,
+      tenantId,
       avatarUrl,
       avatarKey: (user as any).avatarKey ?? null,
       avatarUpdatedAt: (user as any).avatarUpdatedAt ?? null,

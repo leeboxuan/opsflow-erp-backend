@@ -156,6 +156,28 @@ describe("DriverJobsService.listHistoryByDriver (trip-first)", () => {
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
   });
 
+  it("uses linked TripJobItem cargo on history trips instead of cached containerNumber", async () => {
+    const job = makeJob({ status: "ONGOING" });
+    const trip = makeCompletedTrip(job, {
+      containerNumber: "CACHED-OLD",
+      tripJobItems: [
+        { tenantId, jobItem: { itemCode: "HIST-LIVE" } },
+      ],
+    });
+    const { svc } = makePrismaAndService({
+      total: 1n,
+      ids: [{ id: trip.id }],
+      tripsHydrated: [trip],
+    });
+
+    const res = await svc.listHistoryByDriver(tenantId, driverUserId, { month: "2026-05" });
+    expect(res.data[0].trips![0]).toMatchObject({
+      cargoSource: "TRIP_JOB_ITEM",
+      cargoSummary: "HIST-LIVE",
+      containerNumber: "HIST-LIVE",
+    });
+  });
+
   it("groups multiple completed trips for the same job on one page into one job row", async () => {
     const job = makeJob();
     const t1 = makeCompletedTrip(job, { id: "trip-a", tripSequence: 1, closedAt: new Date("2026-05-12T00:00:00.000Z") });

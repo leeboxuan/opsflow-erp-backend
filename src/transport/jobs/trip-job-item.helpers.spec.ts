@@ -9,6 +9,7 @@ import {
   isContainerBasedTransportJob,
   isTripJobItemLinkFrozen,
   resolveSyncedTripContainerNumber,
+  summarizeLinkedCargoForDriverList,
 } from "./trip-job-item.helpers";
 
 describe("trip-job-item.helpers", () => {
@@ -150,6 +151,67 @@ describe("trip-job-item.helpers", () => {
       expect(cargo.cargoSource).toBe("EMPTY");
       expect(cargo.items).toHaveLength(1);
       expect(cargo.items![0].jobItemId).toBe("item-a");
+    });
+  });
+
+  describe("summarizeLinkedCargoForDriverList", () => {
+    it("prefers the linked JobItem container over cached Trip.containerNumber", () => {
+      const summary = summarizeLinkedCargoForDriverList({
+        tenantId: "tenant-1",
+        jobType: JobType.IMPORT,
+        legacyContainerNumber: "CACHED-OLD",
+        tripJobItems: [
+          {
+            tenantId: "tenant-1",
+            containerNumberSnapshot: "CACHED-OLD",
+            jobItem: { itemCode: "TLLU-LIVE" },
+          },
+        ],
+      });
+      expect(summary.cargoSource).toBe("TRIP_JOB_ITEM");
+      expect(summary.cargoSummary).toBe("TLLU-LIVE");
+      expect(summary.containerNumber).toBe("TLLU-LIVE");
+    });
+
+    it("summarizes multiple linked JobItems without inventing unlinked cargo", () => {
+      const summary = summarizeLinkedCargoForDriverList({
+        tenantId: "tenant-1",
+        jobType: JobType.IMPORT,
+        legacyContainerNumber: "CACHED",
+        tripJobItems: [
+          { tenantId: "tenant-1", jobItem: { itemCode: "AAAA" } },
+          { tenantId: "tenant-1", jobItem: { itemCode: "BBBB" } },
+        ],
+      });
+      expect(summary.cargoSource).toBe("TRIP_JOB_ITEM");
+      expect(summary.cargoSummary).toBe("AAAA, BBBB");
+      expect(summary.containerNumber).toBeNull();
+    });
+
+    it("does not infer job items when no TripJobItem link exists", () => {
+      const summary = summarizeLinkedCargoForDriverList({
+        tenantId: "tenant-1",
+        jobType: JobType.IMPORT,
+        legacyContainerNumber: "LEGACY-1",
+        tripJobItems: [],
+      });
+      expect(summary.cargoSource).toBe("LEGACY_TRIP_CONTAINER");
+      expect(summary.cargoSummary).toBeNull();
+      expect(summary.containerNumber).toBe("LEGACY-1");
+    });
+
+    it("excludes another tenant's TripJobItem links", () => {
+      const summary = summarizeLinkedCargoForDriverList({
+        tenantId: "tenant-1",
+        jobType: JobType.IMPORT,
+        legacyContainerNumber: null,
+        tripJobItems: [
+          { tenantId: "tenant-other", jobItem: { itemCode: "FOREIGN" } },
+        ],
+      });
+      expect(summary.cargoSource).toBe("EMPTY");
+      expect(summary.cargoSummary).toBeNull();
+      expect(summary.containerNumber).toBeNull();
     });
   });
 });

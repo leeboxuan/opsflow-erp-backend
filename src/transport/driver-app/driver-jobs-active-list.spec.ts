@@ -243,4 +243,23 @@ describe("DriverJobsService.listActiveByDriver driver-scoped home list", () => {
     expect(returnedIds).toEqual(["trip-a"]);
     expect(returnedIds).not.toContain("trip-b");
   });
+
+  it("maps active-list trip cargo from TripJobItem links", async () => {
+    const linked = tripRow({
+      id: "trip-a",
+      containerNumber: "CACHED-OLD",
+      tripJobItems: [{ tenantId, jobItem: { itemCode: "ACTIVE-LIVE" } }],
+    });
+    const { svc } = makeService([baseJob([linked])], [linked]);
+    const res = await svc.listActiveByDriver(tenantId, driver1, { date, sortBy: "createdAt" });
+    expect(res.data[0].trips![0]).toMatchObject({
+      cargoSource: "TRIP_JOB_ITEM",
+      cargoSummary: "ACTIVE-LIVE",
+      containerNumber: "ACTIVE-LIVE",
+    });
+    expect(res.runSheet?.trips[0]).toMatchObject({
+      cargoSource: "TRIP_JOB_ITEM",
+      cargoSummary: "ACTIVE-LIVE",
+    });
+  });
 });
