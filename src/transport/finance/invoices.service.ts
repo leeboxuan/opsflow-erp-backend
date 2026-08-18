@@ -1590,6 +1590,7 @@ export class InvoicesService {
     user: any,
   ): Promise<{
     customerName: string;
+    customerCompanyId: string | null;
     currency: string;
     sourceJobIds: string[];
     sourceCustomerQuotationId?: string | null;
@@ -1708,11 +1709,81 @@ export class InvoicesService {
 
     return {
       customerName: company?.name ?? jobs[0].receiverName ?? "Customer",
+      customerCompanyId: jobs[0].customerCompanyId ?? company?.id ?? null,
       currency: "SGD",
       sourceJobIds: jobIds,
       sourceCustomerQuotationId: quotationIds[0] ?? null,
       suggestedLineItems,
     };
+  }
+
+  /**
+   * Job-backed drafts must resolve to one same-tenant customer before persist.
+   * Standalone drafts (no source jobs) may omit customerCompanyId.
+   */
+  private async resolveCustomerCompanyIdForDraft(
+    tenantId: string,
+    dto: {
+      customerCompanyId?: string | null;
+      sourceJobId?: string | null;
+      sourceJobIds?: string[] | null;
+      lineItems?: Array<{ sourceJobId?: string | null }>;
+    },
+  ): Promise<string | null> {
+    const requested = String(dto.customerCompanyId ?? "").trim() || null;
+    const sourceJobIds = uniqueNonEmptyIds([
+      dto.sourceJobId,
+      ...(dto.sourceJobIds ?? []),
+      ...(dto.lineItems ?? []).map((line) => line.sourceJobId),
+    ]);
+    if (sourceJobIds.length === 0) {
+      if (!requested) return null;
+      const company = await this.prisma.customer_companies.findFirst({
+        where: { id: requested, tenantId },
+        select: { id: true },
+      });
+      if (!company) {
+        throw new BadRequestException(
+          "customerCompanyId not found under this tenant",
+        );
+      }
+      return requested;
+    }
+
+    const jobs = await this.prisma.job.findMany({
+      where: { tenantId, id: { in: sourceJobIds } },
+      select: { id: true, customerCompanyId: true },
+    });
+    if (jobs.length !== sourceJobIds.length) {
+      throw new BadRequestException(
+        "Some sourceJobIds not found under this tenant",
+      );
+    }
+    const rawCompanyIds = jobs.map((job) =>
+      String(job.customerCompanyId ?? "").trim(),
+    );
+    const uniqueCompanies: string[] = [];
+    for (const id of rawCompanyIds) {
+      if (!id || uniqueCompanies.includes(id)) continue;
+      uniqueCompanies.push(id);
+    }
+    if (rawCompanyIds.some((id) => !id) || uniqueCompanies.length !== 1) {
+      throw new BadRequestException(
+        "All source jobs must belong to the same customer company",
+      );
+    }
+    const inferred = uniqueCompanies[0];
+    if (!inferred) {
+      throw new BadRequestException(
+        "All source jobs must belong to the same customer company",
+      );
+    }
+    if (requested && requested !== inferred) {
+      throw new BadRequestException(
+        "customerCompanyId must match the source job customer",
+      );
+    }
+    return inferred;
   }
 
   async createDraftInvoice(
@@ -1755,9 +1826,13 @@ export class InvoicesService {
       }
     }
 
+    const customerCompanyId = await this.resolveCustomerCompanyIdForDraft(
+      tenantId,
+      dto,
+    );
     await this.validateInvoiceLineSources(
       tenantId,
-      dto.customerCompanyId ?? null,
+      customerCompanyId,
       dto.sourceJobId ?? null,
       dto.lineItems ?? [],
     );
@@ -1793,7 +1868,7 @@ export class InvoicesService {
       const binding = await this.prepareInvoiceChargeBinding(
         tx,
         tenantId,
-        dto,
+        { ...dto, customerCompanyId },
         normalized,
       );
       const inv = await tx.invoice.create({
@@ -1801,7 +1876,7 @@ export class InvoicesService {
           tenantId,
           invoiceNo,
           customerName: dto.customerName,
-          customerCompanyId: dto.customerCompanyId ?? null,
+          customerCompanyId,
           sourceJobId: dto.sourceJobId ?? binding.sourceJobIds[0] ?? null,
           sourceCustomerQuotationId: binding.boundQuotationId,
           templateCode: dto.templateCode ?? "DB_WISDOM",
@@ -2203,9 +2278,18 @@ export class InvoicesService {
     }
 
     const sourceJobId = dto.sourceJobId ?? (inv as any).sourceJobId ?? null;
-    const customerCompanyId =
-      dto.customerCompanyId ?? (inv as any).customerCompanyId ?? null;
     const draftLineItems = dto.lineItems ?? [];
+    const customerCompanyId = await this.resolveCustomerCompanyIdForDraft(
+      tenantId,
+      {
+        customerCompanyId:
+          dto.customerCompanyId ?? (inv as any).customerCompanyId ?? null,
+        sourceJobId,
+        sourceJobIds:
+          dto.sourceJobIds !== undefined ? dto.sourceJobIds : existingSourceJobIds,
+        lineItems: draftLineItems,
+      },
+    );
     const normalizedSourceJobIds = (sourceJobIds ?? [])
       .map((id) => String(id ?? "").trim())
       .filter(Boolean);

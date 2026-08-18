@@ -85,19 +85,26 @@ describe("InvoicesService charge-level integrity", () => {
         findMany: jest.fn().mockResolvedValue([charge()]),
       },
       job: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: "job-a",
+        findFirst: jest.fn().mockImplementation(async ({ where }: any) => ({
+          id: where?.id ?? "job-a",
           customerCompanyId: "c1",
-        }),
-        findMany: jest.fn().mockResolvedValue([
-          {
-            id: "job-a",
+        })),
+        findMany: jest.fn().mockImplementation(async ({ where }: any) => {
+          const ids: string[] = where?.id?.in ?? (where?.id ? [where.id] : ["job-a"]);
+          return ids.map((id: string) => ({
+            id,
+            customerCompanyId: "c1",
             status: JobStatus.READY_FOR_INVOICE,
             invoiceReadyAt: new Date(),
             charges: [{ id: "jc-a" }],
-          },
-        ]),
+          }));
+        }),
         update: jest.fn(),
+      },
+      customer_companies: {
+        findFirst: jest.fn().mockImplementation(async ({ where }: any) =>
+          where?.id ? { id: where.id } : null,
+        ),
       },
       customerQuotation: {
         findFirst: jest.fn().mockResolvedValue({
@@ -300,6 +307,167 @@ describe("InvoicesService charge-level integrity", () => {
         { tenantId: "t1", invoiceId: "inv-1", jobChargeId: "jc-b" },
       ],
     });
+  });
+
+  it("infers customerCompanyId from source jobs when omitted on a job-backed draft", async () => {
+    const { svc, prisma } = makeService();
+    await svc.createDraftInvoice(
+      "t1",
+      {
+        customerName: "Acme",
+        sourceJobId: "job-a",
+        sourceJobIds: ["job-a"],
+        lineItems: [lineFromCharge],
+      } as any,
+      actor,
+    );
+    expect(prisma.invoice.create.mock.calls[0][0].data.customerCompanyId).toBe("c1");
+  });
+
+  it("rejects a job-backed draft that mixes source jobs from different customers before persist", async () => {
+    const { svc, prisma } = makeService();
+    prisma.job.findMany.mockImplementation(async ({ where }: any) => {
+      const ids: string[] = where?.id?.in ?? [];
+      return ids.map((id: string) => ({
+        id,
+        customerCompanyId: id === "job-b" ? "c2" : "c1",
+      }));
+    });
+    await expect(
+      svc.createDraftInvoice(
+        "t1",
+        {
+          customerName: "Acme",
+          sourceJobIds: ["job-a", "job-b"],
+          lineItems: [
+            lineFromCharge,
+            { ...lineFromCharge, jobChargeId: "jc-b", sourceJobId: "job-b" },
+          ],
+        } as any,
+        actor,
+      ),
+    ).rejects.toThrow("All source jobs must belong to the same customer company");
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects customerCompanyId that does not match the source job customer", async () => {
+    const { svc, prisma } = makeService();
+    await expect(
+      svc.createDraftInvoice(
+        "t1",
+        {
+          customerName: "Acme",
+          customerCompanyId: "c-other",
+          sourceJobId: "job-a",
+          lineItems: [lineFromCharge],
+        } as any,
+        actor,
+      ),
+    ).rejects.toThrow("customerCompanyId must match the source job customer");
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
+  });
+
+  it("still allows a standalone draft without customerCompanyId", async () => {
+    const { svc, prisma } = makeService({
+      jobCharge: { findMany: jest.fn().mockResolvedValue([]) },
+    });
+    await svc.createDraftInvoice(
+      "t1",
+      {
+        customerName: "Walk-in",
+        lineItems: [
+          {
+            description: "Manual",
+            qty: 1,
+            unitPriceCents: 100,
+            taxCode: "SR",
+            taxRate: 900,
+          },
+        ],
+      } as any,
+      actor,
+    );
+    expect(prisma.invoice.create.mock.calls[0][0].data.customerCompanyId).toBeNull();
+  });
+
+  it("preview from jobs returns customerCompanyId", async () => {
+    const { svc, prisma } = makeService();
+    prisma.job.findMany.mockResolvedValue([
+      {
+        id: "job-a",
+        customerCompanyId: "c1",
+        customerCompany: { id: "c1", name: "Acme" },
+        receiverName: "Acme",
+        internalRef: "JOB-A",
+        status: JobStatus.READY_FOR_INVOICE,
+        invoiceReadyAt: new Date(),
+        sourceCustomerQuotationId: "qt-1",
+        charges: [
+          {
+            id: "jc-a",
+            label: "Trucking",
+            qty: 1,
+            unitPriceCents: 10000,
+            taxable: true,
+            taxCode: "SR",
+            taxRateBasisPoints: 900,
+          },
+        ],
+      },
+    ]);
+    const preview = await svc.getInvoiceDraftFromJobs("t1", ["job-a"], actor);
+    expect(preview.customerCompanyId).toBe("c1");
+    expect(preview.customerName).toBe("Acme");
+  });
+
+  it("sets customerCompanyId on an existing DRAFT without creating a second invoice", async () => {
+    const existingDraft = {
+      id: "inv-draft",
+      tenantId: "t1",
+      invoiceNo: "INV-202608-0001",
+      customerName: "Acme",
+      customerCompanyId: null,
+      sourceJobId: "job-a",
+      currency: "SGD",
+      status: "DRAFT",
+      issueDate: new Date("2026-08-17T00:00:00.000Z"),
+      dueDate: null,
+      notes: null,
+      subtotalCents: 10000,
+      taxCents: 900,
+      totalCents: 10900,
+      lineItems: [{ id: "line-1", ...lineFromCharge }],
+      orders: [],
+      snapshot: { orderIds: [], sourceJobIds: ["job-a"] },
+    };
+    const { svc, prisma } = makeService({
+      invoice: {
+        findFirst: jest.fn().mockResolvedValue(existingDraft),
+        create: jest.fn(),
+        update: jest.fn().mockImplementation(({ data }: any) => ({
+          ...existingDraft,
+          ...data,
+          lineItems: existingDraft.lineItems,
+          orders: [],
+        })),
+      },
+    });
+    const result = await svc.updateDraftInvoice(
+      "t1",
+      existingDraft.id,
+      {
+        customerName: "Acme",
+        customerCompanyId: "c1",
+        sourceJobId: "job-a",
+        sourceJobIds: ["job-a"],
+        currency: "SGD",
+        lineItems: [lineFromCharge],
+      } as any,
+      actor,
+    );
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
+    expect(prisma.invoice.update.mock.calls[0][0].data.customerCompanyId).toBe("c1");
+    expect(result.id).toBe(existingDraft.id);
   });
 
   it("voids an ISSUED invoice and releases JobCharge reservations", async () => {

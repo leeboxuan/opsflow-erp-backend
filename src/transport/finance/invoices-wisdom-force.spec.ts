@@ -43,7 +43,13 @@ describe("InvoicesService Wisdom Force flow", () => {
           invoiceReadyAt: new Date("2026-05-07T00:00:00.000Z"),
           trips: [{ id: "t1", status: "DONE", displayTitle: "Trip A" }],
         }),
-        findMany: jest.fn().mockResolvedValue([]),
+        findMany: jest.fn().mockImplementation(async ({ where }: any) => {
+          const ids: string[] = where?.id?.in ?? (where?.id ? [where.id] : []);
+          return ids.map((id: string) => ({
+            id,
+            customerCompanyId: "c1",
+          }));
+        }),
       },
       invoice: {
         findFirst: jest
@@ -1157,7 +1163,7 @@ describe("InvoicesService Wisdom Force flow", () => {
           invoiceReadyAt: new Date("2026-05-07T00:00:00.000Z"),
           trips: [{ id: "t1", status: "DONE", displayTitle: "Trip A" }],
         }),
-        findMany: jest.fn().mockResolvedValue([{ id: "job1" }]),
+        findMany: jest.fn().mockResolvedValue([{ id: "job1", customerCompanyId: "c1" }]),
       },
       trip: {
         findFirst: jest.fn().mockResolvedValue({ id: "trip-1", status: "DONE" }),
@@ -1249,7 +1255,7 @@ describe("InvoicesService Wisdom Force flow", () => {
           invoiceReadyAt: new Date("2026-05-07T00:00:00.000Z"),
           trips: [{ id: "t1", status: "DONE", displayTitle: "Trip A" }],
         }),
-        findMany: jest.fn().mockResolvedValue([{ id: "job1" }]),
+        findMany: jest.fn().mockResolvedValue([{ id: "job1", customerCompanyId: "c1" }]),
       },
       customerRateMasterLine: { findMany: jest.fn().mockResolvedValue([]) },
       customerQuotationRateLine: { findMany: jest.fn().mockResolvedValue([]) },
@@ -1351,7 +1357,7 @@ describe("InvoicesService Wisdom Force flow", () => {
           invoiceReadyAt: new Date("2026-05-07T00:00:00.000Z"),
           trips: [{ id: "t1", status: "DONE", displayTitle: "Trip A" }],
         }),
-        findMany: jest.fn().mockResolvedValue([{ id: "job1" }]),
+        findMany: jest.fn().mockResolvedValue([{ id: "job1", customerCompanyId: "c1" }]),
       },
     });
 
@@ -1421,7 +1427,7 @@ describe("InvoicesService Wisdom Force flow", () => {
           invoiceReadyAt: new Date("2026-05-07T00:00:00.000Z"),
           trips: [{ id: "t1", status: "DONE", displayTitle: "Trip A" }],
         }),
-        findMany: jest.fn().mockResolvedValue([{ id: "job1" }]),
+        findMany: jest.fn().mockResolvedValue([{ id: "job1", customerCompanyId: "c1" }]),
       },
       invoiceLineItem: {
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),

@@ -164,6 +164,21 @@ describe("invoice PDF generate atomicity", () => {
     expect(invoiceUpdate).not.toHaveBeenCalled();
   });
 
+  it("leaves DRAFT unchanged when customerCompanyId is missing", async () => {
+    const { svc, invoiceUpdate } = makeService();
+    const pdfSpy = jest.spyOn(svc as any, "createInvoicePdfBuffer");
+    jest.spyOn(svc as any, "buildInvoiceRenderData").mockResolvedValue({
+      customerCompanyId: null,
+      sourceJobId: "job-1",
+      sourceJobInternalRef: "JOB-1",
+    });
+    await expect(
+      svc.generateInvoicePdf("t1", "inv-1", { userId: "u1" }),
+    ).rejects.toThrow("Invoice must have a customerCompanyId before generating a PDF");
+    expect(invoiceUpdate).not.toHaveBeenCalled();
+    expect(pdfSpy).not.toHaveBeenCalled();
+  });
+
   it("refuses generate on ISSUED, PAID, and VOID", async () => {
     for (const status of [
       INVOICE_STATUS.ISSUED,

@@ -329,6 +329,68 @@ describe("TenantUserProvisioningService", () => {
     );
   });
 
+  it("sets username only on an existing driver user without touching password, email, or roles", async () => {
+    const { service, prisma, updateUserById } = makeService();
+    prisma.tenantMembership.findUnique.mockResolvedValue({
+      id: "m-drv",
+      role: Role.DRIVER,
+      status: MembershipStatus.Active,
+      membershipRoles: [{ role: "TRANSPORT_DRIVER" }],
+      user: {
+        id: "u-drv",
+        email: "driver.a@example.test",
+        username: null,
+        name: "E2E Driver A",
+        phone: "+6590000001",
+        customerCompanyId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    prisma.user.update.mockResolvedValue({
+      id: "u-drv",
+      email: "driver.a@example.test",
+      username: "e2e.driver.a",
+      name: "E2E Driver A",
+      phone: "+6590000001",
+      customerCompanyId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    prisma.tenantMembership.update.mockResolvedValue({
+      id: "m-drv",
+      role: Role.DRIVER,
+      status: MembershipStatus.Active,
+      membershipRoles: [{ role: "TRANSPORT_DRIVER" }],
+    });
+
+    const result = await service.updateTenantUser(
+      "t1",
+      "u-drv",
+      { username: "E2E.Driver.A" },
+      {
+        allowUsernameEdit: true,
+        tenantContext: { roles: ["TENANT_ADMIN"] },
+      },
+    );
+
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "u-drv" },
+      data: { username: "e2e.driver.a" },
+    });
+    expect(prisma.tenantMembership.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "m-drv" },
+        data: {},
+      }),
+    );
+    expect(updateUserById).not.toHaveBeenCalled();
+    expect(result.username).toBe("e2e.driver.a");
+    expect(result.email).toBe("driver.a@example.test");
+    expect(result.role).toBe(Role.DRIVER);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
   it("rejects username edit when allowUsernameEdit is false", async () => {
     const { service, prisma } = makeService();
     prisma.tenantMembership.findUnique.mockResolvedValue({
