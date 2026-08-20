@@ -6,6 +6,7 @@ import {
   UseGuards,
   Request,
   UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -47,6 +48,8 @@ const EMAIL_LOGIN_ERROR = 'Invalid email or password';
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(
     private readonly authService: AuthService,
     private readonly supabaseService: SupabaseService,
@@ -57,6 +60,12 @@ export class AuthController {
   @Post('login')
   @ApiOperation({ summary: 'Login with email or username and password' })
   async login(@Body() dto: LoginDto): Promise<LoginResponseDto> {
+    const loginStartedAt = performance.now();
+    const timings: Record<string, number> = {};
+    const mark = (phase: string, startedAt: number) => {
+      timings[phase] = Math.round(performance.now() - startedAt);
+    };
+
     const supabaseUrl =
       this.configService.get<string>('SUPABASE_PROJECT_URL') ||
       this.configService.get<string>('SUPABASE_URL') ||
@@ -87,10 +96,12 @@ export class AuthController {
     let resolvedUserId: string | null = null;
 
     if (isUsernameLogin) {
+      const usernameResolveStartedAt = performance.now();
       const resolved = await this.resolveUsernameLogin(
         usernameRaw!,
         dto.tenantSlug,
       );
+      mark('usernameResolutionMs', usernameResolveStartedAt);
       if (!resolved) {
         throw new UnauthorizedException(USERNAME_LOGIN_ERROR);
       }
@@ -100,10 +111,12 @@ export class AuthController {
 
     const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
 
+    const supabaseSignInStartedAt = performance.now();
     const { data, error } = await supabase.auth.signInWithPassword({
       email: authEmail,
       password: dto.password,
     });
+    mark('supabaseSignInMs', supabaseSignInStartedAt);
 
     if (error || !data.session) {
       throw new UnauthorizedException(loginError);
@@ -113,7 +126,9 @@ export class AuthController {
     const refreshToken = data.session.refresh_token ?? '';
     const expiresAt = data.session.expires_at ?? 0;
 
+    const verifyTokenStartedAt = performance.now();
     const authUser = await this.authService.verifyToken(accessToken);
+    mark('verifyTokenMs', verifyTokenStartedAt);
 
     if (!authUser) {
       const jwtSecret = this.configService.get<string>('SUPABASE_JWT_SECRET');
@@ -131,31 +146,36 @@ export class AuthController {
       throw new UnauthorizedException(loginError);
     }
 
-    const memberships = await this.prisma.tenantMembership.findMany({
-      where: {
-        userId: authUser.userId,
-        status: MembershipStatus.Active,
-      },
-      include: {
-        tenant: {
-          select: {
-            id: true,
-            name: true,
-            status: true,
-            timezone: true,
-            moduleEntitlements: { select: { module: true, enabled: true } },
-          },
-        },
-        membershipRoles: { select: { role: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const platformAdminPayload = this.platformAdminPayloadFromAuthUser(authUser);
 
-    // Filter out suspended/archived tenants for ordinary session selection.
-    // Platform admins still receive memberships for suspended tenants (management).
-    const platformAdminPayload = await this.resolvePlatformAdminPayload(
-      authUser.userId,
-    );
+    const parallelReadsStartedAt = performance.now();
+    const [memberships, dbUser] = await Promise.all([
+      this.prisma.tenantMembership.findMany({
+        where: {
+          userId: authUser.userId,
+          status: MembershipStatus.Active,
+        },
+        include: {
+          tenant: {
+            select: {
+              id: true,
+              name: true,
+              status: true,
+              timezone: true,
+              moduleEntitlements: { select: { module: true, enabled: true } },
+            },
+          },
+          membershipRoles: { select: { role: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: authUser.userId },
+        select: { email: true, username: true },
+      }),
+    ]);
+    mark('parallelReadsMs', parallelReadsStartedAt);
+
     const isPlatformAdmin =
       platformAdminPayload?.status === 'ACTIVE' ||
       authUser.isSuperadmin === true ||
@@ -211,11 +231,6 @@ export class AuthController {
 
     const activeMembership = visibleMemberships[0];
 
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: authUser.userId },
-      select: { email: true, username: true },
-    });
-
     const activeAuth = activeMembership
       ? toMembershipAuthDto(activeMembership)
       : null;
@@ -228,6 +243,15 @@ export class AuthController {
       roles: activeAuth?.roles ?? [],
       tenantId: activeMembership?.tenantId ?? undefined,
     };
+
+    mark('totalMs', loginStartedAt);
+    this.logger.debug(
+      `POST /auth/login timing ${JSON.stringify({
+        clientApp: clientApp || 'unknown',
+        loginMode: isUsernameLogin ? 'username' : isDriverMobile ? 'driver_mobile' : 'email',
+        ...timings,
+      })}`,
+    );
 
     return {
       accessToken,
@@ -243,6 +267,26 @@ export class AuthController {
       ),
       platformAdmin: platformAdminPayload,
     };
+  }
+
+  private platformAdminPayloadFromAuthUser(
+    authUser: {
+      isPlatformAdmin?: boolean;
+      platformAdminId?: string | null;
+      platformAdminStatus?: string | null;
+    },
+  ): { id: string; status: string } | null {
+    if (
+      authUser.isPlatformAdmin === true &&
+      authUser.platformAdminId &&
+      authUser.platformAdminStatus === 'ACTIVE'
+    ) {
+      return {
+        id: authUser.platformAdminId,
+        status: authUser.platformAdminStatus,
+      };
+    }
+    return null;
   }
 
   private async resolvePlatformAdminPayload(

@@ -371,10 +371,9 @@ describe('AuthController.login', () => {
       email: 'pa@opsflow.io',
       role: 'SUPERADMIN',
       isSuperadmin: true,
-    });
-    prisma.platformAdmin.findUnique.mockResolvedValue({
-      id: 'pa-1',
-      status: 'ACTIVE',
+      isPlatformAdmin: true,
+      platformAdminId: 'pa-1',
+      platformAdminStatus: 'ACTIVE',
     });
     prisma.tenantMembership.findMany.mockResolvedValue([]);
     prisma.user.findUnique.mockResolvedValue({
@@ -734,6 +733,130 @@ describe('AuthController.login', () => {
       }),
     ).rejects.toThrow('Invalid username or password');
     expect(mockSignIn).not.toHaveBeenCalled();
+  });
+
+  it('loads memberships and user profile concurrently after token verification', async () => {
+    const internalEmail = `tenant-a.floor1@${AUTH_INTERNAL_EMAIL_DOMAIN}`;
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'user-1',
+        email: internalEmail,
+        memberships: [
+          {
+            status: MembershipStatus.Active,
+            tenant: { slug: 'tenant-a' },
+          },
+        ],
+      },
+    ]);
+    mockSuccessfulSession('user-1', internalEmail);
+
+    let releaseMemberships!: () => void;
+    const membershipsGate = new Promise<void>((resolve) => {
+      releaseMemberships = resolve;
+    });
+    let releaseUserLookup!: () => void;
+    const userGate = new Promise<void>((resolve) => {
+      releaseUserLookup = resolve;
+    });
+
+    prisma.tenantMembership.findMany.mockImplementation(async () => {
+      await membershipsGate;
+      return [
+        {
+          tenantId: tenantA.id,
+          role: Role.WAREHOUSE,
+          status: MembershipStatus.Active,
+          tenant: {
+            id: tenantA.id,
+            name: tenantA.name,
+            status: 'ACTIVE',
+            timezone: tenantA.timezone,
+          },
+        },
+      ];
+    });
+    prisma.user.findUnique.mockImplementation(async () => {
+      await userGate;
+      return { email: internalEmail, username: 'floor1' };
+    });
+
+    const loginPromise = controller.login({
+      username: 'Floor1',
+      password: 'secret123',
+      tenantSlug: 'tenant-a',
+    });
+
+    await Promise.resolve();
+    releaseMemberships();
+    releaseUserLookup();
+
+    const result = await loginPromise;
+    expect(result.user.username).toBe('floor1');
+    expect(prisma.platformAdmin.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('preserves login response contract with parallelized reads', async () => {
+    mockSignIn.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'access',
+          refresh_token: 'refresh',
+          expires_at: 123,
+        },
+      },
+      error: null,
+    });
+    authService.verifyToken.mockResolvedValue({
+      userId: 'user-1',
+      email: 'ops@example.com',
+      role: 'USER',
+      isSuperadmin: false,
+    });
+    prisma.tenantMembership.findMany.mockResolvedValue([
+      {
+        tenantId: tenantA.id,
+        role: Role.WAREHOUSE,
+        status: MembershipStatus.Active,
+        tenant: {
+          id: tenantA.id,
+          name: tenantA.name,
+          status: 'ACTIVE',
+          timezone: tenantA.timezone,
+          moduleEntitlements: [],
+        },
+        membershipRoles: [{ role: 'WAREHOUSE_STAFF' }],
+      },
+    ]);
+    prisma.user.findUnique.mockResolvedValue({
+      email: 'ops@example.com',
+      username: null,
+    });
+
+    const result = await controller.login({
+      email: 'ops@example.com',
+      password: 'secret123',
+      clientApp: 'web',
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        expiresAt: 123,
+        activeTenantId: tenantA.id,
+        activeTenantTimezone: 'Australia/Perth',
+        platformAdmin: null,
+        user: expect.objectContaining({
+          id: 'user-1',
+          email: 'ops@example.com',
+          tenantId: tenantA.id,
+        }),
+        tenantMemberships: expect.arrayContaining([
+          expect.objectContaining({ tenantId: tenantA.id }),
+        ]),
+      }),
+    );
   });
 });
 
