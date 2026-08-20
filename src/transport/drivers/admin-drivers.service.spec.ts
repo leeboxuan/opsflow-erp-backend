@@ -152,6 +152,51 @@ describe("AdminDriversService", () => {
     });
   });
 
+  it("driver list always serializes hasPsaPortAccess false (not omitted)", async () => {
+    const { service, prisma } = makeService();
+    const result = await service.listDrivers("t1", {} as any);
+    expect(prisma.drivers.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({ hasPsaPortAccess: true }),
+      }),
+    );
+    expect(result.data[0]).toEqual(
+      expect.objectContaining({ hasPsaPortAccess: false }),
+    );
+    const json = JSON.parse(JSON.stringify(result.data[0]));
+    expect(Object.prototype.hasOwnProperty.call(json, "hasPsaPortAccess")).toBe(
+      true,
+    );
+    expect(json.hasPsaPortAccess).toBe(false);
+  });
+
+  it("driver list always serializes hasPsaPortAccess true", async () => {
+    const { service } = makeService({
+      drivers: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            userId: "u-driver",
+            name: "Driver Profile Name",
+            assignedVehicleId: null,
+            assignedFleetVehicleId: null,
+            hasPsaPortAccess: true,
+          },
+        ]),
+        upsert: jest.fn().mockResolvedValue({}),
+        findFirst: jest.fn().mockResolvedValue({
+          assignedVehicleId: null,
+          assignedFleetVehicleId: null,
+          hasPsaPortAccess: true,
+          name: "Driver Profile Name",
+        }),
+      },
+    });
+    const result = await service.listDrivers("t1", {} as any);
+    expect(result.data[0].hasPsaPortAccess).toBe(true);
+    const json = JSON.parse(JSON.stringify(result.data[0]));
+    expect(json.hasPsaPortAccess).toBe(true);
+  });
+
   it("driver list includes avatarUrl when user has avatarKey", async () => {
     const { service, usersService } = makeService();
     const result = await service.listDrivers("t1", {} as any);
@@ -292,6 +337,13 @@ describe("AdminDriversService", () => {
     expect(result.email).toBeNull();
     expect(result.username).toBe("ahmad");
     expect(result.userEmail).toBeNull();
+    expect(result.hasPsaPortAccess).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        JSON.parse(JSON.stringify(result)),
+        "hasPsaPortAccess",
+      ),
+    ).toBe(true);
     expect(JSON.stringify(result)).not.toContain("auth.opsflow.app");
     expect(prisma.tenantMembership.upsert).toHaveBeenCalledWith(
       expect.objectContaining({

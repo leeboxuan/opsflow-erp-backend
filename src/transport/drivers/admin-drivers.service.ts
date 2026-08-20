@@ -179,6 +179,7 @@ export class AdminDriversService {
           name: true,
           assignedVehicleId: true,
           assignedFleetVehicleId: true,
+          hasPsaPortAccess: true,
         },
       }),
       this.prisma.vehicle.findMany({
@@ -216,8 +217,17 @@ export class AdminDriversService {
         name: string | null;
         assignedVehicleId: string | null;
         assignedFleetVehicleId: string | null;
+        hasPsaPortAccess: boolean;
       }
-    >(driverProfiles.map((p) => [p.userId, p]));
+    >(
+      driverProfiles.map((p) => [
+        p.userId,
+        {
+          ...p,
+          hasPsaPortAccess: p.hasPsaPortAccess === true,
+        },
+      ]),
+    );
 
     const vehicleByDriverId = new Map<
       string,
@@ -274,6 +284,8 @@ export class AdminDriversService {
         assignedFleetVehiclePlateNo: fv?.plateNo ?? null,
         assignedFleetVehicleType: fv?.type ?? null,
         assignedFleetVehicleStatus: fv?.status ?? null,
+        // Always serialize boolean (including false) — never omit the key.
+        hasPsaPortAccess: profile?.hasPsaPortAccess === true,
       };
     }));
 

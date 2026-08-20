@@ -8,6 +8,45 @@ import {
 } from "./trip-psa-access";
 
 /**
+ * Response fields that must always be present on trip list/detail DTOs
+ * (JSON must retain `false`, never omit the key).
+ */
+function tripPsaResponseFields(input: {
+  requiresPsaPortAccess?: boolean | null;
+  hasPsaPortAccess?: boolean | null;
+  status: TripStatus;
+  assignedDriverUserId?: string | null;
+  driverId?: string | null;
+}) {
+  const requiresPsaPortAccess = input.requiresPsaPortAccess === true;
+  const conflict = evaluatePsaEligibilityConflict({
+    requiresPsaPortAccess,
+    hasPsaPortAccess: input.hasPsaPortAccess === true,
+    status: input.status,
+    assignedDriverUserId: input.assignedDriverUserId ?? null,
+    driverId: input.driverId ?? null,
+  });
+  return {
+    requiresPsaPortAccess,
+    psaEligibilityConflict: conflict.hasConflict,
+    psaEligibilityConflictSeverity: conflict.severity,
+    psaEligibilityConflictMessage: conflict.message,
+  };
+}
+
+function assertJsonKeepsBoolean(
+  obj: Record<string, unknown>,
+  key: string,
+  value: boolean,
+) {
+  expect(Object.prototype.hasOwnProperty.call(obj, key)).toBe(true);
+  expect(obj[key]).toBe(value);
+  const json = JSON.parse(JSON.stringify(obj));
+  expect(Object.prototype.hasOwnProperty.call(json, key)).toBe(true);
+  expect(json[key]).toBe(value);
+}
+
+/**
  * Integration-shaped coverage for assignment/publish PSA gates
  * (pure helpers used by TransportJobsService / Dispatch / TripService).
  */
@@ -56,5 +95,38 @@ describe("PSA assignment path contracts", () => {
       });
       expect(conflict.severity).toBe("URGENT");
     }
+  });
+});
+
+describe("PSA response serialization contracts", () => {
+  it("serializes requiresPsaPortAccess false without omitting the key", () => {
+    const dto = tripPsaResponseFields({
+      requiresPsaPortAccess: false,
+      hasPsaPortAccess: false,
+      status: TripStatus.DRAFT,
+    });
+    assertJsonKeepsBoolean(dto, "requiresPsaPortAccess", false);
+    assertJsonKeepsBoolean(dto, "psaEligibilityConflict", false);
+  });
+
+  it("serializes requiresPsaPortAccess true without omitting the key", () => {
+    const dto = tripPsaResponseFields({
+      requiresPsaPortAccess: true,
+      hasPsaPortAccess: true,
+      status: TripStatus.DRAFT,
+      assignedDriverUserId: "d1",
+    });
+    assertJsonKeepsBoolean(dto, "requiresPsaPortAccess", true);
+    assertJsonKeepsBoolean(dto, "psaEligibilityConflict", false);
+  });
+
+  it("driver DTO shape keeps hasPsaPortAccess false after JSON round-trip", () => {
+    const driver = { hasPsaPortAccess: false as boolean };
+    assertJsonKeepsBoolean(driver, "hasPsaPortAccess", false);
+  });
+
+  it("driver DTO shape keeps hasPsaPortAccess true after JSON round-trip", () => {
+    const driver = { hasPsaPortAccess: true as boolean };
+    assertJsonKeepsBoolean(driver, "hasPsaPortAccess", true);
   });
 });

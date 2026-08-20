@@ -7309,6 +7309,27 @@ export class TransportJobsService {
       driverLocations.map((d) => [d.driverUserId, d] as [string, any]),
     );
 
+    const assignedDriverUserIds = Array.from(
+      new Set(
+        trips
+          .map((t) => t.assignedDriverUserId)
+          .filter((id): id is string => typeof id === "string" && id.length > 0),
+      ),
+    );
+    const driverPsaRows =
+      assignedDriverUserIds.length > 0
+        ? await this.prisma.drivers.findMany({
+            where: { tenantId, userId: { in: assignedDriverUserIds } },
+            select: { userId: true, hasPsaPortAccess: true },
+          })
+        : [];
+    const psaByDriverUserId = new Map<string, boolean>(
+      driverPsaRows.map((row) => [
+        row.userId as string,
+        row.hasPsaPortAccess === true,
+      ]),
+    );
+
     return await Promise.all(trips.map(async (t) => {
       const route = deriveTripRouteSummaryFromJobAndTemplate(job, t);
       const origin = toTripLocationDto("origin", t);
@@ -7333,6 +7354,18 @@ export class TransportJobsService {
         payoutItemId: line.payoutItemId ?? null,
         earningRateMasterId: line.earningRateMasterId ?? null,
       }));
+      // Always serialize boolean (including false) — never omit the key.
+      const requiresPsaPortAccess = t.requiresPsaPortAccess === true;
+      const driverHasPsaPortAccess = t.assignedDriverUserId
+        ? psaByDriverUserId.get(t.assignedDriverUserId) === true
+        : false;
+      const psaConflict = evaluatePsaEligibilityConflict({
+        requiresPsaPortAccess,
+        hasPsaPortAccess: driverHasPsaPortAccess,
+        status: t.status,
+        assignedDriverUserId: t.assignedDriverUserId ?? null,
+        driverId: t.driverId ?? null,
+      });
       const publishReadiness = evaluateTripPublishReadiness({
         status: t.status,
         assignedDriverUserId: t.assignedDriverUserId ?? null,
@@ -7345,6 +7378,8 @@ export class TransportJobsService {
         jobItemCount: job._count?.items ?? 0,
         linkedJobItemCount: t._count?.tripJobItems ?? 0,
         jobTripTemplate: t.jobTripTemplate ?? null,
+        requiresPsaPortAccess,
+        driverHasPsaPortAccess,
       });
       const driverEarningCentsTotal = resolveCanonicalTripPayoutCents({
         driverEarningCents: t.driverEarningCents ?? null,
@@ -7414,6 +7449,10 @@ export class TransportJobsService {
       pendingState: t.pendingState ?? TripPendingState.NONE,
       canPublish: publishReadiness.canPublish,
       canMarkDone: t.status === TripStatus.COMPLETED,
+      requiresPsaPortAccess,
+      psaEligibilityConflict: psaConflict.hasConflict,
+      psaEligibilityConflictSeverity: psaConflict.severity,
+      psaEligibilityConflictMessage: psaConflict.message,
       plannedStartAt: t.plannedStartAt ?? null,
       startedAt: t.startedAt ?? null,
       closedAt: t.closedAt ?? null,
@@ -8077,6 +8116,23 @@ export class TransportJobsService {
       tenantId,
       tripId,
     );
+    // Always serialize boolean (including false) — never omit the key.
+    const requiresPsaPortAccess = trip.requiresPsaPortAccess === true;
+    let driverHasPsaPortAccess = false;
+    if (trip.assignedDriverUserId) {
+      const driverRow = await this.prisma.drivers.findFirst({
+        where: { tenantId, userId: trip.assignedDriverUserId },
+        select: { hasPsaPortAccess: true },
+      });
+      driverHasPsaPortAccess = driverRow?.hasPsaPortAccess === true;
+    }
+    const psaConflict = evaluatePsaEligibilityConflict({
+      requiresPsaPortAccess,
+      hasPsaPortAccess: driverHasPsaPortAccess,
+      status: trip.status,
+      assignedDriverUserId: trip.assignedDriverUserId ?? null,
+      driverId: trip.driverId ?? null,
+    });
     const publishReadiness = evaluateTripPublishReadiness({
       status: trip.status,
       assignedDriverUserId: trip.assignedDriverUserId ?? null,
@@ -8089,6 +8145,8 @@ export class TransportJobsService {
       jobItemCount: cargoItems.length,
       linkedJobItemCount: tripJobItemLinks.length,
       jobTripTemplate: trip.jobTripTemplate ?? null,
+      requiresPsaPortAccess,
+      driverHasPsaPortAccess,
     });
     const cargoBuilt = buildTripCargoFromLinks({
       jobType: trip.job?.jobType,
@@ -8142,6 +8200,10 @@ export class TransportJobsService {
       assignedByUserId: trip.assignedByUserId ?? null,
       canPublish: publishReadiness.canPublish,
       canMarkDone: trip.status === TripStatus.COMPLETED,
+      requiresPsaPortAccess,
+      psaEligibilityConflict: psaConflict.hasConflict,
+      psaEligibilityConflictSeverity: psaConflict.severity,
+      psaEligibilityConflictMessage: psaConflict.message,
       driverId: trip.assignedDriverUserId ?? null,
       driverName,
       vehicleType: trip.vehicles?.type ?? trip.fleetVehicle?.type ?? null,
