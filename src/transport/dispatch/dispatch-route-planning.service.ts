@@ -17,6 +17,8 @@ import { getSafeTenantTimezone } from "../../shared/common/tenant-timezone";
 import { suggestTripOrderByNearestNeighbour } from "../trips/trip-order-suggest";
 import { buildTripDisplayRef } from "../trips/trip-display-ref";
 import { TransportJobsService } from "../jobs/transport-jobs.service";
+import { resolveJobTypesForResponse } from "../jobs/job-types";
+import { evaluateTripDocumentRequirements } from "../workflows/trip-document-requirement-evaluation";
 import {
   dateKeyInTenantTimezone,
   tenantOperatingDayBounds,
@@ -186,6 +188,49 @@ export class DispatchRoutePlanningService {
     };
   }
 
+  private toWorkloadDocumentReadiness(trip: {
+    status?: string | null;
+    documents?: Array<{
+      type: string;
+      isActive?: boolean | null;
+      isSigned?: boolean | null;
+      signedAt?: Date | string | null;
+      mimeType?: string | null;
+      originalName?: string | null;
+    }> | null;
+    documentRequirements?: Array<{
+      id?: string | null;
+      type: string;
+      label?: string | null;
+      isRequired: boolean;
+      requiresSignature: boolean;
+      minCount?: number | null;
+      sortOrder?: number | null;
+      responsibleUploader?: string | null;
+      requirementStage?: string | null;
+    }> | null;
+  }) {
+    const evaluation = evaluateTripDocumentRequirements({
+      tripStatus: trip.status,
+      documents: (trip.documents ?? []).map((document) => ({
+        type: document.type,
+        isActive: document.isActive !== false,
+        isSigned: document.isSigned === true,
+        signedAt: document.signedAt ?? null,
+        mimeType: document.mimeType ?? null,
+        originalName: document.originalName ?? null,
+      })),
+      requirements: trip.documentRequirements ?? [],
+    });
+    return {
+      readinessStatus: evaluation.readinessStatus,
+      missingDocumentCount: evaluation.totalMissingCount,
+      missingLabels: evaluation.summaryLabels,
+      blockingActor: evaluation.blockingActor,
+      primaryTripId: null as string | null,
+    };
+  }
+
   async getBoard(tenantId: string, date?: string) {
     const timezone = await this.resolveTenantTimezone(tenantId);
     const selectedDate =
@@ -197,7 +242,15 @@ export class DispatchRoutePlanningService {
       timezone,
     );
 
-    const [driverMemberships, trips] = await Promise.all([
+    const dayOrFilter = [
+      { plannedStartAt: { not: null, gte: dayStart, lt: dayEnd } },
+      {
+        plannedStartAt: null,
+        createdAt: { gte: dayStart, lt: dayEnd },
+      },
+    ] as const;
+
+    const [driverMemberships, dayTripsRaw, pickupJobs] = await Promise.all([
       this.prisma.tenantMembership.findMany({
         where: {
           tenantId,
@@ -208,37 +261,80 @@ export class DispatchRoutePlanningService {
           user: { select: { id: true, name: true, phone: true } },
         },
       }),
+      // One set-based load for the operating day (cancelled excluded for workload;
+      // planning lanes further exclude COMPLETED/DONE).
       this.prisma.trip.findMany({
         where: {
           tenantId,
-          status: { notIn: PLANNING_EXCLUDED },
-          OR: [
-            { plannedStartAt: { not: null, gte: dayStart, lt: dayEnd } },
-            {
-              plannedStartAt: null,
-              createdAt: { gte: dayStart, lt: dayEnd },
-            },
-          ],
+          status: { not: TripStatus.CANCELLED },
+          OR: [...dayOrFilter],
         },
         include: {
           job: {
             select: {
               id: true,
               internalRef: true,
+              jobType: true,
+              pickupDate: true,
               customerCompany: { select: { name: true } },
+              jobTypeAssignments: {
+                select: { jobType: true },
+              },
             },
           },
           vehicles: { select: { id: true, plateNo: true } },
           fleetVehicle: { select: { id: true, plateNo: true } },
+          documents: {
+            where: { isActive: true },
+            select: {
+              type: true,
+              isActive: true,
+              isSigned: true,
+              signedAt: true,
+              mimeType: true,
+              originalName: true,
+            },
+          },
+          documentRequirements: {
+            select: {
+              id: true,
+              type: true,
+              label: true,
+              isRequired: true,
+              requiresSignature: true,
+              minCount: true,
+              sortOrder: true,
+              responsibleUploader: true,
+              requirementStage: true,
+            },
+          },
         },
         orderBy: [{ dispatchSequence: "asc" }, { createdAt: "asc" }],
       }),
+      this.prisma.job.findMany({
+        where: {
+          tenantId,
+          pickupDate: { gte: dayStart, lt: dayEnd },
+        },
+        select: {
+          id: true,
+          internalRef: true,
+          jobType: true,
+          pickupDate: true,
+          customerCompany: { select: { name: true } },
+          jobTypeAssignments: { select: { jobType: true } },
+        },
+      }),
     ]);
 
-    const dayTrips = trips.filter(
+    const dayTrips = dayTripsRaw.filter(
       (t) =>
         dateKeyInTenantTimezone(t.plannedStartAt ?? t.createdAt, timezone) ===
         selectedDate,
+    );
+
+    const planningDayTrips = dayTrips.filter(
+      (t) => !PLANNING_EXCLUDED.includes(t.status as TripStatus),
     );
 
     const driverUsers = driverMemberships
@@ -288,7 +384,7 @@ export class DispatchRoutePlanningService {
       }
     >(profiles.map((p) => [p.userId ?? "", p]));
 
-    const planningTrips = dayTrips.map((t) =>
+    const planningTrips = planningDayTrips.map((t) =>
       this.toPlanningTrip(t, timezone, driverNameByUserId),
     );
 
@@ -318,6 +414,111 @@ export class DispatchRoutePlanningService {
       .filter((t) => !t.assignedDriverUserId)
       .sort(compareDispatchSequence);
 
+    // ---- Today's workload (visibility: includes COMPLETED/DONE; hides CANCELLED) ----
+    const workloadTripRows = dayTrips.map((t) => {
+      const readiness = this.toWorkloadDocumentReadiness(t);
+      readiness.primaryTripId = t.id;
+      const jobTypes = resolveJobTypesForResponse({
+        assignments: t.job?.jobTypeAssignments,
+        legacyJobType: t.job?.jobType ?? null,
+      }).jobTypes;
+      const planningEligible = !PLANNING_EXCLUDED.includes(
+        t.status as TripStatus,
+      );
+      return {
+        id: t.id,
+        jobId: t.jobId,
+        jobInternalRef: t.job?.internalRef ?? null,
+        companyName: t.job?.customerCompany?.name ?? null,
+        jobTypes,
+        tripDisplayRef: buildTripDisplayRef({
+          jobInternalRef: t.job?.internalRef ?? null,
+          tripSequence: t.tripSequence ?? null,
+          jobSequence: t.jobSequence ?? null,
+          tripId: t.id,
+        }),
+        tripType: t.tripType ?? null,
+        plannedStartAt: t.plannedStartAt,
+        status: t.status,
+        dispatchSequence: t.dispatchSequence ?? null,
+        assignedDriverUserId: t.assignedDriverUserId ?? null,
+        assignedDriverName: t.assignedDriverUserId
+          ? driverNameByUserId.get(t.assignedDriverUserId) ?? null
+          : null,
+        vehiclePlate:
+          t.fleetVehicle?.plateNo ?? t.vehicles?.plateNo ?? null,
+        documentReadiness: readiness,
+        planningEligible,
+        notReady: readiness.missingDocumentCount > 0,
+      };
+    });
+
+    const tripsByJobId = new Map<string, typeof workloadTripRows>();
+    for (const row of workloadTripRows) {
+      if (!row.jobId) continue;
+      const list = tripsByJobId.get(row.jobId) ?? [];
+      list.push(row);
+      tripsByJobId.set(row.jobId, list);
+    }
+
+    const jobMap = new Map<
+      string,
+      {
+        id: string;
+        internalRef: string | null;
+        companyName: string | null;
+        jobTypes: string[];
+      }
+    >();
+    for (const t of dayTrips) {
+      if (!t.job?.id || jobMap.has(t.job.id)) continue;
+      jobMap.set(t.job.id, {
+        id: t.job.id,
+        internalRef: t.job.internalRef ?? null,
+        companyName: t.job.customerCompany?.name ?? null,
+        jobTypes: resolveJobTypesForResponse({
+          assignments: t.job.jobTypeAssignments,
+          legacyJobType: t.job.jobType ?? null,
+        }).jobTypes,
+      });
+    }
+    for (const j of pickupJobs) {
+      const onDay =
+        j.pickupDate &&
+        dateKeyInTenantTimezone(j.pickupDate, timezone) === selectedDate;
+      if (!onDay) continue;
+      if (jobMap.has(j.id)) continue;
+      jobMap.set(j.id, {
+        id: j.id,
+        internalRef: j.internalRef ?? null,
+        companyName: j.customerCompany?.name ?? null,
+        jobTypes: resolveJobTypesForResponse({
+          assignments: j.jobTypeAssignments,
+          legacyJobType: j.jobType ?? null,
+        }).jobTypes,
+      });
+    }
+
+    const workloadJobs = [...jobMap.values()]
+      .map((job) => ({
+        id: job.id,
+        internalRef: job.internalRef,
+        companyName: job.companyName,
+        jobTypes: job.jobTypes,
+        trips: (tripsByJobId.get(job.id) ?? []).sort(compareDispatchSequence),
+      }))
+      .sort((a, b) =>
+        String(a.internalRef ?? a.id).localeCompare(
+          String(b.internalRef ?? b.id),
+        ),
+      );
+
+    const assignedWorkload = workloadTripRows.filter(
+      (t) => Boolean(t.assignedDriverUserId),
+    ).length;
+    const unassignedWorkload = workloadTripRows.length - assignedWorkload;
+    const blockedTrips = workloadTripRows.filter((t) => t.notReady).length;
+
     return {
       date: selectedDate,
       timezone,
@@ -329,6 +530,16 @@ export class DispatchRoutePlanningService {
       lanes,
       unassignedTrips,
       trips: planningTrips,
+      workload: {
+        summary: {
+          totalJobs: workloadJobs.length,
+          totalTrips: workloadTripRows.length,
+          assignedTrips: assignedWorkload,
+          unassignedTrips: unassignedWorkload,
+          blockedTrips,
+        },
+        jobs: workloadJobs,
+      },
     };
   }
 

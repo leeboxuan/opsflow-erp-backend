@@ -218,7 +218,23 @@ describe("DispatchRoutePlanningService Phase 5 corrections", () => {
           if (typeof assigned === "string") {
             rows = rows.filter((r) => r.assignedDriverUserId === assigned);
           }
-          return rows;
+          const statusNot = args?.where?.status?.not;
+          if (statusNot != null) {
+            rows = rows.filter((r) => r.status !== statusNot);
+          }
+          const statusNotIn = args?.where?.status?.notIn as string[] | undefined;
+          if (Array.isArray(statusNotIn)) {
+            rows = rows.filter((r) => !statusNotIn.includes(r.status));
+          }
+          return rows.map((r) => ({
+            ...r,
+            documents: r.documents ?? [],
+            documentRequirements: r.documentRequirements ?? [],
+            job: {
+              ...r.job,
+              jobTypeAssignments: r.job?.jobTypeAssignments ?? [],
+            },
+          }));
         }),
         findFirst: jest.fn(),
         update: jest.fn(),
@@ -243,6 +259,9 @@ describe("DispatchRoutePlanningService Phase 5 corrections", () => {
       vehicle: { findFirst: jest.fn().mockResolvedValue(null) },
       fleetVehicle: { findFirst: jest.fn().mockResolvedValue(null) },
       user: { findMany: jest.fn().mockResolvedValue([]) },
+      job: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       $transaction: jest.fn(async (fn: (txClient: typeof tx) => Promise<unknown>) =>
         fn(tx),
       ),
@@ -281,6 +300,36 @@ describe("DispatchRoutePlanningService Phase 5 corrections", () => {
     expect(board.trips[0].tripSequence).toBe(7);
     expect(board.trips[0].tripDisplayRef).toContain("7");
     expect(board.lanes[0].planVersion).toBe(4);
+  });
+
+  it("getBoard workload includes completed trips but planning lanes exclude them", async () => {
+    const { service } = buildService({
+      trips: [
+        baseTrip({
+          id: "t-plan",
+          status: TripStatus.DRAFT,
+          dispatchSequence: 1,
+        }),
+        baseTrip({
+          id: "t-done",
+          status: TripStatus.COMPLETED,
+          dispatchSequence: 2,
+          assignedDriverUserId: "drv1",
+        }),
+        baseTrip({
+          id: "t-cancel",
+          status: TripStatus.CANCELLED,
+          dispatchSequence: 3,
+        }),
+      ],
+    });
+    const board = await service.getBoard("tenant-1", "2026-08-20");
+    expect(board.trips.map((t: any) => t.id)).toEqual(["t-plan"]);
+    expect(board.workload.summary.totalTrips).toBe(2);
+    expect(board.workload.summary.totalJobs).toBe(1);
+    const workloadIds = board.workload.jobs[0].trips.map((t: any) => t.id);
+    expect(workloadIds).toEqual(["t-plan", "t-done"]);
+    expect(workloadIds).not.toContain("t-cancel");
   });
 
   it("savePlan does not modify tripSequence/jobSequence (sequence ownership regression)", async () => {
