@@ -355,6 +355,9 @@ model Trip {
   routeVersion         Int                       @default(1)
   vehicleId            String?
   fleetVehicleId       String?
+  /// Hard constraint: trip includes a PSA port stop and requires an authorised driver.
+  /// Not inferred from IMPORT/EXPORT alone. Default false.
+  requiresPsaPortAccess Boolean                  @default(false)
   /// Phase 4: what this trip is performing. Nullable until expand/backfill/contract migration is applied.
   tripType                JobType?
   /// When set, this trip belongs to an OpsFlow job (multi-leg). Transport-order trips keep jobId null.
@@ -892,6 +895,8 @@ model drivers {
   email                      String
   name                       String
   phone                      String
+  /// Driver is authorised to enter PSA port facilities. Default false.
+  hasPsaPortAccess           Boolean                   @default(false)
   assignedVehicleId           String?
   assignedFleetVehicleId      String?
   createdAt                  DateTime                  @default(now())

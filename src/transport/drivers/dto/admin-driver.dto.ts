@@ -86,4 +86,9 @@ export class AdminDriverDto {
 
   @ApiProperty({ nullable: true, required: false })
   assignedFleetVehicleStatus?: string | null;
+
+  @ApiProperty({
+    description: "Driver is authorised to enter PSA port facilities.",
+  })
+  hasPsaPortAccess!: boolean;
 }

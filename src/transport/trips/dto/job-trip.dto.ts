@@ -198,6 +198,14 @@ export class AppendJobTripDto {
   @IsString()
   notes?: string | null;
 
+  @ApiPropertyOptional({
+    description:
+      "Trip includes a PSA port stop and requires an authorised driver. Not inferred from trip type. Default false.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  requiresPsaPortAccess?: boolean;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -588,6 +596,14 @@ export class PatchJobTripDto {
   @IsOptional()
   @IsString()
   notes?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      "Trip includes a PSA port stop and requires an authorised driver. Editable while trip is DRAFT (and other editable paths). Not inferred from trip type.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  requiresPsaPortAccess?: boolean;
 
   @ApiPropertyOptional()
   @IsOptional()

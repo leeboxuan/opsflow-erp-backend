@@ -20,6 +20,10 @@ import { TransportJobsService } from "../jobs/transport-jobs.service";
 import { resolveJobTypesForResponse } from "../jobs/job-types";
 import { evaluateTripDocumentRequirements } from "../workflows/trip-document-requirement-evaluation";
 import {
+  assertPsaAssignmentAllowed,
+  evaluatePsaEligibilityConflict,
+} from "../trips/trip-psa-access";
+import {
   dateKeyInTenantTimezone,
   tenantOperatingDayBounds,
   todayOperatingDate,
@@ -45,6 +49,7 @@ type ResolvedDriverAssignment = {
   driverRowId: string | null;
   vehicleId: string | null;
   fleetVehicleId: string | null;
+  hasPsaPortAccess: boolean;
 };
 
 @Injectable()
@@ -100,6 +105,7 @@ export class DispatchRoutePlanningService {
         id: true,
         assignedVehicleId: true,
         assignedFleetVehicleId: true,
+        hasPsaPortAccess: true,
       },
     });
     const [vehicle, fleetVehicle] = await Promise.all([
@@ -121,6 +127,7 @@ export class DispatchRoutePlanningService {
       driverRowId: driverRow?.id ?? null,
       vehicleId: vehicle?.id ?? null,
       fleetVehicleId: fleetVehicle?.id ?? null,
+      hasPsaPortAccess: driverRow?.hasPsaPortAccess === true,
     };
   }
 
@@ -181,6 +188,21 @@ export class DispatchRoutePlanningService {
         missingOrigin || missingDestination
           ? "Trip is missing coordinates required for sequence suggestion"
           : null,
+      requiresPsaPortAccess: trip.requiresPsaPortAccess === true,
+      ...(() => {
+        const conflict = evaluatePsaEligibilityConflict({
+          requiresPsaPortAccess: trip.requiresPsaPortAccess === true,
+          hasPsaPortAccess: trip.drivers?.hasPsaPortAccess === true,
+          status: trip.status,
+          assignedDriverUserId: driverUserId,
+          driverId: trip.driverId ?? null,
+        });
+        return {
+          psaEligibilityConflict: conflict.hasConflict,
+          psaEligibilityConflictSeverity: conflict.severity,
+          psaEligibilityConflictMessage: conflict.message,
+        };
+      })(),
       operatingDateKey: dateKeyInTenantTimezone(
         trip.plannedStartAt ?? trip.createdAt,
         timezone,
@@ -284,6 +306,7 @@ export class DispatchRoutePlanningService {
           },
           vehicles: { select: { id: true, plateNo: true } },
           fleetVehicle: { select: { id: true, plateNo: true } },
+          drivers: { select: { hasPsaPortAccess: true } },
           documents: {
             where: { isActive: true },
             select: {
@@ -369,6 +392,7 @@ export class DispatchRoutePlanningService {
           select: {
             id: true,
             userId: true,
+            hasPsaPortAccess: true,
             assignedVehicle: { select: { plateNo: true } },
             assignedFleetVehicle: { select: { plateNo: true } },
           },
@@ -379,14 +403,37 @@ export class DispatchRoutePlanningService {
       {
         id: string;
         userId: string | null;
+        hasPsaPortAccess: boolean;
         assignedVehicle: { plateNo: string } | null;
         assignedFleetVehicle: { plateNo: string } | null;
       }
-    >(profiles.map((p) => [p.userId ?? "", p]));
-
-    const planningTrips = planningDayTrips.map((t) =>
-      this.toPlanningTrip(t, timezone, driverNameByUserId),
+    >(
+      profiles.map((p) => [
+        p.userId ?? "",
+        {
+          ...p,
+          hasPsaPortAccess: p.hasPsaPortAccess === true,
+        },
+      ]),
     );
+    const psaEligibleDriverCount = profiles.filter(
+      (p) => p.hasPsaPortAccess === true,
+    ).length;
+
+    const planningTrips = planningDayTrips.map((t) => {
+      const base = this.toPlanningTrip(t, timezone, driverNameByUserId);
+      if (!base.assignedDriverUserId && base.requiresPsaPortAccess) {
+        return {
+          ...base,
+          psaEligibleDriverCount,
+          psaAssignmentHint:
+            psaEligibleDriverCount === 0
+              ? "No PSA-authorised drivers available"
+              : `${psaEligibleDriverCount} PSA-authorised driver(s) available`,
+        };
+      }
+      return base;
+    });
 
     const lanes = driverUsers.map((driver) => {
       const laneTrips = planningTrips
@@ -401,6 +448,7 @@ export class DispatchRoutePlanningService {
         driverUserId: driver.id,
         driverName: driver.name ?? null,
         phone: driver.phone ?? null,
+        hasPsaPortAccess: profile?.hasPsaPortAccess === true,
         vehiclePlate:
           profile?.assignedVehicle?.plateNo ??
           profile?.assignedFleetVehicle?.plateNo ??
@@ -450,6 +498,14 @@ export class DispatchRoutePlanningService {
         documentReadiness: readiness,
         planningEligible,
         notReady: readiness.missingDocumentCount > 0,
+        requiresPsaPortAccess: t.requiresPsaPortAccess === true,
+        psaEligibilityConflict: evaluatePsaEligibilityConflict({
+          requiresPsaPortAccess: t.requiresPsaPortAccess === true,
+          hasPsaPortAccess: t.drivers?.hasPsaPortAccess === true,
+          status: t.status,
+          assignedDriverUserId: t.assignedDriverUserId ?? null,
+          driverId: t.driverId ?? null,
+        }).hasConflict,
       };
     });
 
@@ -554,7 +610,12 @@ export class DispatchRoutePlanningService {
       );
     }
 
-    await this.resolveDriverAssignment(tenantId, dto.driverUserId);
+    const targetDriver = await this.resolveDriverAssignment(
+      tenantId,
+      dto.driverUserId,
+    );
+    // Missing driver profile → hasPsaPortAccess false (fail closed).
+    const laneHasPsa = targetDriver.hasPsaPortAccess === true;
 
     const trips = await this.prisma.trip.findMany({
       where: {
@@ -576,6 +637,7 @@ export class DispatchRoutePlanningService {
         destinationLat: true,
         destinationLng: true,
         dispatchSequence: true,
+        requiresPsaPortAccess: true,
       },
       orderBy: [{ dispatchSequence: "asc" }, { createdAt: "asc" }],
     });
@@ -595,7 +657,13 @@ export class DispatchRoutePlanningService {
 
     const lockedIds = new Set<string>(
       dayTrips
-        .filter((t) => isDispatchSequenceLocked(t.status))
+        .filter((t) => {
+          if (isDispatchSequenceLocked(t.status)) return true;
+          // Ineligible lane: keep existing PSA conflicts visible but do not
+          // propose moving/re-prioritising them (absolute lock like ONGOING).
+          if (!laneHasPsa && t.requiresPsaPortAccess === true) return true;
+          return false;
+        })
         .map((t) => t.id),
     );
     const unlocked = dayTrips.filter((t) => !lockedIds.has(t.id));
@@ -620,6 +688,73 @@ export class DispatchRoutePlanningService {
       lockedIds,
     });
 
+    // Unassigned PSA trips: only propose to eligible lanes; never add to
+    // suggestedTripIdsInOrder for ineligible lanes (would create new conflicts).
+    const unassignedRows = await this.prisma.trip.findMany({
+      where: {
+        tenantId,
+        assignedDriverUserId: null,
+        requiresPsaPortAccess: true,
+        status: { notIn: PLANNING_EXCLUDED },
+        OR: [
+          { plannedStartAt: { not: null, gte: dayStart, lt: dayEnd } },
+          { plannedStartAt: null, createdAt: { gte: dayStart, lt: dayEnd } },
+        ],
+      },
+      select: {
+        id: true,
+        plannedStartAt: true,
+        createdAt: true,
+      },
+    });
+    const unassignedPsaIds = unassignedRows
+      .filter(
+        (t) =>
+          dateKeyInTenantTimezone(t.plannedStartAt ?? t.createdAt, timezone) ===
+          day,
+      )
+      .map((t) => t.id);
+
+    const psaEligibleDriverCount = await this.prisma.drivers.count({
+      where: { tenantId, hasPsaPortAccess: true },
+    });
+
+    const excluded = [...nn.excluded];
+    const warnings = [...nn.warnings];
+    const proposedUnassignedTripIds: string[] = [];
+
+    for (const tripId of unassignedPsaIds) {
+      if (psaEligibleDriverCount === 0) {
+        excluded.push({
+          tripId,
+          reason: "NO_PSA_ELIGIBLE_DRIVER",
+        });
+        continue;
+      }
+      if (!laneHasPsa) {
+        excluded.push({
+          tripId,
+          reason: "PSA_DRIVER_INELIGIBLE",
+        });
+        continue;
+      }
+      proposedUnassignedTripIds.push(tripId);
+    }
+
+    if (psaEligibleDriverCount === 0 && unassignedPsaIds.length > 0) {
+      warnings.push(
+        "Unassigned PSA-required trips remain unassigned: no PSA-authorised drivers available",
+      );
+    } else if (!laneHasPsa && unassignedPsaIds.length > 0) {
+      warnings.push(
+        "Unassigned PSA-required trips were not suggested for this driver (no PSA port access)",
+      );
+    } else if (laneHasPsa && proposedUnassignedTripIds.length > 0) {
+      warnings.push(
+        `${proposedUnassignedTripIds.length} unassigned PSA-required trip(s) are eligible for this lane — assign from trip workspace before sequencing`,
+      );
+    }
+
     return {
       date: day,
       driverUserId: dto.driverUserId,
@@ -627,11 +762,12 @@ export class DispatchRoutePlanningService {
       label: nn.label,
       suggestedTripIdsInOrder,
       includedTripIds: suggestedTripIdsInOrder,
-      excluded: nn.excluded,
-      warnings: nn.warnings,
+      proposedUnassignedTripIds,
+      excluded,
+      warnings,
       approximatePlanarDistance: nn.approximatePlanarDistance,
       reason:
-        "Deterministic nearest-neighbour ordering using available origin/destination coordinates. Not traffic-aware. Locked ONGOING positions are absolute.",
+        "Deterministic nearest-neighbour ordering using available origin/destination coordinates. Not traffic-aware. Locked ONGOING positions are absolute. PSA-required trips are never suggested onto ineligible driver lanes.",
       persisted: false,
     };
   }
@@ -686,6 +822,7 @@ export class DispatchRoutePlanningService {
               jobSequence: true,
               plannedStartAt: true,
               createdAt: true,
+              requiresPsaPortAccess: true,
             },
           })
         : [];
@@ -708,6 +845,12 @@ export class DispatchRoutePlanningService {
           `Locked trip ${trip.id} cannot be reassigned`,
         );
       }
+      assertPsaAssignmentAllowed({
+        requiresPsaPortAccess: trip.requiresPsaPortAccess,
+        hasPsaPortAccess: targetDriver.hasPsaPortAccess,
+        tripId: trip.id,
+        driverUserId: dto.driverUserId,
+      });
     }
 
     // Current lane trips for this operating day (before mutation).

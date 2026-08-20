@@ -304,6 +304,29 @@ export class JobTripResponseDto {
   /** Canonical evaluation of documentRequirements against active documents. */
   documentReadiness?: TripDocumentReadinessDto;
 
+  @ApiPropertyOptional({
+    description:
+      "Trip includes a PSA port stop and requires an authorised driver.",
+  })
+  requiresPsaPortAccess?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      "True when assigned driver lacks PSA access required by this trip. Does not auto-unassign.",
+  })
+  psaEligibilityConflict?: boolean;
+
+  @ApiPropertyOptional({
+    enum: ["NONE", "BLOCK_PUBLISH", "URGENT"],
+    description: "Severity of PSA eligibility conflict for ops/driver UI.",
+  })
+  psaEligibilityConflictSeverity?: "NONE" | "BLOCK_PUBLISH" | "URGENT";
+
+  @ApiPropertyOptional({
+    description: "Human-readable PSA eligibility conflict message.",
+  })
+  psaEligibilityConflictMessage?: string | null;
+
   /** Driver active/home: job ref on the trip row (same as parent job when linked). */
   @ApiPropertyOptional()
   jobInternalRef?: string | null;
@@ -631,6 +654,21 @@ export class JobDetailsTripDto {
 
   @ApiPropertyOptional({ type: TripDocumentReadinessDto })
   documentReadiness?: TripDocumentReadinessDto;
+
+  @ApiPropertyOptional({
+    description:
+      "Trip includes a PSA port stop and requires an authorised driver.",
+  })
+  requiresPsaPortAccess?: boolean;
+
+  @ApiPropertyOptional()
+  psaEligibilityConflict?: boolean;
+
+  @ApiPropertyOptional({ enum: ["NONE", "BLOCK_PUBLISH", "URGENT"] })
+  psaEligibilityConflictSeverity?: "NONE" | "BLOCK_PUBLISH" | "URGENT";
+
+  @ApiPropertyOptional()
+  psaEligibilityConflictMessage?: string | null;
 }
 
 export class JobPayoutSummaryDto {

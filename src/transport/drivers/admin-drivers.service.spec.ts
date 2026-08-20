@@ -63,13 +63,19 @@ describe("AdminDriversService", () => {
             name: "Driver Profile Name",
             assignedVehicleId: null,
             assignedFleetVehicleId: null,
+            hasPsaPortAccess: false,
           },
         ]),
         upsert: jest.fn().mockResolvedValue({}),
         findFirst: jest.fn().mockResolvedValue({
           assignedVehicleId: null,
           assignedFleetVehicleId: null,
+          hasPsaPortAccess: false,
+          name: "Driver Profile Name",
         }),
+      },
+      trip: {
+        findMany: jest.fn().mockResolvedValue([]),
       },
       vehicle: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -113,17 +119,20 @@ describe("AdminDriversService", () => {
       listEarningsTransactions: jest.fn(),
       getWalletSummaryByMonth: jest.fn(),
     };
+    const audit: any = { log: jest.fn().mockResolvedValue(undefined) };
     return {
       service: new AdminDriversService(
         prisma,
         supabaseService,
         usersService,
         tripEarnings,
+        audit,
       ),
       prisma,
       usersService,
       tripEarnings,
       supabaseService,
+      audit,
     };
   }
 

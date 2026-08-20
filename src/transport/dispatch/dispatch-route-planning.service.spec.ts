@@ -134,6 +134,8 @@ describe("DispatchRoutePlanningService Phase 5 corrections", () => {
     trips?: any[];
     membership?: any;
     tenant?: any;
+    driverProfile?: any;
+    psaEligibleDriverCount?: number;
     updateManyImpl?: (args: any) => Promise<{ count: number }>;
   }) {
     const trips = (overrides.trips ?? [baseTrip()]).map((t) => ({ ...t }));
@@ -218,6 +220,14 @@ describe("DispatchRoutePlanningService Phase 5 corrections", () => {
           if (typeof assigned === "string") {
             rows = rows.filter((r) => r.assignedDriverUserId === assigned);
           }
+          if (assigned === null) {
+            rows = rows.filter(
+              (r) => r.assignedDriverUserId == null || r.assignedDriverUserId === "",
+            );
+          }
+          if (args?.where?.requiresPsaPortAccess === true) {
+            rows = rows.filter((r) => r.requiresPsaPortAccess === true);
+          }
           const statusNot = args?.where?.status?.not;
           if (statusNot != null) {
             rows = rows.filter((r) => r.status !== statusNot);
@@ -245,16 +255,33 @@ describe("DispatchRoutePlanningService Phase 5 corrections", () => {
           {
             id: "drow1",
             userId: "drv1",
+            hasPsaPortAccess:
+              overrides.driverProfile?.hasPsaPortAccess === undefined
+                ? true
+                : overrides.driverProfile.hasPsaPortAccess === true,
             assignedVehicle: { plateNo: "SGA1234A" },
             assignedFleetVehicle: null,
           },
         ]),
-        findFirst: jest.fn().mockResolvedValue({
-          id: "drow1",
-          userId: "drv1",
-          assignedVehicleId: null,
-          assignedFleetVehicleId: null,
-        }),
+        findFirst: jest.fn().mockResolvedValue(
+          overrides.driverProfile === null
+            ? null
+            : {
+                id: "drow1",
+                userId: "drv1",
+                hasPsaPortAccess: true,
+                assignedVehicleId: null,
+                assignedFleetVehicleId: null,
+                ...overrides.driverProfile,
+              },
+        ),
+        count: jest
+          .fn()
+          .mockResolvedValue(
+            overrides.psaEligibleDriverCount === undefined
+              ? 1
+              : overrides.psaEligibleDriverCount,
+          ),
       },
       vehicle: { findFirst: jest.fn().mockResolvedValue(null) },
       fleetVehicle: { findFirst: jest.fn().mockResolvedValue(null) },
@@ -651,5 +678,296 @@ describe("DispatchRoutePlanningService Phase 5 corrections", () => {
       expect.objectContaining({ publishedTripIds: ["t-draft"] }),
       "admin-1",
     );
+  });
+
+  describe("PSA eligibility — suggestSequence + sequence-only save", () => {
+    it("eligible lane proposes unassigned PSA trips without adding them to lane order", async () => {
+      const { service } = buildService({
+        trips: [
+          baseTrip({
+            id: "lane-a",
+            originLat: 1.2,
+            originLng: 103.8,
+            destinationLat: 1.21,
+            destinationLng: 103.81,
+          }),
+          baseTrip({
+            id: "lane-b",
+            dispatchSequence: 2,
+            originLat: 1.4,
+            originLng: 103.9,
+            destinationLat: 1.41,
+            destinationLng: 103.91,
+          }),
+          baseTrip({
+            id: "unassigned-psa",
+            assignedDriverUserId: null,
+            requiresPsaPortAccess: true,
+            dispatchSequence: null,
+          }),
+        ],
+        driverProfile: { hasPsaPortAccess: true },
+        psaEligibleDriverCount: 2,
+      });
+
+      const result = await service.suggestSequence("tenant-1", {
+        date: "2026-08-20",
+        driverUserId: "drv1",
+      });
+
+      expect(result.persisted).toBe(false);
+      expect(result.suggestedTripIdsInOrder).not.toContain("unassigned-psa");
+      expect(result.proposedUnassignedTripIds).toEqual(["unassigned-psa"]);
+      expect(
+        result.excluded.some((e: any) => e.reason === "PSA_DRIVER_INELIGIBLE"),
+      ).toBe(false);
+    });
+
+    it("ineligible lane excludes unassigned PSA and locks existing PSA conflicts", async () => {
+      const { service } = buildService({
+        trips: [
+          baseTrip({
+            id: "psa-conflict",
+            requiresPsaPortAccess: true,
+            dispatchSequence: 1,
+            originLat: 1.5,
+            originLng: 104.0,
+            destinationLat: 1.51,
+            destinationLng: 104.01,
+          }),
+          baseTrip({
+            id: "ok-near",
+            requiresPsaPortAccess: false,
+            dispatchSequence: 2,
+            originLat: 1.25,
+            originLng: 103.75,
+            destinationLat: 1.26,
+            destinationLng: 103.76,
+          }),
+          baseTrip({
+            id: "ok-far",
+            requiresPsaPortAccess: false,
+            dispatchSequence: 3,
+            originLat: 1.45,
+            originLng: 103.95,
+            destinationLat: 1.46,
+            destinationLng: 103.96,
+          }),
+          baseTrip({
+            id: "unassigned-psa",
+            assignedDriverUserId: null,
+            requiresPsaPortAccess: true,
+          }),
+        ],
+        driverProfile: { hasPsaPortAccess: false },
+        psaEligibleDriverCount: 1,
+      });
+
+      const result = await service.suggestSequence("tenant-1", {
+        date: "2026-08-20",
+        driverUserId: "drv1",
+      });
+
+      expect(result.suggestedTripIdsInOrder[0]).toBe("psa-conflict");
+      expect(result.suggestedTripIdsInOrder).not.toContain("unassigned-psa");
+      expect(result.proposedUnassignedTripIds).toEqual([]);
+      expect(
+        result.excluded.some(
+          (e: any) =>
+            e.tripId === "unassigned-psa" && e.reason === "PSA_DRIVER_INELIGIBLE",
+        ),
+      ).toBe(true);
+    });
+
+    it("mixed lane keeps ONGOING absolute lock while PSA-locking ineligible conflicts", async () => {
+      const { service } = buildService({
+        trips: [
+          baseTrip({
+            id: "ongoing",
+            status: TripStatus.ONGOING,
+            dispatchSequence: 1,
+            originLat: 1.2,
+            originLng: 103.7,
+            destinationLat: 1.21,
+            destinationLng: 103.71,
+          }),
+          baseTrip({
+            id: "psa-conflict",
+            requiresPsaPortAccess: true,
+            dispatchSequence: 2,
+            originLat: 1.5,
+            originLng: 104.0,
+            destinationLat: 1.51,
+            destinationLng: 104.01,
+          }),
+          baseTrip({
+            id: "open-a",
+            dispatchSequence: 3,
+            originLat: 1.3,
+            originLng: 103.8,
+            destinationLat: 1.31,
+            destinationLng: 103.81,
+          }),
+          baseTrip({
+            id: "open-b",
+            dispatchSequence: 4,
+            originLat: 1.35,
+            originLng: 103.85,
+            destinationLat: 1.36,
+            destinationLng: 103.86,
+          }),
+        ],
+        driverProfile: { hasPsaPortAccess: false },
+      });
+
+      const result = await service.suggestSequence("tenant-1", {
+        date: "2026-08-20",
+        driverUserId: "drv1",
+      });
+
+      expect(result.suggestedTripIdsInOrder[0]).toBe("ongoing");
+      expect(result.suggestedTripIdsInOrder[1]).toBe("psa-conflict");
+      expect(result.persisted).toBe(false);
+    });
+
+    it("missing driver profile fails closed (no PSA) for unassigned proposals", async () => {
+      const { service } = buildService({
+        trips: [
+          baseTrip({ id: "lane-only" }),
+          baseTrip({
+            id: "unassigned-psa",
+            assignedDriverUserId: null,
+            requiresPsaPortAccess: true,
+          }),
+        ],
+        driverProfile: null,
+        psaEligibleDriverCount: 1,
+      });
+
+      const result = await service.suggestSequence("tenant-1", {
+        date: "2026-08-20",
+        driverUserId: "drv1",
+      });
+
+      expect(result.proposedUnassignedTripIds).toEqual([]);
+      expect(
+        result.excluded.some(
+          (e: any) =>
+            e.tripId === "unassigned-psa" && e.reason === "PSA_DRIVER_INELIGIBLE",
+        ),
+      ).toBe(true);
+    });
+
+    it("when no PSA-eligible drivers exist, unassigned PSA stays excluded with clear reason", async () => {
+      const { service } = buildService({
+        trips: [
+          baseTrip({ id: "lane-only" }),
+          baseTrip({
+            id: "unassigned-psa",
+            assignedDriverUserId: null,
+            requiresPsaPortAccess: true,
+          }),
+        ],
+        driverProfile: { hasPsaPortAccess: false },
+        psaEligibleDriverCount: 0,
+      });
+
+      const result = await service.suggestSequence("tenant-1", {
+        date: "2026-08-20",
+        driverUserId: "drv1",
+      });
+
+      expect(result.proposedUnassignedTripIds).toEqual([]);
+      expect(
+        result.excluded.some(
+          (e: any) =>
+            e.tripId === "unassigned-psa" &&
+            e.reason === "NO_PSA_ELIGIBLE_DRIVER",
+        ),
+      ).toBe(true);
+      expect(
+        result.warnings.some((w: string) =>
+          w.includes("no PSA-authorised drivers"),
+        ),
+      ).toBe(true);
+    });
+
+    it("sequence-only save succeeds for already-conflicted PSA lane (no new assignment)", async () => {
+      const { service, store } = buildService({
+        trips: [
+          baseTrip({
+            id: "psa-conflict",
+            requiresPsaPortAccess: true,
+            dispatchSequence: 1,
+            dispatchVersion: 1,
+          }),
+          baseTrip({
+            id: "ok",
+            requiresPsaPortAccess: false,
+            dispatchSequence: 2,
+            dispatchVersion: 1,
+          }),
+        ],
+        driverProfile: { hasPsaPortAccess: false },
+      });
+
+      await service.savePlan(
+        "tenant-1",
+        {
+          date: "2026-08-20",
+          driverUserId: "drv1",
+          tripIdsInOrder: ["ok", "psa-conflict"],
+          expectedPlanVersion: 2,
+        },
+        { userId: "admin-1" },
+      );
+
+      expect(store.get("ok")!.dispatchSequence).toBe(1);
+      expect(store.get("psa-conflict")!.dispatchSequence).toBe(2);
+      expect(store.get("psa-conflict")!.assignedDriverUserId).toBe("drv1");
+    });
+
+    it("new PSA assignment to ineligible driver is blocked with 409 DRIVER_PSA_ACCESS_REQUIRED", async () => {
+      const { service } = buildService({
+        trips: [
+          baseTrip({
+            id: "lane-ok",
+            requiresPsaPortAccess: false,
+            dispatchSequence: 1,
+            dispatchVersion: 1,
+          }),
+          baseTrip({
+            id: "incoming-psa",
+            requiresPsaPortAccess: true,
+            assignedDriverUserId: null,
+            dispatchSequence: null,
+            dispatchVersion: 1,
+          }),
+        ],
+        driverProfile: { hasPsaPortAccess: false },
+      });
+
+      try {
+        await service.savePlan(
+          "tenant-1",
+          {
+            date: "2026-08-20",
+            driverUserId: "drv1",
+            tripIdsInOrder: ["lane-ok", "incoming-psa"],
+            assignments: [{ tripId: "incoming-psa", driverUserId: "drv1" }],
+            expectedPlanVersion: 2,
+          },
+          { userId: "admin-1" },
+        );
+        fail("expected ConflictException");
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConflictException);
+        const body = (err as ConflictException).getResponse() as Record<
+          string,
+          unknown
+        >;
+        expect(body.code).toBe("DRIVER_PSA_ACCESS_REQUIRED");
+      }
+    });
   });
 });

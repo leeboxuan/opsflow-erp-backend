@@ -132,6 +132,11 @@ import {
   deriveTripDocumentStatus,
   groupTripDocumentsByTripId,
 } from "../trips/trip-document-list.helpers";
+import {
+  assertPsaAssignmentAllowed,
+  evaluatePsaEligibilityConflict,
+  psaPublishBlockReason,
+} from "../trips/trip-psa-access";
 
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
@@ -752,7 +757,28 @@ function toJobDto(j: any): JobDto {
               ? t.tripJobItems.length
               : (t._count?.tripJobItems ?? 0),
           jobTripTemplate: t.jobTripTemplate ?? null,
+          requiresPsaPortAccess: t.requiresPsaPortAccess === true,
+          driverHasPsaPortAccess:
+            t.drivers?.hasPsaPortAccess === true ||
+            t._driverHasPsaPortAccess === true,
         }).canPublish,
+        requiresPsaPortAccess: t.requiresPsaPortAccess === true,
+        ...(() => {
+          const conflict = evaluatePsaEligibilityConflict({
+            requiresPsaPortAccess: t.requiresPsaPortAccess === true,
+            hasPsaPortAccess:
+              t.drivers?.hasPsaPortAccess === true ||
+              t._driverHasPsaPortAccess === true,
+            status: t.status,
+            assignedDriverUserId: t.assignedDriverUserId ?? null,
+            driverId: t.driverId ?? null,
+          });
+          return {
+            psaEligibilityConflict: conflict.hasConflict,
+            psaEligibilityConflictSeverity: conflict.severity,
+            psaEligibilityConflictMessage: conflict.message,
+          };
+        })(),
         canMarkDone: t.status === TripStatus.COMPLETED,
         plannedStartAt: t.plannedStartAt ?? null,
         startedAt: t.startedAt ?? null,
@@ -825,6 +851,9 @@ type TripPublishReadinessInput = {
   jobItemCount?: number;
   linkedJobItemCount?: number;
   jobTripTemplate?: JobTripTemplate | null;
+  requiresPsaPortAccess?: boolean | null;
+  /** Fail closed when trip requires PSA and this is not explicitly true. */
+  driverHasPsaPortAccess?: boolean | null;
 };
 
 type TripPublishReadinessResult = {
@@ -872,6 +901,21 @@ function evaluateTripPublishReadiness(input: TripPublishReadinessInput): TripPub
     return {
       canPublish: false,
       errorMessage: "Assign driver before publishing trip.",
+      totalPayoutCents: 0,
+      payoutLineCount: 0,
+    };
+  }
+
+  const psaBlock = psaPublishBlockReason({
+    requiresPsaPortAccess: input.requiresPsaPortAccess,
+    hasPsaPortAccess: input.driverHasPsaPortAccess,
+    assignedDriverUserId: input.assignedDriverUserId,
+    driverId: input.driverId,
+  });
+  if (psaBlock) {
+    return {
+      canPublish: false,
+      errorMessage: psaBlock,
       totalPayoutCents: 0,
       payoutLineCount: 0,
     };
@@ -3468,7 +3512,7 @@ export class TransportJobsService {
         trips: {
           orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }],
           include: {
-            drivers: { select: { id: true, name: true, email: true } },
+            drivers: { select: { id: true, name: true, email: true, hasPsaPortAccess: true } },
             vehicles: { select: { id: true, plateNo: true, type: true } },
             fleetVehicle: { select: { id: true, plateNo: true, type: true } },
             payoutLines: {
@@ -3628,11 +3672,22 @@ export class TransportJobsService {
             documents: trip.documents,
             documentRequirements: trip.documentRequirements,
           });
+          const psaConflict = evaluatePsaEligibilityConflict({
+            requiresPsaPortAccess: trip.requiresPsaPortAccess === true,
+            hasPsaPortAccess: trip.drivers?.hasPsaPortAccess === true,
+            status: trip.status,
+            assignedDriverUserId: trip.assignedDriverUserId ?? null,
+            driverId: trip.driverId ?? null,
+          });
           return {
             tripType: resolvedTripType.tripType,
             tripTypeSource: resolvedTripType.tripTypeSource,
             incompleteDocumentCount: evaluation.totalMissingCount,
             documentReadiness: toDocumentReadinessDto(evaluation),
+            requiresPsaPortAccess: trip.requiresPsaPortAccess === true,
+            psaEligibilityConflict: psaConflict.hasConflict,
+            psaEligibilityConflictSeverity: psaConflict.severity,
+            psaEligibilityConflictMessage: psaConflict.message,
           };
         })(),
       };
@@ -5252,6 +5307,7 @@ export class TransportJobsService {
         title: dto.title?.trim() || tripDisplayLabel,
         displayTitle: dto.title?.trim() || tripDisplayLabel,
         notes: normalizeOptionalNotes(dto.notes),
+        requiresPsaPortAccess: dto.requiresPsaPortAccess === true,
         tripPICName: dto.tripPICName?.trim() || null,
         tripPICContact: dto.tripPICContact?.trim() || null,
         containerNumber: dto.containerNumber?.trim() || null,
@@ -5567,6 +5623,7 @@ export class TransportJobsService {
       fleetVehicleId: string | null;
       jobId?: string | null;
       jobTripTemplate?: JobTripTemplate | null;
+      requiresPsaPortAccess?: boolean | null;
     },
     opts?: {
       jobId?: string | null;
@@ -5616,6 +5673,34 @@ export class TransportJobsService {
     }
     if (jobItemCount === undefined) jobItemCount = 0;
 
+    let requiresPsaPortAccess = trip.requiresPsaPortAccess === true;
+    let driverHasPsaPortAccess = false;
+    if (typeof this.prisma?.trip?.findFirst === "function") {
+      const psaTrip = await this.prisma.trip.findFirst({
+        where: { id: trip.id, tenantId },
+        select: {
+          requiresPsaPortAccess: true,
+          assignedDriverUserId: true,
+          drivers: { select: { hasPsaPortAccess: true } },
+        },
+      });
+      if (psaTrip) {
+        requiresPsaPortAccess = psaTrip.requiresPsaPortAccess === true;
+        driverHasPsaPortAccess = psaTrip.drivers?.hasPsaPortAccess === true;
+        if (
+          !driverHasPsaPortAccess &&
+          psaTrip.assignedDriverUserId &&
+          typeof this.prisma?.drivers?.findFirst === "function"
+        ) {
+          const drv = await this.prisma.drivers.findFirst({
+            where: { tenantId, userId: psaTrip.assignedDriverUserId },
+            select: { hasPsaPortAccess: true },
+          });
+          driverHasPsaPortAccess = drv?.hasPsaPortAccess === true;
+        }
+      }
+    }
+
     const readiness = evaluateTripPublishReadiness({
       status: trip.status,
       assignedDriverUserId: trip.assignedDriverUserId ?? null,
@@ -5625,10 +5710,13 @@ export class TransportJobsService {
       driverEarningCents: trip.driverEarningCents ?? null,
       payoutLines,
       jobType: jobType ?? null,
-      jobItemCount: jobItemCount ?? 0,
-      linkedJobItemCount: linkedJobItemCount ?? 0,
+      jobItemCount,
+      linkedJobItemCount,
       jobTripTemplate: trip.jobTripTemplate ?? null,
+      requiresPsaPortAccess,
+      driverHasPsaPortAccess,
     });
+
     return { readiness, payoutLines };
   }
 
@@ -6233,6 +6321,36 @@ export class TransportJobsService {
     if (dto.destinationSummary !== undefined && !data.destinationLocationId) {
       data.destinationLabel = dto.destinationSummary?.trim() || null;
     }
+    if (dto.notes !== undefined) {
+      data.notes = normalizeOptionalNotes(dto.notes);
+    }
+    if (dto.requiresPsaPortAccess !== undefined) {
+      const editable =
+        trip.status === TripStatus.DRAFT ||
+        trip.status === TripStatus.PUBLISHED;
+      if (!editable) {
+        throw new BadRequestException(
+          "PSA port access requirement can only be changed while the trip is DRAFT or PUBLISHED",
+        );
+      }
+      const prev = trip.requiresPsaPortAccess === true;
+      const next = dto.requiresPsaPortAccess === true;
+      data.requiresPsaPortAccess = next;
+      if (prev !== next) {
+        await this.audit.log(
+          tenantId,
+          "TRIP_PSA_REQUIREMENT_UPDATED",
+          "TRIP",
+          tripId,
+          {
+            jobId,
+            previousRequiresPsaPortAccess: prev,
+            requiresPsaPortAccess: next,
+          },
+          actorUserId,
+        );
+      }
+    }
     if (dto.trailerNumber !== undefined) {
       data.trailerNumber = dto.trailerNumber?.trim() || null;
     }
@@ -6558,7 +6676,18 @@ export class TransportJobsService {
 
     const driverRow = await this.prisma.drivers.findFirst({
       where: { tenantId, userId: dto.driverId },
-      select: { id: true, assignedVehicleId: true, assignedFleetVehicleId: true },
+      select: {
+        id: true,
+        assignedVehicleId: true,
+        assignedFleetVehicleId: true,
+        hasPsaPortAccess: true,
+      },
+    });
+    assertPsaAssignmentAllowed({
+      requiresPsaPortAccess: trip.requiresPsaPortAccess,
+      hasPsaPortAccess: driverRow?.hasPsaPortAccess,
+      tripId,
+      driverUserId: dto.driverId,
     });
     const [vehicle, fleetVehicle] = await Promise.all([
       driverRow?.assignedVehicleId

@@ -78,6 +78,7 @@ describe("AdminDriversService driver detail", () => {
         { getClient: jest.fn() } as any,
         usersService,
         tripEarnings,
+        { log: jest.fn().mockResolvedValue(undefined) } as any,
       ),
       prisma,
       tripEarnings,

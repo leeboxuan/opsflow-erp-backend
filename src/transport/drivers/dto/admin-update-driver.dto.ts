@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsOptional, IsString } from "class-validator";
+import { IsBoolean, IsOptional, IsString } from "class-validator";
 
 export class AdminUpdateDriverDto {
   @ApiProperty({ example: "John Doe", required: false })
@@ -27,4 +27,22 @@ export class AdminUpdateDriverDto {
   @IsOptional()
   @IsString()
   assignedFleetVehicleId?: string;
+
+  @ApiProperty({
+    required: false,
+    description:
+      "Driver is authorised to enter PSA port facilities.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  hasPsaPortAccess?: boolean;
+
+  @ApiProperty({
+    required: false,
+    description:
+      "Required when clearing PSA access while the driver still has active PSA-required trip assignments. Assignments are preserved; conflicts are reported.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  confirmRemovePsaAccess?: boolean;
 }

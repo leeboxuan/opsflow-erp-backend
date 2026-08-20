@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsOptional, IsString, MinLength } from "class-validator";
+import { IsBoolean, IsOptional, IsString, MinLength } from "class-validator";
 
 export class AdminCreateDriverDto {
   @ApiProperty({
@@ -27,4 +27,13 @@ export class AdminCreateDriverDto {
   @IsString()
   @MinLength(8)
   password!: string;
+
+  @ApiProperty({
+    required: false,
+    description:
+      "Driver is authorised to enter PSA port facilities. Default false.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  hasPsaPortAccess?: boolean;
 }

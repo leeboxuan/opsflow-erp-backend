@@ -20,6 +20,7 @@ import {
 } from './dto/trip.dto';
 import { EventLogService } from './event-log.service';
 import { AssignVehicleDto } from './trips/dto/assign-vehicle.dto';
+import { assertPsaAssignmentAllowed } from './trips/trip-psa-access';
 import { Role, MembershipStatus } from '@prisma/client';
 
 @Injectable()
@@ -691,6 +692,17 @@ export class TripService {
         'Driver not found or not active in this tenant',
       );
     }
+
+    const driverRow = await this.prisma.drivers.findFirst({
+      where: { tenantId, userId: driverUserId },
+      select: { hasPsaPortAccess: true },
+    });
+    assertPsaAssignmentAllowed({
+      requiresPsaPortAccess: trip.requiresPsaPortAccess,
+      hasPsaPortAccess: driverRow?.hasPsaPortAccess,
+      tripId,
+      driverUserId,
+    });
 
     // Update trip with assigned driver
     const updatedTrip = await this.prisma.trip.update({

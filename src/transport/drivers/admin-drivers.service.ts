@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -9,6 +10,7 @@ import { CanonicalTenantRole, MembershipStatus, Role, StopStatus, TripStatus, Us
 import { PrismaService } from "../../shared/prisma/prisma.service";
 import { SupabaseService } from "../../shared/auth/supabase.service";
 import { UsersService } from "../../shared/users/users.service";
+import { AuditService } from "../../shared/audit/audit.service";
 import { syncMembershipRoleRows } from "../../shared/auth/membership-roles";
 import { isTransportDriverRole } from "../../shared/auth/canonical-tenant-role";
 import {
@@ -46,6 +48,10 @@ import {
   assertUsernameGloballyAvailable,
   rethrowUsernameUniqueConflict,
 } from "../../shared/auth/username-uniqueness";
+import {
+  PSA_ACTIVE_TRIP_STATUSES,
+  throwPsaAccessRemovalConflict,
+} from "../trips/trip-psa-access";
 
 function firstNonEmptyText(...values: Array<unknown>): string | null {
   for (const value of values) {
@@ -86,6 +92,7 @@ export class AdminDriversService {
     private readonly supabaseService: SupabaseService,
     private readonly usersService: UsersService,
     private readonly tripEarnings: DriverTripEarningsService,
+    private readonly audit: AuditService,
     @Optional() private readonly realtime?: RealtimeEventsService,
   ) {}
 
@@ -385,6 +392,7 @@ export class AdminDriversService {
           name,
           phone,
           userId: user.id,
+          hasPsaPortAccess: dto.hasPsaPortAccess === true,
           updatedAt: new Date(),
         },
         create: {
@@ -394,6 +402,7 @@ export class AdminDriversService {
           name,
           phone,
           userId: user.id,
+          hasPsaPortAccess: dto.hasPsaPortAccess === true,
           updatedAt: new Date(),
         },
       });
@@ -404,6 +413,20 @@ export class AdminDriversService {
       await this.compensateDeleteAuthUser(authUserId);
       rethrowUsernameUniqueConflict(e);
       throw e;
+    }
+
+    if (dto.hasPsaPortAccess === true) {
+      await this.audit.log(
+        tenantId,
+        "DRIVER_PSA_ACCESS_UPDATED",
+        "DRIVER",
+        result.user.id,
+        {
+          previousHasPsaPortAccess: false,
+          hasPsaPortAccess: true,
+        },
+        null,
+      );
     }
 
     rt.publishDriverEvent(
@@ -437,6 +460,7 @@ export class AdminDriversService {
         (result.user as any).avatarKey ?? null,
       ),
       avatarUpdatedAt: (result.user as any).avatarUpdatedAt ?? null,
+      hasPsaPortAccess: dto.hasPsaPortAccess === true,
     };
   }
 
@@ -512,6 +536,45 @@ export class AdminDriversService {
       }
     }
 
+    const existingProfile = await this.prisma.drivers.findFirst({
+      where: { tenantId, userId: driverUserId },
+      select: { hasPsaPortAccess: true },
+    });
+    const previousHasPsa = existingProfile?.hasPsaPortAccess === true;
+    let nextHasPsa = previousHasPsa;
+    if (dto.hasPsaPortAccess !== undefined) {
+      nextHasPsa = dto.hasPsaPortAccess === true;
+      if (previousHasPsa && !nextHasPsa) {
+        const conflicting = await this.prisma.trip.findMany({
+          where: {
+            tenantId,
+            assignedDriverUserId: driverUserId,
+            requiresPsaPortAccess: true,
+            status: { in: [...PSA_ACTIVE_TRIP_STATUSES] },
+          },
+          select: {
+            id: true,
+            jobId: true,
+            status: true,
+            plannedStartAt: true,
+          },
+          orderBy: [{ plannedStartAt: "asc" }, { id: "asc" }],
+          take: 50,
+        });
+        if (conflicting.length > 0 && dto.confirmRemovePsaAccess !== true) {
+          throwPsaAccessRemovalConflict({
+            driverUserId,
+            conflictingTrips: conflicting.map((t) => ({
+              tripId: t.id,
+              jobId: t.jobId,
+              status: t.status,
+              plannedStartAt: t.plannedStartAt,
+            })),
+          });
+        }
+      }
+    }
+
     const vehicleAssignmentPatch =
       dto.assignedVehicleId !== undefined
         ? {
@@ -525,6 +588,11 @@ export class AdminDriversService {
             }
           : {};
 
+    const psaPatch =
+      dto.hasPsaPortAccess !== undefined
+        ? { hasPsaPortAccess: nextHasPsa }
+        : {};
+
     await this.prisma.drivers.upsert({
       where: { tenantId_email: { tenantId, email: user.email } },
       update: {
@@ -532,6 +600,7 @@ export class AdminDriversService {
         phone,
         userId: user.id,
         ...vehicleAssignmentPatch,
+        ...psaPatch,
         updatedAt: new Date(),
       },
       create: {
@@ -541,16 +610,34 @@ export class AdminDriversService {
         name,
         phone,
         userId: user.id,
+        hasPsaPortAccess: nextHasPsa,
         ...vehicleAssignmentPatch,
         updatedAt: new Date(),
       },
     });
+
+    if (dto.hasPsaPortAccess !== undefined && previousHasPsa !== nextHasPsa) {
+      await this.audit.log(
+        tenantId,
+        "DRIVER_PSA_ACCESS_UPDATED",
+        "DRIVER",
+        driverUserId,
+        {
+          previousHasPsaPortAccess: previousHasPsa,
+          hasPsaPortAccess: nextHasPsa,
+          confirmedRemoval: dto.confirmRemovePsaAccess === true,
+        },
+        actorUserId,
+      );
+    }
 
     const profile = await this.prisma.drivers.findFirst({
       where: { tenantId, userId: user.id },
       select: {
         assignedVehicleId: true,
         assignedFleetVehicleId: true,
+        hasPsaPortAccess: true,
+        name: true,
       },
     });
 
@@ -577,6 +664,7 @@ export class AdminDriversService {
       avatarUpdatedAt: (user as any).avatarUpdatedAt ?? null,
       defaultVehicleId: profile?.assignedVehicleId ?? null,
       defaultFleetVehicleId: profile?.assignedFleetVehicleId ?? null,
+      hasPsaPortAccess: profile?.hasPsaPortAccess === true,
     };
   }
 
@@ -712,6 +800,7 @@ export class AdminDriversService {
           name: true,
           assignedVehicleId: true,
           assignedFleetVehicleId: true,
+          hasPsaPortAccess: true,
         },
       }),
       this.prisma.vehicle.findFirst({
@@ -758,6 +847,7 @@ export class AdminDriversService {
       assignedFleetVehiclePlateNo: fleetVehicle?.plateNo ?? null,
       assignedFleetVehicleType: fleetVehicle?.type ?? null,
       assignedFleetVehicleStatus: fleetVehicle?.status ?? null,
+      hasPsaPortAccess: profile?.hasPsaPortAccess === true,
     };
   }
 
