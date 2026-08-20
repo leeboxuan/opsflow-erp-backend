@@ -94,6 +94,13 @@ import {
 } from "../jobs/job-invoice-readiness";
 import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
 import * as rt from "../../shared/realtime/realtime-publish";
+import {
+  DRIVER_REMARKS_NOTIFICATION_KIND,
+  auditLogHasDriverRemarksChange,
+  buildDriverRemarksAuditMetadata,
+  driverRemarksChanged,
+  normalizeDriverRemarksText,
+} from "./driver-remarks.helpers";
 import { TransportJobsService } from "../jobs/transport-jobs.service";
 import { resolveTripNotesResponseFields } from "../trips/trip-notes.helpers";
 import {
@@ -3079,6 +3086,11 @@ export class DriverJobsService {
       pendingState: trip.pendingState ?? TripPendingState.NONE,
       plannedStartAt: trip.plannedStartAt ?? null,
       driverRemarks: trip.driverRemarks ?? null,
+      driverRemarksUpdatedAt: await this.resolveDriverRemarksUpdatedAt(
+        tenantId,
+        tripId,
+        trip.driverRemarks,
+      ),
       ...resolveTripNotesResponseFields(trip, trip.job),
       ...resolveTripRouteAddressResponseFields(trip),
       jobSequence: trip.jobSequence ?? null,
@@ -3207,6 +3219,35 @@ export class DriverJobsService {
     };
   }
 
+  private async resolveDriverRemarksUpdatedAt(
+    tenantId: string,
+    tripId: string,
+    driverRemarks: string | null | undefined,
+  ): Promise<string | null> {
+    if (!normalizeDriverRemarksText(driverRemarks)) return null;
+    const logs = await this.prisma.auditLog.findMany({
+      where: {
+        tenantId,
+        entityType: "TRIP",
+        entityId: tripId,
+        action: "TRIP_OPERATIONAL_DETAILS_UPDATE",
+      },
+      orderBy: { createdAt: "desc" },
+      take: 25,
+      select: { createdAt: true, metadata: true },
+    });
+    for (const log of logs) {
+      if (
+        auditLogHasDriverRemarksChange(
+          (log.metadata as Record<string, unknown> | null) ?? null,
+        )
+      ) {
+        return log.createdAt.toISOString();
+      }
+    }
+    return null;
+  }
+
   async updateOperationalDetails(
     tenantId: string,
     jobId: string,
@@ -3298,15 +3339,24 @@ export class DriverJobsService {
       }
     }
 
+    const previousDriverRemarks = normalizeDriverRemarksText(trip.driverRemarks);
     let driverRemarksValue: string | null | undefined;
+    let remarksDidChange = false;
     if (dto.driverRemarks !== undefined) {
-      driverRemarksValue = normalizeOptionalTrimmedText(dto.driverRemarks);
-      changedFields.push("driverRemarks");
+      driverRemarksValue = normalizeDriverRemarksText(dto.driverRemarks);
+      remarksDidChange = driverRemarksChanged(previousDriverRemarks, driverRemarksValue);
+      if (remarksDidChange) {
+        changedFields.push("driverRemarks");
+      } else {
+        driverRemarksValue = undefined;
+      }
     }
 
     if (!changedFields.length) {
       return this.getTripDetailForDriver(tenantId, tripId, driverUserId);
     }
+
+    const updatedAtIso = new Date().toISOString();
 
     await this.prisma.$transaction(async (tx) => {
       for (const update of itemUpdates) {
@@ -3347,16 +3397,22 @@ export class DriverJobsService {
       "TRIP_OPERATIONAL_DETAILS_UPDATE",
       "TRIP",
       tripId,
-      {
+      buildDriverRemarksAuditMetadata({
         jobId,
+        previousDriverRemarks,
+        driverRemarks:
+          driverRemarksValue !== undefined
+            ? driverRemarksValue
+            : previousDriverRemarks,
         changedFields: [...new Set(changedFields)],
         containers: itemUpdates.map((u) => ({
           itemId: u.itemId,
           containerNumber: u.containerNumber,
           sealNumber: u.sealNo,
         })),
-        driverRemarks: driverRemarksValue,
-      },
+        updatedAtIso,
+        actorUserId: driverUserId,
+      }),
       driverUserId,
     );
 
@@ -3365,9 +3421,19 @@ export class DriverJobsService {
       actorUserId: driverUserId,
       actorRole: Role.DRIVER,
       tripStatus: trip.status as TripStatus,
+      ...(remarksDidChange
+        ? { notificationKind: DRIVER_REMARKS_NOTIFICATION_KIND }
+        : {}),
     });
 
-    return this.getTripDetailForDriver(tenantId, tripId, driverUserId);
+    const detail = await this.getTripDetailForDriver(tenantId, tripId, driverUserId);
+    if (remarksDidChange) {
+      return {
+        ...detail,
+        driverRemarksUpdatedAt: updatedAtIso,
+      };
+    }
+    return detail;
   }
 
   async uploadTripDocumentForDriver(

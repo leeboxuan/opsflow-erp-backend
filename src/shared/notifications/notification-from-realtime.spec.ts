@@ -203,6 +203,32 @@ describe("notification-from-realtime", () => {
     expect(driverSpec?.metadata?.type).toBe("EARNINGS_UPDATED");
   });
 
+  it("notifies ops (not driver) when driver updates remarks", () => {
+    const specs = buildNotificationSpecsFromRealtimeEvent(
+      event({
+        type: "trip.updated",
+        entityType: "trip",
+        entityId: "trip-1",
+        tripId: "trip-1",
+        jobId: "job-1",
+        jobInternalRef: "WFL-2026-06-0001-LCL",
+        tripDisplayRef: "TRIP-T01",
+        driverUserId: "drv-1",
+        actorUserId: "drv-1",
+        actorRole: Role.DRIVER,
+        tripStatus: TripStatus.ONGOING,
+        notificationKind: "DRIVER_REMARKS_UPDATED",
+      }),
+    );
+    expect(
+      specs.filter((s) => s.audience === NotificationAudience.USER),
+    ).toHaveLength(0);
+    const opsSpecs = specs.filter((s) => s.audience === NotificationAudience.ROLE);
+    expect(opsSpecs.length).toBeGreaterThan(0);
+    expect(opsSpecs[0]?.title).toBe("Driver remark updated");
+    expect(opsSpecs[0]?.description).toContain("driver sent a remark");
+  });
+
   it("invoice.generated targets FINANCE and ADMIN roles", () => {
     const specs = buildNotificationSpecsFromRealtimeEvent(
       event({

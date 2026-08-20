@@ -39,6 +39,7 @@ describe("DriverJobsService updateOperationalDetails", () => {
         }),
       ),
       masterTrailerLocation: { findFirst: jest.fn().mockResolvedValue(null) },
+      auditLog: { findMany: jest.fn().mockResolvedValue([]) },
     };
 
     // getTripDetailForDriver after update
@@ -127,11 +128,64 @@ describe("DriverJobsService updateOperationalDetails", () => {
           "sealNumber",
           "driverRemarks",
         ]),
+        previousDriverRemarks: null,
+        driverRemarks: "Late at gate",
+        actorUserId: driverUserId,
       }),
       driverUserId,
     );
     expect(result.driverRemarks).toBe("Late at gate");
     expect(result.job.description).toBe("Ops description");
+  });
+
+  it("preserves previous remarks in audit history on edit", async () => {
+    const { svc, auditLog, prisma } = makeSvc();
+    prisma.trip.findFirst.mockReset();
+    prisma.trip.findFirst
+      .mockResolvedValueOnce({
+        id: tripId,
+        tenantId,
+        jobId,
+        status: TripStatus.ONGOING,
+        assignedDriverUserId: driverUserId,
+        containerNumber: "CONT-OLD",
+        driverRemarks: "Late at gate",
+      })
+      .mockResolvedValue({
+        id: tripId,
+        tenantId,
+        jobId,
+        status: TripStatus.ONGOING,
+        assignedDriverUserId: driverUserId,
+        containerNumber: "CONT-OLD",
+        driverRemarks: "Cleared customs",
+        documents: [],
+        job: {
+          id: jobId,
+          internalRef: "REF",
+          jobType: "IMPORT",
+          description: "Ops description",
+          pickupReference: "PU",
+          items: [],
+        },
+      });
+
+    await svc.updateOperationalDetails(tenantId, jobId, tripId, driverUserId, {
+      driverRemarks: "Cleared customs",
+    });
+
+    expect(auditLog).toHaveBeenCalledWith(
+      tenantId,
+      "TRIP_OPERATIONAL_DETAILS_UPDATE",
+      "TRIP",
+      tripId,
+      expect.objectContaining({
+        previousDriverRemarks: "Late at gate",
+        driverRemarks: "Cleared customs",
+        changedFields: ["driverRemarks"],
+      }),
+      driverUserId,
+    );
   });
 
   it("rejects foreign itemIds", async () => {

@@ -258,6 +258,9 @@ export class JobTripResponseDto {
   /** Driver-owned remarks (Trip.driverRemarks). */
   @ApiPropertyOptional()
   driverRemarks?: string | null;
+  /** ISO timestamp of last driver remarks audit change when remarks are present. */
+  @ApiPropertyOptional()
+  driverRemarksUpdatedAt?: string | null;
   /** Job-level notes (Job.notes). */
   @ApiPropertyOptional()
   jobNotes?: string | null;

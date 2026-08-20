@@ -30,6 +30,7 @@ import {
   assertReviewTransition,
   assertValidAmountCents,
   expenseCategoryRequiresReceipt,
+  expenseCountsTowardJobCost,
   isAllowedExpenseReceiptFile,
   isDriverEditableReviewStatus,
   nextReimbursementStatusOnPaymentMethodChange,
@@ -37,6 +38,12 @@ import {
   reimbursementStatusForPaymentMethod,
   TRIP_EXPENSE_RECEIPT_MAX_BYTES,
 } from "./trip-expense.rules";
+import {
+  actorIsCustomerAdmin,
+  actorIsCustomerOnly,
+  actorIsDriverOnly,
+  type AccessActor,
+} from "../../shared/auth/access-actor";
 import {
   AddTripExpenseAttachmentDto,
   ApproveTripExpenseDto,
@@ -904,6 +911,88 @@ export class TripExpensesService {
     });
     if (!expense) throw new NotFoundException("Expense not found");
     return this.toExpenseDto(expense);
+  }
+
+  /**
+   * Read-only trip expenses for internal Job Workspace viewers.
+   * Excludes customers/drivers; tenant-scoped; never returns storage keys.
+   */
+  async listForInternalTrip(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    actor: AccessActor,
+  ) {
+    this.assertInternalExpenseViewer(actor);
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, jobId, tenantId },
+      select: { id: true, jobId: true },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    const rows = await this.prisma.tripExpense.findMany({
+      where: { tenantId, jobId, tripId },
+      include: {
+        attachments: {
+          where: { isActive: true },
+          orderBy: { createdAt: "asc" },
+        },
+        job: { select: { internalRef: true } },
+        submittedByUser: { select: { name: true, email: true } },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 200,
+    });
+
+    const data = rows.map((r) => this.toExpenseDto(r));
+    let submittedCents = 0;
+    let approvedCents = 0;
+    for (const row of data) {
+      const cents = Number(row.amountCents) || 0;
+      submittedCents += cents;
+      if (expenseCountsTowardJobCost({ reviewStatus: row.reviewStatus })) {
+        approvedCents += cents;
+      }
+    }
+
+    return {
+      data,
+      totals: {
+        currency: "SGD",
+        submittedCents,
+        approvedCents,
+        count: data.length,
+      },
+    };
+  }
+
+  async getAttachmentSignedUrlForInternalTrip(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    expenseId: string,
+    attachmentId: string,
+    actor: AccessActor,
+  ) {
+    this.assertInternalExpenseViewer(actor);
+    const expense = await this.prisma.tripExpense.findFirst({
+      where: { id: expenseId, tenantId, jobId, tripId },
+      select: { id: true },
+    });
+    if (!expense) throw new NotFoundException("Expense not found");
+    return this.getAttachmentSignedUrl(tenantId, expenseId, attachmentId);
+  }
+
+  private assertInternalExpenseViewer(actor: AccessActor) {
+    if (
+      actorIsCustomerAdmin(actor) ||
+      actorIsCustomerOnly(actor) ||
+      actorIsDriverOnly(actor)
+    ) {
+      throw new ForbiddenException(
+        "Trip expenses are only available to internal trip viewers",
+      );
+    }
   }
 
   async listEvents(tenantId: string, expenseId: string) {

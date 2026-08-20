@@ -251,6 +251,11 @@ import { reservedJobChargeMutationMessage } from "../finance/invoice-integrity";
 import {
   buildContainerDocumentationRequirements,
 } from "../driver-app/container-documentation.helpers";
+import { labelForOperationalDetailsActivity } from "../driver-app/driver-remarks.helpers";
+import {
+  auditLogHasDriverRemarksChange,
+  normalizeDriverRemarksText,
+} from "../driver-app/driver-remarks.helpers";
 import type {
   ImportJobRowDto,
   ImportPreviewRowDto,
@@ -1426,6 +1431,35 @@ export class TransportJobsService {
     if (job?.customerCompanyId !== customerCompanyId) {
       throw new ForbiddenException("Not allowed to access this job");
     }
+  }
+
+  private async resolveDriverRemarksUpdatedAtForTrip(
+    tenantId: string,
+    tripId: string,
+    driverRemarks: string | null | undefined,
+  ): Promise<string | null> {
+    if (!normalizeDriverRemarksText(driverRemarks)) return null;
+    const logs = await this.prisma.auditLog.findMany({
+      where: {
+        tenantId,
+        entityType: "TRIP",
+        entityId: tripId,
+        action: "TRIP_OPERATIONAL_DETAILS_UPDATE",
+      },
+      orderBy: { createdAt: "desc" },
+      take: 25,
+      select: { createdAt: true, metadata: true },
+    });
+    for (const log of logs) {
+      if (
+        auditLogHasDriverRemarksChange(
+          (log.metadata as Record<string, unknown> | null) ?? null,
+        )
+      ) {
+        return log.createdAt.toISOString();
+      }
+    }
+    return null;
   }
 
   private async buildUserNameMapByIds(
@@ -4844,6 +4878,7 @@ export class TransportJobsService {
         DOC_GENERATED: `${docLabel} generated`,
         DOC_REGENERATED: `${docLabel} regenerated`,
         DOC_SIGNED: `${docLabel} signed`,
+        TRIP_OPERATIONAL_DETAILS_UPDATE: labelForOperationalDetailsActivity(metadata),
       };
 
       return {
@@ -8218,6 +8253,11 @@ export class TransportJobsService {
       vessel: trip.vessel ?? null,
       plannedStartAt: trip.plannedStartAt ?? null,
       driverRemarks: trip.driverRemarks ?? null,
+      driverRemarksUpdatedAt: await this.resolveDriverRemarksUpdatedAtForTrip(
+        tenantId,
+        tripId,
+        trip.driverRemarks,
+      ),
       ...(() => {
         const parentTypes = resolveJobTypesForResponse({
           assignments: trip.job?.jobTypeAssignments,

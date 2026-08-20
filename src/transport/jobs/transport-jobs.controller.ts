@@ -38,6 +38,7 @@ import { DestructiveAction } from "../../shared/auth/guards/destructive-action.d
 import { Role, JobType, TripPendingState, TenantModule, CanonicalTenantRole } from "@prisma/client";
 import { TransportJobsService } from "./transport-jobs.service";
 import { InvoicesService } from "../finance/invoices.service";
+import { TripExpensesService } from "../finance/trip-expenses.service";
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
 import { AssignJobDto } from "./dto/assign-job.dto";
@@ -102,6 +103,7 @@ export class TransportJobsController {
     private readonly jobs: TransportJobsService,
     private readonly invoices: InvoicesService,
     private readonly messageImports: JobMessageImportService,
+    private readonly tripExpenses: TripExpensesService,
   ) {}
 
   @Get(":jobId/documents/:documentId/signed-url")
@@ -1140,6 +1142,63 @@ export class TransportJobsController {
       tripId,
       documentId,
       body,
+      accessUser,
+    );
+  }
+
+  @Get(":jobId/trips/:tripId/expenses")
+  @ApiOperation({
+    summary:
+      "List trip expenses & receipts for internal Job Workspace viewers (read-only)",
+  })
+  @Roles(
+    CanonicalTenantRole.TENANT_ADMIN,
+    CanonicalTenantRole.TRANSPORT_ADMIN,
+    CanonicalTenantRole.FINANCE_ADMIN,
+    Role.ADMIN,
+    Role.TRANSPORT_STAFF,
+  )
+  async listTripExpensesForWorkspace(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = accessActorFromRequest(req);
+    return this.tripExpenses.listForInternalTrip(
+      tenantId,
+      jobId,
+      tripId,
+      accessUser,
+    );
+  }
+
+  @Get(":jobId/trips/:tripId/expenses/:expenseId/attachments/:attachmentId/signed-url")
+  @ApiOperation({
+    summary: "Short-lived signed URL for a trip expense receipt (internal viewers)",
+  })
+  @Roles(
+    CanonicalTenantRole.TENANT_ADMIN,
+    CanonicalTenantRole.TRANSPORT_ADMIN,
+    CanonicalTenantRole.FINANCE_ADMIN,
+    Role.ADMIN,
+    Role.TRANSPORT_STAFF,
+  )
+  async getTripExpenseAttachmentSignedUrlForWorkspace(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Param("expenseId") expenseId: string,
+    @Param("attachmentId") attachmentId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = accessActorFromRequest(req);
+    return this.tripExpenses.getAttachmentSignedUrlForInternalTrip(
+      tenantId,
+      jobId,
+      tripId,
+      expenseId,
+      attachmentId,
       accessUser,
     );
   }

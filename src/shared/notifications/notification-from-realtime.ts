@@ -12,7 +12,14 @@ import {
   jobNotificationDescription,
   tripNotificationDescription,
 } from "./notification-display-context";
-import { driverNotificationCopy } from "./trip-details-notification";
+import {
+  driverNotificationCopy,
+  tripContextDescription,
+} from "./trip-details-notification";
+import {
+  DRIVER_REMARKS_NOTIFICATION_KIND,
+  opsCopyForDriverRemarksNotification,
+} from "../../transport/driver-app/driver-remarks.helpers";
 
 export const PERSISTED_NOTIFICATION_EVENT_TYPES = new Set([
   "job.created",
@@ -125,6 +132,10 @@ export function buildNotificationSpecsFromRealtimeEvent(
       const driverCopy = event.notificationKind
         ? driverNotificationCopy(event)
         : null;
+      const opsRemarksCopy =
+        event.notificationKind === DRIVER_REMARKS_NOTIFICATION_KIND
+          ? opsCopyForDriverRemarksNotification(tripContextDescription(event))
+          : null;
 
       if (
         shouldNotifyAssignedDriverForTripEvent(event, {
@@ -145,8 +156,8 @@ export function buildNotificationSpecsFromRealtimeEvent(
       specs.push(
         ...opsAdminAndOpsRoleSpecs({
           ...base,
-          title: tripTitle.ops,
-          description: tripDesc,
+          title: opsRemarksCopy?.title ?? tripTitle.ops,
+          description: opsRemarksCopy?.description ?? tripDesc,
           severity: tripSeverity(event.type),
         }),
       );
