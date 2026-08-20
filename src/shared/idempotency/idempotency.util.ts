@@ -19,10 +19,18 @@ export function hashRequestPayload(payload: unknown): string {
   return createHash("sha256").update(stableStringify(payload)).digest("hex");
 }
 
+/** SHA-256 hex digest of raw bytes. Never log the buffer itself. */
+export function sha256HexOfBuffer(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
 export const IDEMPOTENCY_SCOPES = {
   CUSTOMER_ONBOARDING: "CUSTOMER_ONBOARDING",
   CUSTOMER_FIRST_QUOTATION: "CUSTOMER_FIRST_QUOTATION",
   CUSTOMER_FIRST_QUOTATION_LINES: "CUSTOMER_FIRST_QUOTATION_LINES",
+  DRIVER_TRIP_EXPENSE_CREATE: "DRIVER_TRIP_EXPENSE_CREATE",
+  DRIVER_TRIP_EXPENSE_ATTACHMENT: "DRIVER_TRIP_EXPENSE_ATTACHMENT",
+  DRIVER_TRIP_EXPENSE_RESUBMIT: "DRIVER_TRIP_EXPENSE_RESUBMIT",
 } as const;
 
 export type IdempotencyScope =

@@ -7,10 +7,12 @@ import {
   TripStatus,
 } from "@prisma/client";
 import { GUL_CIRCLE_LOCATION } from "./gul-circle-location";
+import type { TripDocumentRequirementSnapshot } from "./trip-document-requirements";
 import {
-  shouldSkipCompletionSnapshotType,
-  type TripDocumentRequirementSnapshot,
-} from "./trip-document-requirements";
+  buildTripCompletionDocumentGapsFromEvaluation,
+  PHOTO_DOCUMENTATION_MISSING_KEY as EVAL_PHOTO_MISSING_KEY,
+  PHOTO_DOCUMENTATION_SATISFYING_TYPES as EVAL_PHOTO_TYPES,
+} from "./trip-document-requirement-evaluation";
 
 export type TripCompletionRule = {
   requireGeneratedDoSigned: boolean;
@@ -372,45 +374,29 @@ export function resolveTripCompletionRule(raw: unknown): ResolvedTripCompletionR
 }
 
 /** Canonical missing key returned to mobile for photo documentation gaps. */
-export const PHOTO_DOCUMENTATION_MISSING_KEY = "POD_PHOTO";
+export const PHOTO_DOCUMENTATION_MISSING_KEY = EVAL_PHOTO_MISSING_KEY;
 
 /** Active trip document types that satisfy the photo documentation requirement. */
-export const PHOTO_DOCUMENTATION_SATISFYING_TYPES: TripDocumentType[] = [
-  TripDocumentType.POD_PHOTO,
-  TripDocumentType.OTHER,
-];
+export const PHOTO_DOCUMENTATION_SATISFYING_TYPES: TripDocumentType[] =
+  EVAL_PHOTO_TYPES as TripDocumentType[];
 
 export type TripCompletionDocRow = {
   type: TripDocumentType;
   signedAt: Date | null;
   isSigned: boolean;
+  isActive?: boolean | null;
+  mimeType?: string | null;
+  originalName?: string | null;
+  fileName?: string | null;
 };
-
-function isDocumentMarkedSigned(doc: TripCompletionDocRow): boolean {
-  return !!doc.signedAt || doc.isSigned === true;
-}
 
 /**
  * Canonical live completion rules (web chips, mobile checklist, completeTrip,
  * and Statistics missing-docs exceptions must agree):
  *
  * When TripDocumentRequirement snapshots exist, those rows are the source of
- * truth (isRequired / requiresSignature). Do not infer signature from type.
- *
- * When no snapshots exist (historical trips), keep legacy semantics:
- * - Photo documentation: active POD_PHOTO or OTHER
- * - Signed DELIVERY_DO when a DELIVERY_DO exists (unsigned DO may be satisfied
- *   by a legacy POD_SIGNATURE)
- *
- * Always (outside this helper):
- * - Container + seal photos per linked TripJobItem on IMPORT/EXPORT/COLLECTION
- * - Trailer end photo when this is the driver's last open trip that calendar day
- *
- * Advisory (do not block completeTrip):
- * - trailerParkingLocationCode
- *
- * Legacy / display-only (stored completionRuleJson Pickup DO / POD_SIGNATURE
- * exact lists). Kept on the trip row for historical templates; not enforced.
+ * truth (isRequired / requiresSignature / minCount / stage / uploader).
+ * Container/seal remain per-TripJobItem outside this helper.
  */
 export const CANONICAL_COMPLETION_RULES = {
   requiredPhotoTypes: PHOTO_DOCUMENTATION_SATISFYING_TYPES,
@@ -420,104 +406,29 @@ export const CANONICAL_COMPLETION_RULES = {
   parkingCodeBlocksCompletion: false,
 } as const;
 
-function buildLegacyTripCompletionDocumentGaps(
-  docs: TripCompletionDocRow[],
-): string[] {
-  const missing: string[] = [];
-
-  const hasPhotoDocumentation = docs.some((d) =>
-    PHOTO_DOCUMENTATION_SATISFYING_TYPES.includes(d.type),
-  );
-  if (!hasPhotoDocumentation) {
-    missing.push(PHOTO_DOCUMENTATION_MISSING_KEY);
-  }
-
-  const deliveryDo = docs.find((d) => d.type === TripDocumentType.DELIVERY_DO);
-  if (!deliveryDo) {
-    return missing;
-  }
-
-  const deliveryDoSigned = isDocumentMarkedSigned(deliveryDo);
-  const hasLegacyPodSignature = docs.some(
-    (d) => d.type === TripDocumentType.POD_SIGNATURE,
-  );
-  if (!deliveryDoSigned && !hasLegacyPodSignature) {
-    missing.push(TripDocumentType.DELIVERY_DO);
-  }
-
-  return missing;
-}
-
-function hasSatisfyingPhotoDocumentation(docs: TripCompletionDocRow[]): boolean {
-  return docs.some((d) => PHOTO_DOCUMENTATION_SATISFYING_TYPES.includes(d.type));
-}
-
-function matchingDocs(
-  docs: TripCompletionDocRow[],
-  type: string,
-): TripCompletionDocRow[] {
-  const key = type.trim().toUpperCase();
-  return docs.filter((d) => String(d.type) === key);
-}
-
 /**
- * Driver trip completion document gaps.
- *
- * Pass TripDocumentRequirement snapshots when present. Empty/missing snapshots
- * use historical DELIVERY_DO-if-present semantics only — never guess signature
- * flags onto old rows.
- *
- * Container/seal requirements are evaluated per JobItem by the driver service.
+ * Driver trip completion document gaps (BEFORE_COMPLETE stage).
+ * Delegates to evaluateTripDocumentRequirements so minCount, signatures,
+ * inactive docs, and Delivery DO missing-state stay consistent everywhere.
  */
 export function buildTripCompletionDocumentGaps(
   docs: TripCompletionDocRow[],
   requirements?: TripDocumentRequirementSnapshot[] | null,
+  tripStatus?: string | null,
 ): string[] {
-  const snapshots = (requirements ?? []).filter(
-    (row) => !shouldSkipCompletionSnapshotType(row.type),
+  return buildTripCompletionDocumentGapsFromEvaluation(
+    docs.map((document) => ({
+      type: document.type,
+      signedAt: document.signedAt ?? null,
+      isSigned: document.isSigned === true,
+      isActive: document.isActive !== false,
+      mimeType: document.mimeType ?? null,
+      originalName: document.originalName ?? null,
+      fileName: document.fileName ?? null,
+    })),
+    requirements,
+    tripStatus,
   );
-  if (snapshots.length === 0) {
-    return buildLegacyTripCompletionDocumentGaps(docs);
-  }
-
-  const missing: string[] = [];
-  const seenPhotoGap = new Set<string>();
-
-  for (const requirement of snapshots) {
-    const type = String(requirement.type ?? "")
-      .trim()
-      .toUpperCase();
-    if (!type) continue;
-
-    const isPhotoRequirement =
-      type === TripDocumentType.POD_PHOTO || type === TripDocumentType.OTHER;
-
-    if (requirement.isRequired && isPhotoRequirement) {
-      if (!hasSatisfyingPhotoDocumentation(docs) && !seenPhotoGap.has(PHOTO_DOCUMENTATION_MISSING_KEY)) {
-        missing.push(PHOTO_DOCUMENTATION_MISSING_KEY);
-        seenPhotoGap.add(PHOTO_DOCUMENTATION_MISSING_KEY);
-      }
-      continue;
-    }
-
-    const matches = matchingDocs(docs, type);
-    if (requirement.isRequired && matches.length === 0) {
-      missing.push(type);
-      continue;
-    }
-    if (!requirement.requiresSignature) {
-      continue;
-    }
-    if (matches.length === 0) {
-      continue;
-    }
-    const signed = matches.some((doc) => isDocumentMarkedSigned(doc));
-    if (!signed) {
-      missing.push(type);
-    }
-  }
-
-  return missing;
 }
 
 /** Trailer checkout fields that block completion (parking code is advisory only). */
@@ -553,6 +464,8 @@ export type TripCreateManyForJobOptions = {
   createdByUserId?: string | null;
   /** COLLECTION only: one Pickup→Delivery trip per container JobItem (0 → one empty leg). */
   collectionContainerCount?: number;
+  /** Phase 4: set when topology is unambiguous (exactly one job type). */
+  tripType?: JobType | null;
 };
 
 /**
@@ -862,6 +775,7 @@ export function tripCreateManyForJob(
       pendingState: TripPendingState.NONE,
       tripPICName: null,
       tripPICContact: null,
+      tripType: options?.tripType ?? undefined,
       ...cargoShipping,
       createdByUserId: options?.createdByUserId ?? null,
       completionRuleJson: completionRuleForTemplate(s.jobTripTemplate),

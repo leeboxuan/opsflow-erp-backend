@@ -146,6 +146,13 @@ describe("canonical auto-trip creation", () => {
           return { count: rows.length };
         }),
       },
+      jobTypeAssignment: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      tripDocumentRequirement: {
+        findMany: jest.fn().mockResolvedValue([]),
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
     };
 
     const prisma = withInteractiveTransaction(delegates);

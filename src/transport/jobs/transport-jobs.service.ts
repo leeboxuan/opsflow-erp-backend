@@ -5,7 +5,9 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
+  Logger,
   Optional,
 } from "@nestjs/common";
 import {
@@ -27,6 +29,8 @@ import {
   Role,
   TripPendingState,
   TripDocumentType,
+  TripDocumentRequirementStage,
+  TripDocumentResponsibleUploader,
   TripStatus,
 } from "@prisma/client";
 import {
@@ -41,6 +45,22 @@ import { PrismaService } from "../../shared/prisma/prisma.service";
 import { actorIsCustomerAdmin } from "../../shared/auth/access-actor";
 import { AuditService } from "../../shared/audit/audit.service";
 import { SupabaseService } from "../../shared/auth/supabase.service";
+import {
+  autoTripTopologyJobType,
+  sharedRouteTopologyJobType,
+  resolveCreateJobTypesInput,
+  resolveJobTypesForResponse,
+  resolveTripTypeForResponse,
+  assertTripTypeBelongsToJob,
+  assertTripTypeEditableStatus,
+  JOB_TYPE_IN_USE_BY_TRIP_CODE,
+  JOB_TYPE_COMBINATION_UNSUPPORTED_CODE,
+  normalizeJobTypes,
+  jobTypesInclude,
+  cargoModeForJobTypes,
+  internalRefTypeCode,
+  compatibilityJobTypeOrNull,
+} from "./job-types";
 import {
   parsePaginationFromQuery,
   buildPaginationMeta,
@@ -143,6 +163,7 @@ import {
   AssignJobTripDto,
   PatchTripPayoutDto,
   PatchTripDocumentRequirementDto,
+  CreateTripDocumentRequirementDto,
   PatchJobTripDto,
   PatchTripDetailsDto,
   PublishJobTripRouteDto,
@@ -174,6 +195,12 @@ import {
   requirementSnapshotForType,
 } from "../workflows/trip-document-requirements";
 import {
+  aggregateJobDocumentReadiness,
+  evaluateTripDocumentRequirements,
+  tripDocumentRequirementDuplicateKey,
+  type TripDocumentRequirementEvaluation,
+} from "../workflows/trip-document-requirement-evaluation";
+import {
   buildTripCargoFromLinks,
   evaluateTripPublishLinkReadiness,
   isContainerBasedTransportJob,
@@ -185,6 +212,7 @@ import {
   replaceTripJobItemLinks,
   applyJobItemsUpdateInTransaction,
 } from "./trip-job-item.mutations";
+import { isUniqueConstraintError } from "../../shared/idempotency/idempotency.util";
 import {
   CANONICAL_JOB_DELIVERY_DO_CONCURRENCY,
   mapWithConcurrency,
@@ -330,6 +358,7 @@ const TRIP_DOC_ALLOWED_TYPES = new Set<string>([
   TripDocumentType.POD_PHOTO,
   TripDocumentType.POD_SIGNATURE,
   TripDocumentType.OTHER,
+  TripDocumentType.PERMIT,
 ]);
 
 const sourceCustomerQuotationSelect = {
@@ -358,6 +387,7 @@ const JOB_LIST_ITEM_SELECT = {
   pickupDate: true,
   createdAt: true,
   updatedAt: true,
+  jobTypeAssignments: { select: { jobType: true } },
   customerCompany: { select: { name: true } },
   _count: {
     select: {
@@ -374,14 +404,92 @@ const JOB_LIST_ITEM_SELECT = {
   },
 } as const;
 
+function toDocumentReadinessDto(
+  evaluation: TripDocumentRequirementEvaluation,
+) {
+  return {
+    evaluationSource: evaluation.evaluationSource,
+    readinessStatus: evaluation.readinessStatus,
+    totalMissingCount: evaluation.totalMissingCount,
+    blockingAction: evaluation.blockingAction,
+    blockingActor: evaluation.blockingActor,
+    missingTypeCodes: evaluation.missingTypeCodes,
+    summaryLabels: evaluation.summaryLabels,
+    requirements: evaluation.requirements.map((row) => ({
+      requirementId: row.requirementId,
+      type: row.type,
+      label: row.label,
+      isRequired: row.isRequired,
+      minCount: row.minCount,
+      satisfiedCount: row.satisfiedCount,
+      missingCount: row.missingCount,
+      requiresSignature: row.requiresSignature,
+      signatureSatisfied: row.signatureSatisfied,
+      responsibleUploader: row.responsibleUploader,
+      requirementStage: row.requirementStage,
+      satisfiedState: row.satisfiedState,
+      blockingAction: row.blockingAction,
+      blockingActor: row.blockingActor,
+      blocksLifecycle: row.blocksLifecycle,
+    })),
+  };
+}
+
+function evaluateTripDocsFromRows(input: {
+  status?: string | null;
+  documents?: Array<{
+    type: string;
+    isActive?: boolean | null;
+    isSigned?: boolean | null;
+    signedAt?: Date | string | null;
+    mimeType?: string | null;
+    originalName?: string | null;
+  }> | null;
+  documentRequirements?: Array<{
+    id?: string | null;
+    type: string;
+    label?: string | null;
+    isRequired: boolean;
+    requiresSignature: boolean;
+    minCount?: number | null;
+    sortOrder?: number | null;
+    responsibleUploader?: string | null;
+    requirementStage?: string | null;
+  }> | null;
+}): TripDocumentRequirementEvaluation {
+  return evaluateTripDocumentRequirements({
+    tripStatus: input.status,
+    documents: (input.documents ?? []).map((document) => ({
+      type: document.type,
+      isActive: document.isActive !== false,
+      isSigned: document.isSigned === true,
+      signedAt: document.signedAt ?? null,
+      mimeType: document.mimeType ?? null,
+      originalName: document.originalName ?? null,
+    })),
+    requirements: input.documentRequirements ?? [],
+  });
+}
+
 function toJobListItemDto(
   j: any,
   driverNameByUserId?: Map<string, string | null>,
   tripProgress?: JobListTripProgress,
   invoice?: JobListInvoiceRef | null,
+  documentReadiness?: {
+    readinessStatus: string;
+    missingDocumentCount: number;
+    missingLabels: string[];
+    blockingActor: string;
+    primaryTripId: string | null;
+  },
 ): JobListItemDto {
   const primaryTrip = Array.isArray(j.trips) ? j.trips[0] : null;
   const assignedDriverId = primaryTrip?.assignedDriverUserId ?? null;
+  const resolvedTypes = resolveJobTypesForResponse({
+    assignments: j.jobTypeAssignments,
+    legacyJobType: j.jobType,
+  });
   return {
     id: j.id,
     tenantId: j.tenantId,
@@ -390,6 +498,8 @@ function toJobListItemDto(
     internalRef: j.internalRef,
     externalRef: j.externalRef ?? null,
     jobType: j.jobType,
+    jobTypes: resolvedTypes.jobTypes,
+    jobTypeSource: resolvedTypes.jobTypeSource,
     collectionType: j.collectionType ?? null,
     status: j.status,
     pickupDate: j.pickupDate ?? null,
@@ -401,6 +511,13 @@ function toJobListItemDto(
     tripCount: j._count?.trips ?? 0,
     itemCount: j._count?.items ?? 0,
     documentCount: j._count?.documents ?? 0,
+    documentReadiness: documentReadiness ?? {
+      readinessStatus: "UNAVAILABLE",
+      missingDocumentCount: 0,
+      missingLabels: [],
+      blockingActor: "NONE",
+      primaryTripId: null,
+    },
     tripProgress: tripProgress ?? {
       completed: 0,
       total: 0,
@@ -446,6 +563,16 @@ function toJobDto(j: any): JobDto {
     internalRef: j.internalRef,
     externalRef: j.externalRef ?? null,
     jobType: j.jobType,
+    ...(() => {
+      const resolved = resolveJobTypesForResponse({
+        assignments: j.jobTypeAssignments,
+        legacyJobType: j.jobType,
+      });
+      return {
+        jobTypes: resolved.jobTypes,
+        jobTypeSource: resolved.jobTypeSource,
+      };
+    })(),
     collectionType: j.collectionType ?? null,
     status: j.status,
     invoiceReadyAt: j.invoiceReadyAt ?? null,
@@ -591,6 +718,21 @@ function toJobDto(j: any): JobDto {
         origin: null,
         destination: null,
         status: t.status,
+        ...(() => {
+          const parentTypes = resolveJobTypesForResponse({
+            assignments: j.jobTypeAssignments,
+            legacyJobType: j.jobType,
+          }).jobTypes;
+          const resolved = resolveTripTypeForResponse({
+            tripType: t.tripType,
+            parentJobTypes: parentTypes,
+            legacyParentJobType: j.jobType,
+          });
+          return {
+            tripType: resolved.tripType,
+            tripTypeSource: resolved.tripTypeSource,
+          };
+        })(),
         isPublished: t.status !== TripStatus.DRAFT,
         isCompleted:
           t.status === TripStatus.COMPLETED || t.status === TripStatus.DONE,
@@ -1194,6 +1336,8 @@ function toTripLocationDto(prefix: "origin" | "destination", trip: any) {
 
 @Injectable()
 export class TransportJobsService {
+  private readonly logger = new Logger(TransportJobsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -1725,7 +1869,7 @@ export class TransportJobsService {
 
   private async getNextInternalRef(
     tenantId: string,
-    jobType: JobType,
+    jobTypes: readonly JobType[] | JobType,
   ): Promise<string> {
     const now = new Date();
     const yyyy = now.getUTCFullYear();
@@ -1743,7 +1887,8 @@ export class TransportJobsService {
     });
 
     const seq = String(row.nextSeq).padStart(4, "0");
-    const typeCode = this.getJobTypeCode(jobType);
+    const types = Array.isArray(jobTypes) ? jobTypes : [jobTypes];
+    const typeCode = internalRefTypeCode(types);
     return `${TransportJobsService.JOB_INTERNAL_REF_PREFIX}-${yyyy}-${MM}-${seq}-${typeCode}`;
   }
 
@@ -2259,6 +2404,7 @@ export class TransportJobsService {
       search: (query.q ?? query.search)?.trim() || undefined,
       jobStatus: query.status?.trim() || undefined,
       legacyFilter: query.filter?.trim() || undefined,
+      jobType: query.jobType?.trim() || undefined,
       tripProgress: query.tripProgress,
       invoiceStatus: query.invoiceStatus,
       date: query.date?.trim() || undefined,
@@ -2329,7 +2475,8 @@ export class TransportJobsService {
     }
 
     const jobIds = jobs.map((job) => job.id);
-    const [driverNameMap, tripRows, pageInvoices] = await Promise.all([
+    const [driverNameMap, tripRows, pageInvoices, readinessTripRows] =
+      await Promise.all([
       this.buildUserNameMapByIds(
         tenantId,
         Array.from(
@@ -2349,6 +2496,41 @@ export class TransportJobsService {
       jobIds.length
         ? this.prisma.invoice.findMany(jobListPageInvoiceQuery(tenantId, jobIds))
         : Promise.resolve([]),
+      jobIds.length
+        ? this.prisma.trip.findMany({
+            where: { tenantId, jobId: { in: jobIds } },
+            select: {
+              id: true,
+              jobId: true,
+              status: true,
+              documents: {
+                where: { isActive: true },
+                select: {
+                  type: true,
+                  isActive: true,
+                  isSigned: true,
+                  signedAt: true,
+                  mimeType: true,
+                  originalName: true,
+                },
+              },
+              documentRequirements: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+                select: {
+                  id: true,
+                  type: true,
+                  label: true,
+                  isRequired: true,
+                  requiresSignature: true,
+                  minCount: true,
+                  sortOrder: true,
+                  responsibleUploader: true,
+                  requirementStage: true,
+                },
+              },
+            },
+          })
+        : Promise.resolve([]),
     ]);
 
     const tripsByJobId = new Map<string, Array<{ status: TripStatus }>>();
@@ -2356,6 +2538,45 @@ export class TransportJobsService {
       const list = tripsByJobId.get(trip.jobId) ?? [];
       list.push({ status: trip.status });
       tripsByJobId.set(trip.jobId, list);
+    }
+
+    const readinessByJobId = new Map<
+      string,
+      {
+        readinessStatus: string;
+        missingDocumentCount: number;
+        missingLabels: string[];
+        blockingActor: string;
+        primaryTripId: string | null;
+      }
+    >();
+    const readinessTripsByJob = new Map<string, typeof readinessTripRows>();
+    for (const trip of readinessTripRows) {
+      const list = readinessTripsByJob.get(trip.jobId) ?? [];
+      list.push(trip);
+      readinessTripsByJob.set(trip.jobId, list);
+    }
+    for (const [jobId, trips] of readinessTripsByJob.entries()) {
+      const evaluations = trips.map((trip) =>
+        evaluateTripDocsFromRows({
+          status: trip.status,
+          documents: trip.documents,
+          documentRequirements: trip.documentRequirements,
+        }),
+      );
+      const rollup = aggregateJobDocumentReadiness(evaluations);
+      const firstBlocking = trips.find((trip, index) => {
+        const evaluation = evaluations[index];
+        return (
+          evaluation &&
+          !evaluation.cancelled &&
+          evaluation.totalMissingCount > 0
+        );
+      });
+      readinessByJobId.set(jobId, {
+        ...rollup,
+        primaryTripId: firstBlocking?.id ?? null,
+      });
     }
 
     const invoiceByJobId = indexLatestInvoicesByJobId(pageInvoices);
@@ -2367,6 +2588,7 @@ export class TransportJobsService {
           driverNameMap,
           tripProgressFromTrips(tripsByJobId.get(j.id) ?? []),
           invoiceByJobId.get(j.id) ?? null,
+          readinessByJobId.get(j.id),
         ),
       ),
       meta: buildPaginationMeta(page, pageSize, total),
@@ -2419,11 +2641,46 @@ export class TransportJobsService {
       );
     }
 
+    const typeResolution = resolveCreateJobTypesInput({
+      jobTypes: (dto as any).jobTypes,
+      jobType: dto.jobType,
+      type: (dto as any).type,
+    });
+    if (typeResolution.ok === false) {
+      const Ex =
+        typeResolution.code === JOB_TYPE_COMBINATION_UNSUPPORTED_CODE
+          ? ConflictException
+          : BadRequestException;
+      throw new Ex({
+        code: typeResolution.code,
+        message: typeResolution.message,
+      });
+    }
+    const resolvedJobTypes = typeResolution.jobTypes;
+    // Compatibility singular only when exactly one type; multi-type → null (never first-of-array).
+    const compatibilityJobType = typeResolution.compatibilityJobType;
+    const includesImport = jobTypesInclude(resolvedJobTypes, JobType.IMPORT);
+    const includesExport = jobTypesInclude(resolvedJobTypes, JobType.EXPORT);
+    const includesCollection = jobTypesInclude(
+      resolvedJobTypes,
+      JobType.COLLECTION,
+    );
+    // Pure EXPORT (single-type) still remaps stuffing addresses; multi-type does not invent EXPORT topology.
+    const pureExport = compatibilityJobType === JobType.EXPORT;
+
     const rawItems = readCreateJobItemsInput(dto);
-    const validItems = parseValidJobItemsFromInput(rawItems, dto.jobType);
-    assertCreateJobItemsRequiredForJobType(dto.jobType, rawItems, validItems);
+    const validItems = parseValidJobItemsFromInput(
+      rawItems,
+      compatibilityJobType,
+      resolvedJobTypes,
+    );
+    assertCreateJobItemsRequiredForJobType(
+      compatibilityJobType,
+      rawItems,
+      validItems,
+    );
     const collectionType = resolveCollectionTypeForJobCreate(
-      dto.jobType,
+      resolvedJobTypes,
       dto.collectionType,
     );
 
@@ -2455,13 +2712,13 @@ export class TransportJobsService {
       dto.portnetReady ?? importDetails.portnetReady ?? false;
     const permitReady = dto.permitReady ?? importDetails.permitReady ?? false;
     const returningDepotCodeInput =
-      dto.jobType === JobType.EXPORT
+      pureExport
         ? null
         : (
             dto.returningDepotCode ?? importDetails.returningDepotCode
           )?.trim();
     const returningDepotCode =
-      dto.jobType === JobType.EXPORT
+      pureExport
         ? null
         : returningDepotCodeInput ??
           (await this.resolveLogisticsCodeFromId(
@@ -2469,7 +2726,7 @@ export class TransportJobsService {
             LogisticsLocationType.DEPOT,
           ));
     const returnLastDay =
-      dto.jobType === JobType.EXPORT
+      pureExport
         ? null
         : dto.returnLastDay ?? importDetails.returnLastDay;
     const exportOriginDepotCodeInput = (
@@ -2514,7 +2771,7 @@ export class TransportJobsService {
       exportDetails.stuffingContactPhone ?? dto.receiverPhone
     )?.trim();
 
-    if (dto.jobType === JobType.IMPORT) {
+    if (includesImport) {
       const portCode = pickupPortCode?.trim();
       if (portCode) {
         const port = await this.prisma.masterLogisticsLocation.findFirst({
@@ -2549,7 +2806,7 @@ export class TransportJobsService {
       containerPickupPostal: legacyContainerPickupPostal,
     });
 
-    if (dto.jobType === JobType.EXPORT) {
+    if (pureExport) {
       assertExportDestinationFieldsConsistent({
         deliveryAddress1: dto.deliveryAddress1,
         deliveryAddress2: dto.deliveryAddress2,
@@ -2575,14 +2832,25 @@ export class TransportJobsService {
       }
     }
 
+    // Membership-based shared topology for supported multi (IMPORT|EXPORT + COLLECTION).
+    // Never invent from jobTypes[0] / compatibility null → first type.
+    const routeTopologyType = sharedRouteTopologyJobType(resolvedJobTypes);
+    if (!routeTopologyType) {
+      throw new ConflictException({
+        code: JOB_TYPE_COMBINATION_UNSUPPORTED_CODE,
+        message:
+          "Job type combination cannot safely share the current job-level cargo/route structure.",
+      });
+    }
+
     const routeLocations = resolveCanonicalRouteLocations({
-      jobType: dto.jobType,
+      jobType: routeTopologyType,
       pickupAddress1:
-        dto.jobType === JobType.EXPORT ? exportPickup.address1 : dto.pickupAddress1,
+        pureExport ? exportPickup.address1 : dto.pickupAddress1,
       pickupAddress2:
-        dto.jobType === JobType.EXPORT ? exportPickup.address2 : dto.pickupAddress2,
+        pureExport ? exportPickup.address2 : dto.pickupAddress2,
       pickupPostal:
-        dto.jobType === JobType.EXPORT ? exportPickup.postal : dto.pickupPostal,
+        pureExport ? exportPickup.postal : dto.pickupPostal,
       pickupPlaceId: dto.pickupPlaceId,
       pickupLat: dto.pickupLat,
       pickupLng: dto.pickupLng,
@@ -2590,15 +2858,15 @@ export class TransportJobsService {
       pickupContactPhone: dto.pickupContactPhone,
       pickupPortCode,
       deliveryAddress1:
-        dto.jobType === JobType.EXPORT
+        pureExport
           ? stuffingAddress1 ?? dto.deliveryAddress1
           : dto.deliveryAddress1,
       deliveryAddress2:
-        dto.jobType === JobType.EXPORT
+        pureExport
           ? stuffingAddress2 ?? dto.deliveryAddress2
           : dto.deliveryAddress2,
       deliveryPostal:
-        dto.jobType === JobType.EXPORT
+        pureExport
           ? stuffingPostal ?? dto.deliveryPostal
           : dto.deliveryPostal,
       deliveryPlaceId: dto.deliveryPlaceId,
@@ -2628,9 +2896,9 @@ export class TransportJobsService {
       exportPortCode,
       exportOriginDepotCode,
     });
-    assertCanonicalRouteLocationsForCreate(dto.jobType, routeLocations);
+    assertCanonicalRouteLocationsForCreate(routeTopologyType, routeLocations);
 
-    const internalRef = await this.getNextInternalRef(tenantId, dto.jobType);
+    const internalRef = await this.getNextInternalRef(tenantId, resolvedJobTypes);
 
     const pickupDateParsed = dto.pickupDate ? new Date(dto.pickupDate) : null;
 
@@ -2641,10 +2909,11 @@ export class TransportJobsService {
       shipper: null as string | null,
       vessel: String(vesselName ?? "").trim() || null,
     };
-    const autoTripRouteSnapshots = canonicalAutoTripRouteSnapshots(
-      dto.jobType,
-      routeLocations,
-    );
+    // Auto-trip snapshots only when exactly one type; multi-type skips inventing topology.
+    const autoTripTopology = autoTripTopologyJobType(resolvedJobTypes);
+    const autoTripRouteSnapshots = autoTripTopology
+      ? canonicalAutoTripRouteSnapshots(autoTripTopology, routeLocations)
+      : {};
 
     // Atomic: job + JobItems + auto trips + TripJobItem links (or full rollback).
     // Fail closed: never fall back to non-transactional or root-client writes.
@@ -2664,7 +2933,7 @@ export class TransportJobsService {
           sourceCustomerQuotationId: sourceCustomerQuotationId ?? null,
           internalRef,
           externalRef: normalizeExternalRef(dto.externalRef),
-          jobType: dto.jobType,
+          jobType: compatibilityJobType,
           collectionType,
           status: JobStatus.ONGOING,
           notes: dto.notes ?? null,
@@ -2676,37 +2945,37 @@ export class TransportJobsService {
           createdByUserId: actorUserId,
           pickupDate: pickupDateParsed,
           pickupAddress1:
-            dto.jobType === JobType.EXPORT
+            pureExport
               ? exportPickup.address1
               : (dto.pickupAddress1?.trim() || ""),
           pickupAddress2:
-            dto.jobType === JobType.EXPORT
+            pureExport
               ? exportPickup.address2
               : (dto.pickupAddress2 ?? null),
           pickupPostal:
-            dto.jobType === JobType.EXPORT
+            pureExport
               ? exportPickup.postal
               : (dto.pickupPostal ?? null),
           pickupContactName: dto.pickupContactName ?? null,
           pickupContactPhone: dto.pickupContactPhone ?? null,
           deliveryAddress1:
-            dto.jobType === JobType.EXPORT
+            pureExport
               ? (stuffingAddress1 ?? dto.deliveryAddress1)
               : dto.deliveryAddress1,
           deliveryAddress2:
-            dto.jobType === JobType.EXPORT
+            pureExport
               ? (stuffingAddress2 ?? null)
               : (dto.deliveryAddress2 ?? null),
           deliveryPostal:
-            dto.jobType === JobType.EXPORT
+            pureExport
               ? (stuffingPostal ?? null)
               : (dto.deliveryPostal ?? null),
           receiverName:
-            dto.jobType === JobType.EXPORT
+            pureExport
               ? (stuffingContactName ?? dto.receiverName ?? "")
               : (dto.receiverName ?? ""),
           receiverPhone:
-            dto.jobType === JobType.EXPORT
+            pureExport
               ? (stuffingContactPhone ?? dto.receiverPhone ?? "")
               : (dto.receiverPhone ?? ""),
           pickupPortCode: pickupPortCode || null,
@@ -2734,6 +3003,15 @@ export class TransportJobsService {
         },
       });
 
+      await tx.jobTypeAssignment.createMany({
+        data: resolvedJobTypes.map((jobType) => ({
+          tenantId,
+          jobId: createdJob.id,
+          jobType,
+        })),
+        skipDuplicates: true,
+      });
+
       // Create JobItems in submit order so duplicate (itemCode, sealNo) rows keep
       // distinct identities for per-container COLLECTION trip linking.
       const createdItemIds: string[] = [];
@@ -2753,11 +3031,16 @@ export class TransportJobsService {
       }
 
       const createTripsAndLinks = async () => {
+        const topologyType = autoTripTopologyJobType(resolvedJobTypes);
+        if (!topologyType) {
+          // Multi-type job: do not invent auto-trip topology from the first type.
+          return;
+        }
         await tx.trip.createMany({
           data: tripCreateManyForJob(
             tenantId,
             createdJob.id,
-            dto.jobType,
+            topologyType,
             pickupDateParsed,
             seededContainerNumber,
             seededShippingRefs,
@@ -2765,9 +3048,10 @@ export class TransportJobsService {
             {
               createdByUserId: actorUserId,
               collectionContainerCount: collectionContainerCountForTripGeneration(
-                dto.jobType,
+                topologyType,
                 validItems,
               ),
+              tripType: topologyType,
             },
           ),
         });
@@ -2789,7 +3073,7 @@ export class TransportJobsService {
         if (createdItemIds.length > 0) {
           for (const trip of createdTripsInTx) {
             const linkIds = jobItemIdsForCanonicalAutoTrip({
-              jobType: dto.jobType,
+              jobType: topologyType,
               jobTripTemplate: trip.jobTripTemplate,
               jobItemIds: createdItemIds,
               tripSequence: trip.tripSequence,
@@ -3171,6 +3455,7 @@ export class TransportJobsService {
         },
         assignedDriver: { select: { id: true, name: true, email: true } },
         createdBy: { select: { id: true, name: true, email: true } },
+        jobTypeAssignments: { select: { jobType: true } },
         items: { orderBy: { createdAt: "asc" } },
         charges: {
           orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -3205,10 +3490,17 @@ export class TransportJobsService {
               include: documentUploadedByInclude,
             },
             documentRequirements: {
+              orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
               select: {
+                id: true,
                 type: true,
+                label: true,
                 isRequired: true,
                 requiresSignature: true,
+                minCount: true,
+                sortOrder: true,
+                responsibleUploader: true,
+                requirementStage: true,
               },
             },
             _count: { select: { stops: true, tripJobItems: true } },
@@ -3321,14 +3613,28 @@ export class TransportJobsService {
         pendingState: trip.pendingState ?? null,
         jobTripTemplate: trip.jobTripTemplate ?? null,
         cargoLabels,
-        incompleteDocumentCount: buildTripCompletionDocumentGaps(
-          (trip.documents ?? []).map((document) => ({
-            type: document.type,
-            signedAt: document.signedAt ?? null,
-            isSigned: Boolean(document.signedAt),
-          })),
-          trip.documentRequirements ?? [],
-        ).length,
+        ...(() => {
+          const parentTypes = resolveJobTypesForResponse({
+            assignments: job.jobTypeAssignments,
+            legacyJobType: job.jobType,
+          }).jobTypes;
+          const resolvedTripType = resolveTripTypeForResponse({
+            tripType: trip.tripType,
+            parentJobTypes: parentTypes,
+            legacyParentJobType: job.jobType,
+          });
+          const evaluation = evaluateTripDocsFromRows({
+            status: trip.status,
+            documents: trip.documents,
+            documentRequirements: trip.documentRequirements,
+          });
+          return {
+            tripType: resolvedTripType.tripType,
+            tripTypeSource: resolvedTripType.tripTypeSource,
+            incompleteDocumentCount: evaluation.totalMissingCount,
+            documentReadiness: toDocumentReadinessDto(evaluation),
+          };
+        })(),
       };
     });
 
@@ -3420,28 +3726,87 @@ export class TransportJobsService {
 
     const data: any = {};
 
-    const effectiveJobType = (dto.jobType ?? job.jobType) as JobType;
-    assertTypeSpecificDetailsMatchJobType(effectiveJobType, dto);
-
-    if (dto.jobType !== undefined) data.jobType = dto.jobType;
-    if (dto.jobType !== undefined && dto.jobType !== job.jobType) {
-      clearIncompatibleTypeSpecificJobFields(data, dto.jobType);
+    let nextJobTypes: JobType[] | null = null;
+    let nextCompat: JobType | null | undefined = undefined;
+    if (dto.jobTypes !== undefined || dto.jobType !== undefined) {
+      const typeResolution = resolveCreateJobTypesInput({
+        jobTypes: dto.jobTypes,
+        jobType: dto.jobType,
+      });
+      if (typeResolution.ok === false) {
+        const Ex =
+          typeResolution.code === JOB_TYPE_COMBINATION_UNSUPPORTED_CODE
+            ? ConflictException
+            : BadRequestException;
+        throw new Ex({
+          code: typeResolution.code,
+          message: typeResolution.message,
+        });
+      }
+      nextJobTypes = typeResolution.jobTypes;
+      nextCompat = typeResolution.compatibilityJobType;
     }
-    if (dto.jobType !== undefined && dto.jobType !== JobType.COLLECTION) {
-      data.collectionType = null;
+
+    const currentTypes = resolveJobTypesForResponse({
+      assignments: await this.prisma.jobTypeAssignment.findMany({
+        where: { tenantId, jobId },
+        select: { jobType: true },
+      }),
+      legacyJobType: job.jobType,
+    }).jobTypes;
+    const effectiveTypes = nextJobTypes ?? currentTypes;
+
+    // Type-specific detail validation uses membership, not first-of-array.
+    if (jobTypesInclude(effectiveTypes, JobType.IMPORT)) {
+      assertTypeSpecificDetailsMatchJobType(JobType.IMPORT, dto);
+    }
+    if (jobTypesInclude(effectiveTypes, JobType.EXPORT)) {
+      assertTypeSpecificDetailsMatchJobType(JobType.EXPORT, dto);
+    }
+    if (
+      effectiveTypes.length === 1 &&
+      effectiveTypes[0] === JobType.LCL
+    ) {
+      assertTypeSpecificDetailsMatchJobType(JobType.LCL, dto);
+    }
+    if (
+      effectiveTypes.length === 1 &&
+      effectiveTypes[0] === JobType.COLLECTION
+    ) {
+      assertTypeSpecificDetailsMatchJobType(JobType.COLLECTION, dto);
+    }
+
+    if (nextJobTypes) {
+      data.jobType = nextCompat ?? null;
+      const prevCompat = job.jobType;
+      if (nextCompat !== prevCompat && nextCompat != null) {
+        clearIncompatibleTypeSpecificJobFields(data, nextCompat);
+      }
+      if (!jobTypesInclude(nextJobTypes, JobType.COLLECTION)) {
+        data.collectionType = null;
+      }
+    } else if (dto.jobType !== undefined) {
+      data.jobType = dto.jobType;
+      if (dto.jobType !== job.jobType && dto.jobType != null) {
+        clearIncompatibleTypeSpecificJobFields(data, dto.jobType);
+      }
+      if (dto.jobType !== JobType.COLLECTION) {
+        data.collectionType = null;
+      }
     }
     if (dto.collectionType !== undefined) {
-      if (effectiveJobType === JobType.COLLECTION) {
+      if (jobTypesInclude(effectiveTypes, JobType.COLLECTION)) {
         data.collectionType = dto.collectionType;
       }
     }
     if (
-      dto.jobType === JobType.COLLECTION
-      && job.jobType !== JobType.COLLECTION
+      jobTypesInclude(effectiveTypes, JobType.COLLECTION)
+      && !jobTypesInclude(currentTypes, JobType.COLLECTION)
       && dto.collectionType == null
+      && data.collectionType === undefined
     ) {
       throw new BadRequestException(
-        "collectionType is required when changing jobType to COLLECTION (EMPTY or LOADED)",
+        "collectionType is required when adding COLLECTION to job types (EMPTY or LOADED)",
       );
     }
     if (dto.customerCompanyId !== undefined) {
@@ -3542,19 +3907,64 @@ export class TransportJobsService {
       cargoItems?: unknown;
     });
 
+    if (nextJobTypes) {
+      const currentTypes = resolveJobTypesForResponse({
+        assignments: await this.prisma.jobTypeAssignment.findMany({
+          where: { tenantId, jobId },
+          select: { jobType: true },
+        }),
+        legacyJobType: job.jobType,
+      }).jobTypes;
+      const removed = currentTypes.filter((t) => !nextJobTypes!.includes(t));
+      if (removed.length > 0) {
+        const blocking = await this.prisma.trip.findFirst({
+          where: {
+            tenantId,
+            jobId,
+            tripType: { in: removed },
+            status: { not: TripStatus.CANCELLED },
+          },
+          select: { id: true, tripType: true, status: true },
+        });
+        if (blocking?.tripType) {
+          throw new ConflictException({
+            code: JOB_TYPE_IN_USE_BY_TRIP_CODE,
+            message: `Cannot remove job type ${blocking.tripType}: used by an active trip`,
+          });
+        }
+      }
+    }
+
     const updated = await this.prisma.$transaction(async (tx) => {
       const updatedJob = await tx.job.update({
         where: { id: jobId },
         data,
       });
 
+      if (nextJobTypes) {
+        await tx.jobTypeAssignment.deleteMany({
+          where: { tenantId, jobId },
+        });
+        await tx.jobTypeAssignment.createMany({
+          data: nextJobTypes.map((jobType) => ({
+            tenantId,
+            jobId,
+            jobType,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
       if (inputItems !== null) {
         const validItems = parseValidUpdateJobItemsFromInput(
           inputItems,
-          effectiveJobType,
+          nextCompat ??
+            compatibilityJobTypeOrNull(effectiveTypes) ??
+            undefined,
+          effectiveTypes,
         );
         assertCreateJobItemsRequiredForJobType(
-          effectiveJobType,
+          nextCompat ?? compatibilityJobTypeOrNull(effectiveTypes),
           inputItems,
           validItems,
         );
@@ -4775,6 +5185,25 @@ export class TransportJobsService {
       );
     }
 
+    const jobTypesResolved = resolveJobTypesForResponse({
+      assignments: await this.prisma.jobTypeAssignment.findMany({
+        where: { tenantId, jobId },
+        select: { jobType: true },
+      }),
+      legacyJobType: job.jobType,
+    });
+    const tripTypeCheck = assertTripTypeBelongsToJob(
+      dto.tripType,
+      jobTypesResolved.jobTypes,
+    );
+    if (tripTypeCheck.ok === false) {
+      throw new BadRequestException({
+        code: tripTypeCheck.code,
+        message: tripTypeCheck.message,
+      });
+    }
+    const tripType = tripTypeCheck.tripType;
+
     const plannedStartAt = dto.plannedStartAt
       ? new Date(dto.plannedStartAt)
       : dto.plannedDate
@@ -4819,6 +5248,7 @@ export class TransportJobsService {
         jobSequence: nextSeq,
         tripSequence: nextSeq,
         jobTripTemplate: normalizedTemplate,
+        tripType,
         title: dto.title?.trim() || tripDisplayLabel,
         displayTitle: dto.title?.trim() || tripDisplayLabel,
         notes: normalizeOptionalNotes(dto.notes),
@@ -5629,6 +6059,35 @@ export class TransportJobsService {
     if (!trip) throw new NotFoundException("Trip not found");
 
     const data: any = {};
+    if (dto.tripType !== undefined) {
+      const lock = assertTripTypeEditableStatus(String(trip.status));
+      if (lock.ok === false) {
+        throw new ConflictException({
+          code: lock.code,
+          message: lock.message,
+        });
+      }
+      const parentTypes = resolveJobTypesForResponse({
+        assignments: await this.prisma.jobTypeAssignment.findMany({
+          where: { tenantId, jobId },
+          select: { jobType: true },
+        }),
+        legacyJobType: (
+          await this.prisma.job.findFirst({
+            where: { id: jobId, tenantId },
+            select: { jobType: true },
+          })
+        )?.jobType,
+      }).jobTypes;
+      const check = assertTripTypeBelongsToJob(dto.tripType, parentTypes);
+      if (check.ok === false) {
+        throw new BadRequestException({
+          code: check.code,
+          message: check.message,
+        });
+      }
+      data.tripType = check.tripType;
+    }
     if (dto.title !== undefined) {
       data.title = dto.title?.trim() || null;
       if (dto.displayTitle === undefined) {
@@ -6230,6 +6689,52 @@ export class TransportJobsService {
       );
     }
 
+    const publishDocRows = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+      select: {
+        status: true,
+        documents: {
+          where: { isActive: true },
+          select: {
+            type: true,
+            isActive: true,
+            isSigned: true,
+            signedAt: true,
+            mimeType: true,
+            originalName: true,
+          },
+        },
+        documentRequirements: {
+          select: {
+            id: true,
+            type: true,
+            label: true,
+            isRequired: true,
+            requiresSignature: true,
+            minCount: true,
+            sortOrder: true,
+            responsibleUploader: true,
+            requirementStage: true,
+          },
+        },
+      },
+    });
+    const publishDocEvaluation = evaluateTripDocumentRequirements({
+      tripStatus: publishDocRows?.status ?? trip.status,
+      documents: publishDocRows?.documents ?? [],
+      requirements: publishDocRows?.documentRequirements ?? [],
+      forStage: TripDocumentRequirementStage.BEFORE_DISPATCH,
+    });
+    if (publishDocEvaluation.missingTypeCodes.length > 0) {
+      const labels =
+        publishDocEvaluation.summaryLabels.length > 0
+          ? publishDocEvaluation.summaryLabels.join("; ")
+          : publishDocEvaluation.missingTypeCodes.join(", ");
+      throw new BadRequestException(
+        `Trip cannot be published yet. Missing required documents before dispatch: ${labels}`,
+      );
+    }
+
     await this.prisma.trip.update({
       where: { id: tripId },
       data: {
@@ -6604,6 +7109,8 @@ export class TransportJobsService {
       select: {
         id: true,
         jobType: true,
+        internalRef: true,
+        jobTypeAssignments: { select: { jobType: true } },
         customerCompanyId: true,
         receiverName: true,
         receiverPhone: true,
@@ -6757,6 +7264,21 @@ export class TransportJobsService {
       title: t.title ?? null,
       displayTitle: t.displayTitle ?? t.title ?? null,
       status: t.status,
+      ...(() => {
+        const parentTypes = resolveJobTypesForResponse({
+          assignments: job.jobTypeAssignments,
+          legacyJobType: job.jobType,
+        }).jobTypes;
+        const resolved = resolveTripTypeForResponse({
+          tripType: t.tripType,
+          parentJobTypes: parentTypes,
+          legacyParentJobType: job.jobType,
+        });
+        return {
+          tripType: resolved.tripType,
+          tripTypeSource: resolved.tripTypeSource,
+        };
+      })(),
       isPublished: t.status !== TripStatus.DRAFT,
       isCompleted:
         t.status === TripStatus.COMPLETED || t.status === TripStatus.DONE,
@@ -6792,6 +7314,13 @@ export class TransportJobsService {
       },
       documents: tripDocs,
       documentRequirements: t.documentRequirements ?? [],
+      documentReadiness: toDocumentReadinessDto(
+        evaluateTripDocsFromRows({
+          status: t.status,
+          documents: t.documents,
+          documentRequirements: t.documentRequirements,
+        }),
+      ),
       documentStatus: deriveTripDocumentStatus(t.documents ?? []),
       completionRuleJson:
         (t.completionRuleJson as Record<string, unknown> | null) ?? null,
@@ -6842,6 +7371,7 @@ export class TransportJobsService {
       TripDocumentType.PICKUP_DO,
       TripDocumentType.DELIVERY_DO,
       TripDocumentType.POD_SIGNATURE,
+      TripDocumentType.PERMIT,
     ]);
     const trip = await this.prisma.trip.findFirst({ where: { id: tripId, tenantId, jobId } });
     if (!trip) throw new NotFoundException("Trip not found");
@@ -7278,6 +7808,7 @@ export class TransportJobsService {
             externalRef: true,
             jobType: true,
             collectionType: true,
+            jobTypeAssignments: { select: { jobType: true } },
             status: true,
             notes: true,
             pickupReference: true,
@@ -7496,6 +8027,21 @@ export class TransportJobsService {
       vessel: trip.vessel ?? null,
       plannedStartAt: trip.plannedStartAt ?? null,
       driverRemarks: trip.driverRemarks ?? null,
+      ...(() => {
+        const parentTypes = resolveJobTypesForResponse({
+          assignments: trip.job?.jobTypeAssignments,
+          legacyJobType: trip.job?.jobType,
+        }).jobTypes;
+        const resolved = resolveTripTypeForResponse({
+          tripType: trip.tripType,
+          parentJobTypes: parentTypes,
+          legacyParentJobType: trip.job?.jobType,
+        });
+        return {
+          tripType: resolved.tripType,
+          tripTypeSource: resolved.tripTypeSource,
+        };
+      })(),
       ...resolveTripNotesResponseFields(trip, trip.job),
       ...resolveTripRouteAddressResponseFields(trip),
       startedAt: trip.startedAt ?? null,
@@ -7507,6 +8053,16 @@ export class TransportJobsService {
             internalRef: trip.job.internalRef,
             externalRef: trip.job.externalRef ?? null,
             jobType: trip.job.jobType,
+            ...(() => {
+              const resolved = resolveJobTypesForResponse({
+                assignments: trip.job.jobTypeAssignments,
+                legacyJobType: trip.job.jobType,
+              });
+              return {
+                jobTypes: resolved.jobTypes,
+                jobTypeSource: resolved.jobTypeSource,
+              };
+            })(),
             collectionType: trip.job.collectionType ?? null,
             status: trip.job.status,
             customerCompanyId: trip.job.customerCompanyId,
@@ -7573,6 +8129,13 @@ export class TransportJobsService {
       documents: docs,
       documentStatus,
       documentRequirements: trip.documentRequirements ?? [],
+      documentReadiness: toDocumentReadinessDto(
+        evaluateTripDocsFromRows({
+          status: trip.status,
+          documents: trip.documents,
+          documentRequirements: trip.documentRequirements,
+        }),
+      ),
       trackingSummary: {
         driverLat: driverLoc?.lat ?? null,
         driverLng: driverLoc?.lng ?? null,
@@ -7609,6 +8172,7 @@ export class TransportJobsService {
     user: any,
   ) {
     this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
     const job = await this.prisma.job.findFirst({ where: { id: jobId, tenantId } });
     if (!job) throw new NotFoundException("Job not found");
     this.assertCanAccessJob(job, user);
@@ -7627,28 +8191,373 @@ export class TransportJobsService {
     });
     if (!requirement) throw new NotFoundException("Document requirement not found");
 
+    this.assertEditorResponsibleUploader(dto.responsibleUploader);
+
+    const nextType = dto.type ?? requirement.type;
+    const typeChanging = nextType !== requirement.type;
+    if (typeChanging) {
+      const matchingDocuments = await this.prisma.tripDocument.count({
+        where: {
+          tenantId,
+          tripId,
+          type: requirement.type,
+          isActive: true,
+        },
+      });
+      if (matchingDocuments > 0) {
+        throw new ConflictException({
+          code: "REQUIREMENT_TYPE_HAS_DOCUMENTS",
+          message:
+            "Cannot change requirement type while active documents of the current type exist on this trip.",
+          matchingDocumentCount: matchingDocuments,
+        });
+      }
+    }
+
     const nextRequiresSignature =
       dto.requiresSignature === undefined
         ? requirement.requiresSignature
         : dto.requiresSignature === true;
     if (
       nextRequiresSignature
-      && !documentTypeSupportsCustomerSignature(requirement.type)
+      && !documentTypeSupportsCustomerSignature(nextType)
     ) {
       throw new BadRequestException(
-        `Customer signature is not supported for ${requirement.type}.`,
+        `Customer signature is not supported for ${nextType}.`,
       );
     }
 
-    return this.prisma.tripDocumentRequirement.update({
-      where: { id: requirement.id },
-      data: {
-        ...(dto.isRequired === undefined ? {} : { isRequired: dto.isRequired === true }),
-        ...(dto.requiresSignature === undefined
-          ? {}
-          : { requiresSignature: nextRequiresSignature }),
+    const nextStage = dto.requirementStage ?? requirement.requirementStage;
+    if (typeChanging || nextStage !== requirement.requirementStage) {
+      const duplicate = await this.prisma.tripDocumentRequirement.findFirst({
+        where: {
+          tenantId,
+          tripId,
+          type: nextType,
+          requirementStage: nextStage,
+          NOT: { id: requirement.id },
+        },
+        select: { id: true },
+      });
+      if (duplicate) {
+        throw new ConflictException({
+          code: "REQUIREMENT_TYPE_STAGE_DUPLICATE",
+          message: `A document requirement already exists for ${nextType} at stage ${nextStage} on this trip (${tripDocumentRequirementDuplicateKey({ tenantId, tripId, type: nextType, requirementStage: nextStage })}).`,
+        });
+      }
+    }
+
+    const before = {
+      type: requirement.type,
+      label: requirement.label,
+      isRequired: requirement.isRequired,
+      requiresSignature: requirement.requiresSignature,
+      minCount: requirement.minCount,
+      sortOrder: requirement.sortOrder,
+      responsibleUploader: requirement.responsibleUploader,
+      requirementStage: requirement.requirementStage,
+    };
+
+    let updated;
+    try {
+      updated = await this.prisma.tripDocumentRequirement.update({
+        where: { id: requirement.id },
+        data: {
+          ...(dto.type === undefined ? {} : { type: nextType }),
+          ...(dto.isRequired === undefined ? {} : { isRequired: dto.isRequired === true }),
+          ...(dto.requiresSignature === undefined
+            ? {}
+            : { requiresSignature: nextRequiresSignature }),
+          ...(dto.label === undefined
+            ? {}
+            : { label: String(dto.label ?? "").trim() || requirement.label }),
+          ...(dto.minCount === undefined
+            ? {}
+            : { minCount: Math.max(1, Number(dto.minCount) || 1) }),
+          ...(dto.responsibleUploader === undefined
+            ? {}
+            : { responsibleUploader: dto.responsibleUploader }),
+          ...(dto.requirementStage === undefined
+            ? {}
+            : { requirementStage: dto.requirementStage }),
+          ...(dto.sortOrder === undefined
+            ? {}
+            : { sortOrder: Number(dto.sortOrder) || 0 }),
+        },
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new ConflictException({
+          code: "REQUIREMENT_TYPE_STAGE_DUPLICATE",
+          message: `A document requirement already exists for ${nextType} at stage ${nextStage} on this trip (${tripDocumentRequirementDuplicateKey({ tenantId, tripId, type: nextType, requirementStage: nextStage })}).`,
+        });
+      }
+      throw error;
+    }
+
+    await this.safeLogRequirementAudit(
+      tenantId,
+      "TRIP_DOCUMENT_REQUIREMENT_UPDATED",
+      requirement.id,
+      {
+        jobId,
+        tripId,
+        before,
+        after: {
+          type: updated.type,
+          label: updated.label,
+          isRequired: updated.isRequired,
+          requiresSignature: updated.requiresSignature,
+          minCount: updated.minCount,
+          sortOrder: updated.sortOrder,
+          responsibleUploader: updated.responsibleUploader,
+          requirementStage: updated.requirementStage,
+        },
+      },
+      actorUserId,
+    );
+    return updated;
+  }
+
+  async deleteTripDocumentRequirement(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    requirementId: string,
+    user: any,
+    confirmPreserveDocuments = false,
+  ) {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const job = await this.prisma.job.findFirst({ where: { id: jobId, tenantId } });
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job, user);
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+      select: { id: true, status: true },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+    if (isTripDocumentRequirementFrozen(trip.status)) {
+      throw new BadRequestException(
+        "Document requirements are frozen after the trip is published.",
+      );
+    }
+    const requirement = await this.prisma.tripDocumentRequirement.findFirst({
+      where: { id: requirementId, tenantId, tripId },
+    });
+    if (!requirement) throw new NotFoundException("Document requirement not found");
+
+    const matchingDocuments = await this.prisma.tripDocument.count({
+      where: {
+        tenantId,
+        tripId,
+        type: requirement.type,
+        isActive: true,
       },
     });
+
+    if (matchingDocuments > 0 && !confirmPreserveDocuments) {
+      throw new ConflictException({
+        code: "REQUIREMENT_HAS_DOCUMENTS",
+        message:
+          "This requirement has matching active documents. Confirm removal with confirmPreserveDocuments=true to keep documents and audit history.",
+        matchingDocumentCount: matchingDocuments,
+      });
+    }
+
+    await this.prisma.tripDocumentRequirement.delete({
+      where: { id: requirement.id },
+    });
+
+    await this.safeLogRequirementAudit(
+      tenantId,
+      "TRIP_DOCUMENT_REQUIREMENT_REMOVED",
+      requirement.id,
+      {
+        jobId,
+        tripId,
+        type: requirement.type,
+        label: requirement.label,
+        requirementStage: requirement.requirementStage,
+        responsibleUploader: requirement.responsibleUploader,
+        matchingDocumentCount: matchingDocuments,
+        documentsPreserved: true,
+        confirmPreserveDocuments: matchingDocuments > 0,
+      },
+      actorUserId,
+    );
+
+    return {
+      ok: true,
+      id: requirement.id,
+      matchingDocumentCount: matchingDocuments,
+      documentsPreserved: true,
+    };
+  }
+
+  async createTripDocumentRequirement(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    dto: CreateTripDocumentRequirementDto,
+    user: any,
+  ) {
+    this.assertCustomerCanOnlyRead(user);
+    const actorUserId: string | null = user?.userId ?? null;
+    const job = await this.prisma.job.findFirst({ where: { id: jobId, tenantId } });
+    if (!job) throw new NotFoundException("Job not found");
+    this.assertCanAccessJob(job, user);
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, jobId },
+      select: { id: true, status: true },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+    if (isTripDocumentRequirementFrozen(trip.status)) {
+      throw new BadRequestException(
+        "Document requirements are frozen after the trip is published.",
+      );
+    }
+
+    const type = dto.type;
+    this.assertEditorResponsibleUploader(dto.responsibleUploader);
+    const requiresSignature = dto.requiresSignature === true;
+    if (requiresSignature && !documentTypeSupportsCustomerSignature(type)) {
+      throw new BadRequestException(
+        `Customer signature is not supported for ${type}.`,
+      );
+    }
+
+    const defaultLabel =
+      type === TripDocumentType.PERMIT
+        ? "Permit"
+        : type === TripDocumentType.DELIVERY_DO
+          ? "Delivery DO"
+          : type === TripDocumentType.PICKUP_DO
+            ? "Pickup DO"
+            : type === TripDocumentType.POD_PHOTO
+              ? "POD Photo"
+              : String(type).replace(/_/g, " ");
+
+    const responsibleUploader =
+      dto.responsibleUploader ??
+      (type === TripDocumentType.PERMIT
+        ? TripDocumentResponsibleUploader.OPERATIONS
+        : TripDocumentResponsibleUploader.DRIVER);
+    this.assertEditorResponsibleUploader(responsibleUploader);
+    const requirementStage =
+      dto.requirementStage ??
+      (type === TripDocumentType.PERMIT
+        ? TripDocumentRequirementStage.BEFORE_DISPATCH
+        : TripDocumentRequirementStage.BEFORE_COMPLETE);
+
+    const duplicate = await this.prisma.tripDocumentRequirement.findFirst({
+      where: {
+        tenantId,
+        tripId,
+        type,
+        requirementStage,
+      },
+      select: { id: true },
+    });
+    if (duplicate) {
+      throw new ConflictException({
+        code: "REQUIREMENT_TYPE_STAGE_DUPLICATE",
+        message: `A document requirement already exists for ${type} at stage ${requirementStage} on this trip (${tripDocumentRequirementDuplicateKey({ tenantId, tripId, type, requirementStage })}).`,
+      });
+    }
+
+    const maxSort = await this.prisma.tripDocumentRequirement.aggregate({
+      where: { tenantId, tripId },
+      _max: { sortOrder: true },
+    });
+
+    let created;
+    try {
+      created = await this.prisma.tripDocumentRequirement.create({
+        data: {
+          tenantId,
+          tripId,
+          type,
+          label: String(dto.label ?? "").trim() || defaultLabel,
+          isRequired: dto.isRequired !== false,
+          requiresSignature,
+          minCount: Math.max(1, Number(dto.minCount ?? 1) || 1),
+          sortOrder:
+            dto.sortOrder ??
+            (Number.isFinite(maxSort._max.sortOrder)
+              ? Number(maxSort._max.sortOrder) + 1
+              : 0),
+          responsibleUploader,
+          requirementStage,
+        },
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new ConflictException({
+          code: "REQUIREMENT_TYPE_STAGE_DUPLICATE",
+          message: `A document requirement already exists for ${type} at stage ${requirementStage} on this trip (${tripDocumentRequirementDuplicateKey({ tenantId, tripId, type, requirementStage })}).`,
+        });
+      }
+      throw error;
+    }
+
+    await this.safeLogRequirementAudit(
+      tenantId,
+      "TRIP_DOCUMENT_REQUIREMENT_CREATED",
+      created.id,
+      {
+        jobId,
+        tripId,
+        type: created.type,
+        label: created.label,
+        isRequired: created.isRequired,
+        requiresSignature: created.requiresSignature,
+        minCount: created.minCount,
+        sortOrder: created.sortOrder,
+        responsibleUploader: created.responsibleUploader,
+        requirementStage: created.requirementStage,
+      },
+      actorUserId,
+    );
+    return created;
+  }
+
+  private async safeLogRequirementAudit(
+    tenantId: string,
+    action: string,
+    entityId: string,
+    meta: Record<string, unknown>,
+    actorUserId: string | null,
+  ) {
+    try {
+      await this.audit.log(
+        tenantId,
+        action,
+        "TRIP_DOCUMENT_REQUIREMENT",
+        entityId,
+        meta,
+        actorUserId,
+      );
+    } catch (error) {
+      const err = error as { name?: string; code?: string };
+      this.logger.error(
+        `Post-commit audit failed for ${action} ${entityId} (tenant=${tenantId}, code=${err?.code ?? "n/a"}, name=${err?.name ?? "Error"})`,
+      );
+    }
+  }
+
+  private assertEditorResponsibleUploader(
+    uploader: TripDocumentResponsibleUploader | undefined | null,
+  ) {
+    if (uploader == null) return;
+    if (
+      uploader !== TripDocumentResponsibleUploader.DRIVER &&
+      uploader !== TripDocumentResponsibleUploader.OPERATIONS
+    ) {
+      throw new BadRequestException(
+        "Responsible uploader must be DRIVER or OPERATIONS",
+      );
+    }
   }
 
   private async seedDefaultDocumentRequirementsForJob(
@@ -8274,6 +9183,17 @@ export class TransportJobsService {
           },
         });
 
+        await this.prisma.jobTypeAssignment.createMany({
+          data: [
+            {
+              tenantId,
+              jobId: job.id,
+              jobType,
+            },
+          ],
+          skipDuplicates: true,
+        });
+
         await this.prisma.trip.createMany({
           data: tripCreateManyForJob(
             tenantId,
@@ -8285,7 +9205,7 @@ export class TransportJobsService {
               vessel: String(job?.vesselName ?? "").trim() || null,
             },
             undefined,
-            { createdByUserId: actorUserId },
+            { createdByUserId: actorUserId, tripType: jobType },
           ),
         });
 
@@ -8401,6 +9321,11 @@ export class TransportJobsService {
           }),
         });
 
+        await this.prisma.jobTypeAssignment.createMany({
+          data: [{ tenantId, jobId: job.id, jobType: dto.jobType }],
+          skipDuplicates: true,
+        });
+
         await this.prisma.trip.createMany({
           data: tripCreateManyForJob(
             tenantId,
@@ -8410,7 +9335,7 @@ export class TransportJobsService {
             null,
             null,
             undefined,
-            { createdByUserId: actorUserId },
+            { createdByUserId: actorUserId, tripType: dto.jobType },
           ),
         });
 
@@ -8925,6 +9850,11 @@ export class TransportJobsService {
           },
         });
 
+        await this.prisma.jobTypeAssignment.createMany({
+          data: [{ tenantId, jobId: job.id, jobType: JobType.LCL }],
+          skipDuplicates: true,
+        });
+
         await this.prisma.trip.createMany({
           data: tripCreateManyForJob(
             tenantId,
@@ -8934,7 +9864,7 @@ export class TransportJobsService {
             null,
             null,
             undefined,
-            { createdByUserId: actorUserId },
+            { createdByUserId: actorUserId, tripType: JobType.LCL },
           ),
         });
 

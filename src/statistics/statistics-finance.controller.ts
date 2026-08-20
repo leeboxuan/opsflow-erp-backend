@@ -5,13 +5,14 @@ import {
   ApiOperation,
   ApiTags,
 } from "@nestjs/swagger";
-import { Role, TenantModule } from "@prisma/client";
+import { CanonicalTenantRole, TenantModule } from "@prisma/client";
 import { AuthGuard } from "../shared/auth/guards/auth.guard";
 import {
   ModuleEntitlementGuard,
   RequiresTenantModule,
 } from "../shared/auth/guards/module-entitlement.guard";
-import { RoleGuard, Roles } from "../shared/auth/guards/role.guard";
+import { Roles } from "../shared/auth/guards/role.guard";
+import { StrictCanonicalRoleGuard } from "../shared/auth/guards/strict-canonical-role.guard";
 import { TenantGuard } from "../shared/auth/guards/tenant.guard";
 import { StatisticsFinanceDto, StatisticsFinanceQueryDto } from "./dto";
 import { StatisticsTenantRequest } from "./statistics.controller";
@@ -19,9 +20,9 @@ import { StatisticsFinanceService } from "./statistics-finance.service";
 
 @ApiTags("Statistics")
 @Controller("statistics")
-@UseGuards(AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard)
+@UseGuards(AuthGuard, TenantGuard, StrictCanonicalRoleGuard, ModuleEntitlementGuard)
 @RequiresTenantModule(TenantModule.FINANCE)
-@Roles(Role.ADMIN)
+@Roles(CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN)
 @ApiBearerAuth("JWT-auth")
 export class StatisticsFinanceController {
   constructor(

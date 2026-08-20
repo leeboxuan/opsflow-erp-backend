@@ -60,13 +60,24 @@ export class StatisticsLookupsService {
     if (query.jobId) {
       const job = await this.prisma.job.findFirst({
         where: { tenantId, id: query.jobId },
-        select: { id: true, internalRef: true, jobType: true },
+        select: {
+          id: true,
+          internalRef: true,
+          jobType: true,
+          jobTypeAssignments: { select: { jobType: true } },
+        },
       });
       if (job) {
+        const types =
+          job.jobTypeAssignments.length > 0
+            ? job.jobTypeAssignments.map((a) => a.jobType)
+            : job.jobType
+              ? [job.jobType]
+              : [];
         data.push({
           id: job.id,
           label: displayJobNo(job.internalRef),
-          sublabel: job.jobType,
+          sublabel: types.length > 0 ? types.join(", ") : null,
         });
       }
     }

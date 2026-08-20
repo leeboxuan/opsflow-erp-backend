@@ -24,6 +24,7 @@ import {
   resolveCompletedTripPayoutState,
 } from "./statistics.predicates";
 import { resolveCanonicalTripPayoutCents } from "../transport/trips/trip-payout.helpers";
+import { JobFinanceSummaryService } from "../transport/finance/job-finance-summary.service";
 
 const FINANCE_JOB_BATCH_SIZE = 200;
 
@@ -94,7 +95,10 @@ function safeAdd(left: number, right: number): number {
 
 @Injectable()
 export class StatisticsFinanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jobFinanceSummaries: JobFinanceSummaryService,
+  ) {}
 
   async getFinance(
     tenantId: string,
@@ -138,6 +142,12 @@ export class StatisticsFinanceService {
       }
     }
 
+    const negativeJobCount = await this.countNegativeJobsInScope(
+      tenantId,
+      query,
+      range,
+    );
+
     return {
       timeZone: range.timeZone,
       generatedAt: new Date(),
@@ -170,7 +180,46 @@ export class StatisticsFinanceService {
           accumulator.completedTripsMissingPayouts,
         excludedFromProfit: accumulator.excludedFromProfit,
       },
+      negativeJobCount,
     };
+  }
+
+  /** Reuses canonical JobFinanceSummaryService — no second profitability formula. */
+  private async countNegativeJobsInScope(
+    tenantId: string,
+    query: StatisticsFinanceQueryDto,
+    range: { gte: Date; lt: Date },
+  ): Promise<number> {
+    const jobIds: string[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const jobs = (await this.prisma.job.findMany({
+        where: {
+          ...this.buildJobScope(tenantId, query),
+          trips: {
+            some: {
+              tenantId,
+              status: { in: [...COMPLETED_TRIP_STATUSES] },
+              closedAt: { gte: range.gte, lt: range.lt },
+            },
+          },
+        },
+        orderBy: { id: "asc" },
+        take: FINANCE_JOB_BATCH_SIZE,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        select: { id: true },
+      })) as Array<{ id: string }>;
+      if (jobs.length === 0) break;
+      for (const job of jobs) jobIds.push(job.id);
+      cursor = jobs[jobs.length - 1]?.id;
+      if (jobs.length < FINANCE_JOB_BATCH_SIZE) break;
+    }
+    if (jobIds.length === 0) return 0;
+    const counts = await this.jobFinanceSummaries.countByFinanceStatus(
+      tenantId,
+      jobIds,
+    );
+    return counts.NEGATIVE;
   }
 
   private async aggregateOperationalFinance(

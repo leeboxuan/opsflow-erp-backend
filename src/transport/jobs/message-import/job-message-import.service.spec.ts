@@ -355,6 +355,12 @@ function makePrismaMemory() {
       findMany: jest.fn(async () => []),
       createMany: jest.fn(async () => ({ count: 0 })),
     },
+    jobTypeAssignment: {
+      createMany: jest.fn(async ({ data }: any) => ({
+        count: Array.isArray(data) ? data.length : 0,
+      })),
+      findMany: jest.fn(async () => []),
+    },
     masterLogisticsLocation: {
       findFirst: jest.fn(async () => null),
     },

@@ -835,12 +835,14 @@ describe("trip completion document gaps", () => {
     expect(missing).toEqual(["POD_PHOTO"]);
   });
 
-  it("accepts OTHER as satisfying base photo documentation", () => {
-    const missing = buildTripCompletionDocumentGaps([
+  it("does not accept arbitrary OTHER PDF as POD photo; image-like OTHER still can", () => {
+    const withPdf = buildTripCompletionDocumentGaps([
       {
         type: TripDocumentType.OTHER,
         signedAt: null,
         isSigned: false,
+        mimeType: "application/pdf",
+        originalName: "scan.pdf",
       },
       {
         type: TripDocumentType.DELIVERY_DO,
@@ -848,7 +850,39 @@ describe("trip completion document gaps", () => {
         isSigned: true,
       },
     ]);
-    expect(missing).toEqual([]);
+    expect(withPdf).toEqual(["POD_PHOTO"]);
+
+    const withPdfSpoofedJpgName = buildTripCompletionDocumentGaps([
+      {
+        type: TripDocumentType.OTHER,
+        signedAt: null,
+        isSigned: false,
+        mimeType: "application/pdf",
+        originalName: "spoof.jpg",
+      },
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: new Date(),
+        isSigned: true,
+      },
+    ]);
+    expect(withPdfSpoofedJpgName).toEqual(["POD_PHOTO"]);
+
+    const withImage = buildTripCompletionDocumentGaps([
+      {
+        type: TripDocumentType.OTHER,
+        signedAt: null,
+        isSigned: false,
+        mimeType: "image/jpeg",
+        originalName: "legacy-pod.jpg",
+      },
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: new Date(),
+        isSigned: true,
+      },
+    ]);
+    expect(withImage).toEqual([]);
   });
 
   it("returns DELIVERY_DO when delivery DO is unsigned", () => {

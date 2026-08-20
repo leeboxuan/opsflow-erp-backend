@@ -141,6 +141,7 @@ describe("TransportJobsService.update type-specific details", () => {
 
   function makePrisma(jobRow: any = existingImport) {
     const jobUpdate = jest.fn().mockResolvedValue({ id: "job1" });
+    const assignmentJobType = jobRow?.jobType ?? JobType.IMPORT;
     const prisma: any = {
       job: {
         findFirst: jest
@@ -156,7 +157,22 @@ describe("TransportJobsService.update type-specific details", () => {
         update: jest.fn().mockResolvedValue({}),
         create: jest.fn().mockResolvedValue({}),
       },
+      trip: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       tripJobItem: { findMany: jest.fn().mockResolvedValue([]) },
+      jobTypeAssignment: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue(
+            jobRow != null && assignmentJobType != null
+              ? [{ jobType: assignmentJobType }]
+              : [],
+          ),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
     prisma.jobUpdate = jobUpdate;

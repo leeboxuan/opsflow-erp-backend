@@ -57,7 +57,13 @@ describe("DriverJobsService startTripWithTrailer sequence gate", () => {
         ]),
         update: jest.fn(),
       },
-      tripDocument: { create: jest.fn() },
+      tripDocument: {
+        create: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      tripDocumentRequirement: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       user: { findUnique: jest.fn().mockResolvedValue({ id: driverUserId, name: "D", email: "d@x.com" }) },
       $transaction: jest.fn(async (cb: any) =>
         cb({

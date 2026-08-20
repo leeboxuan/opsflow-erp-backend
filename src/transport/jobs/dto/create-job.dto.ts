@@ -349,17 +349,37 @@ export class CreateJobExportDetailsDto {
 }
 
 export class CreateJobDto {
-  @ApiProperty({ enum: JobType })
+  @ApiPropertyOptional({
+    enum: JobType,
+    isArray: true,
+    description:
+      "Canonical multi-value job types (Phase 4). Prefer this over singular jobType.",
+  })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(JobType, { each: true })
+  jobTypes?: JobType[];
+
+  @ApiPropertyOptional({
+    enum: JobType,
+    description:
+      "Legacy singular job type. Accepted only when jobTypes is omitted, or must agree with jobTypes.",
+  })
+  @IsOptional()
   @IsEnum(JobType)
-  jobType: JobType;
+  jobType?: JobType;
 
   @ApiPropertyOptional({
     enum: CollectionType,
     description:
-      "Required when jobType is COLLECTION (EMPTY or LOADED). Ignored for other job types.",
+      "Required when COLLECTION is among job types (EMPTY or LOADED). Ignored otherwise.",
   })
-  @ValidateIf((o) => o.jobType === JobType.COLLECTION)
-  @IsNotEmpty({ message: "collectionType is required when jobType is COLLECTION" })
+  @ValidateIf(
+    (o) =>
+      o.jobType === JobType.COLLECTION ||
+      (Array.isArray(o.jobTypes) && o.jobTypes.includes(JobType.COLLECTION)),
+  )
+  @IsNotEmpty({ message: "collectionType is required when job includes COLLECTION" })
   @IsEnum(CollectionType)
   collectionType?: CollectionType;
 
@@ -561,7 +581,11 @@ export class CreateJobDto {
     description:
       "IMPORT-only nested details. Preferred shape for import routing and vessel fields.",
   })
-  @ValidateIf((o) => o.jobType === JobType.IMPORT)
+  @ValidateIf(
+    (o) =>
+      o.jobType === JobType.IMPORT ||
+      (Array.isArray(o.jobTypes) && o.jobTypes.includes(JobType.IMPORT)),
+  )
   @IsOptional()
   @ValidateNested()
   @Type(() => CreateJobImportDetailsDto)
@@ -571,7 +595,11 @@ export class CreateJobDto {
     type: CreateJobExportDetailsDto,
     description: "EXPORT-only nested details. Preferred shape for export routing fields.",
   })
-  @ValidateIf((o) => o.jobType === JobType.EXPORT)
+  @ValidateIf(
+    (o) =>
+      o.jobType === JobType.EXPORT ||
+      (Array.isArray(o.jobTypes) && o.jobTypes.includes(JobType.EXPORT)),
+  )
   @IsOptional()
   @ValidateNested()
   @Type(() => CreateJobExportDetailsDto)

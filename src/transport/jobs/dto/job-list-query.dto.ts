@@ -42,6 +42,15 @@ export class JobListQueryDto extends ListQueryBaseDto {
   @IsIn([...JOB_LIST_INVOICE_STATUS_VALUES])
   invoiceStatus?: (typeof JOB_LIST_INVOICE_STATUS_VALUES)[number];
 
+  @ApiPropertyOptional({
+    description:
+      "Contains-type filter: jobs that include this job type (canonical assignment OR legacy Job.jobType). Returns each job once.",
+    enum: ["EXPORT", "IMPORT", "LCL", "COLLECTION"],
+  })
+  @IsOptional()
+  @IsIn(["EXPORT", "IMPORT", "LCL", "COLLECTION"])
+  jobType?: "EXPORT" | "IMPORT" | "LCL" | "COLLECTION";
+
   @ApiPropertyOptional({ description: "Pickup date from (YYYY-MM-DD)" })
   @IsOptional()
   @IsString()

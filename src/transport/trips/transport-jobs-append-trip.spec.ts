@@ -8,6 +8,7 @@ import { GUL_CIRCLE_ROUTE_DEFAULTS } from "../workflows/job-workflow.helpers";
 describe("AppendJobTripDto validation", () => {
   it("accepts CUSTOM and operational route fields", async () => {
     const dto = plainToInstance(AppendJobTripDto, {
+      tripType: "LCL",
       jobTripTemplate: "CUSTOM",
       plannedStartAt: "2026-05-04T08:00:00.000Z",
       originSummary: "A",
@@ -25,7 +26,8 @@ describe("AppendJobTripDto validation", () => {
   it("accepts CUSTOMER_TO_GUL and GUL_TO_CUSTOMER templates", async () => {
     for (const jobTripTemplate of ["CUSTOMER_TO_GUL", "GUL_TO_CUSTOMER"]) {
       const dto = plainToInstance(AppendJobTripDto, {
-        jobTripTemplate,
+      tripType: "LCL",
+      jobTripTemplate,
         plannedStartAt: "2026-05-25T08:00:00.000Z",
         originSummary: "8 Gul Cir, 8 Gul Circle",
         destinationSummary: "7 Gul Circle",
@@ -39,6 +41,7 @@ describe("AppendJobTripDto validation", () => {
 
   it("accepts text-only Gul Circle route without lat/lng", async () => {
     const dto = plainToInstance(AppendJobTripDto, {
+      tripType: "LCL",
       jobTripTemplate: "CUSTOMER_TO_GUL",
       plannedStartAt: "2026-05-25T08:00:00.000Z",
       originSummary: "8 Gul Cir, 8 Gul Circle",
@@ -54,6 +57,7 @@ describe("AppendJobTripDto validation", () => {
 
   it("accepts structured address fields, unit numbers, and trip notes", async () => {
     const dto = plainToInstance(AppendJobTripDto, {
+      tripType: "LCL",
       jobTripTemplate: "CUSTOM",
       plannedStartAt: "2026-06-10T08:30:00.000Z",
       originAddress1: "8 Gul Cir, 8 Gul Circle",
@@ -76,6 +80,7 @@ describe("AppendJobTripDto validation", () => {
 
   it("rejects invalid coordinates", async () => {
     const dto = plainToInstance(AppendJobTripDto, {
+      tripType: "LCL",
       jobTripTemplate: "CUSTOM",
       originLat: 91,
       originLng: 181,
@@ -101,11 +106,15 @@ describe("TransportJobsService.appendTrip", () => {
       job: {
         findFirst: jest.fn().mockResolvedValue({
           id: "job1",
+          jobType: "LCL",
           status: JobStatus.ONGOING,
           invoiceReadyAt: null,
           trips: [{ jobSequence: 1 }],
         }),
         update: jest.fn().mockResolvedValue({}),
+      },
+      jobTypeAssignment: {
+        findMany: jest.fn().mockResolvedValue([{ jobType: "LCL" }]),
       },
       trip: {
         create: jest.fn().mockResolvedValue({ id: "trip1" }),
@@ -146,7 +155,7 @@ describe("TransportJobsService.appendTrip", () => {
       "t1",
       "job1",
       {
-        jobTripTemplate: JobTripTemplate.CUSTOM,
+        tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM,
         plannedStartAt: "2026-05-04T08:00:00.000Z",
         originSummary: "Jelapang Road",
         destinationSummary: "Cogent",
@@ -176,20 +185,20 @@ describe("TransportJobsService.appendTrip", () => {
   it("treats null/undefined/empty template as CUSTOM", async () => {
     const { svc, prisma } = makeService();
 
-    await svc.appendTrip("t1", "job1", { jobTripTemplate: undefined }, { userId: "u1", role: "OPS" });
+    await svc.appendTrip("t1", "job1", { tripType: "LCL" as any, jobTripTemplate: undefined }, { userId: "u1", role: "OPS" });
     expect(prisma.trip.create.mock.calls[0][0].data.jobTripTemplate).toBe(JobTripTemplate.CUSTOM);
 
-    await svc.appendTrip("t1", "job1", { jobTripTemplate: null as any }, { userId: "u1", role: "OPS" });
+    await svc.appendTrip("t1", "job1", { tripType: "LCL" as any, jobTripTemplate: null as any }, { userId: "u1", role: "OPS" });
     expect(prisma.trip.create.mock.calls[1][0].data.jobTripTemplate).toBe(JobTripTemplate.CUSTOM);
 
-    await svc.appendTrip("t1", "job1", { jobTripTemplate: "" as any }, { userId: "u1", role: "OPS" });
+    await svc.appendTrip("t1", "job1", { tripType: "LCL" as any, jobTripTemplate: "" as any }, { userId: "u1", role: "OPS" });
     expect(prisma.trip.create.mock.calls[2][0].data.jobTripTemplate).toBe(JobTripTemplate.CUSTOM);
   });
 
   it("rejects bad non-null template", async () => {
     const { svc } = makeService();
     await expect(
-      svc.appendTrip("t1", "job1", { jobTripTemplate: "BAD" as any }, { userId: "u1", role: "OPS" }),
+      svc.appendTrip("t1", "job1", { tripType: "LCL" as any, jobTripTemplate: "BAD" as any }, { userId: "u1", role: "OPS" }),
     ).rejects.toThrow("jobTripTemplate must be one of");
   });
 
@@ -198,7 +207,7 @@ describe("TransportJobsService.appendTrip", () => {
       job: { findFirst: jest.fn().mockResolvedValue(null) },
     });
     await expect(
-      svc.appendTrip("t1", "missing-job", { jobTripTemplate: JobTripTemplate.CUSTOM }, { userId: "u1", role: "OPS" }),
+      svc.appendTrip("t1", "missing-job", { tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM }, { userId: "u1", role: "OPS" }),
     ).rejects.toThrow("Job not found");
   });
 
@@ -207,7 +216,7 @@ describe("TransportJobsService.appendTrip", () => {
     await svc.appendTrip(
       "t1",
       "job1",
-      { jobTripTemplate: JobTripTemplate.DELIVERY_TO_PORT },
+      { tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.DELIVERY_TO_PORT },
       { userId: "u1", role: "OPS" },
     );
     expect(prisma.trip.create.mock.calls[0][0].data.jobTripTemplate).toBe(
@@ -221,7 +230,7 @@ describe("TransportJobsService.appendTrip", () => {
       "t1",
       "job1",
       {
-        jobTripTemplate: JobTripTemplate.CUSTOMER_TO_GUL,
+        tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOMER_TO_GUL,
         plannedStartAt: "2026-05-25T08:00:00.000Z",
         originSummary: "8 Gul Cir, 8 Gul Circle",
         destinationSummary: "7 Gul Circle",
@@ -253,7 +262,7 @@ describe("TransportJobsService.appendTrip", () => {
       "t1",
       "job1",
       {
-        jobTripTemplate: JobTripTemplate.CUSTOMER_TO_GUL,
+        tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOMER_TO_GUL,
         originSummary: "Customer site",
       },
       { userId: "u1", role: "OPS" },
@@ -271,7 +280,7 @@ describe("TransportJobsService.appendTrip", () => {
       "t1",
       "job1",
       {
-        jobTripTemplate: JobTripTemplate.GUL_TO_CUSTOMER,
+        tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.GUL_TO_CUSTOMER,
         destinationSummary: "Customer site",
       },
       { userId: "u1", role: "OPS" },
@@ -288,7 +297,7 @@ describe("TransportJobsService.appendTrip", () => {
     await svc.appendTrip(
       "t1",
       "job1",
-      { jobTripTemplate: JobTripTemplate.CUSTOM, earningRateMasterId: "rate-1" },
+      { tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM, earningRateMasterId: "rate-1" },
       { userId: "u1", role: "OPS" },
     );
     const data = prisma.trip.create.mock.calls[0][0].data;
@@ -303,7 +312,7 @@ describe("TransportJobsService.appendTrip", () => {
     await svc.appendTrip(
       "t1",
       "job1",
-      { jobTripTemplate: JobTripTemplate.CUSTOM, notes: "do this first" },
+      { tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM, notes: "do this first" },
       { userId: "u1", role: "OPS" },
     );
     const data = prisma.trip.create.mock.calls[0][0].data;
@@ -315,7 +324,7 @@ describe("TransportJobsService.appendTrip", () => {
     await svc.appendTrip(
       "t1",
       "job1",
-      { jobTripTemplate: JobTripTemplate.CUSTOM, notes: "   " },
+      { tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM, notes: "   " },
       { userId: "u1", role: "OPS" },
     );
     const data = prisma.trip.create.mock.calls[0][0].data;
@@ -328,7 +337,7 @@ describe("TransportJobsService.appendTrip", () => {
       "t1",
       "job1",
       {
-        jobTripTemplate: JobTripTemplate.CUSTOM,
+        tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM,
         originSummary: "Legacy origin",
         destinationSummary: "Legacy destination",
       },
@@ -347,7 +356,7 @@ describe("TransportJobsService.appendTrip", () => {
       "t1",
       "job1",
       {
-        jobTripTemplate: JobTripTemplate.CUSTOM,
+        tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM,
         originAddress1: "8 Gul Cir, 8 Gul Circle",
         originAddress2: "#12-34",
         destinationAddress1: "7 Gul Circle",
@@ -379,7 +388,7 @@ describe("TransportJobsService.appendTrip", () => {
     await svc.appendTrip(
       "t1",
       "job1",
-      { jobTripTemplate: JobTripTemplate.CUSTOM },
+      { tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM },
       { userId: "u1", role: "OPS" },
     );
     const data = prisma.trip.create.mock.calls[0][0].data;
@@ -395,7 +404,7 @@ describe("TransportJobsService.appendTrip", () => {
       "t1",
       "job1",
       {
-        jobTripTemplate: JobTripTemplate.CUSTOM,
+        tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM,
         earningRateMasterId: "rate-1",
         payoutLines: [
           {
@@ -435,7 +444,7 @@ describe("TransportJobsService.appendTrip", () => {
       "t1",
       "job1",
       {
-        jobTripTemplate: JobTripTemplate.CUSTOM,
+        tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM,
         payoutLines: [
           {
             label: "Manual handling",
@@ -463,7 +472,7 @@ describe("TransportJobsService.appendTrip", () => {
         "t1",
         "job1",
         {
-          jobTripTemplate: JobTripTemplate.CUSTOM,
+          tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM,
           payoutLines: [
             {
               label: "Manual",
@@ -488,7 +497,7 @@ describe("TransportJobsService.appendTrip", () => {
         "t1",
         "job1",
         {
-          jobTripTemplate: JobTripTemplate.CUSTOM,
+          tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM,
           payoutLines: [
             {
               label: "Bad line",
@@ -535,7 +544,7 @@ describe("TransportJobsService.appendTrip", () => {
     await svc.appendTrip(
       "t1",
       "job1",
-      { jobTripTemplate: JobTripTemplate.CUSTOM },
+      { tripType: "LCL" as any, jobTripTemplate: JobTripTemplate.CUSTOM },
       { userId: "u1", role: "OPS" },
     );
 

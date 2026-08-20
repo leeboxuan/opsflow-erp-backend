@@ -15,6 +15,7 @@ export type InteractiveTxShape = {
     findMany: jest.Mock;
     createMany: jest.Mock;
   };
+  jobTypeAssignment: { createMany: jest.Mock };
 };
 
 /**
@@ -43,6 +44,15 @@ export function buildInteractiveTxClient(
   root: any,
   overrides?: Partial<InteractiveTxShape> & Record<string, unknown>,
 ): any {
+  const {
+    job: jobOverride,
+    trip: tripOverride,
+    jobItem: jobItemOverride,
+    tripJobItem: tripJobItemOverride,
+    jobTypeAssignment: jobTypeAssignmentOverride,
+    ...restOverrides
+  } = overrides ?? {};
+
   return {
     job: {
       create: root?.job?.create ?? jest.fn(),
@@ -50,23 +60,21 @@ export function buildInteractiveTxClient(
       findMany: root?.job?.findMany,
       update: root?.job?.update,
       count: root?.job?.count,
-      ...(overrides?.job ?? {}),
+      ...(jobOverride ?? {}),
     },
     trip: {
       createMany: root?.trip?.createMany ?? jest.fn(),
       findMany: root?.trip?.findMany ?? jest.fn().mockResolvedValue([]),
       findFirst: root?.trip?.findFirst,
       update: root?.trip?.update ?? jest.fn().mockResolvedValue({}),
-      ...(overrides?.trip ?? {}),
+      ...(tripOverride ?? {}),
     },
     jobItem: {
-      create:
-        root?.jobItem?.create
-        ?? jest.fn(),
+      create: root?.jobItem?.create ?? jest.fn(),
       findMany:
         root?.jobItem?.findMany
         ?? jest.fn().mockResolvedValue([]),
-      ...(overrides?.jobItem ?? {}),
+      ...(jobItemOverride ?? {}),
     },
     tripJobItem: {
       findMany:
@@ -76,9 +84,17 @@ export function buildInteractiveTxClient(
         root?.tripJobItem?.createMany
         ?? jest.fn().mockResolvedValue({ count: 0 }),
       count: root?.tripJobItem?.count,
-      ...(overrides?.tripJobItem ?? {}),
+      ...(tripJobItemOverride ?? {}),
     },
-    ...overrides,
+    jobTypeAssignment: {
+      createMany:
+        root?.jobTypeAssignment?.createMany
+        ?? jest.fn().mockResolvedValue({ count: 0 }),
+      findMany: root?.jobTypeAssignment?.findMany,
+      deleteMany: root?.jobTypeAssignment?.deleteMany,
+      ...(jobTypeAssignmentOverride ?? {}),
+    },
+    ...restOverrides,
   };
 }
 
@@ -93,6 +109,7 @@ export function assertCreateJobInteractiveTxClientForTest(tx: any): void {
     ["jobItem.findMany", tx?.jobItem?.findMany],
     ["tripJobItem.findMany", tx?.tripJobItem?.findMany],
     ["tripJobItem.createMany", tx?.tripJobItem?.createMany],
+    ["jobTypeAssignment.createMany", tx?.jobTypeAssignment?.createMany],
   ];
   const missing = required.filter(([, v]) => typeof v !== "function").map(([k]) => k);
   if (missing.length) {

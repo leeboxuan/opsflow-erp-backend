@@ -136,6 +136,7 @@ describe("Trip PIC fields", () => {
         ]),
       },
       trip: { findMany: jest.fn().mockResolvedValue([]) },
+      invoice: { findMany: jest.fn().mockResolvedValue([]) },
       job: {
         count: jest.fn().mockResolvedValue(1),
         findMany: jest.fn().mockResolvedValue([

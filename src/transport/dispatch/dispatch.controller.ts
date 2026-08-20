@@ -27,6 +27,12 @@ import {
   DispatchOptimiseRouteDto,
   DispatchReorderTripsDto,
 } from "./dto/dispatch.dto";
+import { DispatchRoutePlanningService } from "./dispatch-route-planning.service";
+import {
+  DispatchPlanPublishDto,
+  DispatchPlanSaveDto,
+  DispatchPlanSuggestDto,
+} from "./dto/dispatch-route-planning.dto";
 
 @ApiTags("dispatch")
 @Controller("dispatch")
@@ -35,7 +41,10 @@ import {
 @Roles(Role.ADMIN, Role.TRANSPORT_STAFF)
 @ApiBearerAuth("JWT-auth")
 export class DispatchController {
-  constructor(private readonly dispatchService: DispatchService) {}
+  constructor(
+    private readonly dispatchService: DispatchService,
+    private readonly routePlanning: DispatchRoutePlanningService,
+  ) {}
 
   @Get("board")
   @ApiOperation({ summary: "Get dispatch board data for tenant" })
@@ -46,6 +55,46 @@ export class DispatchController {
       throw new BadRequestException("date must be YYYY-MM-DD");
     }
     return this.dispatchService.getBoard(req.tenant.tenantId, selectedDate);
+  }
+
+  @Get("route-planning")
+  @ApiOperation({
+    summary:
+      "Phase 5: Get Dispatch route-planning board for an operating date (tenant timezone)",
+  })
+  async routePlanningBoard(@Req() req: any, @Query("date") date?: string) {
+    const selectedDate = date?.trim();
+    if (selectedDate && !/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) {
+      throw new BadRequestException("date must be YYYY-MM-DD");
+    }
+    return this.routePlanning.getBoard(req.tenant.tenantId, selectedDate);
+  }
+
+  @Post("route-planning/suggest")
+  @ApiOperation({
+    summary:
+      "Phase 5: Suggest trip sequence for a driver lane (advisory; not persisted)",
+  })
+  async suggestRoutePlan(@Req() req: any, @Body() dto: DispatchPlanSuggestDto) {
+    return this.routePlanning.suggestSequence(req.tenant.tenantId, dto);
+  }
+
+  @Patch("route-planning/save")
+  @ApiOperation({
+    summary:
+      "Phase 5: Save driver-day trip sequence (and optional assignments) without publishing",
+  })
+  async saveRoutePlan(@Req() req: any, @Body() dto: DispatchPlanSaveDto) {
+    return this.routePlanning.savePlan(req.tenant.tenantId, dto, req.user);
+  }
+
+  @Post("route-planning/publish")
+  @ApiOperation({
+    summary:
+      "Phase 5: Publish DRAFT trips via existing trip publish lifecycle rules",
+  })
+  async publishRoutePlan(@Req() req: any, @Body() dto: DispatchPlanPublishDto) {
+    return this.routePlanning.publishPlan(req.tenant.tenantId, dto, req.user);
   }
 
   @Get("routes")

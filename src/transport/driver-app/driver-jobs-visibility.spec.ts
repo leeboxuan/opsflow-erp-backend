@@ -38,6 +38,7 @@ const COMPLETION_DOC_QUERY_TYPES = [
   TripDocumentType.PICKUP_DO,
   TripDocumentType.POD_PHOTO,
   TripDocumentType.OTHER,
+  TripDocumentType.PERMIT,
   TripDocumentType.CONTAINER_PHOTO,
   TripDocumentType.SEAL_PHOTO,
 ];
@@ -361,7 +362,7 @@ describe("completion requirements: customer signature vs DELIVERY_DO", () => {
     expect(res.canComplete).toBe(true);
   });
 
-  it("active POD_SIGNATURE upload satisfies DELIVERY_DO when DO is unsigned", async () => {
+  it("does not treat POD_SIGNATURE as satisfying an unsigned DELIVERY_DO", async () => {
     const prisma: any = basePrismaForRequirements([
       POD_PHOTO_DOC,
       CONTAINER_PHOTO_DOC,
@@ -371,8 +372,8 @@ describe("completion requirements: customer signature vs DELIVERY_DO", () => {
     ]);
     const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
     const res = await svc.getTripCompletionRequirements("t1", "job1", "trip1", "driver-1");
-    expect(res.missingDocuments).not.toContain("DELIVERY_DO");
-    expect(res.canComplete).toBe(true);
+    expect(res.missingDocuments).toContain("DELIVERY_DO");
+    expect(res.canComplete).toBe(false);
   });
 
   it("data-driven: required unsigned signature document is incomplete", async () => {

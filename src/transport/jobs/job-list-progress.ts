@@ -98,6 +98,8 @@ export type JobListQueryConstraints = {
   search?: string;
   jobStatus?: string;
   legacyFilter?: string;
+  /** Contains semantics: job has this type among assignments or legacy singular. */
+  jobType?: string;
   tripProgress?: JobListTripProgressFilter;
   invoiceStatus?: JobListInvoiceStatusFilter;
   date?: string;
@@ -398,6 +400,32 @@ export function jobListSharedFilterParts(c: JobListQueryConstraints): {
   if (legacyStatus) {
     prismaAnd.push({ status: legacyStatus });
     sqlParts.push(Prisma.sql`j."status" = ${legacyStatus}::"JobStatus"`);
+  }
+
+  const jobTypeFilter = c.jobType?.trim();
+  if (jobTypeFilter) {
+    // Contains semantics without duplicating jobs: assignment OR legacy singular.
+    prismaAnd.push({
+      OR: [
+        {
+          jobTypeAssignments: {
+            some: { tenantId: c.tenantId, jobType: jobTypeFilter },
+          },
+        },
+        { jobType: jobTypeFilter },
+      ],
+    });
+    sqlParts.push(
+      Prisma.sql`(
+        EXISTS (
+          SELECT 1 FROM job_type_assignments jta
+          WHERE jta."jobId" = j.id
+            AND jta."tenantId" = ${c.tenantId}
+            AND jta."jobType" = ${jobTypeFilter}::"JobType"
+        )
+        OR j."jobType" = ${jobTypeFilter}::"JobType"
+      )`,
+    );
   }
 
   const day = c.date?.trim();

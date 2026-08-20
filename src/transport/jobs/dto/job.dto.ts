@@ -109,7 +109,48 @@ export class TripDocumentRequirementDto {
   requiresSignature!: boolean;
   minCount!: number;
   sortOrder!: number;
+  responsibleUploader!: string;
+  requirementStage!: string;
 }
+
+export class EvaluatedTripDocumentRequirementDto {
+  requirementId!: string | null;
+  type!: string;
+  label!: string;
+  isRequired!: boolean;
+  minCount!: number;
+  satisfiedCount!: number;
+  missingCount!: number;
+  requiresSignature!: boolean;
+  signatureSatisfied!: boolean;
+  responsibleUploader!: string;
+  requirementStage!: string;
+  satisfiedState!: string;
+  blockingAction!: string;
+  blockingActor!: string;
+  blocksLifecycle!: boolean;
+}
+
+export class TripDocumentReadinessDto {
+  evaluationSource!: string;
+  readinessStatus!: string;
+  totalMissingCount!: number;
+  blockingAction!: string;
+  blockingActor!: string;
+  missingTypeCodes!: string[];
+  summaryLabels!: string[];
+  requirements!: EvaluatedTripDocumentRequirementDto[];
+}
+
+export class JobListDocumentReadinessDto {
+  readinessStatus!: string;
+  missingDocumentCount!: number;
+  missingLabels!: string[];
+  blockingActor!: string;
+  /** Trip id to navigate when a single trip owns the primary gap; null when job-level. */
+  primaryTripId!: string | null;
+}
+
 
 export class JobTripLocationDto {
   label!: string | null;
@@ -260,6 +301,9 @@ export class JobTripResponseDto {
   /** Per-trip snapshot of required documents and whether customer signature is required. */
   documentRequirements?: TripDocumentRequirementDto[];
 
+  /** Canonical evaluation of documentRequirements against active documents. */
+  documentReadiness?: TripDocumentReadinessDto;
+
   /** Driver active/home: job ref on the trip row (same as parent job when linked). */
   @ApiPropertyOptional()
   jobInternalRef?: string | null;
@@ -269,6 +313,12 @@ export class JobTripResponseDto {
 
   @ApiPropertyOptional({ enum: JobType })
   jobType?: JobType;
+
+  @ApiPropertyOptional({ enum: JobType })
+  tripType?: JobType | null;
+
+  @ApiPropertyOptional({ enum: ["CANONICAL", "LEGACY_FALLBACK"] })
+  tripTypeSource?: "CANONICAL" | "LEGACY_FALLBACK";
 
   /** Resolved pickup lines (trip origin route, else job pickup). */
   @ApiPropertyOptional()
@@ -340,6 +390,8 @@ export class JobListItemDto {
   internalRef!: string;
   externalRef?: string | null;
   jobType!: JobType;
+  jobTypes?: JobType[];
+  jobTypeSource?: "CANONICAL" | "LEGACY_FALLBACK";
   /** COLLECTION only; null for other job types. */
   collectionType?: CollectionType | null;
   status!: JobStatus;
@@ -352,6 +404,8 @@ export class JobListItemDto {
   itemCount!: number;
   /** Active job-level documents (quotation/other); trip photos are separate. */
   documentCount!: number;
+  /** Canonical trip-document readiness across non-cancelled trips (not job-level documentCount). */
+  documentReadiness!: JobListDocumentReadinessDto;
   tripProgress!: JobListTripProgressDto;
   invoice!: JobListInvoiceDto | null;
 }
@@ -373,7 +427,11 @@ export class JobDto {
 
   internalRef: string;
   externalRef?: string | null;
+  /** Compatibility singular type (synced to first deterministic jobTypes entry). */
   jobType: JobType;
+  /** Canonical multi-value types (deterministic order). */
+  jobTypes?: JobType[];
+  jobTypeSource?: "CANONICAL" | "LEGACY_FALLBACK";
   /** COLLECTION only; null for other job types. */
   collectionType?: CollectionType | null;
   status: JobStatus;
@@ -530,6 +588,8 @@ export class JobDetailsTripDto {
   jobSequence!: number | null;
   displayTitle!: string | null;
   status!: string;
+  tripType?: string | null;
+  tripTypeSource?: "CANONICAL" | "LEGACY_FALLBACK";
   assignedDriverUserId!: string | null;
   driverId!: string | null;
   assignedDriverName!: string | null;
@@ -565,9 +625,12 @@ export class JobDetailsTripDto {
   cargoLabels?: string[];
 
   @ApiPropertyOptional({
-    description: "Count of incomplete trip document requirements from existing completion helpers.",
+    description: "Count of incomplete trip document requirements from canonical evaluation.",
   })
   incompleteDocumentCount?: number;
+
+  @ApiPropertyOptional({ type: TripDocumentReadinessDto })
+  documentReadiness?: TripDocumentReadinessDto;
 }
 
 export class JobPayoutSummaryDto {

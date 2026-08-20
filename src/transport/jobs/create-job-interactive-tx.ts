@@ -15,6 +15,7 @@ export function assertCreateJobInteractiveTxClient(tx: unknown): void {
     trip?: { createMany?: unknown; findMany?: unknown; update?: unknown };
     jobItem?: { create?: unknown; findMany?: unknown };
     tripJobItem?: { findMany?: unknown; createMany?: unknown };
+    jobTypeAssignment?: { createMany?: unknown };
   } | null;
 
   const required: Array<[string, unknown]> = [
@@ -26,6 +27,7 @@ export function assertCreateJobInteractiveTxClient(tx: unknown): void {
     ["jobItem.findMany", client?.jobItem?.findMany],
     ["tripJobItem.findMany", client?.tripJobItem?.findMany],
     ["tripJobItem.createMany", client?.tripJobItem?.createMany],
+    ["jobTypeAssignment.createMany", client?.jobTypeAssignment?.createMany],
   ];
 
   const missing = required

@@ -9,6 +9,7 @@ export const ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES: TripDocumentType[] = [
   TripDocumentType.PICKUP_SIGNATURE,
   TripDocumentType.DELIVERY_SIGNATURE,
   TripDocumentType.OTHER,
+  TripDocumentType.PERMIT,
   TripDocumentType.CONTAINER_PHOTO,
   TripDocumentType.SEAL_PHOTO,
   TripDocumentType.TRAILER_START_PHOTO,
@@ -55,7 +56,7 @@ export function deriveTripDocumentStatus(
     pickupDo = pickupDoDoc.isSigned ? "SIGNED" : "UPLOADED";
   }
 
-  let deliveryDo: TripDocumentCardStatus = "GENERATED";
+  let deliveryDo: TripDocumentCardStatus = "PENDING";
   if (deliveryDoDoc) {
     if (deliveryDoDoc.isSigned) {
       deliveryDo = "SIGNED";

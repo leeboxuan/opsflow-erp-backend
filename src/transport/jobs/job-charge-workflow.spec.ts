@@ -60,6 +60,10 @@ function withCreateJobTransaction(prisma: any): any {
       createMany: jest.fn().mockResolvedValue({ count: 0 }),
       ...(prisma.tripJobItem ?? {}),
     },
+    jobTypeAssignment: {
+      createMany: jest.fn().mockResolvedValue({ count: 1 }),
+      ...(prisma.jobTypeAssignment ?? {}),
+    },
   };
   return withInteractiveTransaction(enriched);
 }

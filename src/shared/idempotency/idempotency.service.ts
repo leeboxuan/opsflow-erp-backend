@@ -204,4 +204,23 @@ export class IdempotencyService {
       });
     }
   }
+
+  /**
+   * Read-only check for a completed idempotent operation.
+   * Use before side effects (e.g. storage upload) so replays skip them.
+   */
+  async peekCompleted<T>(params: {
+    tenantId: string;
+    scope: string;
+    operationKey: string;
+    requestHash: string;
+    load: (resourceId: string) => Promise<T>;
+  }): Promise<IdempotentExecuteResult<T> | null> {
+    return this.findCompletedRecord({
+      ...params,
+      execute: async () => {
+        throw new Error("peekCompleted must not execute");
+      },
+    });
+  }
 }

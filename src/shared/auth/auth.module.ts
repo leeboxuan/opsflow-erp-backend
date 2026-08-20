@@ -5,6 +5,7 @@ import { SupabaseService } from './supabase.service';
 import { AuthGuard } from './guards/auth.guard';
 import { TenantGuard } from './guards/tenant.guard';
 import { RoleGuard } from './guards/role.guard';
+import { StrictCanonicalRoleGuard } from './guards/strict-canonical-role.guard';
 import { PlatformAdminGuard } from './guards/platform-admin.guard';
 import { ModuleEntitlementGuard } from './guards/module-entitlement.guard';
 import { DestructiveActionGuard } from './guards/destructive-action.guard';
@@ -33,6 +34,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     AuthGuard,
     TenantGuard,
     RoleGuard,
+    StrictCanonicalRoleGuard,
     PlatformAdminGuard,
     ModuleEntitlementGuard,
     DestructiveActionGuard,
@@ -44,6 +46,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     AuthGuard,
     TenantGuard,
     RoleGuard,
+    StrictCanonicalRoleGuard,
     PlatformAdminGuard,
     ModuleEntitlementGuard,
     DestructiveActionGuard,

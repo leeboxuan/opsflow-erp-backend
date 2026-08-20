@@ -388,10 +388,18 @@ describe("Statistics V1 canonical predicates", () => {
       expect(result.missingSignedGeneratedDo).toBe(false);
     });
 
-    it("accepts OTHER as photo documentation", () => {
+    it("does not accept bare OTHER as photo documentation", () => {
       expect(
         evaluateRequiredDocumentCompletion({}, [
           { type: TripDocumentType.OTHER, isActive: true },
+        ]).complete,
+      ).toBe(false);
+    });
+
+    it("accepts POD_PHOTO as photo documentation", () => {
+      expect(
+        evaluateRequiredDocumentCompletion({}, [
+          { type: TripDocumentType.POD_PHOTO, isActive: true },
         ]).complete,
       ).toBe(true);
     });

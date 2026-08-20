@@ -6,13 +6,13 @@ import {
   PATH_METADATA,
 } from "@nestjs/common/constants";
 import { Reflector } from "@nestjs/core";
-import { Role, TenantModule } from "@prisma/client";
+import { CanonicalTenantRole, Role, TenantModule } from "@prisma/client";
 import { AuthGuard } from "../shared/auth/guards/auth.guard";
 import {
   ModuleEntitlementGuard,
   REQUIRES_TENANT_MODULE_KEY,
 } from "../shared/auth/guards/module-entitlement.guard";
-import { RoleGuard } from "../shared/auth/guards/role.guard";
+import { StrictCanonicalRoleGuard } from "../shared/auth/guards/strict-canonical-role.guard";
 import { TenantGuard } from "../shared/auth/guards/tenant.guard";
 import { StatisticsFinanceDto, StatisticsFinanceQueryDto } from "./dto";
 import { StatisticsController } from "./statistics.controller";
@@ -65,12 +65,18 @@ describe("StatisticsFinanceController", () => {
     expect(responses["200"]?.type).toBe(StatisticsFinanceDto);
   });
 
-  it("uses the complete guard stack and Finance entitlement", () => {
+  it("uses strict canonical roles and Finance entitlement", () => {
     expect(
       Reflect.getMetadata(GUARDS_METADATA, StatisticsFinanceController),
-    ).toEqual([AuthGuard, TenantGuard, RoleGuard, ModuleEntitlementGuard]);
+    ).toEqual([
+      AuthGuard,
+      TenantGuard,
+      StrictCanonicalRoleGuard,
+      ModuleEntitlementGuard,
+    ]);
     expect(Reflect.getMetadata("roles", StatisticsFinanceController)).toEqual([
-      Role.ADMIN,
+      CanonicalTenantRole.TENANT_ADMIN,
+      CanonicalTenantRole.FINANCE_ADMIN,
     ]);
     const reflector = new Reflector();
     expect(
@@ -89,6 +95,7 @@ describe("StatisticsFinanceController", () => {
         completedTripsMissingPayouts: 0,
         excludedFromProfit: 0,
       },
+      negativeJobCount: 0,
       timeZone: "Asia/Singapore",
       generatedAt: new Date(),
       limitations: [],
@@ -119,34 +126,54 @@ describe("StatisticsFinanceController", () => {
     );
   });
 
-  it("denies non-reporting roles and Transport-only entitlement", async () => {
+  it("denies singular-role fallback, Transport/Driver roles, and Finance-disabled tenants", async () => {
     const reflector = new Reflector();
-    const context = {
-      switchToHttp: () => ({
-        getRequest: () => ({
-          tenant: {
-            tenantId: "tenant-1",
-            role: Role.DRIVER,
-          },
+    const strict = new StrictCanonicalRoleGuard(reflector);
+
+    expect(() =>
+      strict.canActivate({
+        switchToHttp: () => ({
+          getRequest: () => ({
+            tenant: {
+              tenantId: "tenant-1",
+              role: Role.FINANCE,
+              roles: [],
+            },
+          }),
         }),
-      }),
-      getHandler: () => routeHandler,
-      getClass: () => StatisticsFinanceController,
-    } as any;
-    expect(() => new RoleGuard(reflector).canActivate(context)).toThrow(
-      ForbiddenException,
-    );
+        getHandler: () => routeHandler,
+        getClass: () => StatisticsFinanceController,
+      } as any),
+    ).toThrow(ForbiddenException);
+
+    expect(() =>
+      strict.canActivate({
+        switchToHttp: () => ({
+          getRequest: () => ({
+            tenant: {
+              tenantId: "tenant-1",
+              role: Role.DRIVER,
+              roles: [CanonicalTenantRole.TRANSPORT_DRIVER],
+            },
+          }),
+        }),
+        getHandler: () => routeHandler,
+        getClass: () => StatisticsFinanceController,
+      } as any),
+    ).toThrow(ForbiddenException);
 
     const financeContext = {
-      ...context,
       switchToHttp: () => ({
         getRequest: () => ({
           tenant: {
             tenantId: "tenant-1",
             role: Role.FINANCE,
+            roles: [CanonicalTenantRole.FINANCE_ADMIN],
           },
         }),
       }),
+      getHandler: () => routeHandler,
+      getClass: () => StatisticsFinanceController,
     } as any;
     const findUnique = jest.fn().mockResolvedValue(null);
     const entitlementGuard = new ModuleEntitlementGuard(

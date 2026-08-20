@@ -267,6 +267,14 @@ export class StatisticsFinanceDto extends StatisticsResponseBaseDto {
   @ValidateNested()
   @Type(() => StatisticsFinanceExceptionCountsDto)
   exceptionCounts!: StatisticsFinanceExceptionCountsDto;
+
+  @ApiProperty({
+    description:
+      "Jobs in scope where totalCostCents exceeds recognized invoice revenue (canonical JobFinanceSummary).",
+  })
+  @IsInt()
+  @Min(0)
+  negativeJobCount!: number;
 }
 
 export class StatisticsExceptionItemDto {

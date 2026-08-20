@@ -1,9 +1,20 @@
-import { TripDocumentType, TripStatus } from "@prisma/client";
+import {
+  TripDocumentRequirementStage,
+  TripDocumentResponsibleUploader,
+  TripDocumentType,
+  TripStatus,
+} from "@prisma/client";
 
 export type TripDocumentRequirementSnapshot = {
+  id?: string | null;
   type: TripDocumentType | string;
+  label?: string | null;
   isRequired: boolean;
   requiresSignature: boolean;
+  minCount?: number | null;
+  sortOrder?: number | null;
+  responsibleUploader?: TripDocumentResponsibleUploader | string | null;
+  requirementStage?: TripDocumentRequirementStage | string | null;
 };
 
 const SIGNATURE_CAPABLE_TYPES = new Set<string>([
@@ -49,6 +60,8 @@ export function defaultTripDocumentRequirementRows(
   requiresSignature: boolean;
   minCount: number;
   sortOrder: number;
+  responsibleUploader: TripDocumentResponsibleUploader;
+  requirementStage: TripDocumentRequirementStage;
 }> {
   return [
     {
@@ -60,6 +73,8 @@ export function defaultTripDocumentRequirementRows(
       requiresSignature: true,
       minCount: 1,
       sortOrder: 0,
+      responsibleUploader: TripDocumentResponsibleUploader.DRIVER,
+      requirementStage: TripDocumentRequirementStage.BEFORE_COMPLETE,
     },
     {
       tenantId,
@@ -70,6 +85,8 @@ export function defaultTripDocumentRequirementRows(
       requiresSignature: false,
       minCount: 1,
       sortOrder: 1,
+      responsibleUploader: TripDocumentResponsibleUploader.DRIVER,
+      requirementStage: TripDocumentRequirementStage.BEFORE_COMPLETE,
     },
   ];
 }
@@ -137,18 +154,31 @@ export function requirementSnapshotForType(
 export function groupTripDocumentRequirementSnapshots(
   rows: Array<{
     tripId: string;
+    id?: string | null;
     type: string;
+    label?: string | null;
     isRequired: boolean;
     requiresSignature: boolean;
+    minCount?: number | null;
+    sortOrder?: number | null;
+    responsibleUploader?: string | null;
+    requirementStage?: string | null;
   }>,
 ): Map<string, TripDocumentRequirementSnapshot[]> {
   const grouped = new Map<string, TripDocumentRequirementSnapshot[]>();
   for (const row of rows) {
     const list = grouped.get(row.tripId) ?? [];
     list.push({
+      id: row.id ?? null,
       type: row.type,
+      label: row.label ?? null,
       isRequired: row.isRequired,
       requiresSignature: row.requiresSignature,
+      minCount: row.minCount ?? 1,
+      sortOrder: row.sortOrder ?? 0,
+      responsibleUploader: row.responsibleUploader ?? TripDocumentResponsibleUploader.DRIVER,
+      requirementStage:
+        row.requirementStage ?? TripDocumentRequirementStage.BEFORE_COMPLETE,
     });
     grouped.set(row.tripId, list);
   }
@@ -166,9 +196,15 @@ export async function loadTripDocumentRequirementSnapshotsByTrip(
       findMany: (args: unknown) => Promise<
         Array<{
           tripId: string;
+          id: string;
           type: string;
+          label: string;
           isRequired: boolean;
           requiresSignature: boolean;
+          minCount: number;
+          sortOrder: number;
+          responsibleUploader: string;
+          requirementStage: string;
         }>
       >;
     } | null;
@@ -180,10 +216,17 @@ export async function loadTripDocumentRequirementSnapshotsByTrip(
     where: { tenantId, tripId: { in: ids } },
     select: {
       tripId: true,
+      id: true,
       type: true,
+      label: true,
       isRequired: true,
       requiresSignature: true,
+      minCount: true,
+      sortOrder: true,
+      responsibleUploader: true,
+      requirementStage: true,
     },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
   return groupTripDocumentRequirementSnapshots(rows);
 }

@@ -41,6 +41,7 @@ model Tenant {
   InvoiceLineItem              InvoiceLineItem[]
   transportInternalRefCounters transport_internal_ref_counters[]
   jobs                         Job[]
+  jobTypeAssignments           JobTypeAssignment[]
   invoiceChargeReservations    InvoiceChargeReservation[]
   jobDocuments                 JobDocument[]
   jobInternalRefCounters       job_internal_ref_counters[]
@@ -69,6 +70,9 @@ model Tenant {
   tripDocuments                TripDocument[]
   tripPayoutLines              TripPayoutLine[]
   tripDocumentRequirements     TripDocumentRequirement[]
+  tripExpenses                 TripExpense[]
+  tripExpenseAttachments       TripExpenseAttachment[]
+  tripExpenseEvents            TripExpenseEvent[]
   notifications                Notification[]
   pushDevices                  PushDevice[]
   chassis                      Chassis[]
@@ -120,6 +124,11 @@ model User {
   platformAdmin PlatformAdmin?
   platformAdminsCreated PlatformAdmin[] @relation("PlatformAdminCreatedBy")
   platformAuditLogsAsActor PlatformAuditLog[] @relation("PlatformAuditActorUser")
+  tripExpensesSubmitted TripExpense[] @relation("TripExpenseSubmittedBy")
+  tripExpensesReviewed  TripExpense[] @relation("TripExpenseReviewedBy")
+  tripExpensesReimbursed TripExpense[] @relation("TripExpenseReimbursedBy")
+  tripExpenseAttachmentsUploaded TripExpenseAttachment[] @relation("TripExpenseAttachmentUploadedBy")
+  tripExpenseEventsActor TripExpenseEvent[] @relation("TripExpenseEventActor")
 
   customerCompanyId String?
   customerContactId String?
@@ -346,11 +355,17 @@ model Trip {
   routeVersion         Int                       @default(1)
   vehicleId            String?
   fleetVehicleId       String?
+  /// Phase 4: what this trip is performing. Nullable until expand/backfill/contract migration is applied.
+  tripType                JobType?
   /// When set, this trip belongs to an OpsFlow job (multi-leg). Transport-order trips keep jobId null.
   jobId                String?
   /// Sequence within the job (1-based). Null for legacy transport-only trips.
   jobSequence          Int?
   tripSequence         Int?
+  /// Phase 5: driver-day dispatch run order (independent of job-local tripSequence/jobSequence).
+  dispatchSequence     Int?
+  /// Phase 5: optimistic concurrency for dispatch planning (independent of routeVersion).
+  dispatchVersion      Int                       @default(1)
   displayTitle         String?
   jobTripTemplate      JobTripTemplate?
   title                String?
@@ -411,17 +426,20 @@ model Trip {
   documentRequirements TripDocumentRequirement[]
   /// Canonical M:N cargo linkage. Trip.containerNumber is legacy/display cache only.
   tripJobItems         TripJobItem[]
+  tripExpenses         TripExpense[]
 
   @@index([tenantId, status])
   @@index([tenantId, plannedStartAt])
   @@index([tenantId, assignedDriverUserId])
   @@index([tenantId, assignedDriverUserId, status, plannedStartAt])
+  @@index([tenantId, assignedDriverUserId, dispatchSequence])
   @@index([tenantId, driverId])
   @@index([tenantId, vehicleId])
   @@index([tenantId, fleetVehicleId])
   @@index([tenantId, payoutItemId])
   @@index([tenantId, jobId])
   @@index([tenantId, jobId, jobSequence])
+  @@index([tenantId, jobId, tripType])
   @@map("trips")
 }
 
@@ -888,6 +906,7 @@ model drivers {
   assignedFleetVehicle        FleetVehicle?             @relation(fields: [assignedFleetVehicleId], references: [id], onDelete: SetNull)
   gpsDevices                  GpsDevice[]
   gpsPositions                GpsPosition[]
+  tripExpenses                TripExpense[]
 
   @@unique([tenantId, email])
   @@unique([tenantId, userId])
@@ -904,7 +923,8 @@ model Job {
   sourceCustomerQuotationId String?
   internalRef        String
   externalRef        String?
-  jobType            JobType
+  /// Compatibility singular only. Null for canonical multi-type jobs; never invent first-of-array.
+  jobType            JobType?
   /// COLLECTION only: EMPTY or LOADED; null for other job types.
   collectionType     CollectionType?
   status             JobStatus @default(ONGOING)
@@ -984,8 +1004,12 @@ model Job {
   items           JobItem[]
   trips           Trip[]
   charges         JobCharge[]
+  tripExpenses    TripExpense[]
+  jobTypeAssignments JobTypeAssignment[]
 
   @@unique([tenantId, internalRef])
+  /// Enables composite tenant-matched FKs (e.g. job_type_assignments).
+  @@unique([tenantId, id])
   @@index([tenantId, customerCompanyId])
   @@index([tenantId, sourceCustomerQuotationId])
   @@index([tenantId, status])
@@ -1481,21 +1505,26 @@ model TripPayoutLine {
 }
 
 model TripDocumentRequirement {
-  id                String           @id @default(cuid())
-  tenantId          String
-  tripId            String
-  type              TripDocumentType
-  label             String
-  isRequired        Boolean          @default(true)
-  requiresSignature Boolean          @default(false)
-  minCount          Int              @default(1)
-  sortOrder         Int              @default(0)
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  id                  String                         @id @default(cuid())
+  tenantId            String
+  tripId              String
+  type                TripDocumentType
+  label               String
+  isRequired          Boolean                        @default(true)
+  requiresSignature   Boolean                        @default(false)
+  minCount            Int                            @default(1)
+  sortOrder           Int                            @default(0)
+  /// Who is expected to upload this requirement artifact.
+  responsibleUploader TripDocumentResponsibleUploader @default(DRIVER)
+  /// Lifecycle gate this requirement participates in.
+  requirementStage    TripDocumentRequirementStage    @default(BEFORE_COMPLETE)
+  createdAt           DateTime                       @default(now())
+  updatedAt           DateTime                       @updatedAt
 
   trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  @@unique([tenantId, tripId, type, requirementStage], map: "trip_document_requirements_tenant_trip_type_stage_key")
   @@index([tenantId, tripId])
   @@map("trip_document_requirements")
 }
@@ -1797,6 +1826,25 @@ enum JobType {
   COLLECTION
 }
 
+/// Phase 4 canonical multi-value job types (tenant-bound).
+/// Compatibility Job.jobType is nullable and must not classify multi-type jobs.
+model JobTypeAssignment {
+  id        String   @id @default(cuid())
+  tenantId  String
+  jobId     String
+  jobType   JobType
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Composite FK enforces assignment.tenantId == job.tenantId (no cross-tenant jobId).
+  job    Job    @relation(fields: [tenantId, jobId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([tenantId, jobId, jobType])
+  @@index([tenantId, jobId])
+  @@index([tenantId, jobType])
+  @@map("job_type_assignments")
+}
+
 enum CollectionType {
   EMPTY
   LOADED
@@ -1890,6 +1938,8 @@ enum TripDocumentType {
   /// Handwritten signature image captured when signing Delivery DO.
   DELIVERY_SIGNATURE
   OTHER
+  /// Operations/driver port or entry permit (trip-scoped).
+  PERMIT
   /// Driver-uploaded container number photo (required before trip completion).
   CONTAINER_PHOTO
   /// Driver-uploaded seal number photo (required before trip completion).
@@ -1901,6 +1951,21 @@ enum TripDocumentType {
   TRAILER_PARKING_PHOTO
   TRAILER_START_PHOTO
   TRAILER_END_PHOTO
+}
+
+/// Who must provide a trip document requirement artifact.
+enum TripDocumentResponsibleUploader {
+  DRIVER
+  OPERATIONS
+  EITHER
+}
+
+/// When a trip document requirement blocks the lifecycle.
+enum TripDocumentRequirementStage {
+  BEFORE_DISPATCH
+  BEFORE_START
+  BEFORE_COMPLETE
+  REFERENCE_ONLY
 }
 
 enum LogisticsLocationType {
@@ -2425,6 +2490,7 @@ model Invoice {
   @@index([tenantId, createdAt])
   @@index([tenantId, status])
   @@index([tenantId, sourceJobId])
+  @@index([tenantId, sourceJobId, status])
   @@index([tenantId, sourceCustomerQuotationId])
   @@index([tenantId, paidAt])
   @@map("invoices")
@@ -2908,4 +2974,138 @@ model IdempotencyRecord {
   @@index([tenantId, resourceType, resourceId])
   @@index([tenantId, status, claimedAt])
   @@map("idempotency_records")
+}
+
+/// Driver-submitted trip expense (canonical amount/currency). Receipts are evidence only.
+enum TripExpenseCategory {
+  PARKING
+  TOLL
+  FUEL
+  PORT_FEE
+  ERP_CHARGE
+  CASH_CARD
+  MEAL
+  MISCELLANEOUS
+  OTHER
+}
+
+enum TripExpensePaymentMethod {
+  COMPANY_EPAYMENT
+  DRIVER_PAID
+  COMPANY_CASH
+  OTHER
+}
+
+enum TripExpenseReviewStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  NEEDS_CLARIFICATION
+}
+
+enum TripExpenseReimbursementStatus {
+  NOT_REQUIRED
+  PENDING
+  PAID
+}
+
+enum TripExpenseEventAction {
+  SUBMITTED
+  ATTACHMENT_ADDED
+  UPDATED
+  RESUBMITTED
+  CLARIFICATION_REQUESTED
+  APPROVED
+  REJECTED
+  REVIEWER_CORRECTED
+  REIMBURSEMENT_MARKED_PAID
+  REIMBURSEMENT_REOPENED
+}
+
+model TripExpense {
+  id                      String                         @id @default(cuid())
+  tenantId                String
+  jobId                   String
+  tripId                  String
+  submittedByUserId       String
+  /// Optional drivers.id when a driver profile exists for the submitter.
+  submittedByDriverId     String?
+  category                TripExpenseCategory
+  paymentMethod           TripExpensePaymentMethod
+  /// Canonical monetary amount in minor units (cents). Receipts are not the SoT.
+  amountCents             Int
+  currency                String                         @db.VarChar(3)
+  transactionDate         DateTime                       @db.Date
+  remarks                 String?                        @db.Text
+  reviewStatus            TripExpenseReviewStatus        @default(PENDING_REVIEW)
+  reviewedByUserId        String?
+  reviewedAt              DateTime?
+  reviewReason            String?                        @db.Text
+  reimbursementStatus     TripExpenseReimbursementStatus @default(NOT_REQUIRED)
+  reimbursedAt            DateTime?
+  reimbursedByUserId      String?
+  createdAt               DateTime                       @default(now())
+  updatedAt               DateTime                       @updatedAt
+
+  tenant              Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job                 Job                     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  trip                Trip                    @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  submittedByUser     User                    @relation("TripExpenseSubmittedBy", fields: [submittedByUserId], references: [id], onDelete: Restrict)
+  submittedByDriver   drivers?                @relation(fields: [submittedByDriverId], references: [id], onDelete: SetNull)
+  reviewedByUser      User?                   @relation("TripExpenseReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  reimbursedByUser    User?                   @relation("TripExpenseReimbursedBy", fields: [reimbursedByUserId], references: [id], onDelete: SetNull)
+  attachments         TripExpenseAttachment[]
+  events              TripExpenseEvent[]
+
+  @@index([tenantId, reviewStatus, createdAt])
+  @@index([tenantId, reimbursementStatus, createdAt])
+  @@index([tenantId, tripId, createdAt])
+  @@index([tenantId, jobId, createdAt])
+  @@index([tenantId, jobId, reviewStatus])
+  @@index([tenantId, submittedByUserId, createdAt])
+  @@index([tenantId, transactionDate])
+  @@map("trip_expenses")
+}
+
+model TripExpenseAttachment {
+  id               String   @id @default(cuid())
+  tenantId         String
+  expenseId        String
+  storageKey       String
+  originalName     String
+  mimeType         String
+  sizeBytes        Int?
+  uploadedByUserId String
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expense    TripExpense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  uploadedBy User       @relation("TripExpenseAttachmentUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, expenseId, isActive])
+  @@unique([tenantId, storageKey])
+  @@map("trip_expense_attachments")
+}
+
+model TripExpenseEvent {
+  id               String                 @id @default(cuid())
+  tenantId         String
+  expenseId        String
+  actorUserId      String?
+  action           TripExpenseEventAction
+  previousStatus   TripExpenseReviewStatus?
+  newStatus        TripExpenseReviewStatus?
+  reason           String?                @db.Text
+  /// Safe field-level before/after snapshot (no file bytes, signed URLs, or secrets).
+  changedFieldsJson Json?
+  createdAt        DateTime               @default(now())
+
+  tenant  Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expense TripExpense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  actor   User?      @relation("TripExpenseEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, expenseId, createdAt])
+  @@map("trip_expense_events")
 }

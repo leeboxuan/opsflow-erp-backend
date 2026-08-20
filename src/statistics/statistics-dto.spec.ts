@@ -222,6 +222,7 @@ describe("Statistics V1 DTO contracts", () => {
           completedTripsMissingPayouts: 0,
           excludedFromProfit: 0,
         },
+        negativeJobCount: 0,
       });
       await expect(validate(finance)).resolves.toHaveLength(0);
 

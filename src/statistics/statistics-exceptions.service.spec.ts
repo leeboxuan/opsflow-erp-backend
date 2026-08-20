@@ -204,7 +204,7 @@ describe("StatisticsExceptionsService categories", () => {
     prisma.tripDocument.findMany.mockResolvedValue([
       {
         tripId: "trip-photo-ok",
-        type: TripDocumentType.OTHER,
+        type: TripDocumentType.POD_PHOTO,
         isActive: true,
         generatedBySystem: false,
         isSigned: false,

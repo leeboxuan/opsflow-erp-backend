@@ -13,7 +13,7 @@ import {
   MinLength,
   IsNumber,
 } from "class-validator";
-import { CollectionType, JobTripTemplate } from "@prisma/client";
+import { CollectionType, JobTripTemplate, JobType, TripDocumentType, TripDocumentResponsibleUploader, TripDocumentRequirementStage } from "@prisma/client";
 import { Transform, Type } from "class-transformer";
 import { UpdateJobItemDto } from "../../jobs/dto/update-job.dto";
 
@@ -75,6 +75,13 @@ export class PublishJobTripRouteDto {
 }
 
 export class AppendJobTripDto {
+  @ApiProperty({
+    enum: JobType,
+    description: "Required. Must be one of the parent job's selected job types.",
+  })
+  @IsEnum(JobType)
+  tripType!: JobType;
+
   @ApiPropertyOptional({
     enum: JobTripTemplate,
     description: "Optional. Empty/null defaults to CUSTOM in service",
@@ -503,6 +510,15 @@ export class PatchTripDetailsDto {
 }
 
 export class PatchJobTripDto {
+  @ApiPropertyOptional({
+    enum: JobType,
+    description:
+      "Phase 4: change trip type while DRAFT only. Must belong to parent job types.",
+  })
+  @IsOptional()
+  @IsEnum(JobType)
+  tripType?: JobType;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsInt()
@@ -725,6 +741,11 @@ export class PutTripPayoutLinesDto {
 }
 
 export class PatchTripDocumentRequirementDto {
+  @ApiPropertyOptional({ enum: TripDocumentType })
+  @IsOptional()
+  @IsEnum(TripDocumentType)
+  type?: TripDocumentType;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()
@@ -734,6 +755,86 @@ export class PatchTripDocumentRequirementDto {
   @IsOptional()
   @IsBoolean()
   isRequired?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  label?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  minCount?: number;
+
+  @ApiPropertyOptional({
+    enum: [
+      TripDocumentResponsibleUploader.DRIVER,
+      TripDocumentResponsibleUploader.OPERATIONS,
+    ],
+    description: "Phase 7 editor accepts DRIVER or OPERATIONS only.",
+  })
+  @IsOptional()
+  @IsEnum(TripDocumentResponsibleUploader)
+  responsibleUploader?: TripDocumentResponsibleUploader;
+
+  @ApiPropertyOptional({ enum: TripDocumentRequirementStage })
+  @IsOptional()
+  @IsEnum(TripDocumentRequirementStage)
+  requirementStage?: TripDocumentRequirementStage;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  sortOrder?: number;
+}
+
+export class CreateTripDocumentRequirementDto {
+  @ApiProperty({ enum: TripDocumentType })
+  @IsEnum(TripDocumentType)
+  type!: TripDocumentType;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  label?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isRequired?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  requiresSignature?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  minCount?: number;
+
+  @ApiPropertyOptional({
+    enum: [
+      TripDocumentResponsibleUploader.DRIVER,
+      TripDocumentResponsibleUploader.OPERATIONS,
+    ],
+    description: "Phase 7 editor accepts DRIVER or OPERATIONS only.",
+  })
+  @IsOptional()
+  @IsEnum(TripDocumentResponsibleUploader)
+  responsibleUploader?: TripDocumentResponsibleUploader;
+
+  @ApiPropertyOptional({ enum: TripDocumentRequirementStage })
+  @IsOptional()
+  @IsEnum(TripDocumentRequirementStage)
+  requirementStage?: TripDocumentRequirementStage;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  sortOrder?: number;
 }
 
 export class PatchTripPayoutDto {

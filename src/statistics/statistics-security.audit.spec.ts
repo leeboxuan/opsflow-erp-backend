@@ -6,7 +6,7 @@ import {
   PATH_METADATA,
 } from "@nestjs/common/constants";
 import { Reflector } from "@nestjs/core";
-import { Role, TenantModule } from "@prisma/client";
+import { CanonicalTenantRole, Role, TenantModule } from "@prisma/client";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { AuthGuard } from "../shared/auth/guards/auth.guard";
@@ -15,6 +15,7 @@ import {
   REQUIRES_TENANT_MODULE_KEY,
 } from "../shared/auth/guards/module-entitlement.guard";
 import { RoleGuard } from "../shared/auth/guards/role.guard";
+import { StrictCanonicalRoleGuard } from "../shared/auth/guards/strict-canonical-role.guard";
 import { TenantGuard } from "../shared/auth/guards/tenant.guard";
 import {
   StatisticsDriverRowDto,
@@ -83,12 +84,6 @@ describe("Statistics V1 security and integration audit", () => {
         [TenantModule.TRANSPORT],
       ],
       [
-        "finance",
-        StatisticsFinanceController,
-        StatisticsFinanceController.prototype.getFinance,
-        [TenantModule.FINANCE],
-      ],
-      [
         "exceptions",
         StatisticsExceptionsController,
         StatisticsExceptionsController.prototype.getExceptions,
@@ -119,6 +114,33 @@ describe("Statistics V1 security and integration audit", () => {
         ).toEqual([...modules]);
       },
     );
+
+    it("applies Auth→Tenant→StrictCanonicalRole→Module for finance", () => {
+      expect(
+        Reflect.getMetadata(GUARDS_METADATA, StatisticsFinanceController),
+      ).toEqual([
+        AuthGuard,
+        TenantGuard,
+        StrictCanonicalRoleGuard,
+        ModuleEntitlementGuard,
+      ]);
+      expect(Reflect.getMetadata("roles", StatisticsFinanceController)).toEqual(
+        [CanonicalTenantRole.TENANT_ADMIN, CanonicalTenantRole.FINANCE_ADMIN],
+      );
+      expect(
+        Reflect.getMetadata(
+          PATH_METADATA,
+          StatisticsFinanceController.prototype.getFinance,
+        ),
+      ).toBe("finance");
+      const reflector = new Reflector();
+      expect(
+        reflector.getAllAndOverride<TenantModule[]>(REQUIRES_TENANT_MODULE_KEY, [
+          StatisticsFinanceController.prototype.getFinance,
+          StatisticsFinanceController,
+        ]),
+      ).toEqual([TenantModule.FINANCE]);
+    });
 
     it("keeps controllers free of aggregation logic", () => {
       for (const file of [

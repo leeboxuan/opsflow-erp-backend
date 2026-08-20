@@ -652,7 +652,11 @@ export class DispatchService {
     const drivers = await Promise.all(driverUsers.map(async (driver) => {
       const driverTrips = selectedDateTrips
         .filter((t) => t.assignedDriverUserId === driver.id)
-        .sort((a, b) => (a.tripSequence ?? 9999) - (b.tripSequence ?? 9999));
+        .sort(
+          (a, b) =>
+            (a.dispatchSequence ?? 9999) - (b.dispatchSequence ?? 9999) ||
+            (a.tripSequence ?? 9999) - (b.tripSequence ?? 9999),
+        );
       const activeTrip = driverTrips.find((t) => t.status === TripStatus.ONGOING) ?? null;
       const latestLocation = locationMap.get(driver.id);
       const profile = profileMap.get(driver.id);
@@ -792,16 +796,35 @@ export class DispatchService {
       );
     }
 
-    await this.prisma.$transaction(
-      requestedIds.map((tripId, index) =>
-        this.prisma.trip.update({
-          where: { id: tripId },
-          data: {
-            tripSequence: index + 1,
-            jobSequence: index + 1,
+    await this.prisma.$transaction(async (tx) => {
+      for (let index = 0; index < requestedIds.length; index += 1) {
+        const tripId = requestedIds[index]!;
+        const updated = await tx.trip.updateMany({
+          where: {
+            id: tripId,
+            tenantId,
+            assignedDriverUserId: driverUserId,
+            status: {
+              notIn: [
+                TripStatus.COMPLETED,
+                TripStatus.DONE,
+                TripStatus.CANCELLED,
+              ],
+            },
           },
-        })),
-    );
+          data: {
+            dispatchSequence: index + 1,
+            dispatchVersion: { increment: 1 },
+            // Do not modify job-local tripSequence / jobSequence.
+          },
+        });
+        if (updated.count !== 1) {
+          throw new BadRequestException(
+            `Failed to update dispatch sequence for trip ${tripId}`,
+          );
+        }
+      }
+    });
     this.realtime?.publishDispatchAndDashboard(tenantId, {
       driverUserId,
       reason: "dispatch.trips.reordered",
@@ -849,8 +872,15 @@ export class DispatchService {
 
     return {
       suggestedTripIdsInOrder: suggestion.suggestedTripIdsInOrder,
-      reason: "Deterministic nearest-neighbour ordering using available origin/destination coordinates",
+      algorithm: suggestion.algorithm,
+      label: suggestion.label,
+      includedTripIds: suggestion.includedTripIds,
+      excluded: suggestion.excluded,
+      approximatePlanarDistance: suggestion.approximatePlanarDistance,
+      reason:
+        "Deterministic nearest-neighbour ordering using available origin/destination coordinates. Not traffic-aware.",
       warnings: suggestion.warnings,
+      persisted: false,
     };
   }
 }

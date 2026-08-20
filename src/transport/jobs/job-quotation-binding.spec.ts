@@ -248,6 +248,9 @@ describe("Job commercial quotation binding", () => {
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp2", tenantId: "t1" }),
       },
+      jobTypeAssignment: {
+        findMany: jest.fn().mockResolvedValue([{ jobType: JobType.LCL }]),
+      },
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };
     const svc = new TransportJobsService(
@@ -284,6 +287,9 @@ describe("Job commercial quotation binding", () => {
           .mockResolvedValueOnce(ongoingJob({ id: "job-b" }))
           .mockResolvedValueOnce(ongoingJob({ id: "job-b" })),
         update: jest.fn().mockResolvedValue({}),
+      },
+      jobTypeAssignment: {
+        findMany: jest.fn().mockResolvedValue([{ jobType: JobType.LCL }]),
       },
       $transaction: jest.fn(async (fn: any) => fn(prisma)),
     };

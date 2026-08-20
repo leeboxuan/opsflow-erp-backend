@@ -10,6 +10,7 @@ import {
   readUpdateJobItemsInput,
 } from "./create-job-validation.helpers";
 import { TransportJobsService } from "./transport-jobs.service";
+import { withInteractiveTransaction } from "../test-utils/prisma-interactive-transaction.mock";
 
 describe("create job items (LCL optional)", () => {
   describe("readUpdateJobItemsInput", () => {
@@ -200,15 +201,25 @@ describe("create job items (LCL optional)", () => {
           findMany: jest.fn().mockResolvedValue([{ id: "trip1", status: "DRAFT" }]),
           update: jest.fn().mockResolvedValue({}),
         },
-        jobItem: { findMany: jest.fn().mockResolvedValue([]) },
+        jobItem: {
+          create: jest.fn().mockResolvedValue({ id: "item1" }),
+          findMany: jest.fn().mockResolvedValue([]),
+        },
         tripJobItem: {
+          findMany: jest.fn().mockResolvedValue([]),
+          createMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
+        jobTypeAssignment: {
+          createMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findMany: jest.fn().mockResolvedValue([{ jobType: JobType.LCL }]),
+        },
+        tripDocumentRequirement: {
           findMany: jest.fn().mockResolvedValue([]),
           createMany: jest.fn().mockResolvedValue({ count: 0 }),
         },
         masterLogisticsLocation: { findFirst: jest.fn().mockResolvedValue(null) },
       };
-      prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
-      return prisma;
+      return withInteractiveTransaction(prisma);
     }
 
     function makeSvc(prisma: ReturnType<typeof makeCreatePrisma>) {
@@ -656,6 +667,11 @@ describe("create job items (LCL optional)", () => {
         tripJobItem: {
           findMany: jest.fn().mockResolvedValue([]),
         },
+        jobTypeAssignment: {
+          findMany: jest.fn().mockResolvedValue([{ jobType }]),
+          deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+          createMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
         $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>) =>
           fn({
             job: {
@@ -669,6 +685,11 @@ describe("create job items (LCL optional)", () => {
             },
             tripJobItem: {
               findMany: jest.fn().mockResolvedValue([]),
+            },
+            jobTypeAssignment: {
+              findMany: jest.fn().mockResolvedValue([{ jobType }]),
+              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+              createMany: jest.fn().mockResolvedValue({ count: 0 }),
             },
           }),
         ),

@@ -149,10 +149,14 @@ describe("TransportJobsService.list trip and invoice contract", () => {
     ]);
     invoiceFindMany.mockResolvedValue([]);
     await svc.list("t1", { page: 1, pageSize: 20 } as any, staff);
-    expect(tripFindMany).toHaveBeenCalledTimes(1);
+    expect(tripFindMany).toHaveBeenCalledTimes(2);
     expect(invoiceFindMany).toHaveBeenCalledTimes(1);
     expect(queryRaw).not.toHaveBeenCalled();
     expect(tripFindMany.mock.calls[0][0].where).toEqual({
+      tenantId: "t1",
+      jobId: { in: ["job1", "job2"] },
+    });
+    expect(tripFindMany.mock.calls[1][0].where).toEqual({
       tenantId: "t1",
       jobId: { in: ["job1", "job2"] },
     });

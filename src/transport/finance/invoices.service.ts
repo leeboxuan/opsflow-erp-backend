@@ -674,6 +674,7 @@ export class InvoicesService {
       },
       include: {
         trips: { select: { id: true, status: true } },
+        jobTypeAssignments: { select: { jobType: true } },
       },
       orderBy: [{ updatedAt: "desc" }],
     });
@@ -731,11 +732,24 @@ export class InvoicesService {
         t.status === TripStatus.COMPLETED || t.status === TripStatus.DONE).length;
       const billableTripCount = completedTripCount;
 
+      const assignmentTypes =
+        Array.isArray((job as any).jobTypeAssignments) &&
+        (job as any).jobTypeAssignments.length > 0
+          ? (job as any).jobTypeAssignments.map(
+              (a: { jobType: string }) => a.jobType,
+            )
+          : job.jobType
+            ? [job.jobType]
+            : [];
+      const typeLabel =
+        assignmentTypes.length > 0 ? assignmentTypes.join("+") : "—";
+
       items.push({
         id: job.id,
         internalJobReference: job.internalRef,
         customerReference: job.externalRef ?? null,
         jobType: job.jobType,
+        jobTypes: assignmentTypes,
         status: job.status,
         invoiceReadyAt: job.invoiceReadyAt ?? null,
         tripCount: (job.trips ?? []).length,
@@ -743,7 +757,7 @@ export class InvoicesService {
         billableTripCount,
         existingInvoiceId: existingInvoice?.id ?? null,
         existingInvoiceStatus: existingInvoice?.status ?? null,
-        label: `${job.internalRef} · ${job.externalRef ?? "-"} · ${job.jobType}`,
+        label: `${job.internalRef} · ${job.externalRef ?? "-"} · ${typeLabel}`,
       });
     }
     return { items };

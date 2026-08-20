@@ -9,6 +9,7 @@ import {
   resolveExportDestinationFields,
 } from "./create-job-validation.helpers";
 import { TransportJobsService } from "./transport-jobs.service";
+import { withInteractiveTransaction } from "../test-utils/prisma-interactive-transaction.mock";
 
 describe("job create: EXPORT and COLLECTION", () => {
   function makeExportCreatePrisma() {
@@ -83,12 +84,19 @@ describe("job create: EXPORT and COLLECTION", () => {
         findMany: jest.fn().mockResolvedValue([]),
         createMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+      jobTypeAssignment: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([{ jobType: JobType.EXPORT }]),
+      },
+      tripDocumentRequirement: {
+        findMany: jest.fn().mockResolvedValue([]),
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       masterLogisticsLocation: {
         findFirst: jest.fn().mockResolvedValue({ code: "DEPOT-A", name: "Depot A" }),
       },
     };
-    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
-    return prisma;
+    return withInteractiveTransaction(prisma);
   }
 
   function makeSvc(prisma: ReturnType<typeof makeExportCreatePrisma>) {
@@ -454,7 +462,7 @@ describe("job create: EXPORT and COLLECTION", () => {
 
   it("COLLECTION create with EMPTY succeeds", async () => {
     const prisma = makeExportCreatePrisma();
-    prisma.job.create = jest.fn().mockImplementation(({ data }) =>
+    prisma.job.create.mockImplementation(({ data }) =>
       Promise.resolve({
         id: "job1",
         jobType: JobType.COLLECTION,
@@ -503,7 +511,7 @@ describe("job create: EXPORT and COLLECTION", () => {
 
   it("COLLECTION create with LOADED succeeds", async () => {
     const prisma = makeExportCreatePrisma();
-    prisma.job.create = jest.fn().mockImplementation(({ data }) =>
+    prisma.job.create.mockImplementation(({ data }) =>
       Promise.resolve({
         id: "job1",
         jobType: JobType.COLLECTION,
@@ -554,7 +562,7 @@ describe("job create: EXPORT and COLLECTION", () => {
     for (const jobType of [JobType.LCL, JobType.IMPORT, JobType.EXPORT]) {
       prisma.job.create.mockClear();
       prisma.trip.createMany.mockClear();
-      prisma.job.create = jest.fn().mockImplementation(({ data }) =>
+      prisma.job.create.mockImplementation(({ data }) =>
         Promise.resolve({
           id: "job1",
           jobType: data.jobType,
@@ -608,7 +616,7 @@ describe("job create: EXPORT and COLLECTION", () => {
 
   it("COLLECTION create succeeds with no items and one pickup-delivery trip", async () => {
     const prisma = makeExportCreatePrisma();
-    prisma.job.create = jest.fn().mockImplementation(({ data }) =>
+    prisma.job.create.mockImplementation(({ data }) =>
       Promise.resolve({
         id: "job1",
         jobType: JobType.COLLECTION,
@@ -657,7 +665,7 @@ describe("job create: EXPORT and COLLECTION", () => {
 
   it("COLLECTION create persists optional containerNumber and sealNo", async () => {
     const prisma = makeExportCreatePrisma();
-    prisma.job.create = jest.fn().mockImplementation(({ data }) =>
+    prisma.job.create.mockImplementation(({ data }) =>
       Promise.resolve({
         id: "job1",
         jobType: JobType.COLLECTION,
@@ -710,7 +718,7 @@ describe("job create: EXPORT and COLLECTION", () => {
 
   it("COLLECTION create persists job-level pickupReference and description", async () => {
     const prisma = makeExportCreatePrisma();
-    prisma.job.create = jest.fn().mockImplementation(({ data }) =>
+    prisma.job.create.mockImplementation(({ data }) =>
       Promise.resolve({
         id: "job1",
         jobType: JobType.COLLECTION,

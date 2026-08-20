@@ -195,10 +195,12 @@ export class StatisticsCustomersService {
         },
         select: {
           jobId: true,
+          tripType: true,
           job: {
             select: {
               id: true,
               jobType: true,
+              jobTypeAssignments: { select: { jobType: true } },
               customerCompanyId: true,
               customerCompany: { select: { name: true } },
             },
@@ -224,9 +226,11 @@ export class StatisticsCustomersService {
 
     for (const trip of completedTripRows as Array<{
       jobId: string | null;
+      tripType: string | null;
       job: {
         id: string;
-        jobType: JobType;
+        jobType: JobType | null;
+        jobTypeAssignments?: Array<{ jobType: JobType }>;
         customerCompanyId: string;
         customerCompany: { name: string };
       } | null;
@@ -235,8 +239,20 @@ export class StatisticsCustomersService {
       const row = ensure(trip.job.customerCompanyId, trip.job.customerCompany.name);
       row.completedTrips += 1;
       row.jobs.add(trip.job.id);
-      if (!row.jobTypes.has(trip.job.jobType)) {
-        row.jobTypes.set(trip.job.jobType, 0);
+      const membership =
+        trip.job.jobTypeAssignments && trip.job.jobTypeAssignments.length > 0
+          ? trip.job.jobTypeAssignments.map((a) => a.jobType)
+          : trip.job.jobType
+            ? [trip.job.jobType]
+            : [];
+      for (const t of membership) {
+        if (!row.jobTypes.has(t)) {
+          row.jobTypes.set(t, 0);
+        }
+      }
+      // Trip-specific classification seeds membership presence; do not force singular.
+      if (trip.tripType && !row.jobTypes.has(trip.tripType)) {
+        row.jobTypes.set(trip.tripType, 0);
       }
     }
     for (const trip of cancelledTripRows as Array<{

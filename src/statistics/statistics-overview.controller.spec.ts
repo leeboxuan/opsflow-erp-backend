@@ -15,6 +15,7 @@ import {
   REQUIRES_TENANT_MODULE_KEY,
 } from "../shared/auth/guards/module-entitlement.guard";
 import { RoleGuard } from "../shared/auth/guards/role.guard";
+import { StrictCanonicalRoleGuard } from "../shared/auth/guards/strict-canonical-role.guard";
 import { TenantGuard } from "../shared/auth/guards/tenant.guard";
 import {
   StatisticsDriversDto,
@@ -179,6 +180,7 @@ describe("Statistics WP6 HTTP reachability", () => {
         completedTripsMissingPayouts: 0,
         excludedFromProfit: 0,
       },
+      negativeJobCount: 0,
       timeZone: "Asia/Singapore",
       generatedAt: new Date("2026-08-05T00:00:00.000Z"),
       limitations: [],
@@ -258,6 +260,8 @@ describe("Statistics WP6 HTTP reachability", () => {
       .overrideGuard(TenantGuard)
       .useValue(tenantGuard)
       .overrideGuard(RoleGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(StrictCanonicalRoleGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(ModuleEntitlementGuard)
       .useValue({ canActivate: () => true })

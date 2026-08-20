@@ -13,6 +13,7 @@ import {
   TripPendingState,
   TripStatus,
   TripDocumentType,
+  TripDocumentRequirementStage,
 } from "@prisma/client";
 import { PrismaService } from "../../shared/prisma/prisma.service";
 import { parsePaginationFromQuery, buildPaginationMeta } from "../../shared/common/pagination";
@@ -50,6 +51,10 @@ import {
   requirementSnapshotForType,
   type TripDocumentRequirementSnapshot,
 } from "../workflows/trip-document-requirements";
+import {
+  driverMayUploadRequirementType,
+  evaluateTripDocumentRequirements,
+} from "../workflows/trip-document-requirement-evaluation";
 import {
   buildTripCargoFromLinks,
   isContainerBasedTransportJob,
@@ -124,6 +129,7 @@ export const DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPES = [
   TripDocumentType.POD_PHOTO,
   TripDocumentType.POD_SIGNATURE,
   TripDocumentType.OTHER,
+  TripDocumentType.PERMIT,
   TripDocumentType.CONTAINER_PHOTO,
   TripDocumentType.SEAL_PHOTO,
   TripDocumentType.TRAILER_START_PHOTO,
@@ -138,6 +144,7 @@ const DRIVER_SINGLE_ACTIVE_TRIP_DOCUMENT_TYPES = new Set<TripDocumentType>([
   TripDocumentType.PICKUP_DO,
   TripDocumentType.DELIVERY_DO,
   TripDocumentType.POD_SIGNATURE,
+  TripDocumentType.PERMIT,
   TripDocumentType.CONTAINER_PHOTO,
   TripDocumentType.SEAL_PHOTO,
   TripDocumentType.TRAILER_START_PHOTO,
@@ -436,6 +443,7 @@ export class DriverJobsService {
     TripDocumentType.PICKUP_DO,
     TripDocumentType.POD_PHOTO,
     TripDocumentType.OTHER,
+    TripDocumentType.PERMIT,
     TripDocumentType.CONTAINER_PHOTO,
     TripDocumentType.SEAL_PHOTO,
   ];
@@ -2217,6 +2225,41 @@ export class DriverJobsService {
       throw new BadRequestException("Trip already started");
     }
 
+    const [startDocs, startRequirements] = await Promise.all([
+      this.prisma.tripDocument.findMany({
+        where: {
+          tenantId,
+          tripId,
+          isActive: true,
+          type: { in: DriverJobsService.COMPLETION_DOC_QUERY_TYPES },
+        },
+        select: {
+          type: true,
+          isActive: true,
+          isSigned: true,
+          signedAt: true,
+          mimeType: true,
+          originalName: true,
+        },
+      }),
+      this.loadTripDocumentRequirementSnapshots(tenantId, tripId),
+    ]);
+    const startDocEvaluation = evaluateTripDocumentRequirements({
+      tripStatus: trip.status,
+      documents: startDocs,
+      requirements: startRequirements,
+      forStage: TripDocumentRequirementStage.BEFORE_START,
+    });
+    if (startDocEvaluation.missingTypeCodes.length > 0) {
+      const labels =
+        startDocEvaluation.summaryLabels.length > 0
+          ? startDocEvaluation.summaryLabels.join("; ")
+          : startDocEvaluation.missingTypeCodes.join(", ");
+      throw new BadRequestException(
+        `Trip cannot be started yet. Missing required documents: ${labels}`,
+      );
+    }
+
     const tz = await this.getTenantTimeZone(tenantId);
     const startGate = evaluateTripStartDateGate({
       plannedStartAt: trip.plannedStartAt ?? null,
@@ -2463,7 +2506,17 @@ export class DriverJobsService {
     if (!this.prisma.tripDocumentRequirement?.findMany) return [];
     return this.prisma.tripDocumentRequirement.findMany({
       where: { tenantId, tripId },
-      select: { type: true, isRequired: true, requiresSignature: true },
+      select: {
+        id: true,
+        type: true,
+        label: true,
+        isRequired: true,
+        requiresSignature: true,
+        minCount: true,
+        sortOrder: true,
+        responsibleUploader: true,
+        requirementStage: true,
+      },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     });
   }
@@ -2507,6 +2560,8 @@ export class DriverJobsService {
           isActive: true,
           signedAt: true,
           isSigned: true,
+          mimeType: true,
+          originalName: true,
         },
       }),
       this.computeTrailerCheckoutGapsForTrip(tenantId, driverUserId, trip, {
@@ -2765,6 +2820,8 @@ export class DriverJobsService {
           isActive: true,
           signedAt: true,
           isSigned: true,
+          mimeType: true,
+          originalName: true,
         },
       }),
       this.computeTrailerCheckoutGapsForTrip(tenantId, driverUserId, trip),
@@ -2802,6 +2859,17 @@ export class DriverJobsService {
     }
     const { requiresTrailerCheckout, missingTrailerCheckoutFields } = trailerCheckout;
     const parkingLocations = await this.listTrailerParkingLocations();
+    const documentEvaluation = evaluateTripDocumentRequirements({
+      tripStatus: trip.status,
+      documents: completionDocs,
+      requirements: documentRequirements,
+    });
+    const startGaps = evaluateTripDocumentRequirements({
+      tripStatus: trip.status,
+      documents: completionDocs,
+      requirements: documentRequirements,
+      forStage: TripDocumentRequirementStage.BEFORE_START,
+    });
 
     return {
       canComplete: this.resolveTripCanComplete(
@@ -2810,6 +2878,9 @@ export class DriverJobsService {
         requiresTrailerCheckout,
         missingTrailerCheckoutFields,
       ),
+      canStart:
+        trip.status === TripStatus.PUBLISHED &&
+        startGaps.missingTypeCodes.length === 0,
       missingDocuments,
       containerDocumentation,
       missingContainerDocumentation,
@@ -2818,6 +2889,16 @@ export class DriverJobsService {
       missingTrailerCheckoutFields,
       trailerNumber: trip.trailerNumber ?? null,
       parkingLocations,
+      documentRequirements,
+      documentReadiness: {
+        readinessStatus: documentEvaluation.readinessStatus,
+        totalMissingCount: documentEvaluation.totalMissingCount,
+        blockingAction: documentEvaluation.blockingAction,
+        blockingActor: documentEvaluation.blockingActor,
+        missingTypeCodes: documentEvaluation.missingTypeCodes,
+        summaryLabels: documentEvaluation.summaryLabels,
+        requirements: documentEvaluation.requirements,
+      },
     };
   }
 
@@ -2854,6 +2935,7 @@ export class DriverJobsService {
             TripDocumentType.POD_PHOTO,
             TripDocumentType.POD_SIGNATURE,
             TripDocumentType.OTHER,
+            TripDocumentType.PERMIT,
             TripDocumentType.CONTAINER_PHOTO,
             TripDocumentType.SEAL_PHOTO,
             TripDocumentType.TRAILER_PARKING_PHOTO,
@@ -3078,7 +3160,25 @@ export class DriverJobsService {
         requiresSignature: row.requiresSignature,
         minCount: row.minCount,
         sortOrder: row.sortOrder,
+        responsibleUploader: (row as any).responsibleUploader ?? "DRIVER",
+        requirementStage: (row as any).requirementStage ?? "BEFORE_COMPLETE",
       })),
+      documentReadiness: (() => {
+        const evaluation = evaluateTripDocumentRequirements({
+          tripStatus: trip.status,
+          documents: trip.documents ?? [],
+          requirements: trip.documentRequirements ?? [],
+        });
+        return {
+          readinessStatus: evaluation.readinessStatus,
+          totalMissingCount: evaluation.totalMissingCount,
+          blockingAction: evaluation.blockingAction,
+          blockingActor: evaluation.blockingActor,
+          missingTypeCodes: evaluation.missingTypeCodes,
+          summaryLabels: evaluation.summaryLabels,
+          requirements: evaluation.requirements,
+        };
+      })(),
 
       cargo,
       route: {
@@ -3311,7 +3411,8 @@ export class DriverJobsService {
       !mime.startsWith("image/") &&
       type !== TripDocumentType.PICKUP_DO &&
       type !== TripDocumentType.DELIVERY_DO &&
-      type !== TripDocumentType.OTHER
+      type !== TripDocumentType.OTHER &&
+      type !== TripDocumentType.PERMIT
     ) {
       throw new BadRequestException("Unsupported file type for this trip document");
     }
@@ -3325,6 +3426,16 @@ export class DriverJobsService {
 
     if (trip.assignedDriverUserId !== driverUserId) {
       throw new BadRequestException("You are not assigned to this trip");
+    }
+
+    const uploadSnapshots = await this.loadTripDocumentRequirementSnapshots(
+      tenantId,
+      tripId,
+    );
+    if (!driverMayUploadRequirementType(uploadSnapshots, type)) {
+      throw new ForbiddenException(
+        "This document requirement must be uploaded by Operations",
+      );
     }
 
     const isContainerLinkedType =

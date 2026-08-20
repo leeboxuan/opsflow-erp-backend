@@ -1,7 +1,8 @@
 import { BadRequestException } from "@nestjs/common";
 import { CollectionType, JobType } from "@prisma/client";
+import { cargoModeForJobTypes, jobTypesInclude } from "./job-types";
 
-function isContainerCargoJobType(jobType: JobType): boolean {
+function isContainerCargoJobType(jobType: JobType | null | undefined): boolean {
   return (
     jobType === JobType.IMPORT
     || jobType === JobType.EXPORT
@@ -31,7 +32,8 @@ export function readUpdateJobItemsInput(dto: {
 
 export function parseValidJobItemsFromInput(
   rawItems: unknown[],
-  jobType?: JobType,
+  jobType?: JobType | null,
+  jobTypes?: readonly JobType[],
 ): Array<{
   itemCode: string;
   description: string | null;
@@ -39,8 +41,15 @@ export function parseValidJobItemsFromInput(
   pickupReference: string | null;
   qty: number | null;
 }> {
-  const containerStyle =
-    jobType != null && isContainerCargoJobType(jobType);
+  const mode =
+    jobTypes && jobTypes.length > 0
+      ? cargoModeForJobTypes(jobTypes)
+      : jobType != null && isContainerCargoJobType(jobType)
+        ? "CONTAINER"
+        : jobType === JobType.LCL
+          ? "LCL"
+          : "NONE";
+  const containerStyle = mode === "CONTAINER";
 
   return rawItems
     .map((i: any) => {
@@ -82,12 +91,13 @@ export function parseValidJobItemsFromInput(
 
 export function parseValidUpdateJobItemsFromInput(
   rawItems: unknown[],
-  jobType?: JobType,
+  jobType?: JobType | null,
+  jobTypes?: readonly JobType[],
 ): Array<
   ReturnType<typeof parseValidJobItemsFromInput>[number] & { id: string | null }
 > {
   return rawItems.flatMap((rawItem) => {
-    const parsed = parseValidJobItemsFromInput([rawItem], jobType);
+    const parsed = parseValidJobItemsFromInput([rawItem], jobType, jobTypes);
     if (!parsed.length) return [];
     const id =
       rawItem && typeof rawItem === "object" && "id" in rawItem
@@ -288,12 +298,15 @@ export function assertImportPickupSourceForCreate(
   });
 }
 
-/** COLLECTION create requires EMPTY or LOADED; other job types store null. */
+/** COLLECTION membership requires EMPTY or LOADED; otherwise store null. */
 export function resolveCollectionTypeForJobCreate(
-  jobType: JobType,
+  jobTypeOrTypes: JobType | readonly JobType[],
   collectionType?: CollectionType | string | null,
 ): CollectionType | null {
-  if (jobType !== JobType.COLLECTION) return null;
+  const types = Array.isArray(jobTypeOrTypes)
+    ? jobTypeOrTypes
+    : [jobTypeOrTypes];
+  if (!jobTypesInclude(types, JobType.COLLECTION)) return null;
   const raw =
     typeof collectionType === "string"
       ? collectionType.trim().toUpperCase()
@@ -302,12 +315,12 @@ export function resolveCollectionTypeForJobCreate(
     return raw;
   }
   throw new BadRequestException(
-    "collectionType is required for COLLECTION jobs (EMPTY or LOADED)",
+    "collectionType is required when job types include COLLECTION (EMPTY or LOADED)",
   );
 }
 
 export function assertCreateJobItemsRequiredForJobType(
-  _jobType: JobType,
+  _jobType: JobType | null | undefined,
   rawItems: unknown[],
   validItems: Array<{ itemCode: string }>,
 ): void {

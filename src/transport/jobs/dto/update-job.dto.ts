@@ -70,7 +70,20 @@ export class UpdateJobItemDto {
 }
   
 export class UpdateJobDto {
-  @ApiPropertyOptional({ enum: JobType })
+  @ApiPropertyOptional({
+    enum: JobType,
+    isArray: true,
+    description: "Replace canonical job types (Phase 4). At least one required when provided.",
+  })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(JobType, { each: true })
+  jobTypes?: JobType[];
+
+  @ApiPropertyOptional({
+    enum: JobType,
+    description: "Legacy singular type update; prefer jobTypes.",
+  })
   @IsOptional()
   @IsEnum(JobType)
   jobType?: JobType;

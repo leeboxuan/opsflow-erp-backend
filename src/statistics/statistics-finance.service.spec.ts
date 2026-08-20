@@ -21,7 +21,7 @@ function createPrismaMock() {
         timezone: "Asia/Singapore",
       }),
     },
-    job: { findMany: jest.fn() },
+    job: { findMany: jest.fn().mockResolvedValue([]) },
     trip: { findMany: jest.fn() },
     jobCharge: { groupBy: jest.fn() },
     tripPayoutLine: { findMany: jest.fn() },
@@ -35,6 +35,21 @@ function createPrismaMock() {
 function setEmptyResults(prisma: ReturnType<typeof createPrismaMock>) {
   prisma.job.findMany.mockResolvedValue([]);
   prisma.invoice.groupBy.mockResolvedValue([]);
+}
+
+const jobFinanceSummariesMock = {
+  countByFinanceStatus: jest.fn().mockResolvedValue({
+    NEGATIVE: 0,
+    NON_NEGATIVE: 0,
+    NOT_INVOICED: 0,
+  }),
+  summarizeJobs: jest.fn().mockResolvedValue(new Map()),
+  getForJob: jest.fn(),
+  listSummaries: jest.fn(),
+} as any;
+
+function createFinanceService(prisma: ReturnType<typeof createPrismaMock>) {
+  return new StatisticsFinanceService(prisma as any, jobFinanceSummariesMock);
 }
 
 describe("StatisticsFinanceService", () => {
@@ -111,9 +126,7 @@ describe("StatisticsFinanceService", () => {
       ]);
     prisma.invoice.findMany.mockResolvedValue([]);
 
-    const result = await new StatisticsFinanceService(
-      prisma as any,
-    ).getFinance("tenant-1", query());
+    const result = await createFinanceService(prisma).getFinance("tenant-1", query());
 
     expect(result.timeZone).toBe("Asia/Singapore");
     expect(result.currencyGroups).toEqual([
@@ -191,7 +204,7 @@ describe("StatisticsFinanceService", () => {
   it("uses authoritative inclusive/exclusive dates for each financial cohort", async () => {
     const prisma = createPrismaMock();
     setEmptyResults(prisma);
-    await new StatisticsFinanceService(prisma as any).getFinance(
+    await createFinanceService(prisma).getFinance(
       "tenant-1",
       query(),
     );
@@ -245,9 +258,7 @@ describe("StatisticsFinanceService", () => {
     prisma.tripPayoutLine.findMany.mockResolvedValue([]);
     prisma.invoice.groupBy.mockResolvedValue([]);
 
-    const result = await new StatisticsFinanceService(
-      prisma as any,
-    ).getFinance("tenant-1", query());
+    const result = await createFinanceService(prisma).getFinance("tenant-1", query());
 
     expect(result.currencyGroups).toEqual([]);
     expect(result.exceptionCounts).toEqual({
@@ -295,9 +306,7 @@ describe("StatisticsFinanceService", () => {
     ]);
     prisma.invoice.groupBy.mockResolvedValue([]);
 
-    const result = await new StatisticsFinanceService(
-      prisma as any,
-    ).getFinance("tenant-1", query());
+    const result = await createFinanceService(prisma).getFinance("tenant-1", query());
 
     expect(result.currencyGroups.map((group) => group.currency)).toEqual([
       "SGD",
@@ -348,9 +357,7 @@ describe("StatisticsFinanceService", () => {
     ]);
     prisma.invoice.groupBy.mockResolvedValue([]);
 
-    const result = await new StatisticsFinanceService(
-      prisma as any,
-    ).getFinance("tenant-1", query());
+    const result = await createFinanceService(prisma).getFinance("tenant-1", query());
 
     expect(result.currencyGroups[0]).toMatchObject({
       currency: "SGD",
@@ -371,9 +378,7 @@ describe("StatisticsFinanceService", () => {
       ])
       .mockResolvedValueOnce([]);
 
-    const result = await new StatisticsFinanceService(
-      prisma as any,
-    ).getFinance("tenant-1", query());
+    const result = await createFinanceService(prisma).getFinance("tenant-1", query());
 
     expect(result.currencyGroups).toEqual([]);
     expect(result.limitations).toContain(
@@ -384,7 +389,7 @@ describe("StatisticsFinanceService", () => {
   it("applies customer and job filters through tenant-scoped canonical jobs", async () => {
     const prisma = createPrismaMock();
     setEmptyResults(prisma);
-    await new StatisticsFinanceService(prisma as any).getFinance(
+    await createFinanceService(prisma).getFinance(
       "tenant-1",
       query({
         customerId: "customer-other-tenant",
@@ -392,7 +397,7 @@ describe("StatisticsFinanceService", () => {
       }),
     );
 
-    expect(prisma.job.findMany).toHaveBeenCalledTimes(3);
+    expect(prisma.job.findMany).toHaveBeenCalledTimes(4);
     for (const call of prisma.job.findMany.mock.calls) {
       expect(call[0].where).toMatchObject({
         tenantId: "tenant-1",
@@ -417,7 +422,7 @@ describe("StatisticsFinanceService", () => {
     prisma.invoice.groupBy.mockResolvedValue([]);
     prisma.invoice.findMany.mockResolvedValue([]);
 
-    await new StatisticsFinanceService(prisma as any).getFinance(
+    await createFinanceService(prisma).getFinance(
       "tenant-1",
       query({ customerId: "customer-1" }),
     );
@@ -468,7 +473,7 @@ describe("StatisticsFinanceService", () => {
     prisma.invoice.groupBy.mockResolvedValue([]);
     prisma.invoice.findMany.mockResolvedValue([]);
 
-    const result = await new StatisticsFinanceService(prisma as any).getFinance(
+    const result = await createFinanceService(prisma).getFinance(
       "tenant-1",
       query(),
     );
@@ -556,7 +561,7 @@ describe("StatisticsFinanceService", () => {
     prisma.invoice.groupBy.mockResolvedValue([]);
     prisma.invoice.findMany.mockResolvedValue([]);
 
-    const result = await new StatisticsFinanceService(prisma as any).getFinance(
+    const result = await createFinanceService(prisma).getFinance(
       "tenant-1",
       query(),
     );
@@ -611,9 +616,7 @@ describe("StatisticsFinanceService", () => {
       ]);
     prisma.invoice.findMany.mockResolvedValue([]);
 
-    const result = await new StatisticsFinanceService(
-      prisma as any,
-    ).getFinance("tenant-1", query());
+    const result = await createFinanceService(prisma).getFinance("tenant-1", query());
 
     expect(result.currencyGroups).toEqual([
       expect.objectContaining({
@@ -640,7 +643,7 @@ describe("StatisticsFinanceService", () => {
     setEmptyResults(prisma);
     prisma.jobCharge.groupBy.mockResolvedValue([]);
     prisma.invoice.findMany.mockResolvedValue([]);
-    await new StatisticsFinanceService(prisma as any).getFinance(
+    await createFinanceService(prisma).getFinance(
       "tenant-1",
       query(),
     );

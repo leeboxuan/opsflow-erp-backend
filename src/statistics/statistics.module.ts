@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../shared/auth/auth.module";
 import { PrismaModule } from "../shared/prisma/prisma.module";
+import { FinanceModule } from "../transport/finance/finance.module";
 import { StatisticsCustomersService } from "./statistics-customers.service";
 import { StatisticsDriversController } from "./statistics-drivers.controller";
 import { StatisticsDriversService } from "./statistics-drivers.service";
@@ -24,7 +25,7 @@ import { StatisticsTruckingService } from "./statistics-trucking.service";
  * services.
  */
 @Module({
-  imports: [PrismaModule, AuthModule],
+  imports: [PrismaModule, AuthModule, FinanceModule],
   controllers: [
     StatisticsOverviewController,
     StatisticsDriversController,

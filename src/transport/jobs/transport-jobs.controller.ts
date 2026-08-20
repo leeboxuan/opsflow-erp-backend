@@ -61,6 +61,7 @@ import {
   AssignJobTripDto,
   PatchTripPayoutDto,
   PatchTripDocumentRequirementDto,
+  CreateTripDocumentRequirementDto,
   PatchJobTripDto,
   PatchTripDetailsDto,
   PublishJobTripRouteDto,
@@ -798,8 +799,12 @@ export class TransportJobsController {
   @Patch(":jobId/trips/:tripId/document-requirements/:requirementId")
   @ApiOperation({
     summary:
-      "Update a frozen-on-publish trip document requirement (signature / required). Draft trips only.",
+      "Update a trip document requirement while the trip is still DRAFT. Frozen after publish.",
   })
+  @Roles(
+    CanonicalTenantRole.TENANT_ADMIN,
+    CanonicalTenantRole.TRANSPORT_ADMIN,
+  )
   async patchTripDocumentRequirement(
     @Req() req: any,
     @Param("jobId") jobId: string,
@@ -814,6 +819,59 @@ export class TransportJobsController {
       jobId,
       tripId,
       requirementId,
+      dto,
+      accessUser,
+    );
+  }
+
+  @Delete(":jobId/trips/:tripId/document-requirements/:requirementId")
+  @ApiOperation({
+    summary:
+      "Remove a trip document requirement while the trip is still DRAFT. Uploaded documents are preserved.",
+  })
+  @Roles(
+    CanonicalTenantRole.TENANT_ADMIN,
+    CanonicalTenantRole.TRANSPORT_ADMIN,
+  )
+  async deleteTripDocumentRequirement(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Param("requirementId") requirementId: string,
+    @Query("confirmPreserveDocuments") confirmPreserveDocuments?: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = accessActorFromRequest(req);
+    return this.jobs.deleteTripDocumentRequirement(
+      tenantId,
+      jobId,
+      tripId,
+      requirementId,
+      accessUser,
+      confirmPreserveDocuments === "true" || confirmPreserveDocuments === "1",
+    );
+  }
+
+  @Post(":jobId/trips/:tripId/document-requirements")
+  @ApiOperation({
+    summary: "Add a trip document requirement while the trip is still DRAFT.",
+  })
+  @Roles(
+    CanonicalTenantRole.TENANT_ADMIN,
+    CanonicalTenantRole.TRANSPORT_ADMIN,
+  )
+  async createTripDocumentRequirement(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Body() dto: CreateTripDocumentRequirementDto,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = accessActorFromRequest(req);
+    return this.jobs.createTripDocumentRequirement(
+      tenantId,
+      jobId,
+      tripId,
       dto,
       accessUser,
     );

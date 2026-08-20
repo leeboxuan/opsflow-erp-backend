@@ -95,6 +95,7 @@ type MovementRecord = {
     jobSequence: number | null;
     tripSequence: number | null;
     status: TripStatus;
+    tripType: JobType | null;
     startedAt: Date | null;
     closedAt: Date | null;
     originLabel: string | null;
@@ -109,7 +110,8 @@ type MovementRecord = {
     job: {
       id: string;
       internalRef: string;
-      jobType: JobType;
+      jobType: JobType | null;
+      jobTypeAssignments?: Array<{ jobType: JobType }>;
       customerCompanyId: string;
       customerCompany: { name: string };
     } | null;
@@ -135,6 +137,7 @@ const MOVEMENT_SELECT = {
       jobSequence: true,
       tripSequence: true,
       status: true,
+      tripType: true,
       startedAt: true,
       closedAt: true,
       originLabel: true,
@@ -151,6 +154,7 @@ const MOVEMENT_SELECT = {
           id: true,
           internalRef: true,
           jobType: true,
+          jobTypeAssignments: { select: { jobType: true } },
           customerCompanyId: true,
           customerCompany: { select: { name: true } },
         },
@@ -830,7 +834,8 @@ export class StatisticsTruckingService {
       containerSize: inferContainerSizeLabel(row.jobItem.description),
       jobId: trip.job.id,
       jobNo: displayJobNo(trip.job.internalRef),
-      jobType: trip.job.jobType,
+      // Trip-specific classification; never invent from multi-type Job.jobType.
+      jobType: (trip.tripType ?? trip.job.jobType) as any,
       customerId: trip.job.customerCompanyId,
       customerName: trip.job.customerCompany.name,
       tripId: trip.id,
