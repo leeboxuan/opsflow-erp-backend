@@ -1,6 +1,8 @@
 node_modules
 *.zip
 dist
+tsconfig.tsbuildinfo
+tsconfig.build.tsbuildinfo
 
 # Local environment files. Keep tracked templates such as .env.example.
 .env
