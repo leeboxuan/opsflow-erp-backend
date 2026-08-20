@@ -28,6 +28,8 @@
     "e2e:bootstrap-catalogues": "ts-node --project tsconfig.seed.json scripts/e2e-bootstrap-catalogues.ts",
     "e2e:check-safety": "ts-node --project tsconfig.seed.json scripts/e2e-check-safety.ts",
     "e2e:seed-document-requirements": "ts-node --project tsconfig.seed.json scripts/e2e-seed-document-requirements.ts",
+    "e2e:uat:setup": "dotenv -e .env -- ts-node --transpile-only scripts/e2e-uat-run-setup.ts",
+    "e2e:uat:cleanup": "dotenv -e .env -- ts-node --transpile-only scripts/e2e-uat-run-cleanup.ts",
     "bench:phase5": "ts-node --transpile-only scripts/phase5-query-benchmark.ts",
     "start": "node dist/main",
     "gen:api": "openapi-typescript https://opsflow-erp-api.onrender.com/api/docs-json -o src/api/generated.ts"

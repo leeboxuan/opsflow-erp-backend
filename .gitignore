@@ -8,3 +8,6 @@ tsconfig.build.tsbuildinfo
 .env
 .env.*
 !.env.example
+
+# Run-owned UAT automation manifests (may contain tenant UUIDs)
+scripts/.e2e-uat-last-run.json
