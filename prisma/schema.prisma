@@ -1553,16 +1553,18 @@ model MasterSingaporePort {
 }
 
 model MasterSingaporeDepot {
-  id           String  @id @default(cuid())
-  code         String  @unique
-  name         String
-  addressLine1 String?
-  addressLine2 String?
-  postalCode   String?
-  country      String? @default("SG")
-  lat          Float?
-  lng          Float?
-  placeId      String?
+  id                     String  @id @default(cuid())
+  code                   String  @unique
+  name                   String
+  addressLine1           String?
+  addressLine2           String?
+  postalCode             String?
+  country                String? @default("SG")
+  lat                    Float?
+  lng                    Float?
+  placeId                String?
+  /// Human-readable display summary from Portnet/operator directories (not a scheduling engine).
+  operatingHoursSummary  String?
 
   @@map("master_singapore_depots")
 }

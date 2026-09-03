@@ -13,6 +13,7 @@ import {
   DoStatus,
 } from "@prisma/client";
 import { seedMasterLogisticsLocations } from "./seeds/master-logistics-locations.seed";
+import { seedSingaporeDepots } from "./seeds/singapore-depots.portnet.seed";
 
 const prisma = new PrismaClient();
 
@@ -129,57 +130,6 @@ const SG_PORTS = [
   },
 ];
 
-const SG_DEPOTS = [
-  {
-    id: "msd_gul7",
-    code: "GUL7",
-    name: "7 Gul Circle warehouse / yard",
-    addressLine1: "7 Gul Circle",
-    addressLine2: null,
-    postalCode: "629563",
-    country: "SG",
-    lat: 1.3107274,
-    lng: 103.6749418,
-    placeId: null,
-  },
-  {
-    id: "msd_gul_default",
-    code: "GUL_DEFAULT",
-    name: "7 Gul Circle - default return",
-    addressLine1: "7 Gul Circle",
-    addressLine2: null,
-    postalCode: "629563",
-    country: "SG",
-    lat: 1.3107274,
-    lng: 103.6749418,
-    placeId: null,
-  },
-  {
-    id: "msd_tuas",
-    code: "TUAS_DEPOT",
-    name: "Tuas logistics depot (placeholder)",
-    addressLine1: "15 Tuas Avenue 18",
-    addressLine2: null,
-    postalCode: "638898",
-    country: "SG",
-    lat: 1.32545,
-    lng: 103.64648,
-    placeId: null,
-  },
-  {
-    id: "msd_pasir",
-    code: "PASIR_DEPOT",
-    name: "Pasir Panjang area depot (placeholder)",
-    addressLine1: "30 Pasir Panjang Road",
-    addressLine2: null,
-    postalCode: "118503",
-    country: "SG",
-    lat: 1.28124,
-    lng: 103.78309,
-    placeId: null,
-  },
-];
-
 async function seedSingaporeMasters() {
   for (const row of SG_PORTS) {
     await prisma.masterSingaporePort.upsert({
@@ -188,13 +138,7 @@ async function seedSingaporeMasters() {
       create: row,
     });
   }
-  for (const row of SG_DEPOTS) {
-    await prisma.masterSingaporeDepot.upsert({
-      where: { code: row.code },
-      update: row,
-      create: row,
-    });
-  }
+  await seedSingaporeDepots(prisma);
   await seedMasterLogisticsLocations(prisma);
   console.log("✅ Singapore ports/depots seeded");
 }

@@ -8,6 +8,7 @@
   },
   "include": [
     "prisma/seed.ts",
+    "prisma/seeds/**/*.ts",
     "scripts/**/*.ts",
     "src/scripts/wipe-operational-scope.ts",
     "src/e2e/**/*.ts"

@@ -914,3 +914,69 @@ describe("MasterDataService getActiveMasterItems", () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
+
+describe("MasterDataService listSingaporeDepots", () => {
+  it("returns stored operatingHoursSummary including null for OCW4 / legacy", async () => {
+    const findMany = jest.fn().mockResolvedValue([
+      {
+        id: "1",
+        code: "ACS1",
+        name: "Allied Container Services",
+        addressLine1: "1 Tuas Basin Lane, Singapore 637066",
+        addressLine2: null,
+        postalCode: "637066",
+        country: "SG",
+        lat: null,
+        lng: null,
+        placeId: null,
+        operatingHoursSummary: "Mon–Fri 08:00–17:00; Sat 08:00–15:00",
+      },
+      {
+        id: "2",
+        code: "GUL_DEFAULT",
+        name: "7 Gul Circle - default return",
+        addressLine1: "7 Gul Circle",
+        addressLine2: null,
+        postalCode: "629563",
+        country: "SG",
+        lat: 1.3,
+        lng: 103.6,
+        placeId: null,
+        operatingHoursSummary: null,
+      },
+      {
+        id: "3",
+        code: "OCW4",
+        name: "OCWS Tuas",
+        addressLine1: "10 Tuas South Street 2, Singapore 637896",
+        addressLine2: null,
+        postalCode: "637896",
+        country: "SG",
+        lat: null,
+        lng: null,
+        placeId: null,
+        operatingHoursSummary: null,
+      },
+    ]);
+    const prisma: any = {
+      masterSingaporeDepot: { findMany },
+    };
+    const svc = new MasterDataService(prisma, createSupabaseClientMock() as any, {
+      log: jest.fn(),
+    } as any);
+
+    const rows = await svc.listSingaporeDepots();
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({ operatingHoursSummary: true }),
+      }),
+    );
+    expect(rows[0].operatingHoursSummary).toBe(
+      "Mon–Fri 08:00–17:00; Sat 08:00–15:00",
+    );
+    expect(rows[0].label).toBe("ACS1 — Allied Container Services");
+    expect(rows[1].operatingHoursSummary).toBeNull();
+    expect(rows[2].code).toBe("OCW4");
+    expect(rows[2].operatingHoursSummary).toBeNull();
+  });
+});

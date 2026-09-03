@@ -61,6 +61,7 @@ export class MasterDataService {
         rows.map((row) => ({
           ...row,
           label: `${row.code} — ${row.name}`,
+          operatingHoursSummary: null as string | null,
         })),
       );
   }
@@ -80,12 +81,14 @@ export class MasterDataService {
           lat: true,
           lng: true,
           placeId: true,
+          operatingHoursSummary: true,
         },
       })
       .then((rows) =>
         rows.map((row) => ({
           ...row,
           label: `${row.code} — ${row.name}`,
+          operatingHoursSummary: row.operatingHoursSummary ?? null,
         })),
       );
   }
@@ -123,6 +126,8 @@ export class MasterDataService {
         rows.map((row) => ({
           ...row,
           label: row.label ?? `${row.code} — ${row.name}`,
+          // MasterLogisticsLocation has no hours column yet — expose null for FE fallback.
+          operatingHoursSummary: null as string | null,
         })),
       );
   }
