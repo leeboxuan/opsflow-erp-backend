@@ -1035,6 +1035,8 @@ model JobItem {
   itemCode         String
   description      String?
   sealNo           String?
+  /// ISO-style container size for IMPORT/EXPORT/COLLECTION cargo. Nullable for legacy rows.
+  containerSize    ContainerSize?
   pickupReference  String?
   qty              Int?
 
@@ -1853,6 +1855,14 @@ model JobTypeAssignment {
 enum CollectionType {
   EMPTY
   LOADED
+}
+
+/// JobItem container size for IMPORT/EXPORT/COLLECTION cargo lines.
+/// Wire/API values are mapped: FT_20 → "20ft", FT_40 → "40ft", FT_45 → "45ft".
+enum ContainerSize {
+  FT_20 @map("20ft")
+  FT_40 @map("40ft")
+  FT_45 @map("45ft")
 }
 
 enum JobStatus {

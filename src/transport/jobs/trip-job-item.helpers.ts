@@ -17,6 +17,7 @@ import {
   canonicalAutoTripCarriesCreatedJobItems,
   isContainerCargoJobType,
 } from "../workflows/job-workflow.helpers";
+import { toContainerSizeWire } from "./container-size";
 
 export type LinkedCargoItemDto = {
   id: string;
@@ -25,7 +26,8 @@ export type LinkedCargoItemDto = {
   sealNo: string | null;
   sealNumber: string | null;
   pickupReference: string | null;
-  containerSize: null;
+  /** Wire value "20ft"|"40ft"|"45ft"; null on legacy rows. */
+  containerSize: string | null;
   weight: null;
   remarks: null;
   description?: string | null;
@@ -42,6 +44,7 @@ export type TripJobItemLinkRow = {
     itemCode: string;
     description: string | null;
     sealNo: string | null;
+    containerSize?: string | null;
     pickupReference: string | null;
     qty: number | null;
   };
@@ -52,6 +55,7 @@ export type JobItemRowForLink = {
   itemCode: string;
   description?: string | null;
   sealNo?: string | null;
+  containerSize?: string | null;
   pickupReference?: string | null;
   qty?: number | null;
   jobId?: string;
@@ -115,7 +119,7 @@ export function mapLinkedCargoContainers(
       sealNo,
       sealNumber: sealNo,
       pickupReference: null,
-      containerSize: null,
+      containerSize: toContainerSizeWire(link.jobItem.containerSize as any),
       weight: null,
       remarks: null,
       itemCode: link.jobItem.itemCode,

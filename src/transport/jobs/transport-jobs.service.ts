@@ -212,11 +212,12 @@ import {
   normalizeJobItemIdsInput,
 } from "./trip-job-item.helpers";
 import {
+  applyJobItemsUpdateInTransaction,
   createTripJobItemLinksIfAbsent,
   loadTripJobItemLinks,
   replaceTripJobItemLinks,
-  applyJobItemsUpdateInTransaction,
 } from "./trip-job-item.mutations";
+import { toContainerSizeWire } from "./container-size";
 import { isUniqueConstraintError } from "../../shared/idempotency/idempotency.util";
 import {
   CANONICAL_JOB_DELIVERY_DO_CONCURRENCY,
@@ -675,6 +676,7 @@ function toJobDto(j: any): JobDto {
           description: containerStyle ? null : (item.description ?? null),
           sealNo,
           sealNumber: sealNo,
+          containerSize: toContainerSizeWire(item.containerSize),
           pickupReference: containerStyle ? null : (item.pickupReference ?? null),
           qty: item.qty ?? null,
           createdAt: item.createdAt,
@@ -2751,6 +2753,7 @@ export class TransportJobsService {
       rawItems,
       compatibilityJobType,
       resolvedJobTypes,
+      { requireContainerSize: true },
     );
     assertCreateJobItemsRequiredForJobType(
       compatibilityJobType,
@@ -3101,6 +3104,7 @@ export class TransportJobsService {
             itemCode: item.itemCode,
             description: item.description,
             sealNo: item.sealNo,
+            containerSize: item.containerSize,
             pickupReference: item.pickupReference,
             qty: item.qty,
           },
@@ -3615,7 +3619,15 @@ export class TransportJobsService {
 
     const payoutSummary = buildJobPayoutSummary(job.trips);
     const containerSummary = buildJobContainerSummary(
-      job.items,
+      job.items.map((item) => ({
+        id: item.id,
+        itemCode: item.itemCode,
+        sealNo: item.sealNo ?? null,
+        containerSize: toContainerSizeWire(item.containerSize),
+        description: item.description ?? null,
+        qty: item.qty ?? null,
+        pickupReference: item.pickupReference ?? null,
+      })),
       job.trips,
       tripDisplayRefById,
     );
@@ -8044,6 +8056,7 @@ export class TransportJobsService {
                 description: true,
                 qty: true,
                 sealNo: true,
+                containerSize: true,
                 pickupReference: true,
               },
             },

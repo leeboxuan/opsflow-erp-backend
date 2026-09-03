@@ -221,6 +221,76 @@ describe("DriverJobsService updateOperationalDetails", () => {
     });
   });
 
+  it("does not require or write containerSize when driver PATCHes number/seal (legacy null preserved)", async () => {
+    const { svc, prisma, jobItemUpdate } = makeSvc();
+    // Legacy JobItem: containerSize is null in DB; driver payload omits it entirely.
+    prisma.jobItem.findMany.mockResolvedValue([
+      { id: "item-1", itemCode: "CONT-OLD", sealNo: "SEAL-OLD", containerSize: null },
+    ]);
+
+    await svc.updateOperationalDetails(tenantId, jobId, tripId, driverUserId, {
+      containers: [
+        { itemId: "item-1", containerNumber: "CONT-NEW", sealNumber: "SEAL-NEW" },
+      ],
+    });
+
+    expect(prisma.jobItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenantId, jobId, id: { in: ["item-1"] } },
+      }),
+    );
+    expect(jobItemUpdate).toHaveBeenCalledTimes(1);
+    const updateArg = jobItemUpdate.mock.calls[0][0];
+    expect(updateArg.where).toEqual({ id: "item-1" });
+    expect(updateArg.data).toEqual({ itemCode: "CONT-NEW", sealNo: "SEAL-NEW" });
+    expect(updateArg.data).not.toHaveProperty("containerSize");
+  });
+
+  it("preserves an existing non-null containerSize when omitted from driver PATCH", async () => {
+    const { svc, prisma, jobItemUpdate } = makeSvc();
+    prisma.jobItem.findMany.mockResolvedValue([
+      {
+        id: "item-1",
+        itemCode: "CONT-OLD",
+        sealNo: "SEAL-OLD",
+        containerSize: "FT_40",
+      },
+    ]);
+
+    await svc.updateOperationalDetails(tenantId, jobId, tripId, driverUserId, {
+      containers: [{ itemId: "item-1", containerNumber: "CONT-NEW" }],
+    });
+
+    const updateArg = jobItemUpdate.mock.calls[0][0];
+    expect(updateArg.data).toEqual({ itemCode: "CONT-NEW" });
+    expect(updateArg.data).not.toHaveProperty("containerSize");
+    // Omitted field ⇒ Prisma leaves JobItem.containerSize unchanged (still FT_40).
+  });
+
+  it("rejects itemIds that belong to another tenant or job", async () => {
+    const { svc, prisma } = makeSvc();
+    // findMany is scoped by tenantId+jobId; foreign ids resolve to empty.
+    prisma.jobItem.findMany.mockResolvedValue([]);
+
+    await expect(
+      svc.updateOperationalDetails(tenantId, jobId, tripId, driverUserId, {
+        containers: [
+          { itemId: "other-tenant-item", containerNumber: "HACK" },
+        ],
+      }),
+    ).rejects.toThrow(/do not belong to this job/);
+
+    expect(prisma.jobItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          tenantId,
+          jobId,
+          id: { in: ["other-tenant-item"] },
+        },
+      }),
+    );
+  });
+
   it("rejects edits after completion", async () => {
     const { svc } = makeSvc({ tripStatus: TripStatus.COMPLETED });
 

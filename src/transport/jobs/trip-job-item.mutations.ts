@@ -72,6 +72,7 @@ export async function loadTripJobItemLinks(
           itemCode: true,
           description: true,
           sealNo: true,
+          containerSize: true,
           pickupReference: true,
           qty: true,
         },
@@ -98,6 +99,7 @@ async function resolveJobItemsForLinkIds(
       itemCode: true,
       description: true,
       sealNo: true,
+      containerSize: true,
       pickupReference: true,
       qty: true,
     },
@@ -361,6 +363,7 @@ export async function applyJobItemsUpdateInTransaction(
       itemCode: string;
       description: string | null;
       sealNo: string | null;
+      containerSize: import("@prisma/client").ContainerSize | null;
       pickupReference: string | null;
       qty: number | null;
     }>;
@@ -403,6 +406,7 @@ export async function applyJobItemsUpdateInTransaction(
           itemCode: item.itemCode,
           description: item.description,
           sealNo: item.sealNo,
+          containerSize: item.containerSize,
           pickupReference: item.pickupReference,
           qty: item.qty,
         })),
@@ -441,6 +445,7 @@ export async function applyJobItemsUpdateInTransaction(
       itemCode: item.itemCode,
       description: item.description,
       sealNo: item.sealNo,
+      containerSize: item.containerSize,
       pickupReference: item.pickupReference,
       qty: item.qty,
     };

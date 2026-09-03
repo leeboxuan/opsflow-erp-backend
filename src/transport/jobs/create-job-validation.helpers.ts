@@ -1,6 +1,7 @@
 import { BadRequestException } from "@nestjs/common";
-import { CollectionType, JobType } from "@prisma/client";
+import { CollectionType, ContainerSize, JobType } from "@prisma/client";
 import { cargoModeForJobTypes, jobTypesInclude } from "./job-types";
+import { parseContainerSizeInput } from "./container-size";
 
 function isContainerCargoJobType(jobType: JobType | null | undefined): boolean {
   return (
@@ -34,10 +35,12 @@ export function parseValidJobItemsFromInput(
   rawItems: unknown[],
   jobType?: JobType | null,
   jobTypes?: readonly JobType[],
+  opts?: { requireContainerSize?: boolean },
 ): Array<{
   itemCode: string;
   description: string | null;
   sealNo: string | null;
+  containerSize: ContainerSize | null;
   pickupReference: string | null;
   qty: number | null;
 }> {
@@ -50,6 +53,7 @@ export function parseValidJobItemsFromInput(
           ? "LCL"
           : "NONE";
   const containerStyle = mode === "CONTAINER";
+  const requireContainerSize = opts?.requireContainerSize === true && containerStyle;
 
   return rawItems
     .map((i: any) => {
@@ -67,6 +71,11 @@ export function parseValidJobItemsFromInput(
       }
       const sealNo =
         String(i?.sealNo ?? i?.sealNumber ?? "").trim() || null;
+      const containerSize = containerStyle
+        ? parseContainerSizeInput(i?.containerSize, {
+            required: requireContainerSize,
+          })
+        : null;
       // Container-style jobs: pickup reference + description are job-level only.
       // Do not persist per-item pickupReference/description on new writes.
       if (containerStyle) {
@@ -74,6 +83,7 @@ export function parseValidJobItemsFromInput(
           itemCode,
           description: null,
           sealNo,
+          containerSize,
           pickupReference: null,
           qty,
         };
@@ -82,6 +92,7 @@ export function parseValidJobItemsFromInput(
         itemCode,
         description: i?.description?.trim() || null,
         sealNo,
+        containerSize: null,
         pickupReference: i?.pickupReference?.trim() || null,
         qty,
       };
@@ -97,7 +108,10 @@ export function parseValidUpdateJobItemsFromInput(
   ReturnType<typeof parseValidJobItemsFromInput>[number] & { id: string | null }
 > {
   return rawItems.flatMap((rawItem) => {
-    const parsed = parseValidJobItemsFromInput([rawItem], jobType, jobTypes);
+    // Intentional cargo edit: require size on each container row in the payload.
+    const parsed = parseValidJobItemsFromInput([rawItem], jobType, jobTypes, {
+      requireContainerSize: true,
+    });
     if (!parsed.length) return [];
     const id =
       rawItem && typeof rawItem === "object" && "id" in rawItem

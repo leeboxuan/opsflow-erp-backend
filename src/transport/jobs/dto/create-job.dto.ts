@@ -66,6 +66,14 @@ export class CreateJobItemDto {
   @IsNumber()
   qty?: number;
 
+  @ApiPropertyOptional({
+    enum: ["20ft", "40ft", "45ft"],
+    description:
+      "Container size for IMPORT/EXPORT/COLLECTION. Required for new container rows; wire values are 20ft|40ft|45ft.",
+  })
+  @IsOptional()
+  @IsString()
+  containerSize?: string | null;
 }
 
 export class CreateJobImportDetailsDto {

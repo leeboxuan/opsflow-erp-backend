@@ -67,6 +67,15 @@ export class UpdateJobItemDto {
   @IsOptional()
   @IsNumber()
   qty?: number;
+
+  @ApiPropertyOptional({
+    enum: ["20ft", "40ft", "45ft"],
+    description:
+      "Container size for IMPORT/EXPORT/COLLECTION. Required when intentionally editing a container row.",
+  })
+  @IsOptional()
+  @IsString()
+  containerSize?: string | null;
 }
   
 export class UpdateJobDto {

@@ -572,6 +572,10 @@ export class JobItemDto {
   /** API alias for sealNo when clients prefer sealNumber. */
   sealNumber?: string | null;
   /**
+   * Wire value: "20ft" | "40ft" | "45ft". Null on legacy rows.
+   */
+  containerSize: string | null;
+  /**
    * Deprecated for container-style jobs: use JobDto.pickupReference.
    * May be null on new container rows; legacy rows may still have a value.
    */
@@ -696,6 +700,8 @@ export class JobContainerSummaryItemDto {
   tripJobItemId!: string | null;
   itemCode!: string;
   sealNo!: string | null;
+  /** Wire value: "20ft" | "40ft" | "45ft". Null on legacy rows. */
+  containerSize!: string | null;
   description!: string | null;
   qty!: number | null;
   pickupReference!: string | null;

@@ -25,6 +25,7 @@ export type JobDetailsItemSummaryInput = {
   id: string;
   itemCode: string;
   sealNo?: string | null;
+  containerSize?: string | null;
   description?: string | null;
   qty?: number | null;
   pickupReference?: string | null;
@@ -66,6 +67,7 @@ export function buildJobContainerSummary(
     tripJobItemId: string | null;
     itemCode: string;
     sealNo: string | null;
+    containerSize: string | null;
     description: string | null;
     qty: number | null;
     pickupReference: string | null;
@@ -91,6 +93,7 @@ export function buildJobContainerSummary(
         tripJobItemId: link.id,
         itemCode: item.itemCode,
         sealNo: item.sealNo ?? null,
+        containerSize: item.containerSize ?? null,
         description: item.description ?? null,
         qty: item.qty ?? null,
         pickupReference: item.pickupReference ?? null,
@@ -108,6 +111,7 @@ export function buildJobContainerSummary(
       tripJobItemId: null,
       itemCode: item.itemCode,
       sealNo: item.sealNo ?? null,
+      containerSize: item.containerSize ?? null,
       description: item.description ?? null,
       qty: item.qty ?? null,
       pickupReference: item.pickupReference ?? null,

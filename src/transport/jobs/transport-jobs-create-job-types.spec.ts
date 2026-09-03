@@ -699,7 +699,7 @@ describe("job create: EXPORT and COLLECTION", () => {
         deliveryAddress1: "8 Gul Cir",
         receiverName: "Receiver",
         receiverPhone: "91234567",
-        items: [{ containerNumber: "CONT123", sealNo: "SEAL9", pickupReference: "REF-88" }],
+        items: [{ containerNumber: "CONT123", sealNo: "SEAL9", containerSize: "40ft", pickupReference: "REF-88" }],
       } as any,
       { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
@@ -709,6 +709,7 @@ describe("job create: EXPORT and COLLECTION", () => {
       expect.objectContaining({
         itemCode: "CONT123",
         sealNo: "SEAL9",
+        containerSize: expect.anything(),
         pickupReference: null,
         description: null,
         qty: null,
@@ -758,7 +759,7 @@ describe("job create: EXPORT and COLLECTION", () => {
         voyage: "V1",
         shipper: "Ship Co",
         vesselName: "Vessel A",
-        items: [{ containerNumber: "CONT123", sealNo: "SEAL9" }],
+        items: [{ containerNumber: "CONT123", sealNo: "SEAL9", containerSize: "20ft" }],
       } as any,
       { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
@@ -789,6 +790,7 @@ describe("parseValidJobItemsFromInput container cargo", () => {
         itemCode: "ABCD1234567",
         description: null,
         sealNo: "S1",
+        containerSize: null,
         pickupReference: null,
         qty: null,
       },
