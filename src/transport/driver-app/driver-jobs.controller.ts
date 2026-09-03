@@ -249,6 +249,10 @@ export class DriverJobsController {
       properties: {
         trailerEndPhoto: { type: "string", format: "binary" },
         trailerParkingLocationCode: { type: "string" },
+        trailerParkingAddress1: { type: "string" },
+        trailerParkingAddress2: { type: "string" },
+        trailerParkingPostal: { type: "string" },
+        trailerParkingPlaceId: { type: "string" },
         trailerParkingLat: { type: "number" },
         trailerParkingLng: { type: "number" },
       },

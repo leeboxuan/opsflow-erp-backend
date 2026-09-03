@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Patch,
@@ -100,37 +101,22 @@ export class DriverTripExpensesController {
     FileInterceptor("file", { limits: { fileSize: TRIP_EXPENSE_RECEIPT_MAX_BYTES } }),
   )
   create(
-    @Req() req: any,
-    @Param("jobId") jobId: string,
-    @Param("tripId") tripId: string,
-    @Body() dto: CreateTripExpenseDto,
-    @UploadedFile() file?: Express.Multer.File,
+    @Req() _req: any,
+    @Param("jobId") _jobId: string,
+    @Param("tripId") _tripId: string,
+    @Body() _dto: CreateTripExpenseDto,
+    @UploadedFile() _file?: Express.Multer.File,
   ) {
-    if (dto.amountCents != null) {
-      dto.amountCents = Number(dto.amountCents);
-    }
-    return this.expenses.createForDriver(
-      req.tenant.tenantId,
-      jobId,
-      tripId,
-      req.user.userId,
-      dto,
-      file ?? null,
-    );
+    throw new ForbiddenException("Drivers cannot create trip expenses");
   }
 
   @Patch(":expenseId")
   update(
-    @Req() req: any,
-    @Param("expenseId") expenseId: string,
-    @Body() dto: UpdateTripExpenseDto,
+    @Req() _req: any,
+    @Param("expenseId") _expenseId: string,
+    @Body() _dto: UpdateTripExpenseDto,
   ) {
-    return this.expenses.updateForDriver(
-      req.tenant.tenantId,
-      expenseId,
-      req.user.userId,
-      dto,
-    );
+    throw new ForbiddenException("Drivers cannot update trip expenses");
   }
 
   @Post(":expenseId/attachments")
@@ -149,19 +135,12 @@ export class DriverTripExpensesController {
     FileInterceptor("file", { limits: { fileSize: TRIP_EXPENSE_RECEIPT_MAX_BYTES } }),
   )
   addAttachment(
-    @Req() req: any,
-    @Param("expenseId") expenseId: string,
-    @UploadedFile() file: Express.Multer.File,
-    @Body() body: AddTripExpenseAttachmentDto,
+    @Req() _req: any,
+    @Param("expenseId") _expenseId: string,
+    @UploadedFile() _file: Express.Multer.File,
+    @Body() _body: AddTripExpenseAttachmentDto,
   ) {
-    if (!file) throw new BadRequestException("Receipt file is required");
-    return this.expenses.addAttachmentForDriver(
-      req.tenant.tenantId,
-      expenseId,
-      req.user.userId,
-      file,
-      body,
-    );
+    throw new ForbiddenException("Drivers cannot add trip expense receipts");
   }
 
   @Get(":expenseId/attachments/:attachmentId/signed-url")

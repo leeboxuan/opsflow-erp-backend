@@ -221,9 +221,26 @@ describe("DriverJobsService updateOperationalDetails", () => {
     });
   });
 
+  it("updates an anonymous (null itemCode) linked JobItem without inventing identity until driver supplies it", async () => {
+    const { svc, prisma, jobItemUpdate } = makeSvc({ containerNumber: null });
+    prisma.jobItem.findMany.mockResolvedValue([
+      { id: "item-anon", itemCode: null, sealNo: null, containerSize: null },
+    ]);
+
+    await svc.updateOperationalDetails(tenantId, jobId, tripId, driverUserId, {
+      containers: [
+        { itemId: "item-anon", containerNumber: "TCLU9999999", sealNumber: "SEAL-9" },
+      ],
+    });
+
+    expect(jobItemUpdate).toHaveBeenCalledWith({
+      where: { id: "item-anon" },
+      data: { itemCode: "TCLU9999999", sealNo: "SEAL-9" },
+    });
+  });
+
   it("does not require or write containerSize when driver PATCHes number/seal (legacy null preserved)", async () => {
     const { svc, prisma, jobItemUpdate } = makeSvc();
-    // Legacy JobItem: containerSize is null in DB; driver payload omits it entirely.
     prisma.jobItem.findMany.mockResolvedValue([
       { id: "item-1", itemCode: "CONT-OLD", sealNo: "SEAL-OLD", containerSize: null },
     ]);
@@ -264,12 +281,10 @@ describe("DriverJobsService updateOperationalDetails", () => {
     const updateArg = jobItemUpdate.mock.calls[0][0];
     expect(updateArg.data).toEqual({ itemCode: "CONT-NEW" });
     expect(updateArg.data).not.toHaveProperty("containerSize");
-    // Omitted field ⇒ Prisma leaves JobItem.containerSize unchanged (still FT_40).
   });
 
   it("rejects itemIds that belong to another tenant or job", async () => {
     const { svc, prisma } = makeSvc();
-    // findMany is scoped by tenantId+jobId; foreign ids resolve to empty.
     prisma.jobItem.findMany.mockResolvedValue([]);
 
     await expect(

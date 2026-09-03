@@ -20,6 +20,7 @@ export type TripDocumentRequirementSnapshot = {
 const SIGNATURE_CAPABLE_TYPES = new Set<string>([
   TripDocumentType.DELIVERY_DO,
   TripDocumentType.PICKUP_DO,
+  TripDocumentType.LORRY_CHIT,
 ]);
 
 const COMPLETION_SNAPSHOT_SKIP_TYPES = new Set<string>([
@@ -67,28 +68,75 @@ export function defaultTripDocumentRequirementRows(
     {
       tenantId,
       tripId,
-      type: TripDocumentType.DELIVERY_DO,
-      label: "Delivery DO",
-      isRequired: true,
-      requiresSignature: true,
-      minCount: 1,
-      sortOrder: 0,
-      responsibleUploader: TripDocumentResponsibleUploader.DRIVER,
-      requirementStage: TripDocumentRequirementStage.BEFORE_COMPLETE,
-    },
-    {
-      tenantId,
-      tripId,
       type: TripDocumentType.POD_PHOTO,
       label: "Proof of Delivery Photo",
       isRequired: true,
       requiresSignature: false,
       minCount: 1,
-      sortOrder: 1,
+      sortOrder: 0,
       responsibleUploader: TripDocumentResponsibleUploader.DRIVER,
       requirementStage: TripDocumentRequirementStage.BEFORE_COMPLETE,
     },
   ];
+}
+
+export function tripDocumentRequirementRowsForCreate(
+  tenantId: string,
+  tripId: string,
+  flags?: {
+    signedDeliveryDoRequired?: boolean;
+    signedLorryChitRequired?: boolean;
+  } | null,
+): ReturnType<typeof defaultTripDocumentRequirementRows> {
+  const rows = defaultTripDocumentRequirementRows(tenantId, tripId);
+  if (flags?.signedDeliveryDoRequired === true) {
+    rows.push({
+      tenantId,
+      tripId,
+      type: TripDocumentType.DELIVERY_DO,
+      label: "Delivery DO",
+      isRequired: true,
+      requiresSignature: true,
+      minCount: 1,
+      sortOrder: 1,
+      responsibleUploader: TripDocumentResponsibleUploader.DRIVER,
+      requirementStage: TripDocumentRequirementStage.BEFORE_COMPLETE,
+    });
+  }
+  if (flags?.signedLorryChitRequired === true) {
+    rows.push({
+      tenantId,
+      tripId,
+      type: TripDocumentType.LORRY_CHIT,
+      label: "Lorry Chit",
+      isRequired: true,
+      requiresSignature: true,
+      minCount: 1,
+      sortOrder: 2,
+      responsibleUploader: TripDocumentResponsibleUploader.DRIVER,
+      requirementStage: TripDocumentRequirementStage.BEFORE_COMPLETE,
+    });
+  }
+  return rows;
+}
+
+export async function seedTripDocumentRequirementsForCreate(
+  prisma: unknown,
+  tenantId: string,
+  trips: Array<{
+    tripId: string;
+    signedDeliveryDoRequired?: boolean;
+    signedLorryChitRequired?: boolean;
+  }>,
+): Promise<void> {
+  const delegate = (prisma as { tripDocumentRequirement?: RequirementDelegate | null })
+    .tripDocumentRequirement;
+  if (!delegate?.createMany) return;
+  const data = trips.flatMap((trip) =>
+    tripDocumentRequirementRowsForCreate(tenantId, trip.tripId, trip),
+  );
+  if (data.length === 0) return;
+  await delegate.createMany({ data });
 }
 
 type RequirementDelegate = {

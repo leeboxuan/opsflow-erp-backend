@@ -42,7 +42,7 @@ export class JobMessageImportPatchDraftDto {
 
   @ApiProperty({ required: false, enum: JobMessageImportMovementType })
   @IsOptional()
-  @IsIn(["COLLECTION", "IMPORT", "EXPORT", "LCL", "UNKNOWN"])
+  @IsIn(["COLLECTION", "IMPORT", "EXPORT", "LCL", "RETURN", "ONE_WAY", "UNKNOWN"])
   movementType?: JobMessageImportMovementType;
 
   @ApiProperty({ required: false, nullable: true, enum: ["EMPTY", "LOADED"] })
@@ -198,6 +198,20 @@ export class JobMessageImportPatchDraftDto {
   @ValidateNested({ each: true })
   @Type(() => JobMessageImportDraftItemDto)
   items?: JobMessageImportDraftItemDto[];
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  containerSizeType?: string | null;
+
+  @ApiProperty({ required: false, type: [Object] })
+  @IsOptional()
+  @IsArray()
+  autoTripDocumentRequirements?: Array<{
+    tripIndex?: number;
+    signedDeliveryDoRequired?: boolean;
+    signedLorryChitRequired?: boolean;
+  }>;
 
   @ApiProperty({ required: false, enum: ["INCLUDED", "EXCLUDED"] })
   @IsOptional()

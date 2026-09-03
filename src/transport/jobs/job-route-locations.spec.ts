@@ -64,4 +64,56 @@ describe("canonical route locations", () => {
       assertCanonicalRouteLocationsForCreate(JobType.IMPORT, locations),
     ).toThrow(/Empty container return depot is required/);
   });
+
+  it("ONE_WAY maps pickup → delivery as a single Trip snapshot", () => {
+    const locations = resolveCanonicalRouteLocations({
+      jobType: JobType.ONE_WAY,
+      pickupAddress1: "Yard A",
+      deliveryAddress1: "Yard B",
+      receiverName: "Ops",
+    });
+    expect(() =>
+      assertCanonicalRouteLocationsForCreate(JobType.ONE_WAY, locations),
+    ).not.toThrow();
+    const snaps = canonicalAutoTripRouteSnapshots(JobType.ONE_WAY, locations);
+    expect(Object.keys(snaps)).toEqual([JobTripTemplate.PICKUP_TO_DELIVERY]);
+    expect(snaps[JobTripTemplate.PICKUP_TO_DELIVERY]?.originAddressLine1).toBe(
+      "Yard A",
+    );
+    expect(
+      snaps[JobTripTemplate.PICKUP_TO_DELIVERY]?.destinationAddressLine1,
+    ).toBe("Yard B");
+  });
+
+  it("RETURN maps pickup → depot as a single Trip snapshot", () => {
+    const locations = resolveCanonicalRouteLocations({
+      jobType: JobType.RETURN,
+      pickupAddress1: "Customer Yard",
+      importDetails: {
+        returningDepotAddress1: "Cogent",
+        returningDepotCode: "COGENT",
+      },
+    });
+    expect(() =>
+      assertCanonicalRouteLocationsForCreate(JobType.RETURN, locations),
+    ).not.toThrow();
+    const snaps = canonicalAutoTripRouteSnapshots(JobType.RETURN, locations);
+    expect(Object.keys(snaps)).toEqual([JobTripTemplate.PICKUP_TO_DELIVERY]);
+    expect(snaps[JobTripTemplate.PICKUP_TO_DELIVERY]?.originAddressLine1).toBe(
+      "Customer Yard",
+    );
+    expect(
+      snaps[JobTripTemplate.PICKUP_TO_DELIVERY]?.destinationAddressLine1,
+    ).toBe("Cogent");
+  });
+
+  it("rejects RETURN without depot", () => {
+    const locations = resolveCanonicalRouteLocations({
+      jobType: JobType.RETURN,
+      pickupAddress1: "Customer Yard",
+    });
+    expect(() =>
+      assertCanonicalRouteLocationsForCreate(JobType.RETURN, locations),
+    ).toThrow(/Return depot is required/);
+  });
 });

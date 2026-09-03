@@ -10,6 +10,7 @@ export function tripStatusAllowsDoSign(status: TripStatus): boolean {
 export const SIGNABLE_DO_TYPES = [
   TripDocumentType.PICKUP_DO,
   TripDocumentType.DELIVERY_DO,
+  TripDocumentType.LORRY_CHIT,
 ] as const;
 
 export type SignableDoType = (typeof SIGNABLE_DO_TYPES)[number];
@@ -66,9 +67,9 @@ export function isSignableDoType(type: string): type is SignableDoType {
 export function signatureArtifactTypeForDo(
   doType: SignableDoType,
 ): TripDocumentType {
-  return doType === TripDocumentType.PICKUP_DO
-    ? TripDocumentType.PICKUP_SIGNATURE
-    : TripDocumentType.DELIVERY_SIGNATURE;
+  if (doType === TripDocumentType.PICKUP_DO) return TripDocumentType.PICKUP_SIGNATURE;
+  if (doType === TripDocumentType.LORRY_CHIT) return TripDocumentType.LORRY_CHIT_SIGNATURE;
+  return TripDocumentType.DELIVERY_SIGNATURE;
 }
 
 /** Priority order when resolving a stored signature image for PDF embed. */
@@ -77,6 +78,9 @@ export function signatureArtifactFallbackTypes(
 ): TripDocumentType[] {
   if (doType === TripDocumentType.PICKUP_DO) {
     return [TripDocumentType.PICKUP_SIGNATURE, TripDocumentType.SIGNATURE];
+  }
+  if (doType === TripDocumentType.LORRY_CHIT) {
+    return [TripDocumentType.LORRY_CHIT_SIGNATURE, TripDocumentType.SIGNATURE];
   }
   return [
     TripDocumentType.DELIVERY_SIGNATURE,
@@ -98,11 +102,15 @@ export function pickPreferredSignatureArtifact<
 }
 
 export function doStorageFolderForType(doType: SignableDoType): string {
-  return doType === TripDocumentType.PICKUP_DO ? "pickup-do" : "delivery-do";
+  if (doType === TripDocumentType.PICKUP_DO) return "pickup-do";
+  if (doType === TripDocumentType.LORRY_CHIT) return "lorry-chit";
+  return "delivery-do";
 }
 
 export function doFileSuffixForType(doType: SignableDoType): string {
-  return doType === TripDocumentType.PICKUP_DO ? "pickup-do" : "delivery-do";
+  if (doType === TripDocumentType.PICKUP_DO) return "pickup-do";
+  if (doType === TripDocumentType.LORRY_CHIT) return "lorry-chit";
+  return "delivery-do";
 }
 
 export function buildSignedDoSignatureStorageKey(

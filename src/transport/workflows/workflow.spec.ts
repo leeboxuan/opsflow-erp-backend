@@ -37,6 +37,20 @@ describe("workflow helpers", () => {
         titles: ["Pickup to Delivery"],
       },
       {
+        label: "ONE_WAY",
+        jobType: JobType.ONE_WAY,
+        expectedCount: 1,
+        templates: [JobTripTemplate.PICKUP_TO_DELIVERY],
+        titles: ["Pickup to Delivery"],
+      },
+      {
+        label: "RETURN",
+        jobType: JobType.RETURN,
+        expectedCount: 1,
+        templates: [JobTripTemplate.PICKUP_TO_DELIVERY],
+        titles: ["Pickup to Depot"],
+      },
+      {
         label: "EXPORT",
         jobType: JobType.EXPORT,
         expectedCount: 1,

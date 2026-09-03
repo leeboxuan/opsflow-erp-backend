@@ -41,6 +41,7 @@ function makePrismaMemory() {
   const trips: any[] = [];
   const tripJobItems: any[] = [];
   const tripDocuments: any[] = [];
+  const tripDocumentRequirements: any[] = [];
   const auditLogs: any[] = [];
   const companies = [{ id: "comp_1", tenantId: "t1", normalizedName: "acme", name: "Acme" }];
   let seq = 0;
@@ -352,8 +353,22 @@ function makePrismaMemory() {
       }),
     },
     tripDocumentRequirement: {
-      findMany: jest.fn(async () => []),
-      createMany: jest.fn(async () => ({ count: 0 })),
+      findMany: jest.fn(async ({ where }: any = {}) => {
+        return tripDocumentRequirements.filter((row) => {
+          if (where?.tenantId && row.tenantId !== where.tenantId) return false;
+          const inIds = where?.tripId?.in;
+          if (Array.isArray(inIds) && !inIds.includes(row.tripId)) return false;
+          if (typeof where?.tripId === "string" && row.tripId !== where.tripId) return false;
+          return true;
+        });
+      }),
+      createMany: jest.fn(async ({ data }: any) => {
+        const rows = Array.isArray(data) ? data : [];
+        for (const row of rows) {
+          tripDocumentRequirements.push({ id: `req_${++seq}`, ...row });
+        }
+        return { count: rows.length };
+      }),
     },
     jobTypeAssignment: {
       createMany: jest.fn(async ({ data }: any) => ({
@@ -363,6 +378,12 @@ function makePrismaMemory() {
     },
     masterLogisticsLocation: {
       findFirst: jest.fn(async () => null),
+    },
+    masterSingaporePort: {
+      findMany: jest.fn(async () => []),
+    },
+    masterSingaporeDepot: {
+      findMany: jest.fn(async () => []),
     },
     job_internal_ref_counters: {
       upsert: jest.fn(async () => ({ nextSeq: jobs.length + 1 })),
@@ -377,6 +398,7 @@ function makePrismaMemory() {
         trips: clone(trips),
         tripJobItems: clone(tripJobItems),
         tripDocuments: clone(tripDocuments),
+        tripDocumentRequirements: clone(tripDocumentRequirements),
         auditLogs: clone(auditLogs),
       };
       try {
@@ -389,11 +411,12 @@ function makePrismaMemory() {
         trips.splice(0, trips.length, ...snap.trips);
         tripJobItems.splice(0, tripJobItems.length, ...snap.tripJobItems);
         tripDocuments.splice(0, tripDocuments.length, ...snap.tripDocuments);
+        tripDocumentRequirements.splice(0, tripDocumentRequirements.length, ...snap.tripDocumentRequirements);
         auditLogs.splice(0, auditLogs.length, ...snap.auditLogs);
         throw e;
       }
     }),
-    _state: { batches, drafts, jobs, jobItems, trips, tripJobItems, tripDocuments, auditLogs },
+    _state: { batches, drafts, jobs, jobItems, trips, tripJobItems, tripDocuments, tripDocumentRequirements, auditLogs },
   };
   return prisma;
 }
@@ -515,6 +538,25 @@ function confirmDraftsFromPreview(
       duplicateOverrideReason: d.duplicateOverride?.reason,
       ...(opts?.extra?.[d.id] ?? {}),
     }));
+}
+
+function confirmDraftsWithDeliveryDo(
+  preview: Parameters<typeof confirmDraftsFromPreview>[0],
+  opts?: Parameters<typeof confirmDraftsFromPreview>[1],
+) {
+  const extra: Record<string, Record<string, unknown>> = { ...(opts?.extra ?? {}) };
+  const ids = opts?.ids ? new Set(opts.ids) : null;
+  for (const draft of preview.drafts) {
+    if (ids && !ids.has(draft.id)) continue;
+    extra[draft.id] = {
+      ...(extra[draft.id] ?? {}),
+      autoTripDocumentRequirements: [
+        { tripIndex: 0, signedDeliveryDoRequired: true, signedLorryChitRequired: false },
+        { tripIndex: 1, signedDeliveryDoRequired: true, signedLorryChitRequired: false },
+      ],
+    };
+  }
+  return confirmDraftsFromPreview(preview, { ...opts, extra });
 }
 
 describe("JobMessageImportService workflow", () => {
@@ -1945,6 +1987,33 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
         expect.objectContaining({ omitHttpPayload: true, tolerateSideEffectFailures: true }),
       );
     }
+    expect((jobs as any).generateTripDeliveryDoDocument).not.toHaveBeenCalled();
+  });
+
+  it("generates Delivery DOs after confirm when signedDeliveryDoRequired is selected", async () => {
+    const prisma = makePrismaMemory();
+    const parser = new StubJobMessageParser(productionWhatsAppParserResult());
+    const jobs = makeJobsService(prisma);
+    const svc = new JobMessageImportService(
+      prisma,
+      wrapImportAudit(prisma, audit) as any,
+      parser as any,
+      jobs,
+    );
+    const preview = await svc.createPreviewBatch({
+      tenantId: "t1",
+      actorUserId: "u1",
+      timezone: "Asia/Singapore",
+      sourceChannel: "WHATSAPP" as any,
+      sourceText: productionWhatsAppThreeJobMessage,
+    });
+    const confirmed = await svc.confirmBatch({
+      tenantId: "t1",
+      actorUserId: "u1",
+      batchId: preview.batchId,
+      drafts: confirmDraftsWithDeliveryDo(preview),
+    });
+    expect(confirmed.createdCount).toBe(3);
     expect((jobs as any).generateTripDeliveryDoDocument).toHaveBeenCalled();
   });
 
@@ -2009,7 +2078,7 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
       tenantId: "t1",
       actorUserId: "u1",
       batchId: preview.batchId,
-      drafts: confirmDraftsFromPreview(preview),
+      drafts: confirmDraftsWithDeliveryDo(preview),
     });
     expect(confirmed.createdCount).toBe(3);
     expect(confirmed.createdJobIds).toHaveLength(3);
@@ -2089,7 +2158,7 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
       tenantId: "t1",
       actorUserId: "u1",
       batchId: preview.batchId,
-      drafts: confirmDraftsFromPreview(preview),
+      drafts: confirmDraftsWithDeliveryDo(preview),
     });
     expect(first.createdCount).toBe(3);
     expect(first.warnings.some((w) => w.operation === "DELIVERY_DO")).toBe(true);
@@ -2106,7 +2175,7 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
       tenantId: "t1",
       actorUserId: "u1",
       batchId: preview.batchId,
-      drafts: confirmDraftsFromPreview(preview),
+      drafts: confirmDraftsWithDeliveryDo(preview),
     });
     expect(again.createdJobIds).toEqual(first.createdJobIds);
     expect(prisma._state.jobs).toHaveLength(jobCount);

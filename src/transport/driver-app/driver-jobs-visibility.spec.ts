@@ -34,6 +34,7 @@ const BASE_COMPLETION_DOCS = [
 
 const COMPLETION_DOC_QUERY_TYPES = [
   TripDocumentType.DELIVERY_DO,
+  TripDocumentType.LORRY_CHIT,
   TripDocumentType.POD_SIGNATURE,
   TripDocumentType.PICKUP_DO,
   TripDocumentType.POD_PHOTO,

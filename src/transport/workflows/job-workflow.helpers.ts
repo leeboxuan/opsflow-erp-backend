@@ -448,6 +448,8 @@ export function isContainerCargoJobType(jobType: JobType): boolean {
     jobType === JobType.IMPORT
     || jobType === JobType.EXPORT
     || jobType === JobType.COLLECTION
+    || jobType === JobType.RETURN
+    || jobType === JobType.ONE_WAY
   );
 }
 
@@ -474,10 +476,12 @@ export type TripCreateManyForJobOptions = {
  *
  * Sequences are 1-based and contiguous. Do not branch by intake channel.
  *
- * - EXPORT: Depot → Customer, Customer → Port, Port → Depot
+ * - EXPORT: Customer → Port
  * - IMPORT: Port → Customer, Customer → Depot
  * - LCL: Pickup → Delivery
  * - COLLECTION: Pickup → Delivery — one trip per container JobItem (or one leg when no items)
+ * - ONE_WAY: Pickup → Delivery (prime-mover container haul)
+ * - RETURN: Pickup → Depot (prime-mover container return)
  */
 export const CANONICAL_AUTO_TRIP_TEMPLATES: Record<
   JobType,
@@ -492,6 +496,8 @@ export const CANONICAL_AUTO_TRIP_TEMPLATES: Record<
   ],
   [JobType.LCL]: [JobTripTemplate.PICKUP_TO_DELIVERY],
   [JobType.COLLECTION]: [JobTripTemplate.PICKUP_TO_DELIVERY],
+  [JobType.ONE_WAY]: [JobTripTemplate.PICKUP_TO_DELIVERY],
+  [JobType.RETURN]: [JobTripTemplate.PICKUP_TO_DELIVERY],
 };
 
 /**
@@ -509,7 +515,9 @@ export const CANONICAL_AUTO_TRIP_TEMPLATES: Record<
  * Historical EXPORT `PORT_TO_DEPOT` rows (pre one-Trip topology) still do not
  * auto-carry create-time JobItems when evaluated via this helper.
  *
- * LCL — all created JobItems on the single Pickup → Delivery trip.
+ * LCL / ONE_WAY — all created JobItems on the single Pickup → Delivery trip.
+ *
+ * RETURN — all created JobItems on the single Pickup → Depot trip.
  *
  * COLLECTION — one container JobItem per Pickup → Delivery trip (same route on each leg).
  */
@@ -554,6 +562,8 @@ const CANONICAL_AUTO_TRIP_TITLES: Record<JobType, string[]> = {
   [JobType.IMPORT]: ["Port to Customer", "Customer to Depot"],
   [JobType.LCL]: ["Pickup to Delivery"],
   [JobType.COLLECTION]: ["Pickup to Delivery"],
+  [JobType.ONE_WAY]: ["Pickup to Delivery"],
+  [JobType.RETURN]: ["Pickup to Depot"],
 };
 
 function buildCollectionTripSeeds(

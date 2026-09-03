@@ -24,6 +24,8 @@ export const JOB_TYPE_VALUES = [
   JobType.IMPORT,
   JobType.EXPORT,
   JobType.COLLECTION,
+  JobType.RETURN,
+  JobType.ONE_WAY,
 ] as const;
 
 /** Stable display/API order (not request order). */
@@ -32,6 +34,8 @@ export const JOB_TYPE_DETERMINISTIC_ORDER: readonly JobType[] = [
   JobType.IMPORT,
   JobType.LCL,
   JobType.COLLECTION,
+  JobType.RETURN,
+  JobType.ONE_WAY,
 ];
 
 /** Neutral internal-ref type code when a job has multiple canonical types. */
@@ -160,6 +164,10 @@ export function internalRefTypeCode(jobTypes: readonly JobType[]): string {
       return "EXP";
     case JobType.COLLECTION:
       return "COL";
+    case JobType.RETURN:
+      return "RET";
+    case JobType.ONE_WAY:
+      return "OW";
     default:
       return "GEN";
   }
@@ -183,7 +191,9 @@ export function cargoModeForJobTypes(
       (t) =>
         t === JobType.IMPORT ||
         t === JobType.EXPORT ||
-        t === JobType.COLLECTION,
+        t === JobType.COLLECTION ||
+        t === JobType.RETURN ||
+        t === JobType.ONE_WAY,
     )
   ) {
     return "CONTAINER";

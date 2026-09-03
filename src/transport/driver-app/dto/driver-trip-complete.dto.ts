@@ -10,6 +10,26 @@ export class DriverTripCompleteDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @IsString()
+  trailerParkingAddress1?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  trailerParkingAddress2?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  trailerParkingPostal?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  trailerParkingPlaceId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
   @Transform(({ value }) => (value === "" || value == null ? undefined : Number(value)))
   @IsNumber()
   trailerParkingLat?: number;

@@ -24,7 +24,7 @@ export type JobMessageImportParsedJobItem = {
 
 export type JobMessageImportParsedDraft = {
   clientDraftId: string;
-  movementType: "COLLECTION" | "IMPORT" | "EXPORT" | "LCL" | "UNKNOWN";
+  movementType: "COLLECTION" | "IMPORT" | "EXPORT" | "LCL" | "RETURN" | "ONE_WAY" | "UNKNOWN";
 
   customerNameText: string | null;
 
@@ -65,6 +65,8 @@ export type ParseJobMessageInput = {
   sourceChannel: "WHATSAPP";
   sourceText: string;
   correlationId?: string | null;
+  /** Fake parser only. Never sent to OpenAI. */
+  testFixtureId?: string | null;
 };
 
 export type JobMessageParseMeta = {

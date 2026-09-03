@@ -42,6 +42,7 @@ import {
   actorIsCustomerAdmin,
   actorIsCustomerOnly,
   actorIsDriverOnly,
+  actorIsFinanceAdminOnly,
   type AccessActor,
 } from "../../shared/auth/access-actor";
 import {
@@ -438,6 +439,218 @@ export class TripExpensesService {
           result.result.id,
           { tripId, jobId, reviewStatus: "PENDING_REVIEW" },
           driverUserId,
+        );
+      }
+      return result.result;
+    } catch (error) {
+      if (uploadedKey) {
+        await this.removeStorageObjectSafe(uploadedKey, {
+          reason: "db_failure_after_upload",
+          tenantId,
+          tripId,
+          operationKey,
+        });
+      }
+      throw error;
+    }
+  }
+
+  async createForOps(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    actor: AccessActor,
+    dto: CreateTripExpenseDto,
+    file?: Express.Multer.File | null,
+  ) {
+    this.assertInternalExpenseCreator(actor);
+    const actorUserId = String(actor.userId ?? "").trim();
+    if (!actorUserId) {
+      throw new ForbiddenException(
+        "Trip expenses can only be created by internal operations",
+      );
+    }
+
+    const trip = await this.prisma.trip.findFirst({
+      where: {
+        id: tripId,
+        tenantId,
+        jobId,
+        status: { not: TripStatus.CANCELLED },
+      },
+      select: { id: true },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    const operationKey = this.requireOperationKey(dto.operationKey);
+
+    let amountCents: number;
+    let currency: string;
+    try {
+      amountCents = assertValidAmountCents(dto.amountCents);
+      currency = normalizeIsoCurrency(dto.currency ?? "SGD");
+    } catch (e: any) {
+      throw new BadRequestException(e?.message ?? "Invalid amount or currency");
+    }
+
+    const transactionDate = this.parseTransactionDate(dto.transactionDate);
+    const reimbursementStatus = reimbursementStatusForPaymentMethod(
+      dto.paymentMethod,
+    );
+
+    const receiptSha256 =
+      file?.buffer?.length ? sha256HexOfBuffer(file.buffer) : null;
+
+    const requestHash = hashRequestPayload({
+      scope: IDEMPOTENCY_SCOPES.OPS_TRIP_EXPENSE_CREATE,
+      actorUserId,
+      jobId,
+      tripId,
+      category: dto.category,
+      paymentMethod: dto.paymentMethod,
+      amountCents,
+      currency,
+      transactionDate: dto.transactionDate,
+      remarks: dto.remarks?.trim() || null,
+      receiptSha256,
+      fileName: file?.originalname ?? null,
+      fileSize: file?.size ?? null,
+      fileMime: file?.mimetype ?? null,
+    });
+
+    const loadExpense = async (resourceId: string) => {
+      const existing = await this.prisma.tripExpense.findFirst({
+        where: { id: resourceId, tenantId, submittedByUserId: actorUserId },
+        include: this.expenseInclude(),
+      });
+      if (!existing) throw new NotFoundException("Expense not found");
+      return this.toExpenseDto(existing);
+    };
+
+    const peeked = await this.idempotency.peekCompleted({
+      tenantId,
+      scope: IDEMPOTENCY_SCOPES.OPS_TRIP_EXPENSE_CREATE,
+      operationKey,
+      requestHash,
+      load: loadExpense,
+    });
+    if (peeked) {
+      return peeked.result;
+    }
+
+    let uploadedKey: string | null = null;
+    if (file?.buffer?.length) {
+      const check = isAllowedExpenseReceiptFile({
+        mimeType: file.mimetype,
+        originalName: file.originalname,
+        sizeBytes: file.size,
+      });
+      if (check.ok === false) {
+        throw new BadRequestException(check.reason);
+      }
+      const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? "";
+      uploadedKey = `${tenantId}/jobs/${jobId}/trips/${tripId}/expenses/${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`;
+      await this.putReceiptObject(
+        uploadedKey,
+        file.buffer,
+        file.mimetype ?? "application/octet-stream",
+      );
+    }
+
+    try {
+      const result = await this.idempotency.execute({
+        tenantId,
+        scope: IDEMPOTENCY_SCOPES.OPS_TRIP_EXPENSE_CREATE,
+        operationKey,
+        requestHash,
+        load: loadExpense,
+        execute: async (tx) => {
+          const expense = await tx.tripExpense.create({
+            data: {
+              tenantId,
+              jobId,
+              tripId,
+              submittedByUserId: actorUserId,
+              submittedByDriverId: null,
+              category: dto.category,
+              paymentMethod: dto.paymentMethod,
+              amountCents,
+              currency,
+              transactionDate,
+              remarks: dto.remarks?.trim() || null,
+              reviewStatus: TripExpenseReviewStatus.PENDING_REVIEW,
+              reimbursementStatus,
+            },
+          });
+          if (uploadedKey && file) {
+            await tx.tripExpenseAttachment.create({
+              data: {
+                tenantId,
+                expenseId: expense.id,
+                storageKey: uploadedKey,
+                originalName: file.originalname ?? "receipt",
+                mimeType: file.mimetype ?? "application/octet-stream",
+                sizeBytes: file.size ?? null,
+                uploadedByUserId: actorUserId,
+                isActive: true,
+              },
+            });
+          }
+          await tx.tripExpenseEvent.create({
+            data: {
+              tenantId,
+              expenseId: expense.id,
+              actorUserId,
+              action: TripExpenseEventAction.SUBMITTED,
+              previousStatus: null,
+              newStatus: TripExpenseReviewStatus.PENDING_REVIEW,
+              changedFieldsJson: {
+                amountCents,
+                currency,
+                category: dto.category,
+                paymentMethod: dto.paymentMethod,
+              } as Prisma.InputJsonValue,
+            },
+          });
+          if (uploadedKey) {
+            await tx.tripExpenseEvent.create({
+              data: {
+                tenantId,
+                expenseId: expense.id,
+                actorUserId,
+                action: TripExpenseEventAction.ATTACHMENT_ADDED,
+                newStatus: TripExpenseReviewStatus.PENDING_REVIEW,
+              },
+            });
+          }
+          const full = await tx.tripExpense.findFirstOrThrow({
+            where: { id: expense.id, tenantId },
+            include: this.expenseInclude(),
+          });
+          return {
+            resourceType: "TRIP_EXPENSE",
+            resourceId: expense.id,
+            result: this.toExpenseDto(full),
+          };
+        },
+      });
+
+      if (result.outcome === "replayed" && uploadedKey) {
+        await this.removeStorageObjectSafe(uploadedKey, {
+          reason: "idempotent_replay",
+          tenantId,
+          tripId,
+          operationKey,
+        });
+      }
+
+      if (result.outcome === "created") {
+        await this.logAuditAfterCommit(
+          tenantId,
+          "TRIP_EXPENSE_SUBMIT",
+          result.result.id,
+          { tripId, jobId, reviewStatus: "PENDING_REVIEW", source: "OPS" },
+          actorUserId,
         );
       }
       return result.result;
@@ -991,6 +1204,15 @@ export class TripExpensesService {
     ) {
       throw new ForbiddenException(
         "Trip expenses are only available to internal trip viewers",
+      );
+    }
+  }
+
+  private assertInternalExpenseCreator(actor: AccessActor) {
+    this.assertInternalExpenseViewer(actor);
+    if (actorIsFinanceAdminOnly(actor)) {
+      throw new ForbiddenException(
+        "Trip expenses can only be created by internal operations",
       );
     }
   }

@@ -1,0 +1,3 @@
+﻿Noto Sans CJK SC Regular (notofonts/noto-cjk Sans2.004).
+Embed with pdf-lib \{ subset: true \}. Latin/digit body text uses Helvetica.
+License: NotoSansSC-OFL.txt (SIL OFL 1.1)

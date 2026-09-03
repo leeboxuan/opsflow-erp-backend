@@ -29,7 +29,7 @@ export class UpdateJobItemDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  itemCode?: string;
+  itemCode?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()

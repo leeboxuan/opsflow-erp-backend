@@ -93,6 +93,7 @@ import {
 } from "../documents/do-signature.helpers";
 import { computeDoSignatureImageDrawRect } from "../documents/signature-pdf-layout.helpers";
 import { normalizeSignatureImageForPdf } from "../documents/signature-image-normalize";
+import { buildLorryChitPdfBuffer } from "../documents/lorry-chit-pdf";
 import {
   documentUploadedByInclude,
   loadUploadActorFields,
@@ -197,8 +198,14 @@ import {
   documentTypeSupportsCustomerSignature,
   ensureDefaultTripDocumentRequirementSnapshots,
   isTripDocumentRequirementFrozen,
+  loadTripDocumentRequirementSnapshotsByTrip,
   requirementSnapshotForType,
+  seedTripDocumentRequirementsForCreate,
 } from "../workflows/trip-document-requirements";
+import {
+  flagsForGeneratedTrip,
+  normalizeAutoTripDocumentRequirements,
+} from "../workflows/trip-document-create-flags";
 import {
   aggregateJobDocumentReadiness,
   evaluateTripDocumentRequirements,
@@ -217,6 +224,10 @@ import {
   loadTripJobItemLinks,
   replaceTripJobItemLinks,
 } from "./trip-job-item.mutations";
+import {
+  lorryChitCargoRowsFromResolved,
+  resolveLorryChitCargoFromTripLinks,
+} from "./lorry-chit-cargo";
 import { toContainerSizeWire } from "./container-size";
 import { isUniqueConstraintError } from "../../shared/idempotency/idempotency.util";
 import {
@@ -284,6 +295,7 @@ import {
   assertCreateJobItemsRequiredForJobType,
   assertExportDestinationFieldsConsistent,
   collectionContainerCountForTripGeneration,
+  ensureCollectionJobItems,
   importPickupOriginUsesAddressFields,
   parseValidJobItemsFromInput,
   parseValidUpdateJobItemsFromInput,
@@ -366,6 +378,7 @@ function toDocDto(d: any): JobDocumentDto {
 const TRIP_DOC_ALLOWED_TYPES = new Set<string>([
   TripDocumentType.PICKUP_DO,
   TripDocumentType.DELIVERY_DO,
+  TripDocumentType.LORRY_CHIT,
   TripDocumentType.POD_PHOTO,
   TripDocumentType.POD_SIGNATURE,
   TripDocumentType.OTHER,
@@ -1939,6 +1952,10 @@ export class TransportJobsService {
         return "EXP";
       case JobType.COLLECTION:
         return "COL";
+      case JobType.RETURN:
+        return "RET";
+      case JobType.ONE_WAY:
+        return "OW";
       default:
         return "GEN";
     }
@@ -2179,7 +2196,9 @@ export class TransportJobsService {
     tripId: string,
     type: TripDocumentType,
     onlyGenerated = false,
+    opts?: { unsignedOnly?: boolean },
   ) {
+    const unsignedOnly = opts?.unsignedOnly === true;
     const existingDocs = await this.prisma.tripDocument.findMany({
       where: {
         tenantId,
@@ -2187,6 +2206,7 @@ export class TransportJobsService {
         type,
         isActive: true,
         ...(onlyGenerated ? { generatedBySystem: true } : {}),
+        ...(unsignedOnly ? { isSigned: false } : {}),
       },
       orderBy: {
         createdAt: "desc",
@@ -2202,11 +2222,24 @@ export class TransportJobsService {
         type,
         isActive: true,
         ...(onlyGenerated ? { generatedBySystem: true } : {}),
+        ...(unsignedOnly ? { isSigned: false } : {}),
       },
       data: { isActive: false },
     });
 
     return existingDocs[0] ?? null;
+  }
+
+  /**
+   * Lorry Chit cargo is scoped to this Trip's canonical TripJobItem link only
+   * (never all JobItems on the parent Job).
+   */
+  private async resolveLorryChitCargoForTrip(
+    tenantId: string,
+    tripId: string,
+  ) {
+    const links = await loadTripJobItemLinks(this.prisma as any, tenantId, tripId);
+    return resolveLorryChitCargoFromTripLinks(links as any, { tripId });
   }
 
   private async getActiveLogisticsLocationById(
@@ -2749,11 +2782,14 @@ export class TransportJobsService {
     const pureExport = compatibilityJobType === JobType.EXPORT;
 
     const rawItems = readCreateJobItemsInput(dto);
-    const validItems = parseValidJobItemsFromInput(
-      rawItems,
+    const validItems = ensureCollectionJobItems(
       compatibilityJobType,
-      resolvedJobTypes,
-      { requireContainerSize: true },
+      parseValidJobItemsFromInput(
+        rawItems,
+        compatibilityJobType,
+        resolvedJobTypes,
+        { requireContainerSize: false },
+      ),
     );
     assertCreateJobItemsRequiredForJobType(
       compatibilityJobType,
@@ -3173,10 +3209,18 @@ export class TransportJobsService {
           }
         }
 
-        await ensureDefaultTripDocumentRequirementSnapshots(
+        await seedTripDocumentRequirementsForCreate(
           tx,
           tenantId,
-          createdTripsInTx.map((trip: { id: string }) => trip.id),
+          createdTripsInTx.map((trip: { id: string }, index: number) => ({
+            tripId: trip.id,
+            ...flagsForGeneratedTrip(
+              normalizeAutoTripDocumentRequirements(
+                (dto as CreateJobDto).autoTripDocumentRequirements,
+              ),
+              index,
+            ),
+          })),
         );
       };
 
@@ -3316,10 +3360,8 @@ export class TransportJobsService {
       ),
     );
 
-    // Best-effort: auto-generate trip-level DELIVERY_DO for each created trip.
-    // Post-commit side effect: storage/PDF failure is logged and does not roll back Jobs.
-    // Import confirm skips HTTP hydration; load Job once for all trip DOs.
-    // Manual create keeps hydrate-after-DO so the response includes new documents.
+    // Generate unsigned Delivery DO / Lorry Chit PDFs only when those requirements
+    // were explicitly selected at trip create. POD photo stays requirement-only.
     const doJob =
       options?.omitHttpPayload && createdTrips.length > 0
         ? await this.prisma.job.findFirst({
@@ -3332,40 +3374,56 @@ export class TransportJobsService {
           })
         : null;
 
-    const existingDoTripIds = new Set<string>();
-    if (createdTrips.length && typeof this.prisma.tripDocument?.findMany === "function") {
-      const existingDos = await this.prisma.tripDocument.findMany({
-        where: {
-          tenantId,
-          tripId: { in: createdTrips.map((trip) => trip.id) },
-          type: TripDocumentType.DELIVERY_DO,
-          isActive: true,
-        },
-        select: { tripId: true },
-      });
-      for (const row of existingDos) {
-        if (row?.tripId) existingDoTripIds.add(String(row.tripId));
-      }
-    }
+    const requirementByTrip = await loadTripDocumentRequirementSnapshotsByTrip(
+      this.prisma,
+      tenantId,
+      createdTrips.map((trip) => trip.id),
+    );
 
     await mapWithConcurrency(
       createdTrips,
       CANONICAL_JOB_DELIVERY_DO_CONCURRENCY,
       async (trip: { id: string }) => {
-        if (existingDoTripIds.has(trip.id)) return;
-        try {
-          await measure(`deliveryDo:${trip.id}`, () =>
-            this.generateTripDeliveryDoDocument(
-              tenantId,
-              jobId,
-              trip.id,
-              user,
-              "AUTO_CREATE_JOB",
-              doJob,
-            ),
-          );
-        } catch (error: any) {
-          warn("DELIVERY_DO", error);
+        const reqs = requirementByTrip.get(trip.id) ?? [];
+        const wantsDo = reqs.some(
+          (row) => String(row.type).toUpperCase() === TripDocumentType.DELIVERY_DO,
+        );
+        const wantsLorry = reqs.some(
+          (row) => String(row.type).toUpperCase() === TripDocumentType.LORRY_CHIT,
+        );
+        if (wantsDo) {
+          try {
+            await measure(`deliveryDo:${trip.id}`, () =>
+              this.generateTripDeliveryDoDocument(
+                tenantId,
+                jobId,
+                trip.id,
+                user,
+                "AUTO_CREATE_JOB",
+                doJob,
+                TripDocumentType.DELIVERY_DO,
+              ),
+            );
+          } catch (error: any) {
+            warn("DELIVERY_DO", error);
+          }
+        }
+        if (wantsLorry) {
+          try {
+            await measure(`lorryChit:${trip.id}`, () =>
+              this.generateTripDeliveryDoDocument(
+                tenantId,
+                jobId,
+                trip.id,
+                user,
+                "AUTO_CREATE_JOB",
+                doJob,
+                TripDocumentType.LORRY_CHIT,
+              ),
+            );
+          } catch (error: any) {
+            warn("LORRY_CHIT", error);
+          }
         }
       },
     );
@@ -4598,6 +4656,7 @@ export class TransportJobsService {
       assignedDriver?: unknown;
       [key: string]: unknown;
     } | null,
+    pdfType: TripDocumentType = TripDocumentType.DELIVERY_DO,
   ) {
     this.assertCustomerCanOnlyRead(user);
     const userId: string | null = user?.userId ?? null;
@@ -4622,7 +4681,7 @@ export class TransportJobsService {
       throw new NotFoundException("Job not found");
     }
 
-    if (!job.items?.length) {
+    if (!job.items?.length && pdfType !== TripDocumentType.LORRY_CHIT) {
       throw new BadRequestException(
         "Add at least one item before generating DO",
       );
@@ -4642,13 +4701,33 @@ export class TransportJobsService {
               where: {
                 tenantId,
                 tripId,
-                type: TripDocumentType.DELIVERY_DO,
+                type: pdfType,
                 isActive: true,
               },
             })
           : null;
       if (existingAutoDo) {
         return this.attachSignedUrl(existingAutoDo);
+      }
+    }
+
+    if (pdfType === TripDocumentType.LORRY_CHIT) {
+      const signedActive =
+        typeof this.prisma.tripDocument?.findFirst === "function"
+          ? await this.prisma.tripDocument.findFirst({
+              where: {
+                tenantId,
+                tripId,
+                type: TripDocumentType.LORRY_CHIT,
+                isActive: true,
+                isSigned: true,
+              },
+            })
+          : null;
+      if (signedActive) {
+        throw new BadRequestException(
+          "Cannot regenerate Lorry Chit after it has been signed; prior signed version is preserved.",
+        );
       }
     }
 
@@ -4661,14 +4740,45 @@ export class TransportJobsService {
     const previousDo = await this.replaceTripDocumentByType(
       tenantId,
       tripId,
-      TripDocumentType.DELIVERY_DO,
+      pdfType,
+      false,
+      pdfType === TripDocumentType.LORRY_CHIT ? { unsignedOnly: true } : undefined,
     );
 
     const pdfStarted = Date.now();
-    const pdfBuffer = await this.buildDoPdfBuffer(job);
+    let pdfBuffer: Buffer;
+    if (pdfType === TripDocumentType.LORRY_CHIT) {
+      const cargo = await this.resolveLorryChitCargoForTrip(tenantId, tripId);
+      const cargoRows = lorryChitCargoRowsFromResolved(cargo);
+      pdfBuffer = await buildLorryChitPdfBuffer({
+        internalRef: job.internalRef ?? null,
+        externalRef: job.externalRef ?? null,
+        customerName: job.customerCompany?.name ?? null,
+        truckNumber: (trip as { acceptedVehicleNo?: string | null }).acceptedVehicleNo ?? null,
+        trailerNumber: (trip as { trailerNumber?: string | null }).trailerNumber ?? null,
+        vessel:
+          (trip as { vessel?: string | null }).vessel
+          ?? (job as { vesselName?: string | null }).vesselName
+          ?? null,
+        shipper:
+          (trip as { shipper?: string | null }).shipper
+          ?? (job as { shipper?: string | null }).shipper
+          ?? null,
+        bookingRef: job.externalRef ?? null,
+        cargoRows,
+        containerSummary: cargo.cargoRow.containerOrCargo || null,
+        notes: job.notes ?? null,
+        receiverName: job.receiverName ?? null,
+      });
+    } else {
+      pdfBuffer = await this.buildDoPdfBuffer(job, {
+        variant: "delivery",
+        documentKind: "do",
+      });
+    }
     if (process.env.JOB_MESSAGE_IMPORT_CONFIRM_PERF === "1") {
       console.info("job_message_import_confirm_perf", {
-        name: `deliveryDo.pdf:${tripId}`,
+        name: `tripPdf.${pdfType}:${tripId}`,
         ms: Date.now() - pdfStarted,
       });
     }
@@ -4677,8 +4787,10 @@ export class TransportJobsService {
       job.externalRef?.trim() || job.internalRef?.trim() || job.id;
 
     const safeRef = this.safeFileName(refForFile);
-    const fileName = `${safeRef}_delivery-do.pdf`;
-    const storageKey = `${tenantId}/jobs/${jobId}/trips/${tripId}/delivery-do/${Date.now()}-${fileName}`;
+    const isLorry = pdfType === TripDocumentType.LORRY_CHIT;
+    const fileName = isLorry ? `${safeRef}_lorry-chit.pdf` : `${safeRef}_delivery-do.pdf`;
+    const storageFolder = isLorry ? "lorry-chit" : "delivery-do";
+    const storageKey = `${tenantId}/jobs/${jobId}/trips/${tripId}/${storageFolder}/${Date.now()}-${fileName}`;
 
     const uploadStarted = Date.now();
     const { error: uploadError } = await this.supabaseService
@@ -4706,7 +4818,7 @@ export class TransportJobsService {
       data: {
         tenantId,
         tripId,
-        type: TripDocumentType.DELIVERY_DO,
+        type: pdfType,
         storageKey,
         originalName: fileName,
         mimeType: "application/pdf",
@@ -4720,7 +4832,7 @@ export class TransportJobsService {
         requiresSignature: await this.resolveTripDocumentRequiresSignature(
           tenantId,
           tripId,
-          TripDocumentType.DELIVERY_DO,
+          pdfType,
           true,
         ),
       },
@@ -4735,7 +4847,7 @@ export class TransportJobsService {
       {
         documentId: doc.id,
         previousDocumentId: previousDo?.id ?? null,
-        type: "DELIVERY_DO",
+        type: pdfType,
         storageKey,
         originalName: doc.originalName,
         generatedBySystem: true,
@@ -4750,6 +4862,43 @@ export class TransportJobsService {
     );
 
     return this.attachSignedUrl(doc);
+  }
+
+  /**
+   * After the driver supplies a container number, regenerate an updated unsigned
+   * Lorry Chit (new active version). Prior unsigned rows stay inactive; signed
+   * chits are never altered.
+   */
+  async regenerateUnsignedLorryChitAfterContainerUpdate(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    user: any,
+  ): Promise<void> {
+    const active = await this.prisma.tripDocument.findFirst({
+      where: {
+        tenantId,
+        tripId,
+        type: TripDocumentType.LORRY_CHIT,
+        isActive: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!active) {
+      return;
+    }
+    if (active.isSigned) {
+      return;
+    }
+    await this.generateTripDeliveryDoDocument(
+      tenantId,
+      jobId,
+      tripId,
+      user,
+      "MANUAL_REGENERATE",
+      null,
+      TripDocumentType.LORRY_CHIT,
+    );
   }
 
   async listDocuments(
@@ -5248,6 +5397,28 @@ export class TransportJobsService {
     });
   }
 
+  /** TRUCKING_RATES current-dataset rows carry datasetId; legacy DriverPayoutItem does not. */
+  private isTruckingRatesDatasetRow(
+    item: { datasetId?: unknown } | null | undefined,
+  ): boolean {
+    return typeof item?.datasetId === "string";
+  }
+
+  /**
+   * Trip.earningRateMasterId FK → driver_trip_rate_masters.
+   * Trip.payoutItemId FK → driver_payout_items.
+   * TRUCKING_RATES rows live on TripPayoutLine.earningRateMasterId (master_rate_dataset_rows).
+   * Never write a dataset-row id onto the trip header FKs.
+   */
+  private tripHeaderPayoutFksFromResolvedRate(
+    item: { id: string; datasetId?: unknown } | null,
+  ): { earningRateMasterId: string | null; payoutItemId: string | null } {
+    if (!item || this.isTruckingRatesDatasetRow(item)) {
+      return { earningRateMasterId: null, payoutItemId: null };
+    }
+    return { earningRateMasterId: null, payoutItemId: item.id };
+  }
+
   async appendTrip(
     tenantId: string,
     jobId: string,
@@ -5335,7 +5506,7 @@ export class TransportJobsService {
           `Selected payout item "${master.label}" requires manual amount before assignment`,
         );
       }
-      payoutItemId = master.id;
+      payoutItemId = this.tripHeaderPayoutFksFromResolvedRate(master).payoutItemId;
       driverEarningCents = resolvedAmountCents;
       earningLabelSnapshot = master.label;
     }
@@ -5389,9 +5560,64 @@ export class TransportJobsService {
       },
     });
 
-    await ensureDefaultTripDocumentRequirementSnapshots(this.prisma, tenantId, [
-      trip.id,
+    await seedTripDocumentRequirementsForCreate(this.prisma, tenantId, [
+      {
+        tripId: trip.id,
+        signedDeliveryDoRequired: dto.signedDeliveryDoRequired === true,
+        signedLorryChitRequired: dto.signedLorryChitRequired === true,
+      },
     ]);
+
+    if (dto.signedDeliveryDoRequired === true) {
+      try {
+        await this.generateTripDeliveryDoDocument(
+          tenantId,
+          jobId,
+          trip.id,
+          user,
+          "AUTO_CREATE_JOB",
+          null,
+          TripDocumentType.DELIVERY_DO,
+        );
+      } catch (error) {
+        console.error(
+          `[TransportJobsService] Append-trip Delivery DO failed for ${trip.id}:`,
+          error,
+        );
+        throw new BadRequestException({
+          code: "TRIP_DOCUMENT_GENERATION_FAILED",
+          documentType: TripDocumentType.DELIVERY_DO,
+          tripId: trip.id,
+          message:
+            "Trip was created but Delivery DO generation failed. Retry generate on the trip without creating another trip.",
+        });
+      }
+    }
+    if (dto.signedLorryChitRequired === true) {
+      try {
+        await this.generateTripDeliveryDoDocument(
+          tenantId,
+          jobId,
+          trip.id,
+          user,
+          "AUTO_CREATE_JOB",
+          null,
+          TripDocumentType.LORRY_CHIT,
+        );
+      } catch (error) {
+        console.error(
+          `[TransportJobsService] Append-trip Lorry Chit failed for ${trip.id}:`,
+          error,
+        );
+        throw new BadRequestException({
+          code: "TRIP_DOCUMENT_GENERATION_FAILED",
+          documentType: TripDocumentType.LORRY_CHIT,
+          tripId: trip.id,
+          message:
+            "Trip was created but Lorry Chit generation failed. Retry generate on the trip without creating another trip.",
+        });
+      }
+    }
 
     // Phase 1 TripJobItem linkage on append.
     const jobItems = await this.prisma.jobItem.findMany({
@@ -6444,8 +6670,9 @@ export class TransportJobsService {
             `Selected payout item "${master.label}" requires manual amount before assignment`,
           );
         }
-        data.payoutItemId = master.id;
-        data.earningRateMasterId = null;
+        const headerFks = this.tripHeaderPayoutFksFromResolvedRate(master);
+        data.payoutItemId = headerFks.payoutItemId;
+        data.earningRateMasterId = headerFks.earningRateMasterId;
         data.driverEarningCents = resolvedAmountCents;
         data.earningLabelSnapshot = master.label;
       }
@@ -7585,6 +7812,7 @@ export class TransportJobsService {
     const singleActiveTripTypes = new Set<TripDocumentType>([
       TripDocumentType.PICKUP_DO,
       TripDocumentType.DELIVERY_DO,
+      TripDocumentType.LORRY_CHIT,
       TripDocumentType.POD_SIGNATURE,
       TripDocumentType.PERMIT,
     ]);
@@ -7661,6 +7889,7 @@ export class TransportJobsService {
       type === TripDocumentType.POD_SIGNATURE
       || type === TripDocumentType.PICKUP_SIGNATURE
       || type === TripDocumentType.DELIVERY_SIGNATURE
+      || type === TripDocumentType.LORRY_CHIT_SIGNATURE
     );
   }
 
@@ -7815,7 +8044,20 @@ export class TransportJobsService {
       doType,
     );
 
-    if (!job?.items?.length || !doDoc?.storageKey) {
+    if (!doDoc?.storageKey) {
+      return;
+    }
+    if (doType !== TripDocumentType.LORRY_CHIT && !job?.items?.length) {
+      return;
+    }
+
+    // Never rewrite an already-signed Lorry Chit except during the active sign
+    // call that supplies signature bytes to embed once.
+    if (
+      doType === TripDocumentType.LORRY_CHIT
+      && doDoc.isSigned
+      && !overrides?.signatureImageBytes?.length
+    ) {
       return;
     }
 
@@ -7857,13 +8099,48 @@ export class TransportJobsService {
 
     const variant =
       doType === TripDocumentType.PICKUP_DO ? "pickup" : "delivery";
-    const pdfBuffer = await this.buildDoPdfBuffer(job, {
-      variant,
-      signatureImageBytes,
-      recipientName: embedBase.recipientName,
-      recipientNric: embedBase.recipientNric,
-      signedAt: embedBase.signedAt,
-    });
+    let pdfBuffer: Buffer;
+    if (doType === TripDocumentType.LORRY_CHIT) {
+      const cargo = await this.resolveLorryChitCargoForTrip(tenantId, tripId);
+      const tripRow = await this.prisma.trip.findFirst({
+        where: { id: tripId, tenantId, jobId },
+      });
+      pdfBuffer = await buildLorryChitPdfBuffer({
+        internalRef: job?.internalRef ?? null,
+        externalRef: job?.externalRef ?? null,
+        customerName: job?.customerCompany?.name ?? null,
+        vessel:
+          (tripRow as { vessel?: string | null } | null)?.vessel
+          ?? (job as { vesselName?: string | null } | null)?.vesselName
+          ?? null,
+        bookingRef: job?.externalRef ?? null,
+        shipper:
+          (tripRow as { shipper?: string | null } | null)?.shipper
+          ?? (job as { shipper?: string | null } | null)?.shipper
+          ?? null,
+        truckNumber:
+          (tripRow as { acceptedVehicleNo?: string | null } | null)?.acceptedVehicleNo
+          ?? null,
+        trailerNumber:
+          (tripRow as { trailerNumber?: string | null } | null)?.trailerNumber
+          ?? null,
+        cargoRows: lorryChitCargoRowsFromResolved(cargo),
+        containerSummary: cargo.cargoRow.containerOrCargo || null,
+        notes: job?.notes ?? null,
+        receiverName: embedBase.recipientName ?? job?.receiverName ?? null,
+        receiverNric: embedBase.recipientNric ?? null,
+        signatureImageBytes,
+        signedAt: embedBase.signedAt ?? null,
+      });
+    } else {
+      pdfBuffer = await this.buildDoPdfBuffer(job, {
+        variant,
+        signatureImageBytes,
+        recipientName: embedBase.recipientName,
+        recipientNric: embedBase.recipientNric,
+        signedAt: embedBase.signedAt,
+      });
+    }
 
     const refForFile =
       job.externalRef?.trim() || job.internalRef?.trim() || job.id;
@@ -7901,7 +8178,11 @@ export class TransportJobsService {
       },
     });
 
-    await this.deleteStorageObjectIfExists(previousStorageKey);
+    // Preserve prior Lorry Chit storage objects (unsigned drafts / history).
+    // Delivery/Pickup DO keep existing replace-in-place cleanup.
+    if (doType !== TripDocumentType.LORRY_CHIT) {
+      await this.deleteStorageObjectIfExists(previousStorageKey);
+    }
   }
 
   /** @deprecated Use refreshSignedDoPdf with DELIVERY_DO */
@@ -8982,7 +9263,7 @@ export class TransportJobsService {
             `payoutLines[${line.idx}] requires amountCents for manual payout item "${sourceItem.label}"`,
           );
         }
-        if (typeof (sourceItem as { datasetId?: string }).datasetId === "string") {
+        if (this.isTruckingRatesDatasetRow(sourceItem)) {
           line.earningRateMasterId = sourceItem.id;
           line.payoutItemId = null;
         } else {
@@ -8993,9 +9274,7 @@ export class TransportJobsService {
     }
 
     const totalDriverEarningCents = payoutCacheCentsToPersist(normalized);
-    const selectedIsDataset =
-      selectedMaster != null
-      && typeof (selectedMaster as { datasetId?: string }).datasetId === "string";
+    const tripHeaderFks = this.tripHeaderPayoutFksFromResolvedRate(selectedMaster);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.tripPayoutLine.deleteMany({ where: { tenantId, tripId } });
@@ -9026,8 +9305,8 @@ export class TransportJobsService {
       await tx.trip.update({
         where: { id: tripId },
         data: {
-          earningRateMasterId: selectedIsDataset ? selectedMaster.id : null,
-          payoutItemId: selectedMaster && !selectedIsDataset ? selectedMaster.id : null,
+          earningRateMasterId: tripHeaderFks.earningRateMasterId,
+          payoutItemId: tripHeaderFks.payoutItemId,
           driverEarningCents: totalDriverEarningCents,
           earningLabelSnapshot: normalized.length
             ? `${normalized.length} payout items`
@@ -10166,13 +10445,14 @@ export class TransportJobsService {
       deliveredAt?: Date | null;
       customerCompany?: { name: string } | null;
       items: Array<{
-        itemCode: string;
+        itemCode: string | null;
         description: string | null;
         qty: number;
       }>;
     },
     options?: {
       variant?: "pickup" | "delivery";
+      documentKind?: "do" | "lorry_chit";
       signatureImageBytes?: Buffer | null;
       recipientName?: string | null;
       recipientNric?: string | null;
@@ -10305,6 +10585,17 @@ export class TransportJobsService {
       font: bold,
       color: black,
     });
+
+    if (options?.documentKind === "lorry_chit") {
+      currentY -= 18;
+      page.drawText("LORRY CHIT", {
+        x: marginLeft,
+        y: currentY,
+        size: 12,
+        font: bold,
+        color: black,
+      });
+    }
   
     currentY -= 30;
   
@@ -10493,7 +10784,9 @@ export class TransportJobsService {
     const declarationY = rowTopY - rowHeight - 52;
   
     page.drawText(
-      "Received the above stated goods in good order and condition:",
+      options?.documentKind === "lorry_chit"
+        ? "Carrier acknowledgement of the above stated goods:"
+        : "Received the above stated goods in good order and condition:",
       {
         x: tableX,
         y: declarationY,

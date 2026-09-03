@@ -2,6 +2,7 @@ import { JobStatus, JobType } from "@prisma/client";
 import type { CreateJobDto } from "../dto/create-job.dto";
 import {
   assertCreateJobItemsRequiredForJobType,
+  ensureCollectionJobItems,
   parseValidJobItemsFromInput,
   resolveCollectionTypeForJobCreate,
 } from "../create-job-validation.helpers";
@@ -11,6 +12,10 @@ import {
 } from "../job-route-locations";
 import { movementTypeToJobType } from "./job-message-import.validator";
 import type { ControllerReviewedDraft } from "./job-message-import.types";
+import {
+  collectionPickupReferenceFromReviewed,
+  mapReviewedItemsForParse,
+} from "./job-message-import.items-map";
 import { zonedLocalDateTimeToUtc } from "./job-message-import.timing";
 
 export type CanonicalJobCreateData = {
@@ -36,7 +41,7 @@ export type CanonicalJobCreateData = {
   voyage: string | null;
   status: typeof JobStatus.ONGOING;
   items: Array<{
-    itemCode: string;
+    itemCode: string | null;
     description: string | null;
     sealNo: string | null;
     pickupReference: string | null;
@@ -56,19 +61,7 @@ function composeNotes(reviewed: ControllerReviewedDraft): string | null {
 }
 
 function mapReviewedItems(reviewed: ControllerReviewedDraft, jobType: JobType) {
-  return reviewed.items.map((it) =>
-    jobType === JobType.LCL
-      ? {
-          itemCode: it.referenceNumber || it.containerNumber,
-          qty: it.quantity ?? 1,
-          sealNo: it.sealNumber,
-        }
-      : {
-          containerNumber: it.containerNumber || it.referenceNumber,
-          sealNo: it.sealNumber,
-          qty: it.quantity,
-        },
-  );
+  return mapReviewedItemsForParse(reviewed, jobType);
 }
 
 /**
@@ -97,7 +90,10 @@ export function reviewedDraftToCreateJobDto(input: {
       : null;
 
   const mappedItems = mapReviewedItems(reviewed, jobType);
-  const validItems = parseValidJobItemsFromInput(mappedItems, jobType);
+  const validItems = ensureCollectionJobItems(
+    jobType,
+    parseValidJobItemsFromInput(mappedItems, jobType),
+  );
   assertCreateJobItemsRequiredForJobType(jobType, mappedItems, validItems);
 
   const routeLocations = resolveCanonicalRouteLocations({
@@ -133,7 +129,7 @@ export function reviewedDraftToCreateJobDto(input: {
           }
         : null,
     importDetails:
-      jobType === JobType.IMPORT
+      jobType === JobType.IMPORT || jobType === JobType.RETURN
         ? {
             returningDepotAddress1: reviewed.returningDepotAddress1,
             returningDepotAddress2: reviewed.returningDepotAddress2,
@@ -179,8 +175,13 @@ export function reviewedDraftToCreateJobDto(input: {
     pickupContactPhone: reviewed.picPhone ?? undefined,
     receiverName: reviewed.picName ?? "",
     receiverPhone: reviewed.picPhone ?? "",
+    pickupReference:
+      jobType === JobType.COLLECTION
+        ? collectionPickupReferenceFromReviewed(reviewed) ?? undefined
+        : undefined,
     description: reviewed.timingText ?? undefined,
     notes: composeNotes(reviewed) ?? undefined,
+    autoTripDocumentRequirements: reviewed.autoTripDocumentRequirements,
     carrierName: reviewed.carrierName ?? undefined,
     shipper: reviewed.shipper ?? undefined,
     vesselName: reviewed.vesselName ?? undefined,
@@ -190,11 +191,12 @@ export function reviewedDraftToCreateJobDto(input: {
       itemCode: it.itemCode,
       description: it.description ?? undefined,
       sealNo: it.sealNo ?? undefined,
+      containerSize: it.containerSize ?? undefined,
       pickupReference: it.pickupReference ?? undefined,
       qty: it.qty ?? undefined,
     })),
     importDetails:
-      jobType === JobType.IMPORT
+      jobType === JobType.IMPORT || jobType === JobType.RETURN
         ? {
             returningDepotAddress1: reviewed.returningDepotAddress1,
             returningDepotAddress2: reviewed.returningDepotAddress2,

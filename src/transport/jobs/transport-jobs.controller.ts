@@ -38,7 +38,8 @@ import { DestructiveAction } from "../../shared/auth/guards/destructive-action.d
 import { Role, JobType, TripPendingState, TenantModule, CanonicalTenantRole } from "@prisma/client";
 import { TransportJobsService } from "./transport-jobs.service";
 import { InvoicesService } from "../finance/invoices.service";
-import { TripExpensesService } from "../finance/trip-expenses.service";
+import { TripExpensesService, TRIP_EXPENSE_RECEIPT_MAX_BYTES } from "../finance/trip-expenses.service";
+import { CreateTripExpenseDto } from "../finance/dto/trip-expense.dto";
 import { CreateJobDto } from "./dto/create-job.dto";
 import { UpdateJobDto } from "./dto/update-job.dto";
 import { AssignJobDto } from "./dto/assign-job.dto";
@@ -56,6 +57,7 @@ import {
 } from "./dto/job-message-import-confirm.dto";
 import { JobMessageImportPatchDraftDto } from "./dto/job-message-import-patch-draft.dto";
 import { JobMessageImportService } from "./message-import/job-message-import.service";
+import { normalizeAutoTripDocumentRequirements } from "../workflows/trip-document-create-flags";
 import { readCorrelationId } from "../../shared/auth/request-context";
 import {
   AppendJobTripDto,
@@ -258,7 +260,13 @@ export class TransportJobsController {
       actorUserId,
       batchId,
       draftId,
-      patch: dto,
+      patch: {
+        ...dto,
+        autoTripDocumentRequirements:
+          dto.autoTripDocumentRequirements === undefined
+            ? undefined
+            : normalizeAutoTripDocumentRequirements(dto.autoTripDocumentRequirements),
+      },
     });
   }
 
@@ -279,7 +287,13 @@ export class TransportJobsController {
       tenantId,
       actorUserId,
       batchId,
-      drafts: dto.drafts,
+      drafts: dto.drafts.map((row) => ({
+        ...row,
+        autoTripDocumentRequirements:
+          row.autoTripDocumentRequirements === undefined
+            ? undefined
+            : normalizeAutoTripDocumentRequirements(row.autoTripDocumentRequirements),
+      })),
     });
   }
 
@@ -1170,6 +1184,64 @@ export class TransportJobsController {
       jobId,
       tripId,
       accessUser,
+    );
+  }
+
+  @Post(":jobId/trips/:tripId/expenses")
+  @ApiConsumes("multipart/form-data")
+  @ApiOperation({
+    summary: "Create a trip expense from Job Workspace (internal operations)",
+  })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        file: { type: "string", format: "binary" },
+        category: { type: "string" },
+        paymentMethod: { type: "string" },
+        amountCents: { type: "integer" },
+        currency: { type: "string" },
+        transactionDate: { type: "string" },
+        remarks: { type: "string" },
+        operationKey: { type: "string" },
+      },
+      required: [
+        "category",
+        "paymentMethod",
+        "amountCents",
+        "transactionDate",
+        "operationKey",
+      ],
+    },
+  })
+  @Roles(
+    CanonicalTenantRole.TENANT_ADMIN,
+    CanonicalTenantRole.TRANSPORT_ADMIN,
+    Role.ADMIN,
+    Role.TRANSPORT_STAFF,
+  )
+  @UseInterceptors(
+    FileInterceptor("file", { limits: { fileSize: TRIP_EXPENSE_RECEIPT_MAX_BYTES } }),
+  )
+  async createTripExpenseForWorkspace(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Body() dto: CreateTripExpenseDto,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    if (dto.amountCents != null) {
+      dto.amountCents = Number(dto.amountCents);
+    }
+    const tenantId = req.tenant.tenantId;
+    const accessUser = accessActorFromRequest(req);
+    return this.tripExpenses.createForOps(
+      tenantId,
+      jobId,
+      tripId,
+      accessUser,
+      dto,
+      file ?? null,
     );
   }
 

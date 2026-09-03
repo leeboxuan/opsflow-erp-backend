@@ -381,6 +381,10 @@ model Trip {
   earningLabelSnapshot    String?
   trailerNumber           String?
   trailerLastLocationCode String?
+  trailerParkingAddress1  String?
+  trailerParkingAddress2  String?
+  trailerParkingPostal    String?
+  trailerParkingPlaceId   String?
   /// Trip-specific ops/driver instructions (distinct from job-level notes).
   notes                   String?                   @db.Text
   /// Driver-owned operational remarks (distinct from Job.description / Job.notes).
@@ -1032,7 +1036,8 @@ model JobItem {
   tenantId String
   jobId    String
 
-  itemCode         String
+  /// Container number / LCL code. Null for Collection cargo until the driver enters identity.
+  itemCode         String?
   description      String?
   sealNo           String?
   /// ISO-style container size for IMPORT/EXPORT/COLLECTION cargo. Nullable for legacy rows.
@@ -1084,6 +1089,8 @@ enum JobMessageImportMovementType {
   IMPORT
   EXPORT
   LCL
+  RETURN
+  ONE_WAY
   UNKNOWN
 }
 
@@ -1833,6 +1840,10 @@ enum JobType {
   IMPORT
   EXPORT
   COLLECTION
+  /// Container return to depot (prime mover); one Trip pickup → depot.
+  RETURN
+  /// Container one-way haul (prime mover); one Trip pickup → delivery.
+  ONE_WAY
 }
 
 /// Phase 4 canonical multi-value job types (tenant-bound).
@@ -1948,12 +1959,16 @@ enum JobChargeSourceType {
 enum TripDocumentType {
   PICKUP_DO
   DELIVERY_DO
+  /// Unsigned/signed lorry chit PDF generated at trip create when selected.
+  LORRY_CHIT
   POD_PHOTO
   POD_SIGNATURE
   /// Handwritten signature image captured when signing Pickup DO.
   PICKUP_SIGNATURE
   /// Handwritten signature image captured when signing Delivery DO.
   DELIVERY_SIGNATURE
+  /// Handwritten signature image captured when signing Lorry Chit.
+  LORRY_CHIT_SIGNATURE
   OTHER
   /// Operations/driver port or entry permit (trip-scoped).
   PERMIT

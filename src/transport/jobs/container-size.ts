@@ -21,6 +21,25 @@ export function isContainerSizeWire(value: string): value is ContainerSizeWire {
   return (CONTAINER_SIZE_WIRE_VALUES as readonly string[]).includes(value);
 }
 
+/** Map ops equipment tokens (40HC, 1x20GP) onto the wire size enum without inventing identity. */
+export function parseContainerSizeFromEquipmentText(
+  raw: unknown,
+): ContainerSize | null {
+  const text = String(raw ?? "").trim().toUpperCase();
+  if (!text) return null;
+  const compact = text.replace(/\s+/g, "");
+  if (/(?:^|X)45(FT|HC|HQ|GP)?(?:$|[^0-9])/.test(compact) || compact === "45") {
+    return ContainerSize.FT_45;
+  }
+  if (/(?:^|X)40(FT|HC|HQ|GP|DC)?(?:$|[^0-9])/.test(compact) || compact === "40") {
+    return ContainerSize.FT_40;
+  }
+  if (/(?:^|X)20(FT|HC|HQ|GP|DC|FR)?(?:$|[^0-9])/.test(compact) || compact === "20") {
+    return ContainerSize.FT_20;
+  }
+  return null;
+}
+
 /** Serialize Prisma enum (or legacy string) to API wire value. */
 export function toContainerSizeWire(
   value: ContainerSize | string | null | undefined,
@@ -66,6 +85,8 @@ export function parseContainerSizeInput(
   if (text === "FT_20") return ContainerSize.FT_20;
   if (text === "FT_40") return ContainerSize.FT_40;
   if (text === "FT_45") return ContainerSize.FT_45;
+  const fromEquipment = parseContainerSizeFromEquipmentText(text);
+  if (fromEquipment) return fromEquipment;
   throw new BadRequestException(
     `${label} must be one of: ${CONTAINER_SIZE_WIRE_VALUES.join(", ")}`,
   );

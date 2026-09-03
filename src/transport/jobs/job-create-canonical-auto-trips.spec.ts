@@ -535,7 +535,7 @@ describe("canonical auto-trip creation", () => {
     ]);
   });
 
-  it("COLLECTION with no containers still creates one pickup-delivery trip and no links", async () => {
+  it("COLLECTION with no submitted containers still materializes one anonymous JobItem linked to the trip", async () => {
     const prisma = makeStatefulPrisma();
     const svc = makeSvc(prisma);
 
@@ -552,7 +552,10 @@ describe("canonical auto-trip creation", () => {
     );
 
     expect(prisma._state.trips).toHaveLength(1);
-    expect(prisma._state.tripJobItems).toHaveLength(0);
+    expect(prisma._state.jobItems).toHaveLength(1);
+    expect(prisma._state.jobItems[0].itemCode).toBeNull();
+    expect(prisma._state.tripJobItems).toHaveLength(1);
+    expect(prisma._state.tripJobItems[0].jobItemId).toBe(prisma._state.jobItems[0].id);
   });
 
   it("EXPORT create fails with an operational message when export port is missing", async () => {

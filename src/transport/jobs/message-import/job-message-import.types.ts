@@ -4,6 +4,7 @@ import type {
   JobMessageImportMovementType,
 } from "@prisma/client";
 import type { JobMessageImportParseWarning } from "./job-message-parser";
+import type { AddressVerificationStatus } from "./job-message-import.location-verification";
 
 export type ControllerReviewedItem = {
   containerNumber: string | null;
@@ -46,6 +47,14 @@ export type ControllerReviewedDraft = {
     returningDepotLat: number | null;
     returningDepotLng: number | null;
     returningDepotCode: string | null;
+    pickupSourceText: string | null;
+    deliverySourceText: string | null;
+    portSourceText: string | null;
+    returningDepotSourceText: string | null;
+    pickupVerificationStatus: AddressVerificationStatus;
+    deliveryVerificationStatus: AddressVerificationStatus;
+    portVerificationStatus: AddressVerificationStatus;
+    returningDepotVerificationStatus: AddressVerificationStatus;
   pickupDateLocal: string | null;
   deliveryDateLocal: string | null;
   pickupDateDisplay: string | null;
@@ -61,6 +70,12 @@ export type ControllerReviewedDraft = {
   shipper: string | null;
   vesselName: string | null;
   voyage: string | null;
+  containerSizeType: string | null;
+  autoTripDocumentRequirements: Array<{
+    tripIndex: number;
+    signedDeliveryDoRequired: boolean;
+    signedLorryChitRequired: boolean;
+  }>;
   items: ControllerReviewedItem[];
 };
 

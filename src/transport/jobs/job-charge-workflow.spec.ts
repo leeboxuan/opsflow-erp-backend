@@ -2481,6 +2481,7 @@ describe("job charge workflow hardening", () => {
       },
       tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
       driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+      drivers: { findFirst: jest.fn().mockResolvedValue({ hasPsaPortAccess: false }) },
       tripJobItem: {
         findMany: jest.fn().mockResolvedValue([
           {
@@ -2543,6 +2544,7 @@ describe("job charge workflow hardening", () => {
       },
       tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
       driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+      drivers: { findFirst: jest.fn().mockResolvedValue({ hasPsaPortAccess: false }) },
       tripJobItem: {
         findMany: jest.fn().mockResolvedValue([
           {
@@ -2618,6 +2620,7 @@ describe("job charge workflow hardening", () => {
         ]),
       },
       driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+      drivers: { findFirst: jest.fn().mockResolvedValue({ hasPsaPortAccess: false }) },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
@@ -2677,6 +2680,7 @@ describe("job charge workflow hardening", () => {
       },
       tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
       driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+      drivers: { findFirst: jest.fn().mockResolvedValue({ hasPsaPortAccess: false }) },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
@@ -2730,6 +2734,7 @@ describe("job charge workflow hardening", () => {
       },
       tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
       driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+      drivers: { findFirst: jest.fn().mockResolvedValue({ hasPsaPortAccess: false }) },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
@@ -2789,6 +2794,7 @@ describe("job charge workflow hardening", () => {
       },
       tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
       driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+      drivers: { findFirst: jest.fn().mockResolvedValue({ hasPsaPortAccess: false }) },
     };
     const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
     const supabaseService = { getClient: jest.fn() } as any;
@@ -2906,7 +2912,7 @@ describe("job charge workflow hardening", () => {
     });
   });
 
-  it("saveTripPayoutDraft snapshots TRUCKING_RATES onto earningRateMasterId without live master coupling", async () => {
+  it("saveTripPayoutDraft snapshots TRUCKING_RATES onto payout-line earningRateMasterId without coupling Trip.earningRateMasterId", async () => {
     const tripUpdate = jest.fn().mockResolvedValue({});
     const createMany = jest.fn().mockResolvedValue({ count: 1 });
     const liveRow = {
@@ -2981,7 +2987,8 @@ describe("job charge workflow hardening", () => {
     expect(tripUpdate).toHaveBeenCalledWith({
       where: { id: "trip1" },
       data: expect.objectContaining({
-        earningRateMasterId: "trucking-row-a1",
+        // Trip.earningRateMasterId FK is driver_trip_rate_masters, not dataset rows.
+        earningRateMasterId: null,
         payoutItemId: null,
         driverEarningCents: 1800,
       }),

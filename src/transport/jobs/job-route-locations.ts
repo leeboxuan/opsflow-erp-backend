@@ -112,7 +112,8 @@ function locationIsPresent(input?: CanonicalRouteLocation | null): boolean {
  *   Optional empty-depot fields on pickup/containerPickup remain commercial
  *   reference only and never seed auto-trips.
  * IMPORT: port from pickup, customer from delivery, returnDepot from returningDepot.
- * LCL/COLLECTION: pickup and delivery stay pickup/delivery.
+ * LCL/COLLECTION/ONE_WAY: pickup and delivery stay pickup/delivery.
+ * RETURN: pickup from pickup fields; depot from returningDepot (searchable depot catalogue).
  */
 export function resolveCanonicalRouteLocations(
   input: CanonicalRouteLocationInput,
@@ -201,6 +202,33 @@ export function resolveCanonicalRouteLocations(
     };
   }
 
+  if (input.jobType === JobType.RETURN) {
+    return {
+      pickup: loc({
+        address1: input.pickupAddress1,
+        address2: input.pickupAddress2,
+        postal: input.pickupPostal,
+        placeId: input.pickupPlaceId,
+        lat: input.pickupLat,
+        lng: input.pickupLng,
+        contactName: input.pickupContactName,
+        contactPhone: input.pickupContactPhone,
+      }),
+      returnDepot: loc({
+        address1:
+          importDetails.returningDepotAddress1 || input.deliveryAddress1,
+        address2:
+          importDetails.returningDepotAddress2 || input.deliveryAddress2,
+        postal: importDetails.returningDepotPostal || input.deliveryPostal,
+        placeId:
+          importDetails.returningDepotPlaceId || input.deliveryPlaceId,
+        lat: importDetails.returningDepotLat ?? input.deliveryLat,
+        lng: importDetails.returningDepotLng ?? input.deliveryLng,
+        code: importDetails.returningDepotCode || input.returningDepotCode,
+      }),
+    };
+  }
+
   return {
     pickup: loc({
       address1: input.pickupAddress1,
@@ -257,6 +285,15 @@ export function assertCanonicalRouteLocationsForCreate(
     }
     return;
   }
+  if (jobType === JobType.RETURN) {
+    if (!locationIsPresent(locations.pickup)) {
+      throw new BadRequestException("Pickup location is required.");
+    }
+    if (!locationIsPresent(locations.returnDepot)) {
+      throw new BadRequestException("Return depot is required.");
+    }
+    return;
+  }
   if (!locationIsPresent(locations.pickup)) {
     throw new BadRequestException("Pickup location is required.");
   }
@@ -309,6 +346,8 @@ function tripPicFields(
 /**
  * Create-time Trip origin/destination snapshots from operational route roles.
  * EXPORT: Customer/Stuffing → Export Port (one Trip).
+ * RETURN: Pickup → Depot (one Trip).
+ * ONE_WAY / LCL / COLLECTION: Pickup → Delivery.
  * Historical DEPOT_TO_DELIVERY / PORT_TO_DEPOT rows remain display-only.
  */
 export function canonicalAutoTripRouteSnapshots(
@@ -334,6 +373,15 @@ export function canonicalAutoTripRouteSnapshots(
       [JobTripTemplate.DELIVERY_TO_DEPOT]: {
         ...originFields(locations.customer),
         ...destinationFields(locations.returnDepot),
+      },
+    };
+  }
+  if (jobType === JobType.RETURN) {
+    return {
+      [JobTripTemplate.PICKUP_TO_DELIVERY]: {
+        ...originFields(locations.pickup),
+        ...destinationFields(locations.returnDepot),
+        ...tripPicFields(locations.pickup),
       },
     };
   }

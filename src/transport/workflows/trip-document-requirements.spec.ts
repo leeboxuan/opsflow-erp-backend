@@ -10,10 +10,17 @@ describe("trip document requirement snapshots", () => {
   it("supports customer signature only for DO types", () => {
     expect(documentTypeSupportsCustomerSignature("DELIVERY_DO")).toBe(true);
     expect(documentTypeSupportsCustomerSignature("PICKUP_DO")).toBe(true);
+    expect(documentTypeSupportsCustomerSignature("LORRY_CHIT")).toBe(true);
     expect(documentTypeSupportsCustomerSignature("POD_PHOTO")).toBe(false);
     expect(documentTypeSupportsCustomerSignature("TRAILER_START_PHOTO")).toBe(false);
     expect(documentTypeSupportsCustomerSignature("CONTAINER_PHOTO")).toBe(false);
     expect(documentTypeSupportsCustomerSignature("SEAL_PHOTO")).toBe(false);
+  });
+
+  it("defaults new trips to POD photo only", () => {
+    expect(defaultTripDocumentRequirementRows("t1", "trip1").map((row) => row.type)).toEqual([
+      TripDocumentType.POD_PHOTO,
+    ]);
   });
 
   it("freezes requirements after draft", () => {
@@ -58,19 +65,18 @@ describe("trip document requirement snapshots", () => {
     expect(createMany).toHaveBeenCalledTimes(1);
     const data = createMany.mock.calls[0][0].data;
     expect(data.every((row: { tripId: string }) => row.tripId === "trip-new")).toBe(true);
-    expect(data).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: TripDocumentType.DELIVERY_DO,
-          isRequired: true,
-          requiresSignature: true,
-        }),
-        expect.objectContaining({
-          type: TripDocumentType.POD_PHOTO,
-          isRequired: true,
-          requiresSignature: false,
-        }),
-      ]),
+    expect(data).toEqual([
+      expect.objectContaining({
+        type: TripDocumentType.POD_PHOTO,
+        isRequired: true,
+        requiresSignature: false,
+      }),
+    ]);
+    expect(data.some((row: { type: string }) => row.type === TripDocumentType.DELIVERY_DO)).toBe(
+      false,
+    );
+    expect(data.some((row: { type: string }) => row.type === TripDocumentType.LORRY_CHIT)).toBe(
+      false,
     );
   });
 });

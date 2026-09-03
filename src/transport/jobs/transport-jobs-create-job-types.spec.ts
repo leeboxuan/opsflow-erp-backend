@@ -712,7 +712,7 @@ describe("job create: EXPORT and COLLECTION", () => {
         containerSize: expect.anything(),
         pickupReference: null,
         description: null,
-        qty: null,
+        qty: 1,
       }),
     ]);
   });
@@ -808,7 +808,7 @@ describe("parseValidJobItemsFromInput container cargo", () => {
     expect(rows.map((r) => r.displayTitle)).toEqual(["Customer to Port"]);
   });
 
-  it("COLLECTION container count uses only parsed container cargo rows", () => {
+  it("COLLECTION container count keeps null-identity cargo slots", () => {
     const valid = parseValidJobItemsFromInput(
       [
         { containerNumber: "AAAU1" },
@@ -817,8 +817,8 @@ describe("parseValidJobItemsFromInput container cargo", () => {
       ],
       JobType.COLLECTION,
     );
-    expect(valid.map((row) => row.itemCode)).toEqual(["AAAU1", "ZZZU2"]);
-    expect(collectionContainerCountForTripGeneration(JobType.COLLECTION, valid)).toBe(2);
+    expect(valid.map((row) => row.itemCode)).toEqual(["AAAU1", null, "ZZZU2"]);
+    expect(collectionContainerCountForTripGeneration(JobType.COLLECTION, valid)).toBe(3);
     expect(collectionContainerCountForTripGeneration(JobType.LCL, valid)).toBeUndefined();
   });
 

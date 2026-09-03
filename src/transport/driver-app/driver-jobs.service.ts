@@ -150,6 +150,7 @@ const DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPE_SET = new Set<TripDocumentType>(
 const DRIVER_SINGLE_ACTIVE_TRIP_DOCUMENT_TYPES = new Set<TripDocumentType>([
   TripDocumentType.PICKUP_DO,
   TripDocumentType.DELIVERY_DO,
+  TripDocumentType.LORRY_CHIT,
   TripDocumentType.POD_SIGNATURE,
   TripDocumentType.PERMIT,
   TripDocumentType.CONTAINER_PHOTO,
@@ -446,6 +447,7 @@ export class DriverJobsService {
 
   private static readonly COMPLETION_DOC_QUERY_TYPES: TripDocumentType[] = [
     TripDocumentType.DELIVERY_DO,
+    TripDocumentType.LORRY_CHIT,
     TripDocumentType.POD_SIGNATURE,
     TripDocumentType.PICKUP_DO,
     TripDocumentType.POD_PHOTO,
@@ -460,6 +462,9 @@ export class DriverJobsService {
     input: {
       hasTrailerEndPhoto: boolean;
       trailerParkingLocationCode?: string | null;
+      trailerParkingPlaceId?: string | null;
+      trailerParkingAddress1?: string | null;
+      trailerParkingPostal?: string | null;
     },
   ): string[] {
     if (!requiresTrailerCheckout) return [];
@@ -467,7 +472,12 @@ export class DriverJobsService {
     if (!input.hasTrailerEndPhoto) {
       missing.push("trailerEndPhoto");
     }
-    if (!String(input.trailerParkingLocationCode ?? "").trim()) {
+    const hasParkingPlace =
+      !!String(input.trailerParkingLocationCode ?? "").trim() ||
+      !!String(input.trailerParkingPlaceId ?? "").trim() ||
+      !!String(input.trailerParkingAddress1 ?? "").trim() ||
+      !!String(input.trailerParkingPostal ?? "").trim();
+    if (!hasParkingPlace) {
       missing.push("trailerParkingLocationCode");
     }
     return missing;
@@ -515,6 +525,9 @@ export class DriverJobsService {
     },
     opts?: {
       trailerParkingLocationCode?: string | null;
+      trailerParkingPlaceId?: string | null;
+      trailerParkingAddress1?: string | null;
+      trailerParkingPostal?: string | null;
       hasNewTrailerEndPhotoUpload?: boolean;
     },
   ): Promise<{
@@ -550,6 +563,9 @@ export class DriverJobsService {
       {
         hasTrailerEndPhoto,
         trailerParkingLocationCode: resolvedTrailerParkingLocationCode,
+        trailerParkingPlaceId: opts?.trailerParkingPlaceId,
+        trailerParkingAddress1: opts?.trailerParkingAddress1,
+        trailerParkingPostal: opts?.trailerParkingPostal,
       },
     );
 
@@ -2535,6 +2551,10 @@ export class DriverJobsService {
     driverUserId: string,
     payload?: {
       trailerParkingLocationCode?: string;
+      trailerParkingAddress1?: string;
+      trailerParkingAddress2?: string;
+      trailerParkingPostal?: string;
+      trailerParkingPlaceId?: string;
       trailerParkingLat?: number;
       trailerParkingLng?: number;
       trailerEndPhoto?: Express.Multer.File;
@@ -2573,6 +2593,9 @@ export class DriverJobsService {
       }),
       this.computeTrailerCheckoutGapsForTrip(tenantId, driverUserId, trip, {
         trailerParkingLocationCode: payload?.trailerParkingLocationCode,
+        trailerParkingPlaceId: payload?.trailerParkingPlaceId,
+        trailerParkingAddress1: payload?.trailerParkingAddress1,
+        trailerParkingPostal: payload?.trailerParkingPostal,
         hasNewTrailerEndPhotoUpload: !!payload?.trailerEndPhoto?.buffer?.length,
       }),
       this.loadTripDocumentRequirementSnapshots(tenantId, tripId),
@@ -2660,18 +2683,25 @@ export class DriverJobsService {
           where: { code: resolvedTrailerParkingLocationCode },
           select: { code: true, name: true },
         });
-        if (!location) {
-          throw new BadRequestException(
-            `Unknown trailerParkingLocationCode: ${resolvedTrailerParkingLocationCode}`,
-          );
+        if (location) {
+          trailerLocation = location;
+        } else {
+          const hasPlacesParking =
+            !!String(payload?.trailerParkingPlaceId ?? "").trim() ||
+            !!String(payload?.trailerParkingAddress1 ?? "").trim() ||
+            !!String(payload?.trailerParkingPostal ?? "").trim();
+          if (!hasPlacesParking) {
+            throw new BadRequestException(
+              `Unknown trailerParkingLocationCode: ${resolvedTrailerParkingLocationCode}`,
+            );
+          }
         }
-        trailerLocation = location;
       }
     }
 
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
-      if (requiresTrailerCheckout && payload?.trailerEndPhoto && trailerLocation) {
+      if (requiresTrailerCheckout && payload?.trailerEndPhoto) {
         const file = payload.trailerEndPhoto;
         const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
         const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/trailer-end/${Date.now()}${ext}`;
@@ -2709,6 +2739,18 @@ export class DriverJobsService {
           status: TripStatus.COMPLETED,
           pendingState: TripPendingState.NONE,
           trailerLastLocationCode: trailerLocation?.code ?? undefined,
+          trailerParkingAddress1: requiresTrailerCheckout
+            ? (String(payload?.trailerParkingAddress1 ?? "").trim() || null)
+            : undefined,
+          trailerParkingAddress2: requiresTrailerCheckout
+            ? (String(payload?.trailerParkingAddress2 ?? "").trim() || null)
+            : undefined,
+          trailerParkingPostal: requiresTrailerCheckout
+            ? (String(payload?.trailerParkingPostal ?? "").trim() || null)
+            : undefined,
+          trailerParkingPlaceId: requiresTrailerCheckout
+            ? (String(payload?.trailerParkingPlaceId ?? "").trim() || null)
+            : undefined,
           trailerParkingLat: requiresTrailerCheckout ? (payload?.trailerParkingLat ?? null) : undefined,
           trailerParkingLng: requiresTrailerCheckout ? (payload?.trailerParkingLng ?? null) : undefined,
           trailerParkedAt: requiresTrailerCheckout ? now : undefined,
@@ -2737,6 +2779,9 @@ export class DriverJobsService {
           trailerNumber: trip.trailerNumber ?? null,
           trailerParkingLocationCode: trailerLocation?.code ?? null,
           trailerParkingLocationName: trailerLocation?.name ?? null,
+          trailerParkingAddress1: payload?.trailerParkingAddress1 ?? null,
+          trailerParkingPostal: payload?.trailerParkingPostal ?? null,
+          trailerParkingPlaceId: payload?.trailerParkingPlaceId ?? null,
           trailerParkingLat: payload?.trailerParkingLat ?? null,
           trailerParkingLng: payload?.trailerParkingLng ?? null,
         },
@@ -2939,6 +2984,7 @@ export class DriverJobsService {
           in: [
             TripDocumentType.PICKUP_DO,
             TripDocumentType.DELIVERY_DO,
+            TripDocumentType.LORRY_CHIT,
             TripDocumentType.POD_PHOTO,
             TripDocumentType.POD_SIGNATURE,
             TripDocumentType.OTHER,
@@ -3104,6 +3150,10 @@ export class DriverJobsService {
       trailerParkedAt: trip.trailerParkedAt ?? null,
       trailerParkingLat: trip.trailerParkingLat ?? null,
       trailerParkingLng: trip.trailerParkingLng ?? null,
+      trailerParkingAddress1: trip.trailerParkingAddress1 ?? null,
+      trailerParkingAddress2: trip.trailerParkingAddress2 ?? null,
+      trailerParkingPostal: trip.trailerParkingPostal ?? null,
+      trailerParkingPlaceId: trip.trailerParkingPlaceId ?? null,
       trailerStartPhotoUrl,
       trailerEndPhotoUrl,
 
@@ -3297,7 +3347,7 @@ export class DriverJobsService {
           "One or more container itemIds do not belong to this job",
         );
       }
-      const itemsById = new Map<string, { id: string; itemCode: string; sealNo: string | null }>(
+      const itemsById = new Map<string, { id: string; itemCode: string | null; sealNo: string | null }>(
         jobItems.map((i) => [i.id, i]),
       );
 
@@ -3316,7 +3366,7 @@ export class DriverJobsService {
           sealNo?: string | null;
         } = {
           itemId,
-          previousContainerNumber: existing.itemCode,
+          previousContainerNumber: existing.itemCode ?? "",
         };
         if (row.containerNumber !== undefined) {
           const containerNumber = normalizeOptionalTrimmedText(row.containerNumber);
@@ -3425,6 +3475,27 @@ export class DriverJobsService {
         ? { notificationKind: DRIVER_REMARKS_NOTIFICATION_KIND }
         : {}),
     });
+
+    const containerNumberChanged = itemUpdates.some(
+      (u) => u.containerNumber !== undefined,
+    );
+    if (containerNumberChanged && this.opsJobs?.regenerateUnsignedLorryChitAfterContainerUpdate) {
+      try {
+        await this.opsJobs.regenerateUnsignedLorryChitAfterContainerUpdate(
+          tenantId,
+          jobId,
+          tripId,
+          { userId: driverUserId, role: Role.DRIVER },
+        );
+      } catch (err) {
+        console.warn("lorry_chit_unsigned_regenerate_after_container_update_failed", {
+          tenantId,
+          jobId,
+          tripId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     const detail = await this.getTripDetailForDriver(tenantId, tripId, driverUserId);
     if (remarksDidChange) {

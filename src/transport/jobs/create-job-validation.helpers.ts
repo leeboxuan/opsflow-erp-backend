@@ -8,6 +8,8 @@ function isContainerCargoJobType(jobType: JobType | null | undefined): boolean {
     jobType === JobType.IMPORT
     || jobType === JobType.EXPORT
     || jobType === JobType.COLLECTION
+    || jobType === JobType.RETURN
+    || jobType === JobType.ONE_WAY
   );
 }
 
@@ -37,13 +39,17 @@ export function parseValidJobItemsFromInput(
   jobTypes?: readonly JobType[],
   opts?: { requireContainerSize?: boolean },
 ): Array<{
-  itemCode: string;
+  itemCode: string | null;
   description: string | null;
   sealNo: string | null;
   containerSize: ContainerSize | null;
   pickupReference: string | null;
   qty: number | null;
 }> {
+  const types = jobTypes && jobTypes.length > 0 ? jobTypes : jobType != null ? [jobType] : [];
+  const isCollection =
+    jobType === JobType.COLLECTION
+    || (types.length === 1 && types[0] === JobType.COLLECTION);
   const mode =
     jobTypes && jobTypes.length > 0
       ? cargoModeForJobTypes(jobTypes)
@@ -53,18 +59,21 @@ export function parseValidJobItemsFromInput(
           ? "LCL"
           : "NONE";
   const containerStyle = mode === "CONTAINER";
-  const requireContainerSize = opts?.requireContainerSize === true && containerStyle;
+  const requireContainerSize =
+    opts?.requireContainerSize === true && containerStyle && !isCollection;
 
   return rawItems
     .map((i: any) => {
-      const itemCode = String(i?.itemCode ?? i?.containerNumber ?? "").trim();
-      if (!itemCode) return null;
+      const itemCode = String(i?.itemCode ?? i?.containerNumber ?? "").trim() || null;
+      if (!itemCode && !isCollection) return null;
       const rawQty = i?.qty;
       let qty: number | null;
       if (containerStyle) {
         qty =
           rawQty == null || rawQty === ""
-            ? null
+            ? isCollection
+              ? 1
+              : null
             : Math.max(1, Number(rawQty) || 1);
       } else {
         qty = Math.max(1, Number(rawQty) || 1);
@@ -108,9 +117,11 @@ export function parseValidUpdateJobItemsFromInput(
   ReturnType<typeof parseValidJobItemsFromInput>[number] & { id: string | null }
 > {
   return rawItems.flatMap((rawItem) => {
-    // Intentional cargo edit: require size on each container row in the payload.
+    const isCollection =
+      jobType === JobType.COLLECTION
+      || (Array.isArray(jobTypes) && jobTypes.length === 1 && jobTypes[0] === JobType.COLLECTION);
     const parsed = parseValidJobItemsFromInput([rawItem], jobType, jobTypes, {
-      requireContainerSize: true,
+      requireContainerSize: !isCollection,
     });
     if (!parsed.length) return [];
     const id =
@@ -336,7 +347,7 @@ export function resolveCollectionTypeForJobCreate(
 export function assertCreateJobItemsRequiredForJobType(
   _jobType: JobType | null | undefined,
   rawItems: unknown[],
-  validItems: Array<{ itemCode: string }>,
+  validItems: Array<{ itemCode: string | null }>,
 ): void {
   if (!rawItems.length) {
     return;
@@ -357,7 +368,7 @@ export type ParsedCreateJobItem = ReturnType<typeof parseValidJobItemsFromInput>
  */
 export function orderCreatedJobItemIdsBySubmitOrder(
   submittedItems: ParsedCreateJobItem[],
-  createdItems: Array<{ id: string; itemCode: string; sealNo?: string | null }>,
+  createdItems: Array<{ id: string; itemCode: string | null; sealNo?: string | null }>,
 ): string[] {
   const remaining = createdItems.map((item) => ({ ...item }));
   return submittedItems.map((submitted) => {
@@ -377,8 +388,7 @@ export function orderCreatedJobItemIdsBySubmitOrder(
 }
 
 /**
- * COLLECTION auto-trip count uses only parsed container cargo rows.
- * `parseValidJobItemsFromInput` already drops blank rows and requires itemCode/containerNumber.
+ * COLLECTION auto-trip count uses parsed cargo slots (identity may be null).
  */
 export function collectionContainerCountForTripGeneration(
   jobType: JobType,
@@ -386,4 +396,23 @@ export function collectionContainerCountForTripGeneration(
 ): number | undefined {
   if (jobType !== JobType.COLLECTION) return undefined;
   return validItems.length;
+}
+
+/** Collection always materializes at least one JobItem with null cargo identity. */
+export function ensureCollectionJobItems(
+  jobType: JobType | null | undefined,
+  validItems: ParsedCreateJobItem[],
+): ParsedCreateJobItem[] {
+  if (jobType !== JobType.COLLECTION) return validItems;
+  if (validItems.length > 0) return validItems;
+  return [
+    {
+      itemCode: null,
+      description: null,
+      sealNo: null,
+      containerSize: null,
+      pickupReference: null,
+      qty: 1,
+    },
+  ];
 }

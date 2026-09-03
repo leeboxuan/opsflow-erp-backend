@@ -263,7 +263,7 @@ describe("TransportJobsService.update type-specific details", () => {
       "t1",
       "job1",
       {
-        items: [{ id: "item-1", itemCode: "CMAU9988776", sealNo: "SL88903" }],
+        items: [{ id: "item-1", itemCode: "CMAU9988776", sealNo: "SL88903", containerSize: "40ft" }],
       } as any,
       { userId: "u1", role: Role.TRANSPORT_STAFF },
     );

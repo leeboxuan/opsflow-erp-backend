@@ -270,6 +270,16 @@ export class AppendJobTripDto {
   @IsOptional()
   @IsArray()
   payoutLines?: Array<Record<string, unknown>>;
+
+  @ApiPropertyOptional({ description: "Create a signed Delivery DO requirement for this trip" })
+  @IsOptional()
+  @IsBoolean()
+  signedDeliveryDoRequired?: boolean;
+
+  @ApiPropertyOptional({ description: "Create a signed Lorry Chit requirement for this trip" })
+  @IsOptional()
+  @IsBoolean()
+  signedLorryChitRequired?: boolean;
 }
 
 export class ReorderJobTripsDto {

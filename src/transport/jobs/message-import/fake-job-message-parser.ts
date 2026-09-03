@@ -31,10 +31,26 @@ export class FakeJobMessageParser implements JobMessageParser {
 
   async parse(input: ParseJobMessageInput): Promise<ParseJobMessageResult> {
     const src = input.sourceText ?? "";
+    const fixtureId = input.testFixtureId?.trim() || null;
 
-    // Fixture detection (keeps tests deterministic without calling OpenAI).
-    const isFixture = src.includes("GESU6311344") || src.includes("ONE HANNOVER");
-    if (!isFixture) {
+    const baseField = (field: string, sourceText: string) => ({
+      field,
+      sourceText,
+      confidence: "HIGH" as const,
+    });
+
+    const mkDraft = (d: JobMessageImportParsedJobMessage["drafts"][number]) => d;
+
+    if (fixtureId === "six-draft-ops") {
+      return this.parseSixDraftOpsFixture(src, baseField, mkDraft);
+    }
+
+    // Existing acceptance fixture (keeps tests deterministic without calling OpenAI).
+    const isAcceptanceFixture =
+      fixtureId === "acceptance-three-job" ||
+      src.includes("GESU6311344") ||
+      src.includes("ONE HANNOVER");
+    if (!isAcceptanceFixture) {
       return {
         message: {
           parserVersion: PARSER_VERSION,
@@ -51,14 +67,6 @@ export class FakeJobMessageParser implements JobMessageParser {
         meta: EMPTY_META,
       };
     }
-
-    const baseField = (field: string, sourceText: string) => ({
-      field,
-      sourceText,
-      confidence: "HIGH" as const,
-    });
-
-    const mkDraft = (d: JobMessageImportParsedJobMessage["drafts"][number]) => d;
 
     const drafts: JobMessageImportParsedJobMessage["drafts"] = [
       mkDraft({
@@ -315,6 +323,213 @@ export class FakeJobMessageParser implements JobMessageParser {
             severity: "WARNING",
           },
         ],
+        drafts: traceableDrafts,
+      },
+      meta: EMPTY_META,
+    };
+  }
+
+  private parseSixDraftOpsFixture(
+    src: string,
+    baseField: (field: string, sourceText: string) => {
+      field: string;
+      sourceText: string;
+      confidence: "HIGH";
+    },
+    mkDraft: (
+      d: JobMessageImportParsedJobMessage["drafts"][number],
+    ) => JobMessageImportParsedJobMessage["drafts"][number],
+  ): ParseJobMessageResult {
+    const drafts: JobMessageImportParsedJobMessage["drafts"] = [
+      mkDraft({
+        clientDraftId: "col-1",
+        movementType: "COLLECTION",
+        customerNameText: null,
+        earliestAt: null,
+        latestAt: null,
+        timingText: null,
+        pickup: { rawText: "EK 30 pioneer sector 2" },
+        delivery: { rawText: "HOCK CHUAN. 31 JURONG PORT ROAD #07-20" },
+        carrier: "samudera",
+        shipper: "ESL",
+        vessel: "ALS SUMIRE",
+        voyage: "249N",
+        containerSizeType: "40HC",
+        items: [
+          {
+            containerNumber: null,
+            sealNumber: null,
+            referenceNumber: "SGBKKCAE9294",
+            quantity: 1,
+          },
+        ],
+        picName: null,
+        picPhone: null,
+        instructions: [],
+        notes: null,
+        sourceFragment: "SGBKKCAE9294",
+        fieldEvidence: [
+          baseField("containerSizeType", "1x40HC"),
+          baseField("referenceNumber", "SGBKKCAE9294"),
+        ],
+        warnings: [],
+      }),
+      mkDraft({
+        clientDraftId: "imp-1",
+        movementType: "IMPORT",
+        customerNameText: null,
+        earliestAt: null,
+        latestAt: null,
+        timingText: null,
+        pickup: { rawText: "ppz" },
+        delivery: { rawText: "db whse" },
+        carrier: null,
+        shipper: null,
+        vessel: null,
+        voyage: null,
+        containerSizeType: null,
+        items: [
+          { containerNumber: "OOCU9212980", sealNumber: "OOLKYV1084", referenceNumber: "IG6H183388Z", quantity: 1 },
+          { containerNumber: "CSNU7730628", sealNumber: "OOLKYR8671", referenceNumber: "IG6H183388Z", quantity: 1 },
+          { containerNumber: "FFAU2879099", sealNumber: "OOLKYS0580", referenceNumber: "IG6H183388Z", quantity: 1 },
+        ],
+        picName: null,
+        picPhone: null,
+        instructions: [],
+        notes: "permit - IG6H183388Z (chukong)",
+        sourceFragment: "OOCU9212980 / OOLKYV1084",
+        fieldEvidence: [baseField("pickup", "from - ppz"), baseField("delivery", "to - db whse")],
+        warnings: [],
+      }),
+      mkDraft({
+        clientDraftId: "exp-1",
+        movementType: "EXPORT",
+        customerNameText: null,
+        earliestAt: null,
+        latestAt: null,
+        timingText: "ETA 05/09@1030",
+        pickup: { rawText: "db whse" },
+        delivery: { rawText: "db whse" },
+        carrier: null,
+        shipper: null,
+        vessel: null,
+        voyage: null,
+        containerSizeType: null,
+        items: [
+          { containerNumber: "MSBU3879600", sealNumber: "FX47126059", referenceNumber: null, quantity: 1 },
+        ],
+        picName: null,
+        picPhone: null,
+        instructions: ["LD at db whse"],
+        notes: null,
+        sourceFragment: "MSBU3879600 / FX47126059",
+        fieldEvidence: [baseField("containerNumber", "MSBU3879600")],
+        warnings: [],
+      }),
+      mkDraft({
+        clientDraftId: "ret-1",
+        movementType: "RETURN",
+        customerNameText: null,
+        earliestAt: null,
+        latestAt: null,
+        timingText: "det 04/09",
+        pickup: { rawText: "db whse" },
+        delivery: { rawText: "cogent" },
+        carrier: null,
+        shipper: null,
+        vessel: null,
+        voyage: null,
+        containerSizeType: null,
+        items: [
+          { containerNumber: "UASU1061210", sealNumber: null, referenceNumber: null, quantity: 1 },
+        ],
+        picName: null,
+        picPhone: null,
+        instructions: [],
+        notes: null,
+        sourceFragment: "UASU1061210 - det 04/09",
+        fieldEvidence: [baseField("pickup", "from - db whse"), baseField("delivery", "to - cogent")],
+        warnings: [],
+      }),
+      mkDraft({
+        clientDraftId: "ret-2",
+        movementType: "RETURN",
+        customerNameText: null,
+        earliestAt: null,
+        latestAt: null,
+        timingText: "det tba",
+        pickup: { rawText: "db whse" },
+        delivery: { rawText: "TBA (wait carrier update return to HLA or tuas)" },
+        carrier: null,
+        shipper: null,
+        vessel: null,
+        voyage: null,
+        containerSizeType: null,
+        items: [
+          { containerNumber: "MSDU7515916", sealNumber: null, referenceNumber: null, quantity: 1 },
+        ],
+        picName: null,
+        picPhone: null,
+        instructions: [],
+        notes: "det tba",
+        sourceFragment: "MSDU7515916 - det tba",
+        fieldEvidence: [baseField("delivery", "to - TBA")],
+        warnings: [
+          {
+            code: "UNRESOLVED_DEPOT",
+            field: "delivery",
+            message: "Return depot is TBA; location left unresolved.",
+            severity: "WARNING",
+          },
+        ],
+      }),
+      mkDraft({
+        clientDraftId: "lcl-1",
+        movementType: "LCL",
+        customerNameText: null,
+        earliestAt: null,
+        latestAt: null,
+        timingText: "morning 830 reach DB",
+        pickup: { rawText: "db whse" },
+        delivery: { rawText: "AMS whse. 15 tuas ave 18" },
+        carrier: null,
+        shipper: null,
+        vessel: null,
+        voyage: null,
+        containerSizeType: null,
+        items: [
+          { containerNumber: null, sealNumber: null, referenceNumber: "platform", quantity: 1 },
+        ],
+        picName: "Mr Venka",
+        picPhone: null,
+        instructions: ["take documents from Ah Fu"],
+        notes: null,
+        sourceFragment: "PIC: Mr Venka 15 tuas avenue 18",
+        fieldEvidence: [baseField("picName", "PIC: Mr Venka")],
+        warnings: [],
+      }),
+    ];
+
+    const normalizedSource = normalizeSourceTextForTraceability(src);
+    const traceableDrafts = drafts.filter((draft) =>
+      normalizedSource.includes(normalizeSourceTextForTraceability(draft.sourceFragment)),
+    );
+
+    return {
+      message: {
+        parserVersion: PARSER_VERSION,
+        batchWarnings:
+          traceableDrafts.length === 6
+            ? []
+            : [
+                {
+                  code: "FAKE_PARSER_PARTIAL_FIXTURE",
+                  field: null,
+                  message:
+                    "Deterministic fake parser omitted fixture drafts whose source fragments were absent from the submitted text.",
+                  severity: "WARNING",
+                },
+              ],
         drafts: traceableDrafts,
       },
       meta: EMPTY_META,

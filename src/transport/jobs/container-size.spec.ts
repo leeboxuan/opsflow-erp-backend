@@ -26,9 +26,15 @@ describe("container size wire helpers", () => {
     expect(toContainerSizeWire(null)).toBeNull();
   });
 
+  it("normalizes equipment size tokens onto the wire enum", () => {
+    expect(parseContainerSizeInput("40HC")).toBe(ContainerSize.FT_40);
+    expect(parseContainerSizeInput("1x20GP")).toBe(ContainerSize.FT_20);
+    expect(parseContainerSizeInput("20")).toBe(ContainerSize.FT_20);
+  });
+
   it("rejects unsupported sizes", () => {
-    expect(() => parseContainerSizeInput("40HC")).toThrow(BadRequestException);
-    expect(() => parseContainerSizeInput("20")).toThrow(/20ft, 40ft, 45ft/);
+    expect(() => parseContainerSizeInput("99ft")).toThrow(BadRequestException);
+    expect(() => parseContainerSizeInput("foo")).toThrow(/20ft, 40ft, 45ft/);
   });
 });
 

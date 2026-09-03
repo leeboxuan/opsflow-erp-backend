@@ -21,7 +21,7 @@ export class CreateJobItemDto {
   @ApiPropertyOptional({ description: "LCL item code; container types may use containerNumber instead" })
   @IsOptional()
   @IsString()
-  itemCode?: string;
+  itemCode?: string | null;
 
   @ApiPropertyOptional({
     description: "IMPORT/EXPORT/COLLECTION: stored as itemCode when itemCode omitted",
@@ -74,6 +74,23 @@ export class CreateJobItemDto {
   @IsOptional()
   @IsString()
   containerSize?: string | null;
+}
+
+export class AutoTripDocumentRequirementDto {
+  @ApiPropertyOptional({ description: "0-based generated trip order" })
+  @IsOptional()
+  @IsNumber()
+  tripIndex?: number;
+
+  @ApiPropertyOptional({ description: "Create a signed Delivery DO requirement for this trip" })
+  @IsOptional()
+  @IsBoolean()
+  signedDeliveryDoRequired?: boolean;
+
+  @ApiPropertyOptional({ description: "Create a signed Lorry Chit requirement for this trip" })
+  @IsOptional()
+  @IsBoolean()
+  signedLorryChitRequired?: boolean;
 }
 
 export class CreateJobImportDetailsDto {
@@ -569,6 +586,17 @@ export class CreateJobDto {
   @ValidateNested({ each: true })
   @Type(() => CreateJobItemDto)
   cargoItems?: CreateJobItemDto[];
+
+  @ApiPropertyOptional({
+    type: [AutoTripDocumentRequirementDto],
+    description:
+      "Per auto-generated trip document flags. Omitted or false = do not seed Delivery DO or Lorry Chit.",
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => AutoTripDocumentRequirementDto)
+  autoTripDocumentRequirements?: AutoTripDocumentRequirementDto[];
 
   @ApiPropertyOptional()
   @IsOptional()

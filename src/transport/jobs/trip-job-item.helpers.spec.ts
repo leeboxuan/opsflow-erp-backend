@@ -83,6 +83,18 @@ describe("trip-job-item.helpers", () => {
       expect(r.shouldAutoHealSingleItem).toBe(false);
     });
 
+    it("allows COLLECTION publish when a single anonymous JobItem is already linked", () => {
+      const r = evaluateTripPublishLinkReadiness({
+        jobType: JobType.COLLECTION,
+        jobItemCount: 1,
+        linkedJobItemCount: 1,
+        jobItemIds: ["anon-1"],
+      });
+      expect(r.required).toBe(true);
+      expect(r.satisfied).toBe(true);
+      expect(r.shouldAutoHealSingleItem).toBe(false);
+    });
+
     it("blocks multi-item without links", () => {
       const r = evaluateTripPublishLinkReadiness({
         jobType: JobType.IMPORT,

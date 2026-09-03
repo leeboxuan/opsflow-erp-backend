@@ -133,3 +133,119 @@ describe("TripExpensesService listForInternalTrip", () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
+
+describe("TripExpensesService createForOps", () => {
+  const tenantId = "t1";
+  const jobId = "job1";
+  const tripId = "trip1";
+  const OP_KEY = "33333333-3333-4333-8333-333333333333";
+
+  function makeSvc() {
+    const expenseStore: any[] = [];
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({ id: tripId, jobId }),
+      },
+      tripExpense: {
+        findFirst: jest.fn().mockImplementation(({ where }: any) => {
+          const hit = expenseStore.find(
+            (e) => e.id === where.id && e.tenantId === where.tenantId,
+          );
+          return Promise.resolve(hit ?? null);
+        }),
+        findFirstOrThrow: jest.fn().mockImplementation(async ({ where }: any) => {
+          const hit = expenseStore.find((e) => e.id === where.id);
+          if (!hit) throw new Error("missing");
+          return hit;
+        }),
+        create: jest.fn().mockImplementation(({ data }: any) => {
+          const row = {
+            id: "exp-ops-1",
+            ...data,
+            attachments: [],
+            job: { internalRef: "JOB-1" },
+            submittedByUser: { name: "Ops" },
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+          expenseStore.push(row);
+          return Promise.resolve(row);
+        }),
+      },
+      tripExpenseAttachment: { create: jest.fn() },
+      tripExpenseEvent: { create: jest.fn() },
+    };
+    const idempotency = {
+      peekCompleted: jest.fn().mockResolvedValue(null),
+      execute: jest.fn(async (params: any) => {
+        const out = await params.execute(prisma);
+        return { result: out.result, outcome: "created" as const };
+      }),
+    };
+    const svc = new TripExpensesService(
+      prisma,
+      { log: jest.fn() } as any,
+      { getClient: jest.fn() } as any,
+      idempotency as any,
+    );
+    return { svc, prisma, idempotency };
+  }
+
+  it("allows transport ops to create and rejects finance-only / driver / customer", async () => {
+    const { svc, prisma } = makeSvc();
+    const created = await svc.createForOps(
+      tenantId,
+      jobId,
+      tripId,
+      { roles: [CanonicalTenantRole.TRANSPORT_ADMIN], userId: "ops-1" },
+      {
+        category: "PARKING" as any,
+        paymentMethod: "DRIVER_PAID" as any,
+        amountCents: 800,
+        transactionDate: "2026-09-04",
+        operationKey: OP_KEY,
+      },
+    );
+    expect(created.amountCents).toBe(800);
+    expect(prisma.tripExpense.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          submittedByUserId: "ops-1",
+          submittedByDriverId: null,
+        }),
+      }),
+    );
+
+    await expect(
+      svc.createForOps(
+        tenantId,
+        jobId,
+        tripId,
+        { roles: [CanonicalTenantRole.FINANCE_ADMIN], userId: "fin-1" },
+        {
+          category: "PARKING" as any,
+          paymentMethod: "DRIVER_PAID" as any,
+          amountCents: 800,
+          transactionDate: "2026-09-04",
+          operationKey: OP_KEY,
+        },
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    await expect(
+      svc.createForOps(
+        tenantId,
+        jobId,
+        tripId,
+        { roles: [CanonicalTenantRole.TRANSPORT_DRIVER], userId: "drv-1" },
+        {
+          category: "PARKING" as any,
+          paymentMethod: "DRIVER_PAID" as any,
+          amountCents: 800,
+          transactionDate: "2026-09-04",
+          operationKey: OP_KEY,
+        },
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});

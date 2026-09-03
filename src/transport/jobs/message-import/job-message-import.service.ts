@@ -62,6 +62,7 @@ import {
 } from "./job-message-import.labelled-fields";
 import { parseOperationalTiming } from "./job-message-import.timing";
 import { enrichAddressFields } from "./job-message-import.address-parse";
+import { applyResolvedLocationsOntoReviewed } from "./job-message-import.location-verification";
 import { sanitizeReviewedDraftForResponse } from "./job-message-import.repair";
 import type {
   ControllerReviewedDraft,
@@ -108,6 +109,10 @@ function mapParsedMovementType(
       return JobMessageImportMovementType.EXPORT;
     case "LCL":
       return JobMessageImportMovementType.LCL;
+    case "RETURN":
+      return JobMessageImportMovementType.RETURN;
+    case "ONE_WAY":
+      return JobMessageImportMovementType.ONE_WAY;
     default:
       return JobMessageImportMovementType.UNKNOWN;
   }
@@ -218,12 +223,14 @@ export function controllerJsonFromParsed(
     pickupPlaceId: null,
     pickupLat: null,
     pickupLng: null,
+    pickupSourceText: pickupSplit.location ?? parsed.pickup?.rawText ?? null,
     deliveryAddress1: deliveryEnriched.address1,
     deliveryAddress2: deliveryEnriched.address2,
     deliveryPostal: deliveryEnriched.postal,
     deliveryPlaceId: null,
     deliveryLat: null,
     deliveryLng: null,
+    deliverySourceText: deliverySplit.location ?? parsed.delivery?.rawText ?? null,
     pickupDateLocal: resolvedPickupTiming.pickupDateLocal,
     deliveryDateLocal: resolvedDeliveryTiming.pickupDateLocal,
     pickupDateDisplay: resolvedPickupTiming.display,
@@ -239,6 +246,7 @@ export function controllerJsonFromParsed(
     shipper: parsed.shipper ?? null,
     vesselName: parsed.vessel ?? null,
     voyage: parsed.voyage ?? null,
+    containerSizeType: parsed.containerSizeType ?? null,
     items,
   });
 }
@@ -290,6 +298,8 @@ function readControllerJson(raw: unknown): ControllerReviewedDraft {
     shipper: c.shipper ?? null,
     vesselName: c.vesselName ?? null,
     voyage: c.voyage ?? null,
+    containerSizeType: c.containerSizeType ?? null,
+    autoTripDocumentRequirements: c.autoTripDocumentRequirements,
     items: c.items ?? [],
   });
 }
@@ -306,6 +316,35 @@ export class JobMessageImportService {
     @Inject(JOB_MESSAGE_PARSER_TOKEN) private readonly parser: JobMessageParser,
     private readonly jobs: TransportJobsService,
   ) {}
+
+  private async loadImportLocationCatalogues() {
+    const [ports, depots] = await Promise.all([
+      this.prisma.masterSingaporePort.findMany(),
+      this.prisma.masterSingaporeDepot.findMany(),
+    ]);
+    return {
+      ports: ports.map((row) => ({
+        code: row.code,
+        name: row.name,
+        addressLine1: row.addressLine1,
+        addressLine2: row.addressLine2,
+        postalCode: row.postalCode,
+        placeId: row.placeId,
+        lat: row.lat,
+        lng: row.lng,
+      })),
+      depots: depots.map((row) => ({
+        code: row.code,
+        name: row.name,
+        addressLine1: row.addressLine1,
+        addressLine2: row.addressLine2,
+        postalCode: row.postalCode,
+        placeId: row.placeId,
+        lat: row.lat,
+        lng: row.lng,
+      })),
+    };
+  }
 
   async createPreviewBatch(params: {
     tenantId: string;
@@ -376,15 +415,20 @@ export class JobMessageImportService {
 
     const referenceDate = parseReferenceDateForTimezone(params.timezone);
 
+    const catalogues = await this.loadImportLocationCatalogues();
+
     const draftsToCreate = [];
     for (const d of parsed.drafts) {
       const customerId = d.customerNameText
         ? customerByName.get(d.customerNameText) ?? null
         : null;
-      const reviewed = controllerJsonFromParsed(d, customerId, {
+      let reviewed = controllerJsonFromParsed(d, customerId, {
         timezone: params.timezone,
         referenceDate,
       });
+      reviewed = normalizeReviewedDraft(
+        applyResolvedLocationsOntoReviewed(reviewed, catalogues),
+      );
       const duplicateFingerprint = computeDraftFingerprint({
         tenantId: params.tenantId,
         movementType: reviewed.movementType,
@@ -498,7 +542,11 @@ export class JobMessageImportService {
     }
 
     const current = readControllerJson(draft.controllerJson);
-    const nextReviewed = mergeReviewedDraftPatch(current, params.patch);
+    const catalogues = await this.loadImportLocationCatalogues();
+    const nextReviewed = applyResolvedLocationsOntoReviewed(
+      mergeReviewedDraftPatch(current, params.patch),
+      catalogues,
+    );
 
     if (nextReviewed.customerCompanyId) {
       const exists = await this.prisma.customer_companies.findFirst({
@@ -661,6 +709,7 @@ export class JobMessageImportService {
     }> = [];
 
     await perf.measure("reviewedDraftValidation", async () => {
+      const catalogues = await this.loadImportLocationCatalogues();
       for (const row of submitted) {
         const draft = draftsById.get(row.draftId) as (typeof batch.drafts)[number] | undefined;
         if (!draft) {
@@ -669,7 +718,10 @@ export class JobMessageImportService {
         if (draft.confirmedAt) {
           throw new BadRequestException("Draft already confirmed");
         }
-        const reviewed = mergeReviewedDraftPatch(readControllerJson(draft.controllerJson), row);
+        const reviewed = applyResolvedLocationsOntoReviewed(
+          mergeReviewedDraftPatch(readControllerJson(draft.controllerJson), row),
+          catalogues,
+        );
         const validation = validateReviewedDraft(reviewed);
         if (validation.hasBlockingErrors) {
           throw new BadRequestException("Included drafts have unresolved validation errors");

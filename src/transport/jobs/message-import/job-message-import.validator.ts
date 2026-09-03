@@ -5,6 +5,8 @@ import {
   JobType,
 } from "@prisma/client";
 import { parseValidJobItemsFromInput } from "../create-job-validation.helpers";
+import { mapReviewedItemsForParse } from "./job-message-import.items-map";
+import { normalizeAutoTripDocumentRequirements } from "../../workflows/trip-document-create-flags";
 import type { JobMessageImportParseWarning } from "./job-message-parser";
 import type {
   ControllerReviewedDraft,
@@ -17,8 +19,28 @@ import {
   normalizeNotes,
   normalizePersonName,
 } from "./job-message-import.text-normalize";
+import {
+  type AddressVerificationStatus,
+  resolveImportedLocation,
+} from "./job-message-import.location-verification";
 
 const ISO_CONTAINER_RE = /^[A-Z]{4}\d{7}$/;
+
+function resolveSlotVerification(input: {
+  sourceText?: string | null;
+  placeId?: string | null;
+  address1?: string | null;
+  postal?: string | null;
+  code?: string | null;
+}): AddressVerificationStatus {
+  return resolveImportedLocation({
+    rawText: input.sourceText ?? input.address1 ?? null,
+    address1: input.address1 ?? null,
+    postal: input.postal ?? null,
+    placeId: input.placeId ?? null,
+    code: input.code ?? null,
+  }).verificationStatus;
+}
 
 export function trimToNull(v: string | null | undefined): string | null {
   if (v == null) return null;
@@ -118,7 +140,43 @@ export function normalizeReviewedDraft(
     shipper: trimToNull(input.shipper),
     vesselName: trimToNull(input.vesselName),
     voyage: trimToNull(input.voyage),
+    containerSizeType: trimToNull(input.containerSizeType),
+    autoTripDocumentRequirements: normalizeAutoTripDocumentRequirements(
+      input.autoTripDocumentRequirements,
+    ),
     items,
+    pickupSourceText: trimToNull(input.pickupSourceText) ?? normalizeLocationLabel(input.pickupAddress1),
+    deliverySourceText:
+      trimToNull(input.deliverySourceText) ?? normalizeLocationLabel(input.deliveryAddress1),
+    portSourceText: trimToNull(input.portSourceText) ?? normalizeLocationLabel(input.portAddress1),
+    returningDepotSourceText:
+      trimToNull(input.returningDepotSourceText) ??
+      normalizeLocationLabel(input.returningDepotAddress1),
+    pickupVerificationStatus: resolveSlotVerification({
+      sourceText: input.pickupSourceText,
+      placeId: input.pickupPlaceId,
+      address1: input.pickupAddress1,
+      postal: input.pickupPostal,
+    }),
+    deliveryVerificationStatus: resolveSlotVerification({
+      sourceText: input.deliverySourceText,
+      placeId: input.deliveryPlaceId,
+      address1: input.deliveryAddress1,
+      postal: input.deliveryPostal,
+    }),
+    portVerificationStatus: resolveSlotVerification({
+      sourceText: input.portSourceText,
+      placeId: input.portPlaceId,
+      address1: input.portAddress1,
+      postal: input.portPostal,
+    }),
+    returningDepotVerificationStatus: resolveSlotVerification({
+      sourceText: input.returningDepotSourceText,
+      placeId: input.returningDepotPlaceId,
+      address1: input.returningDepotAddress1,
+      postal: input.returningDepotPostal,
+      code: input.returningDepotCode,
+    }),
   };
 }
 
@@ -205,6 +263,12 @@ export function mergeReviewedDraftPatch(
     ...(patch.shipper !== undefined ? { shipper: patch.shipper } : {}),
     ...(patch.vesselName !== undefined ? { vesselName: patch.vesselName } : {}),
     ...(patch.voyage !== undefined ? { voyage: patch.voyage } : {}),
+    ...(patch.containerSizeType !== undefined
+      ? { containerSizeType: patch.containerSizeType }
+      : {}),
+    ...(patch.autoTripDocumentRequirements !== undefined
+      ? { autoTripDocumentRequirements: patch.autoTripDocumentRequirements }
+      : {}),
     ...(patch.items !== undefined ? { items: patch.items } : {}),
   });
 }
@@ -221,6 +285,10 @@ export function movementTypeToJobType(
       return JobType.EXPORT;
     case JobMessageImportMovementType.LCL:
       return JobType.LCL;
+    case JobMessageImportMovementType.RETURN:
+      return JobType.RETURN;
+    case JobMessageImportMovementType.ONE_WAY:
+      return JobType.ONE_WAY;
     default:
       return null;
   }
@@ -301,6 +369,17 @@ export function validateReviewedDraft(
         "Empty container return depot is required.",
       );
     }
+  } else if (reviewed.movementType === JobMessageImportMovementType.RETURN) {
+    if (!reviewed.pickupAddress1) {
+      pushBlocking("pickupAddress1", "MISSING_PICKUP", "Pickup location is required.");
+    }
+    if (!reviewed.returningDepotAddress1 && !reviewed.returningDepotCode) {
+      pushBlocking(
+        "returningDepotAddress1",
+        "MISSING_RETURN_DEPOT",
+        "Return depot is required.",
+      );
+    }
   } else {
     if (!reviewed.pickupAddress1) {
       pushBlocking("pickupAddress1", "MISSING_PICKUP", "Pickup location is required.");
@@ -312,6 +391,54 @@ export function validateReviewedDraft(
         "Delivery location is required.",
       );
     }
+  }
+
+  const pushUnresolved = (
+    field: string,
+    status: AddressVerificationStatus,
+    present: boolean,
+  ) => {
+    if (present && status === "UNRESOLVED") {
+      pushBlocking(
+        field,
+        "LOCATION_UNRESOLVED",
+        "Location is unresolved (TBA or unusable). Select an address before confirming.",
+      );
+    }
+  };
+  if (reviewed.movementType === JobMessageImportMovementType.EXPORT) {
+    pushUnresolved(
+      "deliveryAddress1",
+      reviewed.deliveryVerificationStatus,
+      Boolean(reviewed.deliveryAddress1),
+    );
+    pushUnresolved("portAddress1", reviewed.portVerificationStatus, Boolean(reviewed.portAddress1));
+  } else if (reviewed.movementType === JobMessageImportMovementType.IMPORT) {
+    pushUnresolved("pickupAddress1", reviewed.pickupVerificationStatus, Boolean(reviewed.pickupAddress1));
+    pushUnresolved(
+      "deliveryAddress1",
+      reviewed.deliveryVerificationStatus,
+      Boolean(reviewed.deliveryAddress1),
+    );
+    pushUnresolved(
+      "returningDepotAddress1",
+      reviewed.returningDepotVerificationStatus,
+      Boolean(reviewed.returningDepotAddress1 || reviewed.returningDepotCode),
+    );
+  } else if (reviewed.movementType === JobMessageImportMovementType.RETURN) {
+    pushUnresolved("pickupAddress1", reviewed.pickupVerificationStatus, Boolean(reviewed.pickupAddress1));
+    pushUnresolved(
+      "returningDepotAddress1",
+      reviewed.returningDepotVerificationStatus,
+      Boolean(reviewed.returningDepotAddress1 || reviewed.returningDepotCode),
+    );
+  } else {
+    pushUnresolved("pickupAddress1", reviewed.pickupVerificationStatus, Boolean(reviewed.pickupAddress1));
+    pushUnresolved(
+      "deliveryAddress1",
+      reviewed.deliveryVerificationStatus,
+      Boolean(reviewed.deliveryAddress1),
+    );
   }
 
   const postalOk = (v: string | null) => !v || /^\d{6}$/.test(v);
@@ -352,21 +479,9 @@ export function validateReviewedDraft(
 
   const jobType = movementTypeToJobType(reviewed.movementType);
   if (jobType) {
-    const mappedItems = reviewed.items.map((it) =>
-      jobType === JobType.LCL
-        ? {
-            itemCode: it.referenceNumber || it.containerNumber,
-            qty: it.quantity ?? 1,
-            sealNo: it.sealNumber,
-          }
-        : {
-            containerNumber: it.containerNumber || it.referenceNumber,
-            sealNo: it.sealNumber,
-            qty: it.quantity,
-          },
-    );
+    const mappedItems = mapReviewedItemsForParse(reviewed, jobType);
     const validItems = parseValidJobItemsFromInput(mappedItems, jobType);
-    if (!validItems.length) {
+    if (!validItems.length && jobType !== JobType.COLLECTION) {
       pushBlocking(
         "items",
         "MISSING_ITEMS",

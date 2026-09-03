@@ -67,7 +67,15 @@ export const JOB_MESSAGE_IMPORT_JSON_SCHEMA = {
             clientDraftId: { type: "string" },
             movementType: {
               type: "string",
-              enum: ["COLLECTION", "IMPORT", "EXPORT", "LCL", "UNKNOWN"],
+              enum: [
+                "COLLECTION",
+                "IMPORT",
+                "EXPORT",
+                "LCL",
+                "RETURN",
+                "ONE_WAY",
+                "UNKNOWN",
+              ],
             },
             customerNameText: { type: ["string", "null"] },
             earliestAt: { type: ["string", "null"] },
@@ -422,6 +430,12 @@ Keep timingText as the original operational phrase (for example "PSA 12/08@2300"
 Do not invent ISO timestamps. If a date or time is a window or deadline, still copy the raw phrase into timingText and add a warning.
 Preserve exact supporting source fragments for each draft field.
 Never create tenant IDs, database IDs, permissions, assignments, trips, prices, routes, or eligibility decisions.
+
+Movement types: COLLECTION, IMPORT, EXPORT, LCL, RETURN, ONE_WAY.
+COLLECTION: copy equipment tokens such as 1x40HC into containerSizeType and quantity; leave containerNumber and sealNumber null unless an actual container number appears in the source. Do not copy pickup references into containerNumber.
+RETURN is a container return to a depot (not Import's automatic customer-to-depot leg).
+ONE_WAY is a single pickup-to-delivery container move.
+Never invent postal codes, place IDs, or coordinates.
 
 Return strict JSON that matches the requested schema.
 

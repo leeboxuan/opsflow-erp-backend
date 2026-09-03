@@ -127,6 +127,25 @@ describe("job-types Phase 4 audit fixes", () => {
       "CONTAINER",
     );
     expect(cargoModeForJobTypes([JobType.LCL])).toBe("LCL");
+    expect(cargoModeForJobTypes([JobType.RETURN])).toBe("CONTAINER");
+    expect(cargoModeForJobTypes([JobType.ONE_WAY])).toBe("CONTAINER");
+  });
+
+  it("RETURN and ONE_WAY resolve as single-type container jobs", () => {
+    expect(resolveCreateJobTypesInput({ jobTypes: ["RETURN"] })).toEqual({
+      ok: true,
+      jobTypes: [JobType.RETURN],
+      compatibilityJobType: JobType.RETURN,
+    });
+    expect(resolveCreateJobTypesInput({ jobTypes: ["ONE_WAY"] })).toEqual({
+      ok: true,
+      jobTypes: [JobType.ONE_WAY],
+      compatibilityJobType: JobType.ONE_WAY,
+    });
+    expect(internalRefTypeCode([JobType.RETURN])).toBe("RET");
+    expect(internalRefTypeCode([JobType.ONE_WAY])).toBe("OW");
+    expect(autoTripTopologyJobType([JobType.RETURN])).toBe(JobType.RETURN);
+    expect(autoTripTopologyJobType([JobType.ONE_WAY])).toBe(JobType.ONE_WAY);
   });
 
   it("labels LEGACY_FALLBACK vs CANONICAL without inventing multi-type trip type", () => {

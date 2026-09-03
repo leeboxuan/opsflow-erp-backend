@@ -342,11 +342,55 @@ describe("DriverJobsService.completeTrip trailer checkout", () => {
       },
     ]);
     const svc = makeCompleteSvc(prisma);
-    jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: tripId }] } as any);
+    jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: tripId }] } as never);
 
     await expect(
       svc.completeTrip(tenantId, jobId, tripId, driverUserId),
     ).resolves.toBeTruthy();
     expect(tripUpdate).toHaveBeenCalled();
+  });
+
+  it("persists Places parking address, postal, unit (address2), placeId, coords, and legacy master code", async () => {
+    const { prisma, tripUpdate } = makeCompletePrisma();
+    prisma.tripDocument.findMany.mockResolvedValue([
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: new Date(),
+        isSigned: true,
+      },
+      {
+        type: TripDocumentType.POD_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
+    ]);
+    const svc = makeCompleteSvc(prisma);
+    jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: tripId }] } as never);
+
+    await expect(
+      svc.completeTrip(tenantId, jobId, tripId, driverUserId, {
+        trailerParkingLocationCode: "GUL7",
+        trailerParkingAddress1: "7 Gul Circle",
+        trailerParkingAddress2: "Unit 07-20",
+        trailerParkingPostal: "629563",
+        trailerParkingPlaceId: "ChIJ-gul7",
+        trailerParkingLat: 1.31,
+        trailerParkingLng: 103.67,
+      }),
+    ).resolves.toBeTruthy();
+
+    expect(tripUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          trailerLastLocationCode: "GUL7",
+          trailerParkingAddress1: "7 Gul Circle",
+          trailerParkingAddress2: "Unit 07-20",
+          trailerParkingPostal: "629563",
+          trailerParkingPlaceId: "ChIJ-gul7",
+          trailerParkingLat: 1.31,
+          trailerParkingLng: 103.67,
+        }),
+      }),
+    );
   });
 });
