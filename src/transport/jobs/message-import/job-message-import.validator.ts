@@ -512,18 +512,31 @@ export function validateReviewedDraft(
   }
 
   if (reviewed.pickupDateNeedsReview) {
-    pushBlocking(
-      "pickupDateLocal",
-      "PICKUP_TIME_NEEDS_REVIEW",
-      reviewed.pickupDateDisplay || "Pickup date/time needs review.",
-    );
+    const display = reviewed.pickupDateDisplay || "";
+    const ambiguous =
+      /needs review|ambiguous|constraint|window|could not/i.test(display);
+    const detentionOnly =
+      /\bdet(?:ention)?\b/i.test(String(reviewed.timingText ?? "")) &&
+      !reviewed.pickupDateLocal;
+    if (ambiguous && !detentionOnly) {
+      pushBlocking(
+        "pickupDateLocal",
+        "PICKUP_TIME_NEEDS_REVIEW",
+        reviewed.pickupDateDisplay || "Pickup date/time needs review.",
+      );
+    }
   }
   if (reviewed.deliveryDateNeedsReview) {
-    pushBlocking(
-      "deliveryDateLocal",
-      "DELIVERY_TIME_NEEDS_REVIEW",
-      reviewed.deliveryDateDisplay || "Delivery date/time needs review.",
-    );
+    const display = reviewed.deliveryDateDisplay || "";
+    const ambiguous =
+      /needs review|ambiguous|constraint|window|could not/i.test(display);
+    if (ambiguous) {
+      pushBlocking(
+        "deliveryDateLocal",
+        "DELIVERY_TIME_NEEDS_REVIEW",
+        reviewed.deliveryDateDisplay || "Delivery date/time needs review.",
+      );
+    }
   }
 
   if (reviewed.movementType === JobMessageImportMovementType.COLLECTION) {
