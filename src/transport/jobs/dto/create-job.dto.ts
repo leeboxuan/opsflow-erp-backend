@@ -148,6 +148,23 @@ export class CreateJobImportDetailsDto {
 
   @ApiPropertyOptional({
     description:
+      "RETURN intake only: operator explicitly marked return depot as not confirmed yet. Allows Draft create without a resolved depot; publish still requires a depot.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  returningDepotPending?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      "Preserved TBA/source wording while returningDepotPending is true. Never stored as deliveryAddress1.",
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  returningDepotPendingText?: string | null;
+
+  @ApiPropertyOptional({
+    description:
       "IMPORT empty-container return depot code (master_singapore_depots.code). Required with address or code so Customer → Depot can be generated.",
     nullable: true,
   })
@@ -536,10 +553,27 @@ export class CreateJobDto {
   @IsNumber()
   pickupLng?: number;
 
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description:
+      "Delivery / destination address. Required unless job type is RETURN and returningDepotPending is true (Draft intake with unset destination).",
+  })
+  @ValidateIf((o: CreateJobDto) => {
+    const types =
+      Array.isArray(o.jobTypes) && o.jobTypes.length > 0
+        ? o.jobTypes
+        : o.jobType
+          ? [o.jobType]
+          : [];
+    const pureReturn = types.length === 1 && types[0] === JobType.RETURN;
+    const pending =
+      o.returningDepotPending === true ||
+      o.importDetails?.returningDepotPending === true;
+    // Pending-depot exemption is RETURN-only. Other job types still require destination.
+    return !(pureReturn && pending);
+  })
   @IsString()
   @MinLength(1)
-  deliveryAddress1: string;
+  deliveryAddress1?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -731,6 +765,23 @@ export class CreateJobDto {
   @IsOptional()
   @IsBoolean()
   permitReady?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      "RETURN intake: depot not confirmed yet. Allows Draft Job/Trip without a resolved destination; publish still requires a depot.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  returningDepotPending?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      "Preserved TBA/source wording while returningDepotPending is true. Never used as a real address.",
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  returningDepotPendingText?: string | null;
 
   @ApiPropertyOptional({
     description:

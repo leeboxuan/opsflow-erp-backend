@@ -504,6 +504,25 @@ function makeImportSvc(
   );
 }
 
+function confirmWritableFromReviewed(reviewed: Record<string, unknown>) {
+  const RESPONSE_ONLY = new Set([
+    "pickupSourceText",
+    "deliverySourceText",
+    "portSourceText",
+    "returningDepotSourceText",
+    "pickupVerificationStatus",
+    "deliveryVerificationStatus",
+    "portVerificationStatus",
+    "returningDepotVerificationStatus",
+  ]);
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(reviewed)) {
+    if (RESPONSE_ONLY.has(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 function canonicalLocationPatch(reviewed: { movementType?: string; returningDepotAddress1?: string | null; returningDepotCode?: string | null; portAddress1?: string | null }) {
   if (reviewed.movementType === "IMPORT" && !reviewed.returningDepotAddress1 && !reviewed.returningDepotCode) {
     return { returningDepotAddress1: "Tuas Depot" };
@@ -533,7 +552,7 @@ function confirmDraftsFromPreview(
     .filter((d) => (allow ? allow.has(d.id) : true))
     .map((d) => ({
       draftId: d.id,
-      ...d.reviewed,
+      ...confirmWritableFromReviewed(d.reviewed),
       ...canonicalLocationPatch(d.reviewed),
       customerCompanyId:
         opts?.customerCompanyId !== undefined

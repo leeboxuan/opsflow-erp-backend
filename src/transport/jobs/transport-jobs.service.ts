@@ -194,7 +194,10 @@ import {
   canonicalAutoTripRouteSnapshots,
   resolveCanonicalRouteLocations,
 } from "./job-route-locations";
-import { resolveReturnDestinationFields } from "./return-destination";
+import {
+  pendingReturnDestinationJobFields,
+  resolveReturnDestinationResolution,
+} from "./return-destination";
 import {
   documentTypeSupportsCustomerSignature,
   ensureDefaultTripDocumentRequirementSnapshots,
@@ -638,6 +641,8 @@ function toJobDto(j: any): JobDto {
     permitReady: j.permitReady ?? false,
     returningDepotCode: j.returningDepotCode ?? null,
     returnLastDay: j.returnLastDay ?? null,
+    returningDepotPending: j.returningDepotPending === true,
+    returningDepotPendingText: j.returningDepotPendingText ?? null,
     exportOriginDepotCode: j.exportOriginDepotCode ?? null,
     exportPortCode: j.exportPortCode ?? null,
 
@@ -884,11 +889,16 @@ type TripPublishReadinessInput = {
   requiresPsaPortAccess?: boolean | null;
   /** Fail closed when trip requires PSA and this is not explicitly true. */
   driverHasPsaPortAccess?: boolean | null;
+  /** RETURN: Draft intake may leave depot pending; publish requires a resolved depot. */
+  returningDepotPending?: boolean | null;
+  destinationAddressLine1?: string | null;
 };
 
 type TripPublishReadinessResult = {
   canPublish: boolean;
   errorMessage: string | null;
+  /** Field key for UI linking when present. */
+  errorField?: string | null;
   totalPayoutCents: number;
   payoutLineCount: number;
 };
@@ -919,6 +929,20 @@ function evaluateTripPublishReadiness(input: TripPublishReadinessInput): TripPub
     return {
       canPublish: false,
       errorMessage: "Trip is already published or cannot be published from current status",
+      totalPayoutCents: 0,
+      payoutLineCount: 0,
+    };
+  }
+
+  if (
+    input.jobType === JobType.RETURN &&
+    (input.returningDepotPending === true ||
+      !String(input.destinationAddressLine1 ?? "").trim())
+  ) {
+    return {
+      canPublish: false,
+      errorMessage: "Return depot is required before publishing.",
+      errorField: "returningDepotCode",
       totalPayoutCents: 0,
       payoutLineCount: 0,
     };
@@ -3002,9 +3026,16 @@ export class TransportJobsService {
       });
     }
 
-    const returnDestination =
+    const returnResolution =
       routeTopologyType === JobType.RETURN
-        ? resolveReturnDestinationFields({
+        ? resolveReturnDestinationResolution({
+            returningDepotPending:
+              dto.returningDepotPending === true ||
+              importDetails.returningDepotPending === true,
+            returningDepotPendingText:
+              dto.returningDepotPendingText ??
+              importDetails.returningDepotPendingText ??
+              null,
             returningDepotCode,
             returningDepotAddress1:
               returnMasterDepot?.addressLine1 ||
@@ -3034,28 +3065,43 @@ export class TransportJobsService {
             deliveryLng: dto.deliveryLng,
           })
         : null;
-    if (routeTopologyType === JobType.RETURN && !returnDestination) {
+    if (routeTopologyType === JobType.RETURN && !returnResolution) {
       throw new BadRequestException("Return depot is required.");
     }
+    const returnDestination =
+      returnResolution?.kind === "resolved" ? returnResolution.fields : null;
+    const returnDepotPending =
+      returnResolution?.kind === "pending"
+        ? pendingReturnDestinationJobFields(returnResolution.pendingText)
+        : null;
 
     const resolvedDeliveryAddress1 =
       pureExport
         ? stuffingAddress1 ?? dto.deliveryAddress1
-        : returnDestination?.deliveryAddress1 ?? dto.deliveryAddress1;
+        : returnDepotPending
+          ? returnDepotPending.deliveryAddress1
+          : returnDestination?.deliveryAddress1 ?? dto.deliveryAddress1;
     const resolvedDeliveryAddress2 =
       pureExport
         ? stuffingAddress2 ?? dto.deliveryAddress2
-        : returnDestination?.deliveryAddress2 ?? dto.deliveryAddress2;
+        : returnDepotPending
+          ? null
+          : returnDestination?.deliveryAddress2 ?? dto.deliveryAddress2;
     const resolvedDeliveryPostal =
       pureExport
         ? stuffingPostal ?? dto.deliveryPostal
-        : returnDestination?.deliveryPostal ?? dto.deliveryPostal;
-    const resolvedDeliveryPlaceId =
-      returnDestination?.deliveryPlaceId ?? dto.deliveryPlaceId;
-    const resolvedDeliveryLat =
-      returnDestination?.deliveryLat ?? dto.deliveryLat;
-    const resolvedDeliveryLng =
-      returnDestination?.deliveryLng ?? dto.deliveryLng;
+        : returnDepotPending
+          ? null
+          : returnDestination?.deliveryPostal ?? dto.deliveryPostal;
+    const resolvedDeliveryPlaceId = returnDepotPending
+      ? null
+      : returnDestination?.deliveryPlaceId ?? dto.deliveryPlaceId;
+    const resolvedDeliveryLat = returnDepotPending
+      ? null
+      : returnDestination?.deliveryLat ?? dto.deliveryLat;
+    const resolvedDeliveryLng = returnDepotPending
+      ? null
+      : returnDestination?.deliveryLng ?? dto.deliveryLng;
 
     const routeLocations = resolveCanonicalRouteLocations({
       jobType: routeTopologyType,
@@ -3095,31 +3141,41 @@ export class TransportJobsService {
       importDetails: {
         ...importDetails,
         pickupPortCode,
-        returningDepotCode:
-          returnDestination?.returningDepotCode ?? returningDepotCode,
-        returningDepotAddress1:
-          returnDestination?.returningDepotAddress1 ??
-          importDetails.returningDepotAddress1,
-        returningDepotAddress2:
-          returnDestination?.returningDepotAddress2 ??
-          importDetails.returningDepotAddress2,
-        returningDepotPostal:
-          returnDestination?.returningDepotPostal ??
-          importDetails.returningDepotPostal,
-        returningDepotPlaceId:
-          returnDestination?.returningDepotPlaceId ??
-          importDetails.returningDepotPlaceId,
-        returningDepotLat:
-          returnDestination?.returningDepotLat ?? importDetails.returningDepotLat,
-        returningDepotLng:
-          returnDestination?.returningDepotLng ?? importDetails.returningDepotLng,
+        returningDepotCode: returnDepotPending
+          ? null
+          : returnDestination?.returningDepotCode ?? returningDepotCode,
+        returningDepotAddress1: returnDepotPending
+          ? null
+          : returnDestination?.returningDepotAddress1 ??
+            importDetails.returningDepotAddress1,
+        returningDepotAddress2: returnDepotPending
+          ? null
+          : returnDestination?.returningDepotAddress2 ??
+            importDetails.returningDepotAddress2,
+        returningDepotPostal: returnDepotPending
+          ? null
+          : returnDestination?.returningDepotPostal ??
+            importDetails.returningDepotPostal,
+        returningDepotPlaceId: returnDepotPending
+          ? null
+          : returnDestination?.returningDepotPlaceId ??
+            importDetails.returningDepotPlaceId,
+        returningDepotLat: returnDepotPending
+          ? null
+          : returnDestination?.returningDepotLat ?? importDetails.returningDepotLat,
+        returningDepotLng: returnDepotPending
+          ? null
+          : returnDestination?.returningDepotLng ?? importDetails.returningDepotLng,
       },
-      returningDepotCode:
-        returnDestination?.returningDepotCode ?? returningDepotCode,
+      returningDepotCode: returnDepotPending
+        ? null
+        : returnDestination?.returningDepotCode ?? returningDepotCode,
       exportPortCode,
       exportOriginDepotCode,
     });
-    assertCanonicalRouteLocationsForCreate(routeTopologyType, routeLocations);
+    assertCanonicalRouteLocationsForCreate(routeTopologyType, routeLocations, {
+      allowPendingReturnDepot: Boolean(returnDepotPending),
+    });
 
     const internalRef = await this.getNextInternalRef(tenantId, resolvedJobTypes);
 
@@ -3217,7 +3273,7 @@ export class TransportJobsService {
           deliveryAddress1:
             pureExport
               ? (stuffingAddress1 ?? dto.deliveryAddress1)
-              : (resolvedDeliveryAddress1 ?? dto.deliveryAddress1),
+              : (resolvedDeliveryAddress1 ?? dto.deliveryAddress1 ?? ""),
           deliveryAddress2:
             pureExport
               ? (stuffingAddress2 ?? null)
@@ -3244,7 +3300,12 @@ export class TransportJobsService {
           vesselEta: vesselEta ? new Date(vesselEta) : null,
           portnetReady,
           permitReady,
-          returningDepotCode: returningDepotCode || null,
+          returningDepotCode: returnDepotPending
+            ? null
+            : returningDepotCode || null,
+          returningDepotPending: Boolean(returnDepotPending),
+          returningDepotPendingText:
+            returnDepotPending?.returningDepotPendingText ?? null,
           returnLastDay: returnLastDay ? new Date(returnLastDay) : null,
           exportOriginDepotCode: exportOriginDepotCode || null,
           exportPortCode: exportPortCode || null,
@@ -4210,6 +4271,33 @@ export class TransportJobsService {
       "returningDepotCode",
       dto.returningDepotCode,
     );
+    if (dto.returningDepotPending !== undefined) {
+      data.returningDepotPending = dto.returningDepotPending === true;
+      if (dto.returningDepotPending === true) {
+        data.deliveryAddress1 = "";
+        data.deliveryAddress2 = null;
+        data.deliveryPostal = null;
+        data.returningDepotCode = null;
+      }
+    }
+    applyOptionalTrimmedNullable(
+      data,
+      "returningDepotPendingText",
+      dto.returningDepotPendingText,
+    );
+    // Selecting a real depot clears pending intake state.
+    if (
+      dto.returningDepotPending !== true &&
+      ((dto.returningDepotCode != null &&
+        String(dto.returningDepotCode).trim()) ||
+        (dto.deliveryAddress1 != null &&
+          String(dto.deliveryAddress1).trim()))
+    ) {
+      data.returningDepotPending = false;
+      if (dto.returningDepotPendingText === undefined) {
+        data.returningDepotPendingText = null;
+      }
+    }
     applyOptionalDateNullable(data, "returnLastDay", dto.returnLastDay);
     applyOptionalTrimmedNullable(
       data,
@@ -6080,35 +6168,50 @@ export class TransportJobsService {
     let jobType = opts?.jobType;
     let jobItemCount = opts?.jobItemCount;
     let linkedJobItemCount = opts?.linkedJobItemCount;
+    let returningDepotPending: boolean | null = null;
+    let destinationAddressLine1: string | null = null;
     const jobId = opts?.jobId ?? trip.jobId ?? null;
 
-    if (
-      (jobType === undefined || jobItemCount === undefined || linkedJobItemCount === undefined)
-      && jobId
-      && typeof this.prisma?.job?.findFirst === "function"
-    ) {
+    if (jobId && typeof this.prisma?.job?.findFirst === "function") {
       const job = await this.prisma.job.findFirst({
         where: { id: jobId, tenantId },
         select: {
           jobType: true,
+          returningDepotPending: true,
+          deliveryAddress1: true,
           _count: { select: { items: true } },
         },
       });
       if (job) {
         jobType = jobType ?? job.jobType;
         jobItemCount = jobItemCount ?? job._count?.items ?? 0;
+        returningDepotPending = job.returningDepotPending === true;
+        destinationAddressLine1 = String(job.deliveryAddress1 ?? "").trim() || null;
       }
-      if (linkedJobItemCount === undefined && typeof (this.prisma as any).tripJobItem?.count === "function") {
-        linkedJobItemCount = await this.prisma.tripJobItem.count({
-          where: { tenantId, tripId: trip.id },
-        });
-      } else if (linkedJobItemCount === undefined) {
-        linkedJobItemCount = 0;
-      }
+    }
+
+    if (
+      linkedJobItemCount === undefined
+      && jobId
+      && typeof (this.prisma as any).tripJobItem?.count === "function"
+    ) {
+      linkedJobItemCount = await this.prisma.tripJobItem.count({
+        where: { tenantId, tripId: trip.id },
+      });
     } else if (linkedJobItemCount === undefined) {
       linkedJobItemCount = 0;
     }
     if (jobItemCount === undefined) jobItemCount = 0;
+
+    if (typeof this.prisma?.trip?.findFirst === "function") {
+      const destTrip = await this.prisma.trip.findFirst({
+        where: { id: trip.id, tenantId },
+        select: { destinationAddressLine1: true },
+      });
+      const tripDest = String(destTrip?.destinationAddressLine1 ?? "").trim();
+      if (tripDest) destinationAddressLine1 = tripDest;
+      else if (!destinationAddressLine1) destinationAddressLine1 = null;
+    }
 
     let requiresPsaPortAccess = trip.requiresPsaPortAccess === true;
     let driverHasPsaPortAccess = false;
@@ -6152,6 +6255,8 @@ export class TransportJobsService {
       jobTripTemplate: trip.jobTripTemplate ?? null,
       requiresPsaPortAccess,
       driverHasPsaPortAccess,
+      returningDepotPending,
+      destinationAddressLine1,
     });
 
     return { readiness, payoutLines };
@@ -6990,6 +7095,17 @@ export class TransportJobsService {
     }
     if (dto.returningDepotCode !== undefined) {
       jobData.returningDepotCode = dto.returningDepotCode?.trim() || null;
+      if (jobData.returningDepotCode) {
+        jobData.returningDepotPending = false;
+        jobData.returningDepotPendingText = null;
+      }
+    }
+    if (dto.deliveryAddress1 !== undefined) {
+      const addr = String(dto.deliveryAddress1 ?? "").trim();
+      if (addr) {
+        jobData.returningDepotPending = false;
+        jobData.returningDepotPendingText = null;
+      }
     }
     if (dto.returnLastDay !== undefined) {
       jobData.returnLastDay = dto.returnLastDay ? new Date(dto.returnLastDay) : null;
@@ -7239,6 +7355,13 @@ export class TransportJobsService {
       jobId,
     });
     if (!readiness.canPublish) {
+      if (readiness.errorField) {
+        throw new BadRequestException({
+          message: readiness.errorMessage ?? "Trip is not ready to publish",
+          field: readiness.errorField,
+          code: "RETURN_DEPOT_REQUIRED_FOR_PUBLISH",
+        });
+      }
       throw new BadRequestException(readiness.errorMessage ?? "Trip is not ready to publish");
     }
 

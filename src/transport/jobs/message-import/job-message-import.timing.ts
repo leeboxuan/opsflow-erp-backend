@@ -190,14 +190,23 @@ export function parseOperationalTiming(
   const locationHint = extractLocationHint(raw);
   const lower = raw.toLowerCase();
 
-  // Detention phrases are operational metadata, not requested pickup/delivery times.
+  // Detention / vessel ETA are operational metadata, not requested pickup/delivery times.
+  // Do not invent requested timing unless the message/user explicitly establishes that meaning.
   if (/\bdet(?:ention)?\b/.test(lower)) {
     return {
       ...empty,
       locationHint,
-      // Do not block confirmation or invent a pickup date from detention text.
       needsReview: false,
       reason: "Detention date is not a requested pickup time.",
+      display: null,
+    };
+  }
+  if (/\beta\b/.test(lower)) {
+    return {
+      ...empty,
+      locationHint,
+      needsReview: false,
+      reason: "Vessel ETA is not a requested pickup time.",
       display: null,
     };
   }

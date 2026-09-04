@@ -159,4 +159,49 @@ describe("controllerJsonFromParsed labelled field extraction", () => {
     expect(reviewed.pickupDateNeedsReview).toBe(false);
     expect(reviewed.pickupDateDisplay).toBeNull();
   });
+
+  it("keeps vessel ETA in timingText and does not invent requested pickup", () => {
+    // Fresh parse / controllerJson path — not re-confirm of a stale reviewed draft.
+    const parsed: JobMessageImportParsedDraft = {
+      clientDraftId: "exp-eta",
+      movementType: "EXPORT",
+      customerNameText: null,
+      earliestAt: null,
+      latestAt: null,
+      timingText: "ETA 05/09@1030",
+      pickup: { rawText: "From - DB WHSE" },
+      delivery: { rawText: "7 Gul Circle" },
+      carrier: null,
+      shipper: null,
+      vessel: null,
+      voyage: null,
+      containerSizeType: "40HC",
+      items: [
+        {
+          containerNumber: "MSBU3879600",
+          sealNumber: "FX47126059",
+          referenceNumber: null,
+          quantity: 1,
+        },
+      ],
+      picName: null,
+      picPhone: null,
+      instructions: [],
+      notes: null,
+      sourceFragment: "1. MSBU3879600 / FX47126059 - ETA 05/09@1030\nFrom - DB WHSE\nto - 7 Gul Circle",
+      fieldEvidence: [],
+      warnings: [],
+    };
+
+    const reviewed = controllerJsonFromParsed(parsed, null, {
+      timezone: "Asia/Singapore",
+      referenceDate: "2026-09-01",
+    });
+    expect(reviewed.timingText).toBe("ETA 05/09@1030");
+    expect(reviewed.pickupDateLocal).toBeNull();
+    expect(reviewed.pickupDateNeedsReview).toBe(false);
+    expect(reviewed.pickupAddress1).toBe("DB WHSE");
+    expect(reviewed.pickupSourceText).toMatch(/From\s*-\s*DB WHSE/i);
+    expect(reviewed.deliveryAddress1).toMatch(/7 Gul Circle/i);
+  });
 });

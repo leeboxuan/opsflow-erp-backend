@@ -10,7 +10,10 @@ import {
   assertCanonicalRouteLocationsForCreate,
   resolveCanonicalRouteLocations,
 } from "../job-route-locations";
-import { resolveReturnDestinationFields } from "../return-destination";
+import {
+  pendingReturnDestinationJobFields,
+  resolveReturnDestinationResolution,
+} from "../return-destination";
 import {
   movementTypeToJobType,
   trimToNull,
@@ -21,7 +24,12 @@ import {
   mapReviewedItemsForParse,
 } from "./job-message-import.items-map";
 import { zonedLocalDateTimeToUtc } from "./job-message-import.timing";
+import { stripDirectionalLocationPrefix } from "./job-message-import.text-normalize";
 import { requestedLocalHasTime } from "../requested-timing";
+
+function cleanAddress1(value: string | null | undefined): string | null {
+  return stripDirectionalLocationPrefix(value) ?? trimToNull(value);
+}
 
 export type CanonicalJobCreateData = {
   jobType: JobType;
@@ -104,9 +112,14 @@ export function reviewedDraftToCreateJobDto(input: {
   );
   assertCreateJobItemsRequiredForJobType(jobType, mappedItems, validItems);
 
-  const returnDestination =
+  const returnResolution =
     jobType === JobType.RETURN
-      ? resolveReturnDestinationFields({
+      ? resolveReturnDestinationResolution({
+          returningDepotPending: reviewed.returningDepotPending === true,
+          returningDepotPendingText:
+            reviewed.returningDepotPendingText ??
+            reviewed.returningDepotSourceText ??
+            null,
           returningDepotCode: reviewed.returningDepotCode,
           returningDepotAddress1: reviewed.returningDepotAddress1,
           returningDepotAddress2: reviewed.returningDepotAddress2,
@@ -122,38 +135,63 @@ export function reviewedDraftToCreateJobDto(input: {
           deliveryLng: reviewed.deliveryLng,
         })
       : null;
-  if (jobType === JobType.RETURN && !returnDestination) {
+  if (jobType === JobType.RETURN && !returnResolution) {
     throw new Error("MISSING_LOCATION");
   }
+  const returnDestination =
+    returnResolution?.kind === "resolved" ? returnResolution.fields : null;
+  const returnDepotPending =
+    returnResolution?.kind === "pending"
+      ? pendingReturnDestinationJobFields(returnResolution.pendingText)
+      : null;
 
-  const deliveryAddress1 =
-    returnDestination?.deliveryAddress1 ?? reviewed.deliveryAddress1;
-  const deliveryAddress2 =
-    returnDestination?.deliveryAddress2 ?? reviewed.deliveryAddress2;
-  const deliveryPostal =
-    returnDestination?.deliveryPostal ?? reviewed.deliveryPostal;
-  const deliveryPlaceId =
-    returnDestination?.deliveryPlaceId ?? reviewed.deliveryPlaceId;
-  const deliveryLat = returnDestination?.deliveryLat ?? reviewed.deliveryLat;
-  const deliveryLng = returnDestination?.deliveryLng ?? reviewed.deliveryLng;
-  const returningDepotAddress1 =
-    returnDestination?.returningDepotAddress1 ?? reviewed.returningDepotAddress1;
-  const returningDepotAddress2 =
-    returnDestination?.returningDepotAddress2 ?? reviewed.returningDepotAddress2;
-  const returningDepotPostal =
-    returnDestination?.returningDepotPostal ?? reviewed.returningDepotPostal;
-  const returningDepotPlaceId =
-    returnDestination?.returningDepotPlaceId ?? reviewed.returningDepotPlaceId;
-  const returningDepotLat =
-    returnDestination?.returningDepotLat ?? reviewed.returningDepotLat;
-  const returningDepotLng =
-    returnDestination?.returningDepotLng ?? reviewed.returningDepotLng;
-  const returningDepotCode =
-    returnDestination?.returningDepotCode ?? reviewed.returningDepotCode;
+  const pickupAddress1 = cleanAddress1(reviewed.pickupAddress1);
+  const cleanedDeliveryAddress1 = cleanAddress1(reviewed.deliveryAddress1);
+  const portAddress1 = cleanAddress1(reviewed.portAddress1);
+
+  const deliveryAddress1 = returnDepotPending
+    ? returnDepotPending.deliveryAddress1
+    : returnDestination?.deliveryAddress1 ?? cleanedDeliveryAddress1;
+  const deliveryAddress2 = returnDepotPending
+    ? null
+    : returnDestination?.deliveryAddress2 ?? reviewed.deliveryAddress2;
+  const deliveryPostal = returnDepotPending
+    ? null
+    : returnDestination?.deliveryPostal ?? reviewed.deliveryPostal;
+  const deliveryPlaceId = returnDepotPending
+    ? null
+    : returnDestination?.deliveryPlaceId ?? reviewed.deliveryPlaceId;
+  const deliveryLat = returnDepotPending
+    ? null
+    : returnDestination?.deliveryLat ?? reviewed.deliveryLat;
+  const deliveryLng = returnDepotPending
+    ? null
+    : returnDestination?.deliveryLng ?? reviewed.deliveryLng;
+  const returningDepotAddress1 = returnDepotPending
+    ? null
+    : returnDestination?.returningDepotAddress1 ?? reviewed.returningDepotAddress1;
+  const returningDepotAddress2 = returnDepotPending
+    ? null
+    : returnDestination?.returningDepotAddress2 ?? reviewed.returningDepotAddress2;
+  const returningDepotPostal = returnDepotPending
+    ? null
+    : returnDestination?.returningDepotPostal ?? reviewed.returningDepotPostal;
+  const returningDepotPlaceId = returnDepotPending
+    ? null
+    : returnDestination?.returningDepotPlaceId ?? reviewed.returningDepotPlaceId;
+  const returningDepotLat = returnDepotPending
+    ? null
+    : returnDestination?.returningDepotLat ?? reviewed.returningDepotLat;
+  const returningDepotLng = returnDepotPending
+    ? null
+    : returnDestination?.returningDepotLng ?? reviewed.returningDepotLng;
+  const returningDepotCode = returnDepotPending
+    ? null
+    : returnDestination?.returningDepotCode ?? reviewed.returningDepotCode;
 
   const routeLocations = resolveCanonicalRouteLocations({
     jobType,
-    pickupAddress1: reviewed.pickupAddress1,
+    pickupAddress1,
     pickupAddress2: reviewed.pickupAddress2,
     pickupPostal: reviewed.pickupPostal,
     pickupPlaceId: reviewed.pickupPlaceId,
@@ -172,10 +210,10 @@ export function reviewedDraftToCreateJobDto(input: {
     exportDetails:
       jobType === JobType.EXPORT
         ? {
-            stuffingAddress1: reviewed.deliveryAddress1,
+            stuffingAddress1: cleanedDeliveryAddress1,
             stuffingContactName: reviewed.picName,
             stuffingContactPhone: reviewed.picPhone,
-            exportPortAddress1: reviewed.portAddress1,
+            exportPortAddress1: portAddress1,
             exportPortAddress2: reviewed.portAddress2,
             exportPortPostal: reviewed.portPostal,
             exportPortPlaceId: reviewed.portPlaceId,
@@ -197,7 +235,9 @@ export function reviewedDraftToCreateJobDto(input: {
         : null,
   });
   try {
-    assertCanonicalRouteLocationsForCreate(jobType, routeLocations);
+    assertCanonicalRouteLocationsForCreate(jobType, routeLocations, {
+      allowPendingReturnDepot: Boolean(returnDepotPending),
+    });
   } catch {
     throw new Error("MISSING_LOCATION");
   }
@@ -226,13 +266,13 @@ export function reviewedDraftToCreateJobDto(input: {
     pickupDateHasTime: pickupDateHasTime === null ? undefined : pickupDateHasTime,
     deliveryDate: deliveryDate ? deliveryDate.toISOString() : undefined,
     deliveryDateHasTime: deliveryDateHasTime === null ? undefined : deliveryDateHasTime,
-    pickupAddress1: reviewed.pickupAddress1,
+    pickupAddress1: pickupAddress1 ?? "",
     pickupAddress2: reviewed.pickupAddress2 ?? undefined,
     pickupPostal: reviewed.pickupPostal ?? undefined,
     pickupPlaceId: reviewed.pickupPlaceId ?? undefined,
     pickupLat: reviewed.pickupLat ?? undefined,
     pickupLng: reviewed.pickupLng ?? undefined,
-    deliveryAddress1: deliveryAddress1!,
+    deliveryAddress1: deliveryAddress1 ?? "",
     deliveryAddress2: deliveryAddress2 ?? undefined,
     deliveryPostal: deliveryPostal ?? undefined,
     deliveryPlaceId: deliveryPlaceId ?? undefined,
@@ -254,6 +294,9 @@ export function reviewedDraftToCreateJobDto(input: {
     vesselName: reviewed.vesselName ?? undefined,
     voyage: reviewed.voyage ?? undefined,
     containerNumber: seedContainer ?? undefined,
+    returningDepotPending: Boolean(returnDepotPending),
+    returningDepotPendingText:
+      returnDepotPending?.returningDepotPendingText ?? undefined,
     items: validItems.map((it) => ({
       itemCode: it.itemCode,
       description: it.description ?? undefined,
@@ -272,20 +315,27 @@ export function reviewedDraftToCreateJobDto(input: {
             returningDepotLat,
             returningDepotLng,
             returningDepotCode,
+            ...(returnDepotPending
+              ? {
+                  returningDepotPending: true,
+                  returningDepotPendingText:
+                    returnDepotPending.returningDepotPendingText,
+                }
+              : {}),
           }
         : undefined,
     exportDetails:
       jobType === JobType.EXPORT
         ? {
-            stuffingAddress1: reviewed.deliveryAddress1,
+            stuffingAddress1: cleanedDeliveryAddress1,
             stuffingAddress2: reviewed.deliveryAddress2,
             stuffingPostal: reviewed.deliveryPostal,
             stuffingContactName: reviewed.picName,
             stuffingContactPhone: reviewed.picPhone,
-            containerPickupAddress1: reviewed.pickupAddress1,
+            containerPickupAddress1: pickupAddress1,
             containerPickupAddress2: reviewed.pickupAddress2,
             containerPickupPostal: reviewed.pickupPostal,
-            exportPortAddress1: reviewed.portAddress1,
+            exportPortAddress1: portAddress1,
             exportPortAddress2: reviewed.portAddress2,
             exportPortPostal: reviewed.portPostal,
             exportPortPlaceId: reviewed.portPlaceId,

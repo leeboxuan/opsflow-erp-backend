@@ -324,6 +324,8 @@ function readControllerJson(raw: unknown): ControllerReviewedDraft {
     returningDepotLat: c.returningDepotLat ?? null,
     returningDepotLng: c.returningDepotLng ?? null,
     returningDepotCode: c.returningDepotCode ?? null,
+    returningDepotPending: c.returningDepotPending === true,
+    returningDepotPendingText: c.returningDepotPendingText ?? null,
     pickupDateLocal: c.pickupDateLocal ?? null,
     deliveryDateLocal: c.deliveryDateLocal ?? null,
     pickupDateDisplay: c.pickupDateDisplay ?? null,

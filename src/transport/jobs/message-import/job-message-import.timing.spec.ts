@@ -67,6 +67,20 @@ describe("parseOperationalTiming", () => {
     expect(result.reason).toMatch(/detention/i);
   });
 
+  it("does not map vessel ETA into requested pickup", () => {
+    // Fresh-parse boundary: existing reviewed drafts are not auto-repaired on re-confirm.
+    const result = parseOperationalTiming({
+      text: "ETA 05/09@1030",
+      referenceDate: "2026-09-01",
+      timezone: TZ,
+    });
+    expect(result.pickupDateLocal).toBeNull();
+    expect(result.deliveryDateLocal).toBeNull();
+    expect(result.needsReview).toBe(false);
+    expect(result.display).toBeNull();
+    expect(result.reason).toMatch(/eta/i);
+  });
+
   it("keeps date-only requests without inventing midnight or blocking review", () => {
     const result = parseOperationalTiming({
       text: "04/09",

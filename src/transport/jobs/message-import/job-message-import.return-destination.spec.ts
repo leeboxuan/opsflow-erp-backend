@@ -186,4 +186,119 @@ describe("RETURN destination contract", () => {
       validation.fieldErrors.some((e) => e.code === "LOCATION_UNRESOLVED"),
     ).toBe(true);
   });
+
+  it("allows Draft confirm when TBA is acknowledged as depot pending", () => {
+    const reviewed = normalizeReviewedDraft({
+      movementType: JobMessageImportMovementType.RETURN,
+      customerCompanyId: "comp_1",
+      pickupAddress1: "DB Warehouse",
+      returningDepotAddress1: null,
+      returningDepotCode: null,
+      returningDepotSourceText: "TBA — waiting for carrier confirmation",
+      returningDepotPending: true,
+      returningDepotPendingText: "TBA — waiting for carrier confirmation",
+      items: [
+        {
+          containerNumber: "MSDU7515916",
+          sealNumber: null,
+          referenceNumber: null,
+          quantity: 1,
+        },
+      ],
+    });
+    const validation = validateReviewedDraft(reviewed);
+    expect(
+      validation.fieldErrors.filter((e) =>
+        ["MISSING_RETURN_DEPOT", "LOCATION_UNRESOLVED", "RETURN_DEPOT_NEEDS_CONFIRMATION"].includes(
+          e.code,
+        ),
+      ),
+    ).toEqual([]);
+    const dto = reviewedDraftToCreateJobDto({
+      reviewed,
+      timezone: "Asia/Singapore",
+    });
+    expect(dto.returningDepotPending).toBe(true);
+    expect(dto.returningDepotPendingText).toMatch(/TBA/);
+    expect(dto.deliveryAddress1).toBe("");
+    expect(dto.importDetails?.returningDepotCode).toBeFalsy();
+  });
+
+  it.each([
+    ["COLLECTION", JobMessageImportMovementType.COLLECTION],
+    ["IMPORT", JobMessageImportMovementType.IMPORT],
+    ["EXPORT", JobMessageImportMovementType.EXPORT],
+  ] as const)(
+    "%s: returningDepotPending:true does not bypass destination requirements",
+    (_label, movementType) => {
+      const reviewed = normalizeReviewedDraft({
+        movementType,
+        collectionType: movementType === "COLLECTION" ? "EMPTY" : null,
+        customerCompanyId: "comp_1",
+        pickupAddress1:
+          movementType === "EXPORT" ? null : "30 Pioneer Sector 2",
+        deliveryAddress1: null,
+        portAddress1: movementType === "EXPORT" ? null : undefined,
+        returningDepotAddress1: null,
+        returningDepotCode: null,
+        returningDepotPending: true,
+        returningDepotPendingText: "TBA",
+        items: [
+          {
+            containerNumber: movementType === "COLLECTION" ? null : "MSBU3879600",
+            sealNumber: null,
+            referenceNumber: movementType === "COLLECTION" ? "REF1" : null,
+            quantity: 1,
+          },
+        ],
+      });
+      expect(reviewed.returningDepotPending).toBe(false);
+      expect(reviewed.deliveryAddress1).toBeNull();
+      const validation = validateReviewedDraft(reviewed);
+      expect(validation.hasBlockingErrors).toBe(true);
+      const codes = validation.fieldErrors.map((e) => e.code);
+      if (movementType === "EXPORT") {
+        expect(codes).toEqual(
+          expect.arrayContaining(["MISSING_CUSTOMER", "MISSING_PORT"]),
+        );
+      } else if (movementType === "IMPORT") {
+        expect(codes).toEqual(
+          expect.arrayContaining(["MISSING_CUSTOMER", "MISSING_RETURN_DEPOT"]),
+        );
+      } else {
+        expect(codes).toContain("MISSING_DELIVERY");
+      }
+    },
+  );
+
+  it("CreateJobDto: pending flag does not waive deliveryAddress1 for non-RETURN", async () => {
+    const payload = {
+      jobType: JobType.COLLECTION,
+      collectionType: "EMPTY",
+      customerCompanyId: "comp_1",
+      pickupAddress1: "30 Pioneer Sector 2",
+      returningDepotPending: true,
+      returningDepotPendingText: "TBA",
+      receiverName: "Ops",
+      receiverPhone: "91234567",
+      items: [{ itemCode: null, qty: 1 }],
+    };
+    const errors = await validate(plainToInstance(CreateJobDto, payload));
+    expect(errors.some((e) => e.property === "deliveryAddress1")).toBe(true);
+  });
+
+  it("CreateJobDto: RETURN pending still waives deliveryAddress1", async () => {
+    const payload = {
+      jobType: JobType.RETURN,
+      customerCompanyId: "comp_1",
+      pickupAddress1: "DB Warehouse",
+      returningDepotPending: true,
+      returningDepotPendingText: "TBA",
+      receiverName: "Ops",
+      receiverPhone: "91234567",
+      items: [{ itemCode: "MSDU7515916", qty: 1 }],
+    };
+    const errors = await validate(plainToInstance(CreateJobDto, payload));
+    expect(errors.filter((e) => e.property === "deliveryAddress1")).toHaveLength(0);
+  });
 });

@@ -116,4 +116,32 @@ describe("canonical route locations", () => {
       assertCanonicalRouteLocationsForCreate(JobType.RETURN, locations),
     ).toThrow(/Return depot is required/);
   });
+
+  it("allows RETURN draft intake when depot is explicitly pending", () => {
+    const locations = resolveCanonicalRouteLocations({
+      jobType: JobType.RETURN,
+      pickupAddress1: "Customer Yard",
+    });
+    expect(() =>
+      assertCanonicalRouteLocationsForCreate(JobType.RETURN, locations, {
+        allowPendingReturnDepot: true,
+      }),
+    ).not.toThrow();
+    const snaps = canonicalAutoTripRouteSnapshots(JobType.RETURN, locations);
+    expect(
+      snaps[JobTripTemplate.PICKUP_TO_DELIVERY]?.destinationAddressLine1 ?? null,
+    ).toBeNull();
+  });
+
+  it("does not let allowPendingReturnDepot waive COLLECTION delivery", () => {
+    const locations = resolveCanonicalRouteLocations({
+      jobType: JobType.COLLECTION,
+      pickupAddress1: "30 Pioneer Sector 2",
+    });
+    expect(() =>
+      assertCanonicalRouteLocationsForCreate(JobType.COLLECTION, locations, {
+        allowPendingReturnDepot: true,
+      }),
+    ).toThrow(/Delivery location is required/);
+  });
 });

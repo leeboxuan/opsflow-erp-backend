@@ -16,8 +16,12 @@ export function clearIncompatibleTypeSpecificJobFields(
     data.psaStorageRentLastDay = null;
     data.portnetReady = false;
     data.permitReady = false;
+  }
+  if (nextJobType !== JobType.IMPORT && nextJobType !== JobType.RETURN) {
     data.returningDepotCode = null;
     data.returnLastDay = null;
+    data.returningDepotPending = false;
+    data.returningDepotPendingText = null;
   }
   if (nextJobType !== JobType.EXPORT) {
     data.exportOriginDepotCode = null;
@@ -73,6 +77,21 @@ export function applyImportDetailsPatch(
     details.returningDepotCode,
   );
   applyOptionalDateNullable(data, "returnLastDay", details.returnLastDay);
+  if (details.returningDepotPending !== undefined) {
+    data.returningDepotPending = details.returningDepotPending === true;
+    if (details.returningDepotPending === true) {
+      // Pending intake: never keep TBA/fabricated address on the job row.
+      data.deliveryAddress1 = "";
+      data.deliveryAddress2 = null;
+      data.deliveryPostal = null;
+      data.returningDepotCode = null;
+    }
+  }
+  applyOptionalTrimmedNullable(
+    data,
+    "returningDepotPendingText",
+    details.returningDepotPendingText,
+  );
 }
 
 export function applyExportDetailsPatch(

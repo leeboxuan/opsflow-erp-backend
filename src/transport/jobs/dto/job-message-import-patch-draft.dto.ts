@@ -177,6 +177,20 @@ export class JobMessageImportPatchDraftDto {
   @IsString()
   returningDepotCode?: string | null;
 
+  @ApiProperty({
+    required: false,
+    description:
+      "RETURN intake: acknowledge depot not confirmed yet. Allows confirm into Draft without a resolved depot.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  returningDepotPending?: boolean;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  returningDepotPendingText?: string | null;
+
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
   @IsString()

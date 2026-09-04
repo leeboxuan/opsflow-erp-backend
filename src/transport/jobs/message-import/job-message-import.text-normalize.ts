@@ -86,8 +86,19 @@ export function normalizeCompanyName(value: string | null | undefined): string |
   return normalizePhrase(value, "company");
 }
 
+/** Strip extraction direction labels ("From - …", "to: …") before address enrichment. */
+export function stripDirectionalLocationPrefix(
+  value: string | null | undefined,
+): string | null {
+  if (value == null) return null;
+  const trimmed = value.replace(/\s+/g, " ").trim();
+  if (!trimmed) return null;
+  const stripped = trimmed.replace(/^(?:from|to)\s*[-:]\s*/i, "").trim();
+  return stripped || null;
+}
+
 export function normalizeLocationLabel(value: string | null | undefined): string | null {
-  return normalizePhrase(value, "location");
+  return normalizePhrase(stripDirectionalLocationPrefix(value), "location");
 }
 
 export function normalizeNotes(value: string | null | undefined): string | null {

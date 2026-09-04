@@ -493,6 +493,10 @@ export class JobDto {
   permitReady?: boolean;
   returningDepotCode?: string | null;
   returnLastDay?: Date | null;
+  /** RETURN Draft intake: depot not yet confirmed. */
+  returningDepotPending?: boolean;
+  /** Preserved TBA/source text while pending — not a real address. */
+  returningDepotPendingText?: string | null;
   exportOriginDepotCode?: string | null;
   exportPortCode?: string | null;
 

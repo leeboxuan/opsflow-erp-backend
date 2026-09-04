@@ -123,6 +123,13 @@ export function normalizeReviewedDraft(
     returningDepotLat: toCoord(input.returningDepotLat),
     returningDepotLng: toCoord(input.returningDepotLng),
     returningDepotCode: trimToNull(input.returningDepotCode),
+    returningDepotPending: input.returningDepotPending === true,
+    returningDepotPendingText:
+      trimToNull(input.returningDepotPendingText) ??
+      (input.returningDepotPending === true
+        ? trimToNull(input.returningDepotSourceText) ??
+          normalizeLocationLabel(input.returningDepotAddress1)
+        : null),
     pickupDateLocal: trimToNull(input.pickupDateLocal),
     deliveryDateLocal: trimToNull(input.deliveryDateLocal),
     pickupDateDisplay: trimToNull(input.pickupDateDisplay),
@@ -184,7 +191,39 @@ export function normalizeReviewedDraft(
     }),
   };
 
-  return promoteReturnDeliveryToDepot(draft);
+  const promoted = promoteReturnDeliveryToDepot(draft);
+  // Pending-depot acknowledgement is RETURN-only. Never clear destinations for other types.
+  if (promoted.movementType !== JobMessageImportMovementType.RETURN) {
+    if (!promoted.returningDepotPending && !promoted.returningDepotPendingText) {
+      return promoted;
+    }
+    return {
+      ...promoted,
+      returningDepotPending: false,
+      returningDepotPendingText: null,
+    };
+  }
+  if (!promoted.returningDepotPending) return promoted;
+  return {
+    ...promoted,
+    // Pending acknowledgement: keep source text, never treat TBA as a real address.
+    returningDepotAddress1: null,
+    returningDepotAddress2: null,
+    returningDepotPostal: null,
+    returningDepotPlaceId: null,
+    returningDepotLat: null,
+    returningDepotLng: null,
+    returningDepotCode: null,
+    deliveryAddress1: null,
+    deliveryAddress2: null,
+    deliveryPostal: null,
+    deliveryPlaceId: null,
+    deliveryLat: null,
+    deliveryLng: null,
+    returningDepotPendingText:
+      promoted.returningDepotPendingText ??
+      promoted.returningDepotSourceText,
+  };
 }
 
 /** When type is RETURN, keep extracted "to - …" on returningDepot* (not empty Custom). */
@@ -420,12 +459,15 @@ export function validateReviewedDraft(
     if (!reviewed.pickupAddress1) {
       pushBlocking("pickupAddress1", "MISSING_PICKUP", "Pickup location is required.");
     }
+    const depotPending = reviewed.returningDepotPending === true;
     const hasDepot = Boolean(reviewed.returningDepotAddress1 || reviewed.returningDepotCode);
-    if (!hasDepot) {
+    if (depotPending) {
+      // Intake acknowledgement: Draft confirm allowed; publish still requires a depot.
+    } else if (!hasDepot) {
       pushBlocking(
         "returningDepotAddress1",
         "MISSING_RETURN_DEPOT",
-        "Select a return depot.",
+        "Select a return depot, or choose Depot not confirmed yet.",
       );
     } else if (
       reviewed.returningDepotVerificationStatus === "UNRESOLVED" &&
@@ -434,7 +476,7 @@ export function validateReviewedDraft(
       pushBlocking(
         "returningDepotAddress1",
         "LOCATION_UNRESOLVED",
-        "Location is unresolved (TBA or unusable). Select an address before confirming.",
+        "Location is unresolved (TBA or unusable). Select a depot, enter a custom address, or choose Depot not confirmed yet.",
       );
     } else if (
       reviewed.returningDepotVerificationStatus === "NEEDS_REVIEW" &&
@@ -443,7 +485,7 @@ export function validateReviewedDraft(
       pushBlocking(
         "returningDepotAddress1",
         "RETURN_DEPOT_NEEDS_CONFIRMATION",
-        "Return depot needs confirmation. Select a depot or enter a custom address.",
+        "Return depot needs confirmation. Select a depot, enter a custom address, or choose Depot not confirmed yet.",
       );
     }
   } else {
@@ -515,10 +557,10 @@ export function validateReviewedDraft(
     const display = reviewed.pickupDateDisplay || "";
     const ambiguous =
       /needs review|ambiguous|constraint|window|could not/i.test(display);
-    const detentionOnly =
-      /\bdet(?:ention)?\b/i.test(String(reviewed.timingText ?? "")) &&
+    const detentionOrEtaOnly =
+      /\bdet(?:ention)?\b|\beta\b/i.test(String(reviewed.timingText ?? "")) &&
       !reviewed.pickupDateLocal;
-    if (ambiguous && !detentionOnly) {
+    if (ambiguous && !detentionOrEtaOnly) {
       pushBlocking(
         "pickupDateLocal",
         "PICKUP_TIME_NEEDS_REVIEW",

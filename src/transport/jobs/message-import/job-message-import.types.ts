@@ -47,6 +47,10 @@ export type ControllerReviewedDraft = {
     returningDepotLat: number | null;
     returningDepotLng: number | null;
     returningDepotCode: string | null;
+    /** Explicit intake acknowledgement that return depot is not confirmed yet. */
+    returningDepotPending: boolean;
+    /** Preserved TBA/source wording while pending — never treated as a real address. */
+    returningDepotPendingText: string | null;
     pickupSourceText: string | null;
     deliverySourceText: string | null;
     portSourceText: string | null;

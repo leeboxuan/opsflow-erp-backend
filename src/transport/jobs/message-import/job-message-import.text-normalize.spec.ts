@@ -23,6 +23,14 @@ describe("job-message-import text normalize", () => {
     expect(normalizeLocationLabel("31 jurong port road")).toBe("31 Jurong Port Road");
   });
 
+  it("strips From/To directional prefixes from location labels", () => {
+    expect(normalizeLocationLabel("From - DB WHSE")).toBe("DB WHSE");
+    expect(normalizeLocationLabel("to - HOCK CHUAN. 31 JURONG PORT ROAD")).toBe(
+      "HOCK CHUAN. 31 JURONG PORT ROAD",
+    );
+    expect(normalizeLocationLabel("from: EK 30 pioneer sector 2")).toMatch(/Pioneer Sector 2/i);
+  });
+
   it("preserves container codes and acronyms in notes", () => {
     expect(normalizeNotes("wait at psa for gesu6311344")).toBe("wait at PSA for GESU6311344");
     expect(normalizeIdentifier("gesu6311344")).toBe("GESU6311344");

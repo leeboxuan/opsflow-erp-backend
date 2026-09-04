@@ -352,6 +352,24 @@ export class UpdateJobDto {
 
   @ApiPropertyOptional({
     description:
+      "RETURN intake: mark return depot as not confirmed yet. Null/false clears; omit to leave unchanged.",
+    nullable: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  returningDepotPending?: boolean | null;
+
+  @ApiPropertyOptional({
+    description:
+      "Preserved TBA/source wording while depot is pending. Null clears; omit to leave unchanged.",
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  returningDepotPendingText?: string | null;
+
+  @ApiPropertyOptional({
+    description:
       "Optional IMPORT return depot code. Null clears; omit to leave unchanged.",
     nullable: true,
     deprecated: true,

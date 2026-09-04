@@ -962,6 +962,10 @@ model Job {
   deliveryPostal     String?
   receiverName       String
   receiverPhone      String
+  /// RETURN intake: depot unknown; Draft Job/Trip allowed. Must be cleared before publish.
+  returningDepotPending Boolean @default(false)
+  /// Preserved TBA/source wording while pending — never used as deliveryAddress1.
+  returningDepotPendingText String?
   /// Deprecated runtime field: use Trip.assignedDriverUserId/Trip.driverId for execution assignment.
   assignedDriverId   String?
   /// Deprecated runtime field: use Trip.vehicleId/Trip.fleetVehicleId for execution assignment.

@@ -256,6 +256,7 @@ export function resolveCanonicalRouteLocations(
 export function assertCanonicalRouteLocationsForCreate(
   jobType: JobType,
   locations: CanonicalRouteLocations,
+  options?: { allowPendingReturnDepot?: boolean },
 ): void {
   if (jobType === JobType.EXPORT) {
     // Empty-container depot is optional commercial/reference only.
@@ -289,7 +290,10 @@ export function assertCanonicalRouteLocationsForCreate(
     if (!locationIsPresent(locations.pickup)) {
       throw new BadRequestException("Pickup location is required.");
     }
-    if (!locationIsPresent(locations.returnDepot)) {
+    if (
+      !options?.allowPendingReturnDepot &&
+      !locationIsPresent(locations.returnDepot)
+    ) {
       throw new BadRequestException("Return depot is required.");
     }
     return;
