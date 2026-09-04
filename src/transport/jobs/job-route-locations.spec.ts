@@ -54,7 +54,7 @@ describe("canonical route locations", () => {
     ).toThrow(/Export port \/ terminal is required/);
   });
 
-  it("IMPORT requires return depot", () => {
+  it("IMPORT requires return depot unless pending is allowed", () => {
     const locations = resolveCanonicalRouteLocations({
       jobType: JobType.IMPORT,
       pickupAddress1: "Jurong Port",
@@ -63,6 +63,11 @@ describe("canonical route locations", () => {
     expect(() =>
       assertCanonicalRouteLocationsForCreate(JobType.IMPORT, locations),
     ).toThrow(/Empty container return depot is required/);
+    expect(() =>
+      assertCanonicalRouteLocationsForCreate(JobType.IMPORT, locations, {
+        allowPendingReturnDepot: true,
+      }),
+    ).not.toThrow();
   });
 
   it("ONE_WAY maps pickup → delivery as a single Trip snapshot", () => {

@@ -1,10 +1,11 @@
 import {
   CollectionType,
+  JobMovementScope,
   JobMessageImportDraftValidationStatus,
   JobMessageImportMovementType,
   JobType,
 } from "@prisma/client";
-import { parseValidJobItemsFromInput } from "../create-job-validation.helpers";
+import { parseValidJobItemsFromInput, IMPORT_CONTAINER_SEAL_REQUIRED_MESSAGE } from "../create-job-validation.helpers";
 import { mapReviewedItemsForParse } from "./job-message-import.items-map";
 import { normalizeAutoTripDocumentRequirements } from "../../workflows/trip-document-create-flags";
 import type { JobMessageImportParseWarning } from "./job-message-parser";
@@ -95,6 +96,19 @@ export function normalizeReviewedDraft(
 
   const draft: ControllerReviewedDraft = {
     movementType: input.movementType,
+    movementScope:
+      input.movementScope !== undefined
+      ? input.movementScope
+      :
+      (input.movementType === JobMessageImportMovementType.COLLECTION
+        ? JobMovementScope.COLLECTION_ONLY
+        : input.movementType === JobMessageImportMovementType.RETURN
+          ? JobMovementScope.RETURN_ONLY
+          : input.movementType === JobMessageImportMovementType.IMPORT
+            ? JobMovementScope.FULL_IMPORT
+            : input.movementType === JobMessageImportMovementType.EXPORT
+              ? JobMovementScope.EXPORT_DELIVERY_ONLY
+              : null),
     collectionType,
     customerCompanyId: trimToNull(input.customerCompanyId),
     customerNameText: normalizeCompanyName(input.customerNameText),
@@ -193,8 +207,11 @@ export function normalizeReviewedDraft(
   };
 
   const promoted = promoteReturnDeliveryToDepot(draft);
-  // Pending-depot is RETURN-only. Never clear destinations for other types.
-  if (promoted.movementType !== JobMessageImportMovementType.RETURN) {
+  // Pending-depot: RETURN (wipes delivery*) and IMPORT empty-return (keeps customer).
+  if (
+    promoted.movementType !== JobMessageImportMovementType.RETURN &&
+    promoted.movementType !== JobMessageImportMovementType.IMPORT
+  ) {
     if (!promoted.returningDepotPending && !promoted.returningDepotPendingText) {
       return promoted;
     }
@@ -223,6 +240,22 @@ export function normalizeReviewedDraft(
     trimToNull(promoted.returningDepotPendingText) ??
     trimToNull(promoted.returningDepotSourceText) ??
     (tbaOnly ? depotAddress : null);
+
+  if (promoted.movementType === JobMessageImportMovementType.IMPORT) {
+    return {
+      ...promoted,
+      returningDepotPending: true,
+      returningDepotAddress1: null,
+      returningDepotAddress2: null,
+      returningDepotPostal: null,
+      returningDepotPlaceId: null,
+      returningDepotLat: null,
+      returningDepotLng: null,
+      returningDepotCode: null,
+      returningDepotPendingText: pendingText,
+      returningDepotVerificationStatus: "UNRESOLVED",
+    };
+  }
 
   return {
     ...promoted,
@@ -299,6 +332,9 @@ export function mergeReviewedDraftPatch(
   return normalizeReviewedDraft({
     ...current,
     ...(patch.movementType != null ? { movementType: patch.movementType } : {}),
+    ...(patch.movementScope !== undefined
+      ? { movementScope: patch.movementScope }
+      : {}),
     ...(patch.collectionType !== undefined ? { collectionType: patch.collectionType } : {}),
     ...(patch.customerCompanyId !== undefined
       ? { customerCompanyId: patch.customerCompanyId }
@@ -428,6 +464,17 @@ export function validateReviewedDraft(
       "Movement type could not be determined.",
     );
   }
+  if (
+    (reviewed.movementType === JobMessageImportMovementType.IMPORT ||
+      reviewed.movementType === JobMessageImportMovementType.EXPORT) &&
+    reviewed.movementScope == null
+  ) {
+    pushBlocking(
+      "movementScope",
+      "MOVEMENT_SCOPE_REVIEW_REQUIRED",
+      "Select the movement scope before confirming.",
+    );
+  }
 
   if (!reviewed.customerCompanyId) {
     pushBlocking(
@@ -468,13 +515,8 @@ export function validateReviewedDraft(
         "Customer / delivery location is required.",
       );
     }
-    if (!reviewed.returningDepotAddress1 && !reviewed.returningDepotCode) {
-      pushBlocking(
-        "returningDepotAddress1",
-        "MISSING_RETURN_DEPOT",
-        "Empty container return depot is required.",
-      );
-    }
+    // Missing / TBA return depot auto-normalizes to pending empty-return Draft Trips.
+    // Publish of those legs still requires a resolved depot.
   } else if (reviewed.movementType === JobMessageImportMovementType.RETURN) {
     if (!reviewed.pickupAddress1) {
       pushBlocking("pickupAddress1", "MISSING_PICKUP", "Pickup location is required.");
@@ -521,11 +563,13 @@ export function validateReviewedDraft(
       reviewed.deliveryVerificationStatus,
       Boolean(reviewed.deliveryAddress1),
     );
-    pushUnresolved(
-      "returningDepotAddress1",
-      reviewed.returningDepotVerificationStatus,
-      Boolean(reviewed.returningDepotAddress1 || reviewed.returningDepotCode),
-    );
+    if (reviewed.returningDepotPending !== true) {
+      pushUnresolved(
+        "returningDepotAddress1",
+        reviewed.returningDepotVerificationStatus,
+        Boolean(reviewed.returningDepotAddress1 || reviewed.returningDepotCode),
+      );
+    }
   } else if (reviewed.movementType === JobMessageImportMovementType.RETURN) {
     pushUnresolved("pickupAddress1", reviewed.pickupVerificationStatus, Boolean(reviewed.pickupAddress1));
     // Return depot confirmation / unresolved handled above with priority messages.
@@ -597,6 +641,24 @@ export function validateReviewedDraft(
         "MISSING_ITEMS",
         "At least one valid container or item code is required.",
       );
+    }
+
+    if (jobType === JobType.IMPORT) {
+      reviewed.items.forEach((it, index) => {
+        const containerNumber = trimToNull(it.containerNumber);
+        const sealNumber = trimToNull(it.sealNumber);
+        // Skip completely empty rows; require seal whenever a container is present.
+        if (!containerNumber && !sealNumber && it.quantity == null && !it.referenceNumber) {
+          return;
+        }
+        if (!sealNumber) {
+          pushBlocking(
+            `items.${index}.sealNumber`,
+            "MISSING_SEAL",
+            IMPORT_CONTAINER_SEAL_REQUIRED_MESSAGE,
+          );
+        }
+      });
     }
 
     for (const it of reviewed.items) {

@@ -171,3 +171,17 @@ export function serializeRequestedDeliveryForJob(
     deliveryDateHasTime: serialized.hasTime,
   };
 }
+
+export function serializeRequestedStorageRentForJob(
+  local: string | null | undefined,
+  timeZone: string,
+): {
+  psaStorageRentLastDay: string | null;
+  psaStorageRentLastDayHasTime: boolean | null;
+} {
+  const serialized = serializeRequestedTimingForJob(local, timeZone);
+  return {
+    psaStorageRentLastDay: serialized.at,
+    psaStorageRentLastDayHasTime: serialized.hasTime,
+  };
+}

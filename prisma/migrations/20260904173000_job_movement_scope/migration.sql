@@ -1,0 +1,11 @@
+CREATE TYPE "JobMovementScope" AS ENUM (
+  'FULL_IMPORT',
+  'IMPORT_DELIVERY_ONLY',
+  'RETURN_ONLY',
+  'FULL_EXPORT',
+  'COLLECTION_ONLY',
+  'EXPORT_DELIVERY_ONLY'
+);
+
+ALTER TABLE "jobs"
+ADD COLUMN "movementScope" "JobMovementScope";

@@ -1,5 +1,6 @@
 import {
   JobTripTemplate,
+  JobMovementScope,
   JobType,
   Prisma,
   TripDocumentType,
@@ -466,6 +467,18 @@ export type TripCreateManyForJobOptions = {
   createdByUserId?: string | null;
   /** COLLECTION only: one Pickup→Delivery trip per container JobItem (0 → one empty leg). */
   collectionContainerCount?: number;
+  /**
+   * IMPORT only: two trips (Port→Customer, Customer→Depot) per container JobItem.
+   * 0 containers → one pair (2 trips), matching historical single-pair create.
+   */
+  importContainerCount?: number;
+  /**
+   * EXPORT only: one Customer→Port trip per container JobItem (0 → one empty leg).
+   * Same multiply shape as COLLECTION — not IMPORT’s two-template pairs.
+   */
+  exportContainerCount?: number;
+  /** Canonical IMPORT/EXPORT operational scope. Omit to retain legacy topology. */
+  movementScope?: JobMovementScope | null;
   /** Phase 4: set when topology is unambiguous (exactly one job type). */
   tripType?: JobType | null;
 };
@@ -476,12 +489,16 @@ export type TripCreateManyForJobOptions = {
  *
  * Sequences are 1-based and contiguous. Do not branch by intake channel.
  *
- * - EXPORT: Customer → Port
- * - IMPORT: Port → Customer, Customer → Depot
+ * - EXPORT: Customer → Port — one trip per container JobItem (or one leg when no items)
+ * - IMPORT: Port → Customer, Customer → Depot — one pair per container JobItem
  * - LCL: Pickup → Delivery
  * - COLLECTION: Pickup → Delivery — one trip per container JobItem (or one leg when no items)
  * - ONE_WAY: Pickup → Delivery (prime-mover container haul)
  * - RETURN: Pickup → Depot (prime-mover container return)
+ *
+ * `CANONICAL_AUTO_TRIP_TEMPLATES` lists the per-unit template pattern. IMPORT,
+ * EXPORT, and COLLECTION expand that pattern across containers via
+ * `buildDefaultTripSeeds`.
  */
 export const CANONICAL_AUTO_TRIP_TEMPLATES: Record<
   JobType,
@@ -506,14 +523,14 @@ export const CANONICAL_AUTO_TRIP_TEMPLATES: Record<
  * Do not cartesian-link every JobItem onto every auto-leg. Same JobItem on
  * multiple legs means the same cargo actually moves on each of those legs.
  *
- * IMPORT — each created container JobItem on both legs:
- *   1. Port → Customer (`PICKUP_TO_DELIVERY`) — laden
- *   2. Customer → Depot (`DELIVERY_TO_DEPOT`) — empty return of the same boxes
+ * IMPORT — one container JobItem per pair of legs (sequence pairing):
+ *   odd seq  Port → Customer (`PICKUP_TO_DELIVERY`) — laden
+ *   even seq Customer → Depot (`DELIVERY_TO_DEPOT`) — empty return of that box
  *
- * EXPORT — each created container JobItem on the single laden leg:
- *   1. Customer → Port (`DELIVERY_TO_PORT`) — stuffed export box to terminal
- * Historical EXPORT `PORT_TO_DEPOT` rows (pre one-Trip topology) still do not
- * auto-carry create-time JobItems when evaluated via this helper.
+ * EXPORT — one container JobItem per Customer → Port trip (`DELIVERY_TO_PORT`).
+ * Historical EXPORT `PORT_TO_DEPOT` rows (pre one-Trip / pre per-container
+ * topology) still do not auto-carry create-time JobItems when evaluated via
+ * this helper. No automatic empty-collection/return leg.
  *
  * LCL / ONE_WAY — all created JobItems on the single Pickup → Delivery trip.
  *
@@ -535,8 +552,37 @@ export function collectionAutoTripCount(containerCount: number): number {
   return containerCount > 0 ? containerCount : 1;
 }
 
+/** EXPORT: one Customer→Port trip per container; zero containers still yields one leg. */
+export function exportAutoTripCount(containerCount: number): number {
+  return collectionAutoTripCount(containerCount);
+}
+
+/** IMPORT: 2 trips per container; zero containers still yields one pair. */
+export function importAutoTripCount(containerCount: number): number {
+  const pairs = containerCount > 0 ? containerCount : 1;
+  return pairs * 2;
+}
+
+/** 0-based container index for an IMPORT auto-trip sequence (1-based). */
+export function importContainerIndexForTripSequence(tripSequence: number): number {
+  return Math.max(0, Math.floor((Math.max(1, tripSequence) - 1) / 2));
+}
+
+/**
+ * Expand the per-unit IMPORT template pair across N containers:
+ * [Port→Customer, Customer→Depot] × N.
+ */
+export function expandImportAutoTripTemplates(
+  containerCount: number,
+): JobTripTemplate[] {
+  const pairs = containerCount > 0 ? containerCount : 1;
+  const unit = CANONICAL_AUTO_TRIP_TEMPLATES[JobType.IMPORT];
+  return Array.from({ length: pairs }, () => unit).flat();
+}
+
 export function jobItemIdsForCanonicalAutoTrip(input: {
   jobType: JobType;
+  movementScope?: JobMovementScope | null;
   jobTripTemplate: JobTripTemplate | null | undefined;
   jobItemIds: string[];
   tripSequence?: number;
@@ -551,6 +597,29 @@ export function jobItemIdsForCanonicalAutoTrip(input: {
   }
   if (input.jobType === JobType.COLLECTION && input.jobItemIds.length > 1) {
     const index = Math.max(0, (input.tripSequence ?? 1) - 1);
+    const jobItemId = input.jobItemIds[index];
+    return jobItemId ? [jobItemId] : [];
+  }
+  if (input.jobType === JobType.EXPORT && input.jobItemIds.length > 1) {
+    const legsPerContainer =
+      input.movementScope === JobMovementScope.FULL_EXPORT ? 2 : 1;
+    const index = Math.max(
+      0,
+      Math.floor(((input.tripSequence ?? 1) - 1) / legsPerContainer),
+    );
+    const jobItemId = input.jobItemIds[index];
+    return jobItemId ? [jobItemId] : [];
+  }
+  if (input.jobType === JobType.IMPORT && input.jobItemIds.length > 1) {
+    const legsPerContainer =
+      input.movementScope === JobMovementScope.IMPORT_DELIVERY_ONLY ||
+      input.movementScope === JobMovementScope.RETURN_ONLY
+        ? 1
+        : 2;
+    const index = Math.max(
+      0,
+      Math.floor(((input.tripSequence ?? 1) - 1) / legsPerContainer),
+    );
     const jobItemId = input.jobItemIds[index];
     return jobItemId ? [jobItemId] : [];
   }
@@ -580,9 +649,78 @@ function buildCollectionTripSeeds(
       displayTitle: title,
       jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
       title,
-      plannedStartAt: sequence === 1 ? pickupDate : null,
+      plannedStartAt: null,
     };
   });
+}
+
+function buildExportTripSeeds(
+  pickupDate: Date | null,
+  containerCount: number,
+  movementScope?: JobMovementScope | null,
+): DefaultTripSeed[] {
+  const containers = containerCount > 0 ? containerCount : 1;
+  const templates =
+    movementScope === JobMovementScope.FULL_EXPORT
+      ? [JobTripTemplate.DEPOT_TO_DELIVERY, JobTripTemplate.DELIVERY_TO_PORT]
+      : movementScope === JobMovementScope.COLLECTION_ONLY
+        ? [JobTripTemplate.DEPOT_TO_DELIVERY]
+        : [JobTripTemplate.DELIVERY_TO_PORT];
+  return Array.from({ length: containers }, (_, containerIndex) =>
+    templates.map((jobTripTemplate, legIndex) => {
+      const sequence = containerIndex * templates.length + legIndex + 1;
+      const title =
+        jobTripTemplate === JobTripTemplate.DEPOT_TO_DELIVERY
+          ? "Depot to Customer"
+          : "Customer to Port";
+      return {
+        jobSequence: sequence,
+        tripSequence: sequence,
+        displayTitle: title,
+        jobTripTemplate,
+        title,
+        plannedStartAt: null,
+      };
+    }),
+  ).flat();
+}
+
+function buildImportTripSeeds(
+  pickupDate: Date | null,
+  containerCount: number,
+  movementScope?: JobMovementScope | null,
+): DefaultTripSeed[] {
+  const pairs = containerCount > 0 ? containerCount : 1;
+  const templates =
+    movementScope === JobMovementScope.IMPORT_DELIVERY_ONLY
+      ? [JobTripTemplate.PICKUP_TO_DELIVERY]
+      : movementScope === JobMovementScope.RETURN_ONLY
+        ? [JobTripTemplate.DELIVERY_TO_DEPOT]
+        : CANONICAL_AUTO_TRIP_TEMPLATES[JobType.IMPORT];
+  const titles = CANONICAL_AUTO_TRIP_TITLES[JobType.IMPORT];
+  const seeds: DefaultTripSeed[] = [];
+  for (let pairIndex = 0; pairIndex < pairs; pairIndex += 1) {
+    for (let leg = 0; leg < templates.length; leg += 1) {
+      const sequence = pairIndex * templates.length + leg + 1;
+      const jobTripTemplate = templates[leg]!;
+      const title =
+        jobTripTemplate === JobTripTemplate.PICKUP_TO_DELIVERY
+          ? "Port to Customer"
+          : jobTripTemplate === JobTripTemplate.DELIVERY_TO_DEPOT
+            ? "Customer to Depot"
+            : titles[leg] ?? jobTripTemplateDisplayLabel(jobTripTemplate);
+      seeds.push({
+        jobSequence: sequence,
+        tripSequence: sequence,
+        displayTitle: title,
+        jobTripTemplate,
+        title,
+        // Requested Job timing is not operational Trip scheduling.
+        plannedStartAt: null,
+      });
+    }
+  }
+  return seeds;
 }
 
 function contiguousDefaultTripSeeds(
@@ -599,7 +737,7 @@ function contiguousDefaultTripSeeds(
         displayTitle: "Main leg",
         jobTripTemplate: JobTripTemplate.CUSTOM,
         title: "Main leg",
-        plannedStartAt: pickupDate,
+        plannedStartAt: null,
       },
     ];
   }
@@ -612,8 +750,8 @@ function contiguousDefaultTripSeeds(
       displayTitle: title,
       jobTripTemplate,
       title,
-      // Job pickupDate is the first operational trip's service time.
-      plannedStartAt: sequence === 1 ? pickupDate : null,
+      // Requested Job timing is separate from operational Trip scheduling.
+      plannedStartAt: null,
     };
   });
 }
@@ -621,12 +759,29 @@ function contiguousDefaultTripSeeds(
 export function buildDefaultTripSeeds(
   jobType: JobType,
   pickupDate: Date | null,
-  options?: Pick<TripCreateManyForJobOptions, "collectionContainerCount">,
+  options?: Pick<
+    TripCreateManyForJobOptions,
+    "collectionContainerCount" | "importContainerCount" | "exportContainerCount" | "movementScope"
+  >,
 ): DefaultTripSeed[] {
   if (jobType === JobType.COLLECTION) {
     return buildCollectionTripSeeds(
       pickupDate,
       options?.collectionContainerCount ?? 0,
+    );
+  }
+  if (jobType === JobType.EXPORT) {
+    return buildExportTripSeeds(
+      pickupDate,
+      options?.exportContainerCount ?? 0,
+      options?.movementScope,
+    );
+  }
+  if (jobType === JobType.IMPORT) {
+    return buildImportTripSeeds(
+      pickupDate,
+      options?.importContainerCount ?? 0,
+      options?.movementScope,
     );
   }
   return contiguousDefaultTripSeeds(jobType, pickupDate);
@@ -769,8 +924,20 @@ export function tripCreateManyForJob(
     containerNumber,
     shippingRefs,
   );
+  const importPairs =
+    jobType === JobType.IMPORT
+      ? Math.max(1, options?.importContainerCount ?? 0)
+      : 0;
+  const exportLegs =
+    jobType === JobType.EXPORT
+      ? Math.max(1, options?.exportContainerCount ?? 0)
+      : 0;
+
   return buildDefaultTripSeeds(jobType, pickupDate, {
     collectionContainerCount: options?.collectionContainerCount,
+    importContainerCount: options?.importContainerCount,
+    exportContainerCount: options?.exportContainerCount,
+    movementScope: options?.movementScope,
   }).map((s) => {
     const row: Prisma.TripCreateManyInput = {
       tenantId,
@@ -792,6 +959,13 @@ export function tripCreateManyForJob(
       ...(routeSnapshots?.[s.jobTripTemplate] ?? {}),
     };
 
+    if (
+      s.jobTripTemplate === JobTripTemplate.DELIVERY_TO_DEPOT &&
+      !String(row.destinationAddressLine1 ?? "").trim()
+    ) {
+      row.pendingState = TripPendingState.PENDING_AT_DEPOT;
+    }
+
     if (!canonicalAutoTripCarriesCreatedJobItems(jobType, s.jobTripTemplate)) {
       row.containerNumber = null;
     }
@@ -802,6 +976,15 @@ export function tripCreateManyForJob(
       row.carrier = null;
       row.shipper = null;
       row.vessel = null;
+    }
+
+    // Multi-container IMPORT/EXPORT: leave containerNumber for TripJobItem sync
+    // so each leg gets its own box — do not stamp the job-level seed onto every leg.
+    if (jobType === JobType.IMPORT && importPairs > 1) {
+      row.containerNumber = null;
+    }
+    if (jobType === JobType.EXPORT && exportLegs > 1) {
+      row.containerNumber = null;
     }
 
     return row;

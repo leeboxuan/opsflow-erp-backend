@@ -48,7 +48,11 @@ export class FleetTrackingController {
   @Post("chassis")
   @ApiOperation({ summary: "Create chassis" })
   createChassis(@Req() req: any, @Body() dto: CreateChassisDto) {
-    return this.fleetTracking.createChassis(req.tenant.tenantId, dto);
+    return this.fleetTracking.createChassis(
+      req.tenant.tenantId,
+      dto,
+      req.user?.userId ?? null,
+    );
   }
 
   @Get("chassis/:chassisId/history")
@@ -70,7 +74,12 @@ export class FleetTrackingController {
   @Patch("chassis/:id")
   @ApiOperation({ summary: "Update chassis" })
   patchChassis(@Req() req: any, @Param("id") id: string, @Body() dto: UpdateChassisDto) {
-    return this.fleetTracking.updateChassis(req.tenant.tenantId, id, dto);
+    return this.fleetTracking.updateChassis(
+      req.tenant.tenantId,
+      id,
+      dto,
+      req.user?.userId ?? null,
+    );
   }
 
   @Delete("chassis/:id")

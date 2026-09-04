@@ -9,7 +9,7 @@ import {
   IsBoolean,
   ValidateIf,
 } from "class-validator";
-import { CollectionType, JobType } from "@prisma/client";
+import { CollectionType, JobMovementScope, JobType } from "@prisma/client";
 import { Type } from "class-transformer";
 import { IsArray, ValidateNested } from "class-validator";
 import {
@@ -96,6 +96,11 @@ export class UpdateJobDto {
   @IsOptional()
   @IsEnum(JobType)
   jobType?: JobType;
+
+  @ApiPropertyOptional({ enum: JobMovementScope, nullable: true })
+  @IsOptional()
+  @IsEnum(JobMovementScope)
+  movementScope?: JobMovementScope | null;
 
   @ApiPropertyOptional({
     enum: CollectionType,
@@ -329,6 +334,17 @@ export class UpdateJobDto {
   @IsOptional()
   @IsDateString()
   psaStorageRentLastDay?: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    deprecated: true,
+    description:
+      "Legacy flat field (prefer importDetails.psaStorageRentLastDayHasTime)",
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsBoolean()
+  psaStorageRentLastDayHasTime?: boolean | null;
 
   @ApiPropertyOptional({ nullable: true })
   @IsOptional()

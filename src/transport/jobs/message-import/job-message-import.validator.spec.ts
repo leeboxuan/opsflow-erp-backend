@@ -56,14 +56,41 @@ describe("job-message-import.validator", () => {
     ]);
   });
 
-  it("requires collectionType for COLLECTION jobs", () => {
+  it("requires seal number for each IMPORT container independently", () => {
+    const result = validateReviewedDraft(
+      baseDraft({
+        items: [
+          { containerNumber: "AAAA1111111", sealNumber: "S1", referenceNumber: null, quantity: 1 },
+          { containerNumber: "BBBB2222222", sealNumber: "  ", referenceNumber: null, quantity: 1 },
+          { containerNumber: "CCCC3333333", sealNumber: "S3", referenceNumber: null, quantity: 1 },
+        ],
+      }),
+    );
+    expect(result.hasBlockingErrors).toBe(true);
+    expect(result.fieldErrors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: "items.1.sealNumber",
+          code: "MISSING_SEAL",
+          message: "Seal number is required for this import container.",
+        }),
+      ]),
+    );
+    expect(result.fieldErrors.some((e) => e.field === "items.0.sealNumber")).toBe(false);
+    expect(result.fieldErrors.some((e) => e.field === "items.2.sealNumber")).toBe(false);
+  });
+
+  it("allows COLLECTION drafts without seals", () => {
     const result = validateReviewedDraft(
       baseDraft({
         movementType: JobMessageImportMovementType.COLLECTION,
-        collectionType: null,
+        collectionType: "EMPTY",
+        items: [
+          { containerNumber: null, sealNumber: null, referenceNumber: null, quantity: 1 },
+        ],
       }),
     );
-    expect(result.fieldErrors.some((e) => e.field === "collectionType")).toBe(true);
+    expect(result.fieldErrors.some((e) => e.code === "MISSING_SEAL")).toBe(false);
   });
 
   it("keeps unknown optional values null instead of inventing them", () => {

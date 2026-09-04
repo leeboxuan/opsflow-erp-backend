@@ -43,6 +43,22 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
     );
   });
 
+  it("rejects IMPORT confirm mapping when seal is missing", () => {
+    const reviewed = normalizeReviewedDraft({
+      movementType: JobMessageImportMovementType.IMPORT,
+      customerCompanyId: "comp_1",
+      pickupAddress1: "Tuas",
+      deliveryAddress1: "DB warehouse",
+      returningDepotAddress1: "Tuas Depot",
+      items: [
+        { containerNumber: "GESU6311344", sealNumber: null, referenceNumber: null, quantity: 1 },
+      ],
+    });
+    expect(() =>
+      reviewedDraftToCreateJobDto({ reviewed, timezone: "Asia/Singapore" }),
+    ).toThrow(/Seal number is required for this import container/);
+  });
+
   it("does not invent missing PIC values", () => {
     const reviewed = normalizeReviewedDraft({
       movementType: JobMessageImportMovementType.LCL,
@@ -72,7 +88,7 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
       pickupAddress1: "CONTROLLER PICKUP",
       deliveryAddress1: "CONTROLLER DELIVERY",
       returningDepotAddress1: "Tuas Depot",
-      items: [{ containerNumber: "GESU6311344", sealNumber: null, referenceNumber: null, quantity: 1 }],
+      items: [{ containerNumber: "GESU6311344", sealNumber: "FJ28581743", referenceNumber: null, quantity: 1 }],
     });
     const canonical = reviewedDraftToCanonicalJobCreate({
       reviewed,
@@ -114,7 +130,7 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
       pickupDateDisplay: "4 Sep 2026 · Time not specified",
       pickupDateNeedsReview: false,
       items: [
-        { containerNumber: "GESU6311344", sealNumber: null, referenceNumber: null, quantity: 1 },
+        { containerNumber: "GESU6311344", sealNumber: "FJ28581743", referenceNumber: null, quantity: 1 },
       ],
     });
     const dto = reviewedDraftToCreateJobDto({
@@ -142,7 +158,7 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
       deliveryDateDisplay: "5 Sep 2026 · Time not specified",
       deliveryDateNeedsReview: false,
       items: [
-        { containerNumber: "GESU6311344", sealNumber: null, referenceNumber: null, quantity: 1 },
+        { containerNumber: "GESU6311344", sealNumber: "FJ28581743", referenceNumber: null, quantity: 1 },
       ],
     });
     const dto = reviewedDraftToCreateJobDto({
@@ -170,7 +186,7 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
       pickupDateLocal: "2026-09-04T08:30",
       pickupDateNeedsReview: false,
       items: [
-        { containerNumber: "GESU6311344", sealNumber: null, referenceNumber: null, quantity: 1 },
+        { containerNumber: "GESU6311344", sealNumber: "FJ28581743", referenceNumber: null, quantity: 1 },
       ],
     });
     const dto = reviewedDraftToCreateJobDto({

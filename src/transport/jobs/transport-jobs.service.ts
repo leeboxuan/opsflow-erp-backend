@@ -15,6 +15,7 @@ import {
   JobStatus,
   JobTripTemplate,
   JobChargeSourceType,
+  JobMovementScope,
   JobType,
   JobDocumentType,
   LogisticsLocationType,
@@ -302,8 +303,12 @@ import {
 import {
   assertCreateJobItemsRequiredForJobType,
   assertExportDestinationFieldsConsistent,
+  assertImportContainerSealsRequired,
   collectionContainerCountForTripGeneration,
   ensureCollectionJobItems,
+  ensureUnknownIdentityCargoSlots,
+  exportContainerCountForTripGeneration,
+  importContainerCountForTripGeneration,
   importPickupOriginUsesAddressFields,
   parseValidJobItemsFromInput,
   parseValidUpdateJobItemsFromInput,
@@ -313,6 +318,13 @@ import {
   resolveExportDestinationFields,
   resolveExportPickupFields,
 } from "./create-job-validation.helpers";
+import {
+  resolveMovementScopeForCreate,
+  movementScopeForLegacyType,
+  parentJobTypeForLegacyType,
+  scopeAllowsUnknownCargoIdentity,
+  scopeIncludesReturn,
+} from "./job-movement-scope";
 import {
   normalizeOptionalTrimmedText,
   resolveJobDescription,
@@ -414,6 +426,7 @@ const JOB_LIST_ITEM_SELECT = {
   internalRef: true,
   externalRef: true,
   jobType: true,
+  movementScope: true,
   collectionType: true,
   status: true,
   pickupDate: true,
@@ -533,6 +546,10 @@ function toJobListItemDto(
     internalRef: j.internalRef,
     externalRef: j.externalRef ?? null,
     jobType: j.jobType,
+    parentJobType: j.jobType ? parentJobTypeForLegacyType(j.jobType) : null,
+    movementScope:
+      j.movementScope ??
+      (j.jobType ? movementScopeForLegacyType(j.jobType) : null),
     jobTypes: resolvedTypes.jobTypes,
     jobTypeSource: resolvedTypes.jobTypeSource,
     collectionType: j.collectionType ?? null,
@@ -601,6 +618,10 @@ function toJobDto(j: any): JobDto {
     internalRef: j.internalRef,
     externalRef: j.externalRef ?? null,
     jobType: j.jobType,
+    parentJobType: j.jobType ? parentJobTypeForLegacyType(j.jobType) : null,
+    movementScope:
+      j.movementScope ??
+      (j.jobType ? movementScopeForLegacyType(j.jobType) : null),
     ...(() => {
       const resolved = resolveJobTypesForResponse({
         assignments: j.jobTypeAssignments,
@@ -639,6 +660,7 @@ function toJobDto(j: any): JobDto {
     portTerminalCode: j.portTerminalCode ?? null,
     portName: j.portName ?? null,
     psaStorageRentLastDay: j.psaStorageRentLastDay ?? null,
+    psaStorageRentLastDayHasTime: j.psaStorageRentLastDayHasTime ?? null,
     vesselName: j.vesselName ?? null,
     vesselEta: j.vesselEta ?? null,
     portnetReady: j.portnetReady ?? false,
@@ -893,7 +915,7 @@ type TripPublishReadinessInput = {
   requiresPsaPortAccess?: boolean | null;
   /** Fail closed when trip requires PSA and this is not explicitly true. */
   driverHasPsaPortAccess?: boolean | null;
-  /** RETURN: Draft intake may leave depot pending; publish requires a resolved depot. */
+  /** RETURN / IMPORT empty-return: Draft intake may leave depot pending; publish requires a resolved depot. */
   returningDepotPending?: boolean | null;
   destinationAddressLine1?: string | null;
 };
@@ -946,6 +968,22 @@ function evaluateTripPublishReadiness(input: TripPublishReadinessInput): TripPub
     return {
       canPublish: false,
       errorMessage: "Return depot is required before publishing.",
+      errorField: "returningDepotCode",
+      totalPayoutCents: 0,
+      payoutLineCount: 0,
+    };
+  }
+
+  // IMPORT empty-return leg only — laden Port→Customer stays publishable while depot TBA.
+  // Trip destination is authoritative (per-container depot may differ from job default).
+  if (
+    input.jobType === JobType.IMPORT &&
+    input.jobTripTemplate === JobTripTemplate.DELIVERY_TO_DEPOT &&
+    !String(input.destinationAddressLine1 ?? "").trim()
+  ) {
+    return {
+      canPublish: false,
+      errorMessage: "Return depot is required before publishing this empty-return trip.",
       errorField: "returningDepotCode",
       totalPayoutCents: 0,
       payoutLineCount: 0,
@@ -2488,7 +2526,12 @@ export class TransportJobsService {
           "delivery",
           deliveryAsOriginGeo,
         );
-        destination = this.locationSnapshotFromMaster(returnDepot);
+        // Job-level return depot is a shared default only. Do not overwrite a
+        // distinct per-trip destination already set on this empty-return leg.
+        const existingReturnDest = String(trip.destinationAddressLine1 ?? "").trim();
+        if (!existingReturnDest) {
+          destination = this.locationSnapshotFromMaster(returnDepot);
+        }
       } else if (trip.jobTripTemplate === JobTripTemplate.DEPOT_TO_DELIVERY) {
         origin =
           this.locationSnapshotFromMaster(exportOriginDepot) ??
@@ -2823,6 +2866,13 @@ export class TransportJobsService {
     const resolvedJobTypes = typeResolution.jobTypes;
     // Compatibility singular only when exactly one type; multi-type → null (never first-of-array).
     const compatibilityJobType = typeResolution.compatibilityJobType;
+    const movement = compatibilityJobType
+      ? resolveMovementScopeForCreate({
+          jobType: compatibilityJobType,
+          movementScope: dto.movementScope,
+        })
+      : { parentJobType: compatibilityJobType, movementScope: null };
+    const movementScope = movement.movementScope;
     const includesImport = jobTypesInclude(resolvedJobTypes, JobType.IMPORT);
     const includesExport = jobTypesInclude(resolvedJobTypes, JobType.EXPORT);
     const includesCollection = jobTypesInclude(
@@ -2833,13 +2883,20 @@ export class TransportJobsService {
     const pureExport = compatibilityJobType === JobType.EXPORT;
 
     const rawItems = readCreateJobItemsInput(dto);
-    const validItems = ensureCollectionJobItems(
-      compatibilityJobType,
-      parseValidJobItemsFromInput(
-        rawItems,
+    const validItems = ensureUnknownIdentityCargoSlots(
+      movementScope,
+      ensureCollectionJobItems(
         compatibilityJobType,
-        resolvedJobTypes,
-        { requireContainerSize: false },
+        parseValidJobItemsFromInput(
+          rawItems,
+          compatibilityJobType,
+          resolvedJobTypes,
+          {
+            requireContainerSize: false,
+            allowUnknownContainerIdentity:
+              scopeAllowsUnknownCargoIdentity(movementScope),
+          },
+        ),
       ),
     );
     assertCreateJobItemsRequiredForJobType(
@@ -2847,6 +2904,13 @@ export class TransportJobsService {
       rawItems,
       validItems,
     );
+    if (movementScope !== JobMovementScope.RETURN_ONLY) {
+      assertImportContainerSealsRequired(
+        compatibilityJobType,
+        validItems,
+        resolvedJobTypes,
+      );
+    }
     const collectionType = resolveCollectionTypeForJobCreate(
       resolvedJobTypes,
       dto.collectionType,
@@ -2871,6 +2935,17 @@ export class TransportJobsService {
     const portName = (dto.portName ?? importDetails.portName)?.trim();
     const psaStorageRentLastDay =
       dto.psaStorageRentLastDay ?? importDetails.psaStorageRentLastDay;
+    const psaStorageRentLastDayRaw = String(psaStorageRentLastDay ?? "").trim();
+    const psaStorageRentLastDayHasTime =
+      dto.psaStorageRentLastDayHasTime !== undefined
+        ? dto.psaStorageRentLastDayHasTime
+        : importDetails.psaStorageRentLastDayHasTime !== undefined
+          ? importDetails.psaStorageRentLastDayHasTime
+          : !psaStorageRentLastDayRaw
+            ? null
+            : /^\d{4}-\d{2}-\d{2}$/.test(psaStorageRentLastDayRaw)
+              ? false
+              : true;
     const vesselName = (
       dto.vesselName ?? importDetails.vesselName ?? exportDetails.vesselName
     )?.trim();
@@ -2959,7 +3034,8 @@ export class TransportJobsService {
       }
     }
 
-    // RETURN: resolve depot code to canonical master address before destination contract.
+    // Resolve depot code to canonical master address before destination contract
+    // (RETURN destination wipe / IMPORT empty-return pending vs resolved).
     let returnMasterDepot: {
       addressLine1: string;
       addressLine2: string | null;
@@ -2968,7 +3044,11 @@ export class TransportJobsService {
       lat: number | null;
       lng: number | null;
     } | null = null;
-    if (compatibilityJobType === JobType.RETURN && returningDepotCode) {
+    if (
+      (compatibilityJobType === JobType.RETURN ||
+        compatibilityJobType === JobType.IMPORT) &&
+      returningDepotCode
+    ) {
       const returnDepot = await resolveReturningDepotMasterByCode(
         this.prisma as any,
         returningDepotCode,
@@ -3073,6 +3153,41 @@ export class TransportJobsService {
             deliveryLng: dto.deliveryLng,
           })
         : null;
+    // IMPORT: resolve return depot from returningDepot* only — never treat customer
+    // deliveryAddress1 as the empty-return depot.
+    const importReturnResolution =
+      routeTopologyType === JobType.IMPORT && scopeIncludesReturn(movementScope)
+        ? resolveReturnDestinationResolution({
+            returningDepotPending:
+              dto.returningDepotPending === true ||
+              importDetails.returningDepotPending === true,
+            returningDepotPendingText:
+              dto.returningDepotPendingText ??
+              importDetails.returningDepotPendingText ??
+              null,
+            returningDepotCode,
+            returningDepotAddress1:
+              returnMasterDepot?.addressLine1 ||
+              importDetails.returningDepotAddress1 ||
+              null,
+            returningDepotAddress2:
+              returnMasterDepot?.addressLine2 ||
+              importDetails.returningDepotAddress2 ||
+              null,
+            returningDepotPostal:
+              returnMasterDepot?.postalCode ||
+              importDetails.returningDepotPostal ||
+              null,
+            returningDepotPlaceId:
+              returnMasterDepot?.placeId ||
+              importDetails.returningDepotPlaceId ||
+              null,
+            returningDepotLat:
+              returnMasterDepot?.lat ?? importDetails.returningDepotLat ?? null,
+            returningDepotLng:
+              returnMasterDepot?.lng ?? importDetails.returningDepotLng ?? null,
+          })
+        : null;
     if (routeTopologyType === JobType.RETURN && !returnResolution) {
       throw new BadRequestException("Return depot is required.");
     }
@@ -3082,7 +3197,21 @@ export class TransportJobsService {
       returnResolution?.kind === "pending"
         ? pendingReturnDestinationJobFields(returnResolution.pendingText)
         : null;
+    const importReturnDepotPending =
+      importReturnResolution?.kind === "pending"
+        ? {
+            returningDepotPending: true as const,
+            returningDepotPendingText:
+              pendingReturnDestinationJobFields(
+                importReturnResolution.pendingText,
+              ).returningDepotPendingText,
+          }
+        : null;
+    const jobReturnDepotPending = Boolean(
+      returnDepotPending || importReturnDepotPending,
+    );
 
+    // RETURN pending wipes Job.delivery*; IMPORT pending keeps customer delivery.
     const resolvedDeliveryAddress1 =
       pureExport
         ? stuffingAddress1 ?? dto.deliveryAddress1
@@ -3113,6 +3242,7 @@ export class TransportJobsService {
 
     const routeLocations = resolveCanonicalRouteLocations({
       jobType: routeTopologyType,
+      movementScope,
       pickupAddress1:
         pureExport ? exportPickup.address1 : dto.pickupAddress1,
       pickupAddress2:
@@ -3149,40 +3279,41 @@ export class TransportJobsService {
       importDetails: {
         ...importDetails,
         pickupPortCode,
-        returningDepotCode: returnDepotPending
+        returningDepotCode: jobReturnDepotPending
           ? null
           : returnDestination?.returningDepotCode ?? returningDepotCode,
-        returningDepotAddress1: returnDepotPending
+        returningDepotAddress1: jobReturnDepotPending
           ? null
           : returnDestination?.returningDepotAddress1 ??
             importDetails.returningDepotAddress1,
-        returningDepotAddress2: returnDepotPending
+        returningDepotAddress2: jobReturnDepotPending
           ? null
           : returnDestination?.returningDepotAddress2 ??
             importDetails.returningDepotAddress2,
-        returningDepotPostal: returnDepotPending
+        returningDepotPostal: jobReturnDepotPending
           ? null
           : returnDestination?.returningDepotPostal ??
             importDetails.returningDepotPostal,
-        returningDepotPlaceId: returnDepotPending
+        returningDepotPlaceId: jobReturnDepotPending
           ? null
           : returnDestination?.returningDepotPlaceId ??
             importDetails.returningDepotPlaceId,
-        returningDepotLat: returnDepotPending
+        returningDepotLat: jobReturnDepotPending
           ? null
           : returnDestination?.returningDepotLat ?? importDetails.returningDepotLat,
-        returningDepotLng: returnDepotPending
+        returningDepotLng: jobReturnDepotPending
           ? null
           : returnDestination?.returningDepotLng ?? importDetails.returningDepotLng,
       },
-      returningDepotCode: returnDepotPending
+      returningDepotCode: jobReturnDepotPending
         ? null
         : returnDestination?.returningDepotCode ?? returningDepotCode,
       exportPortCode,
       exportOriginDepotCode,
     });
     assertCanonicalRouteLocationsForCreate(routeTopologyType, routeLocations, {
-      allowPendingReturnDepot: Boolean(returnDepotPending),
+      allowPendingReturnDepot: jobReturnDepotPending,
+      movementScope,
     });
 
     const internalRef = await this.getNextInternalRef(tenantId, resolvedJobTypes);
@@ -3251,6 +3382,7 @@ export class TransportJobsService {
           internalRef,
           externalRef: normalizeExternalRef(dto.externalRef),
           jobType: compatibilityJobType,
+          movementScope,
           collectionType,
           status: JobStatus.ONGOING,
           notes: dto.notes ?? null,
@@ -3301,19 +3433,22 @@ export class TransportJobsService {
           pickupPortCode: pickupPortCode || null,
           portTerminalCode: portTerminalCode || null,
           portName: portName || null,
-          psaStorageRentLastDay: psaStorageRentLastDay
-            ? new Date(psaStorageRentLastDay)
+          psaStorageRentLastDay: psaStorageRentLastDayRaw
+            ? new Date(psaStorageRentLastDayRaw)
             : null,
+          psaStorageRentLastDayHasTime,
           vesselName: vesselName || null,
           vesselEta: vesselEta ? new Date(vesselEta) : null,
           portnetReady,
           permitReady,
-          returningDepotCode: returnDepotPending
+          returningDepotCode: jobReturnDepotPending
             ? null
             : returningDepotCode || null,
-          returningDepotPending: Boolean(returnDepotPending),
+          returningDepotPending: jobReturnDepotPending,
           returningDepotPendingText:
-            returnDepotPending?.returningDepotPendingText ?? null,
+            returnDepotPending?.returningDepotPendingText ??
+            importReturnDepotPending?.returningDepotPendingText ??
+            null,
           returnLastDay: returnLastDay ? new Date(returnLastDay) : null,
           exportOriginDepotCode: exportOriginDepotCode || null,
           exportPortCode: exportPortCode || null,
@@ -3377,6 +3512,15 @@ export class TransportJobsService {
                 topologyType,
                 validItems,
               ),
+              importContainerCount: importContainerCountForTripGeneration(
+                topologyType,
+                validItems,
+              ),
+              exportContainerCount: exportContainerCountForTripGeneration(
+                topologyType,
+                validItems,
+              ),
+              movementScope,
               tripType: topologyType,
             },
           ),
@@ -3400,6 +3544,7 @@ export class TransportJobsService {
           for (const trip of createdTripsInTx) {
             const linkIds = jobItemIdsForCanonicalAutoTrip({
               jobType: topologyType,
+              movementScope,
               jobTripTemplate: trip.jobTripTemplate,
               jobItemIds: createdItemIds,
               tripSequence: trip.tripSequence,
@@ -4122,6 +4267,26 @@ export class TransportJobsService {
       legacyJobType: job.jobType,
     }).jobTypes;
     const effectiveTypes = nextJobTypes ?? currentTypes;
+    const effectiveCompat = compatibilityJobTypeOrNull(effectiveTypes);
+    if (dto.movementScope !== undefined) {
+      if (!effectiveCompat) {
+        throw new BadRequestException(
+          "movementScope requires a single IMPORT or EXPORT parent job type",
+        );
+      }
+      data.movementScope = resolveMovementScopeForCreate({
+        jobType: effectiveCompat,
+        movementScope: dto.movementScope,
+      }).movementScope;
+    } else if (
+      nextJobTypes &&
+      effectiveCompat !== job.jobType &&
+      effectiveCompat != null
+    ) {
+      data.movementScope = resolveMovementScopeForCreate({
+        jobType: effectiveCompat,
+      }).movementScope;
+    }
 
     // Type-specific detail validation uses membership, not first-of-array.
     if (jobTypesInclude(effectiveTypes, JobType.IMPORT)) {
@@ -4270,6 +4435,19 @@ export class TransportJobsService {
       "psaStorageRentLastDay",
       dto.psaStorageRentLastDay,
     );
+    if (dto.psaStorageRentLastDay !== undefined) {
+      if (dto.psaStorageRentLastDayHasTime === undefined) {
+        const raw = String(dto.psaStorageRentLastDay ?? "").trim();
+        data.psaStorageRentLastDayHasTime = !raw
+          ? null
+          : /^\d{4}-\d{2}-\d{2}$/.test(raw)
+            ? false
+            : true;
+      }
+    }
+    if (dto.psaStorageRentLastDayHasTime !== undefined) {
+      data.psaStorageRentLastDayHasTime = dto.psaStorageRentLastDayHasTime;
+    }
     applyOptionalTrimmedNullable(data, "vesselName", dto.vesselName);
     applyOptionalDateNullable(data, "vesselEta", dto.vesselEta);
     if (dto.portnetReady !== undefined) data.portnetReady = dto.portnetReady;
@@ -4387,6 +4565,15 @@ export class TransportJobsService {
           inputItems,
           validItems,
         );
+        const effectiveMovementScope =
+          data.movementScope ?? job.movementScope ?? null;
+        if (effectiveMovementScope !== JobMovementScope.RETURN_ONLY) {
+          assertImportContainerSealsRequired(
+            nextCompat ?? compatibilityJobTypeOrNull(effectiveTypes),
+            validItems,
+            effectiveTypes,
+          );
+        }
         await applyJobItemsUpdateInTransaction(tx as any, {
           tenantId,
           jobId,
@@ -6214,11 +6401,23 @@ export class TransportJobsService {
     if (typeof this.prisma?.trip?.findFirst === "function") {
       const destTrip = await this.prisma.trip.findFirst({
         where: { id: trip.id, tenantId },
-        select: { destinationAddressLine1: true },
+        select: {
+          destinationAddressLine1: true,
+          jobTripTemplate: true,
+        },
       });
       const tripDest = String(destTrip?.destinationAddressLine1 ?? "").trim();
-      if (tripDest) destinationAddressLine1 = tripDest;
-      else if (!destinationAddressLine1) destinationAddressLine1 = null;
+      if (tripDest) {
+        destinationAddressLine1 = tripDest;
+      } else if (
+        // IMPORT empty-return: never treat customer deliveryAddress1 as the depot.
+        jobType === JobType.IMPORT &&
+        destTrip?.jobTripTemplate === JobTripTemplate.DELIVERY_TO_DEPOT
+      ) {
+        destinationAddressLine1 = null;
+      } else if (!destinationAddressLine1) {
+        destinationAddressLine1 = null;
+      }
     }
 
     let requiresPsaPortAccess = trip.requiresPsaPortAccess === true;
@@ -7157,6 +7356,7 @@ export class TransportJobsService {
           inputItems,
           validItems,
         );
+        assertImportContainerSealsRequired(job.jobType, validItems);
         await applyJobItemsUpdateInTransaction(tx as any, {
           tenantId,
           jobId,

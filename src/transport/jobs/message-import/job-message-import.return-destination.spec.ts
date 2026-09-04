@@ -1,4 +1,8 @@
-import { JobMessageImportMovementType, JobType } from "@prisma/client";
+import {
+  JobMessageImportMovementType,
+  JobMovementScope,
+  JobType,
+} from "@prisma/client";
 import { plainToInstance } from "class-transformer";
 import { validate } from "class-validator";
 import {
@@ -40,7 +44,8 @@ describe("RETURN destination contract", () => {
       reviewed,
       timezone: "Asia/Singapore",
     });
-    expect(dto.jobType).toBe(JobType.RETURN);
+    expect(dto.jobType).toBe(JobType.IMPORT);
+    expect(dto.movementScope).toBe(JobMovementScope.RETURN_ONLY);
     expect(dto.deliveryAddress1).toBe("Cogent Yard");
     expect(dto.deliveryPostal).toBe("629117");
     expect(dto.importDetails?.returningDepotCode).toBe("COG1");
@@ -97,7 +102,7 @@ describe("RETURN destination contract", () => {
       items: [
         {
           containerNumber: "UASU1061210",
-          sealNumber: null,
+          sealNumber: "SEAL-IMPORT",
           referenceNumber: null,
           quantity: 1,
         },
@@ -159,7 +164,8 @@ describe("RETURN destination contract", () => {
       }),
       timezone: "Asia/Singapore",
     });
-    expect(dto.jobType).toBe(JobType.RETURN);
+    expect(dto.jobType).toBe(JobType.IMPORT);
+    expect(dto.movementScope).toBe(JobMovementScope.RETURN_ONLY);
     expect(dto.returningDepotPending).toBe(true);
     expect(dto.deliveryAddress1).toBe("");
     expect(dto.importDetails?.returningDepotCode).toBeFalsy();
@@ -236,7 +242,6 @@ describe("RETURN destination contract", () => {
 
   it.each([
     ["COLLECTION", JobMessageImportMovementType.COLLECTION],
-    ["IMPORT", JobMessageImportMovementType.IMPORT],
     ["EXPORT", JobMessageImportMovementType.EXPORT],
   ] as const)(
     "%s: returningDepotPending:true does not bypass destination requirements",
@@ -271,15 +276,37 @@ describe("RETURN destination contract", () => {
         expect(codes).toEqual(
           expect.arrayContaining(["MISSING_CUSTOMER", "MISSING_PORT"]),
         );
-      } else if (movementType === "IMPORT") {
-        expect(codes).toEqual(
-          expect.arrayContaining(["MISSING_CUSTOMER", "MISSING_RETURN_DEPOT"]),
-        );
       } else {
         expect(codes).toContain("MISSING_DELIVERY");
       }
     },
   );
+
+  it("IMPORT: returningDepotPending keeps customer delivery and does not block confirm", () => {
+    const reviewed = normalizeReviewedDraft({
+      movementType: JobMessageImportMovementType.IMPORT,
+      customerCompanyId: "comp_1",
+      pickupAddress1: "Jurong Port",
+      deliveryAddress1: "Customer Yard",
+      returningDepotAddress1: null,
+      returningDepotCode: null,
+      returningDepotPending: true,
+      returningDepotPendingText: "TBA — waiting for carrier",
+      items: [
+        {
+          containerNumber: "MSBU3879600",
+          sealNumber: "SEAL-1",
+          referenceNumber: null,
+          quantity: 1,
+        },
+      ],
+    });
+    expect(reviewed.returningDepotPending).toBe(true);
+    expect(reviewed.deliveryAddress1).toBe("Customer Yard");
+    expect(reviewed.returningDepotAddress1).toBeNull();
+    const validation = validateReviewedDraft(reviewed);
+    expect(validation.hasBlockingErrors).toBe(false);
+  });
 
   it("CreateJobDto: pending flag does not waive deliveryAddress1 for non-RETURN", async () => {
     const payload = {

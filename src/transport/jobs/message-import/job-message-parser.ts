@@ -25,6 +25,14 @@ export type JobMessageImportParsedJobItem = {
 export type JobMessageImportParsedDraft = {
   clientDraftId: string;
   movementType: "COLLECTION" | "IMPORT" | "EXPORT" | "LCL" | "RETURN" | "ONE_WAY" | "UNKNOWN";
+  movementScope?:
+    | "FULL_IMPORT"
+    | "IMPORT_DELIVERY_ONLY"
+    | "RETURN_ONLY"
+    | "FULL_EXPORT"
+    | "COLLECTION_ONLY"
+    | "EXPORT_DELIVERY_ONLY"
+    | null;
 
   customerNameText: string | null;
 

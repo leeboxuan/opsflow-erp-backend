@@ -6,6 +6,7 @@ import { PlacesModule } from "../shared/places/places.module";
 import { TransportJobsController } from "./jobs/transport-jobs.controller";
 import { TransportTripsController } from "./trips/transport-trips.controller";
 import { DriverJobsController } from "./driver-app/driver-jobs.controller";
+import { DriverChassisController } from "./driver-app/driver-chassis.controller";
 import { DriverTripExpensesController } from "./driver-app/driver-trip-expenses.controller";
 import { DriverHomeController } from "./driver-app/driver-home.controller";
 import { DriverTripsController } from "./driver-app/driver-trips.controller";
@@ -26,6 +27,7 @@ import { createJobMessageParser } from "./jobs/message-import/job-message-parser
     TransportJobsController,
     TransportTripsController,
     DriverJobsController,
+    DriverChassisController,
     DriverTripExpensesController,
     DriverHomeController,
     DriverTripsController,

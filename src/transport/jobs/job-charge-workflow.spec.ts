@@ -669,10 +669,25 @@ describe("job charge workflow hardening", () => {
             return Promise.resolve({ code: "JURONG", name: "Jurong Port", type: "PORT" });
           }
           if (where?.code === "GUL_DEFAULT" && where?.type === "DEPOT") {
-            return Promise.resolve({ code: "GUL_DEFAULT", name: "Gul Depot", type: "DEPOT" });
+            return Promise.resolve({
+              id: "loc-gul",
+              code: "GUL_DEFAULT",
+              name: "Gul Depot",
+              addressLine1: "7 Gul Circle",
+              addressLine2: null,
+              postalCode: "629563",
+              placeId: null,
+              lat: null,
+              lng: null,
+              type: "DEPOT",
+              isActive: true,
+            });
           }
           return Promise.resolve(null);
         }),
+      },
+      masterSingaporeDepot: {
+        findUnique: jest.fn().mockResolvedValue(null),
       },
       masterSingaporePort: {
         findFirst: jest.fn().mockResolvedValue({ code: "JURONG" }),
@@ -807,7 +822,7 @@ describe("job charge workflow hardening", () => {
     expect(prisma.trip.createMany.mock.calls[0][0].data).toHaveLength(2);
   });
 
-  it("IMPORT create without return depot is rejected", async () => {
+  it("IMPORT create without return depot auto-pends empty-return Draft Trips", async () => {
     const prisma: any = withCreateJobTransaction({
       customer_companies: {
         findFirst: jest.fn().mockResolvedValue({ id: "comp1", tenantId: "t1" }),
@@ -869,8 +884,9 @@ describe("job charge workflow hardening", () => {
         } as any,
         { userId: "u1", role: Role.TRANSPORT_STAFF },
       ),
-    ).rejects.toThrow("Empty container return depot is required.");
-    expect(prisma.job.create).not.toHaveBeenCalled();
+    ).resolves.toBeTruthy();
+    expect(prisma.job.create).toHaveBeenCalled();
+    expect(prisma.job.create.mock.calls[0][0].data.returningDepotPending).toBe(true);
   });
 
   it("IMPORT create with return depot address generates two trips and stores null returningDepotCode", async () => {

@@ -14,6 +14,7 @@ export function clearIncompatibleTypeSpecificJobFields(
     data.portTerminalCode = null;
     data.portName = null;
     data.psaStorageRentLastDay = null;
+    data.psaStorageRentLastDayHasTime = null;
     data.portnetReady = false;
     data.permitReady = false;
   }
@@ -67,6 +68,16 @@ export function applyImportDetailsPatch(
     "psaStorageRentLastDay",
     details.psaStorageRentLastDay,
   );
+  if (details.psaStorageRentLastDayHasTime !== undefined) {
+    data.psaStorageRentLastDayHasTime = details.psaStorageRentLastDayHasTime;
+  } else if (details.psaStorageRentLastDay !== undefined) {
+    const raw = String(details.psaStorageRentLastDay ?? "").trim();
+    data.psaStorageRentLastDayHasTime = !raw
+      ? null
+      : /^\d{4}-\d{2}-\d{2}$/.test(raw)
+        ? false
+        : true;
+  }
   applyOptionalTrimmedNullable(data, "vesselName", details.vesselName);
   applyOptionalDateNullable(data, "vesselEta", details.vesselEta);
   if (details.portnetReady !== undefined) data.portnetReady = details.portnetReady;

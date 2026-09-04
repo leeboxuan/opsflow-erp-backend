@@ -144,15 +144,20 @@ export class DriverJobsController {
   @Post(":jobId/trips/:tripId/start")
   @ApiOperation({
     summary:
-      "Start a trip leg: trailer number + trailer photo (multipart)",
+      "Start a trip leg: chassis selection + trailer photo (multipart)",
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
     schema: {
       type: "object",
-      required: ["trailerPhoto", "trailerNumber"],
+      required: ["trailerPhoto", "chassisId"],
       properties: {
-        trailerNumber: { type: "string" },
+        chassisId: { type: "string" },
+        trailerNumber: {
+          type: "string",
+          description:
+            "Optional display compatibility; authoritative number comes from chassis register",
+        },
         trailerPhoto: { type: "string", format: "binary" },
       },
     },
@@ -170,17 +175,21 @@ export class DriverJobsController {
     const tenantId = req.tenant.tenantId;
     const userId = req.user.userId;
     const body = req.body as Record<string, string>;
+    const chassisId = body?.chassisId?.trim() ?? "";
     const trailerNumber = body?.trailerNumber?.trim() ?? "";
     const trailerPhoto = files?.trailerPhoto?.[0];
     if (!trailerPhoto) {
       throw new BadRequestException("trailerPhoto is required");
+    }
+    if (!chassisId) {
+      throw new BadRequestException("chassisId is required");
     }
     return this.driverJobs.startTripWithTrailer(
       tenantId,
       jobId,
       tripId,
       userId,
-      { trailerNumber, trailerPhoto },
+      { chassisId, trailerNumber, trailerPhoto },
     );
   }
 
@@ -318,7 +327,7 @@ export class DriverJobsController {
   @ApiOperation({
     summary: "Upload trip document (form field type + file)",
     description:
-      "CONTAINER_PHOTO and SEAL_PHOTO require jobItemId for the exact container row. Other document types reject jobItemId. Returns document metadata only (no signed URLs); fetch preview via GET .../documents/:documentId/signed-url.",
+      "CONTAINER_PHOTO and SEAL_PHOTO require jobItemId for the exact container row and append as additional active photos (up to 10 per category per container on the trip). Other document types reject jobItemId. Returns document metadata only (no signed URLs); fetch preview via GET .../documents/:documentId/signed-url.",
   })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
@@ -407,6 +416,29 @@ export class DriverJobsController {
       tripId,
       documentId,
       userId,
+    );
+  }
+
+  @Post(":jobId/trips/:tripId/documents/:type/ensure-generated")
+  @ApiOperation({
+    summary: "Ensure required Delivery DO / Lorry Chit exists for this trip",
+    description:
+      "Idempotent. When the trip requires Delivery DO or Lorry Chit and no active document exists, generates it once. Returns the existing active document when already present.",
+  })
+  async ensureRequiredTripDocument(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+    @Param("type") type: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const userId = req.user.userId;
+    return this.driverJobs.ensureRequiredTripDocumentForDriver(
+      tenantId,
+      jobId,
+      tripId,
+      userId,
+      type,
     );
   }
 

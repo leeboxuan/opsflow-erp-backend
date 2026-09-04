@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   CollectionType,
+  JobMovementScope,
   JobType,
   JobStatus,
   JobTripTemplate,
@@ -99,6 +100,18 @@ export class JobDocumentDto {
 
   @ApiPropertyOptional()
   signedByName?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      "Lifecycle for system-generated signable trip PDFs: GENERATED | AWAITING_SIGNATURE | SIGNED | GENERATION_FAILED",
+  })
+  generationStatus?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      "True when the driver may idempotently retry generation for a missing required Delivery DO / Lorry Chit.",
+  })
+  canRetryGenerate?: boolean | null;
 }
 
 export class TripDocumentRequirementDto {
@@ -278,6 +291,8 @@ export class JobTripResponseDto {
   startedAt!: Date | null;
   closedAt!: Date | null;
   trailerNumber!: string | null;
+  /** Canonical chassis when selected from register; null for legacy text-only trips. */
+  chassisId!: string | null;
   trailerLastLocationCode!: string | null;
   driverEarningCents!: number | null;
   hasDriverPayout!: boolean;
@@ -416,8 +431,10 @@ export class JobListItemDto {
   internalRef!: string;
   externalRef?: string | null;
   jobType!: JobType;
+  parentJobType?: JobType | null;
   jobTypes?: JobType[];
   jobTypeSource?: "CANONICAL" | "LEGACY_FALLBACK";
+  movementScope?: JobMovementScope | null;
   /** COLLECTION only; null for other job types. */
   collectionType?: CollectionType | null;
   status!: JobStatus;
@@ -459,9 +476,13 @@ export class JobDto {
   externalRef?: string | null;
   /** Compatibility singular type (synced to first deterministic jobTypes entry). */
   jobType: JobType;
+  /** Parent category; maps legacy COLLECTION→EXPORT and RETURN→IMPORT. */
+  parentJobType?: JobType | null;
   /** Canonical multi-value types (deterministic order). */
   jobTypes?: JobType[];
   jobTypeSource?: "CANONICAL" | "LEGACY_FALLBACK";
+  /** Explicit operational movement within IMPORT/EXPORT; null on legacy rows. */
+  movementScope?: JobMovementScope | null;
   /** COLLECTION only; null for other job types. */
   collectionType?: CollectionType | null;
   status: JobStatus;
@@ -487,6 +508,8 @@ export class JobDto {
   portTerminalCode?: string | null;
   portName?: string | null;
   psaStorageRentLastDay?: Date | null;
+  /** null = legacy/unknown; true = explicit time; false = date-only. */
+  psaStorageRentLastDayHasTime?: boolean | null;
   vesselName?: string | null;
   vesselEta?: Date | null;
   portnetReady?: boolean;

@@ -460,7 +460,7 @@ describe("create job items (LCL optional)", () => {
       expect(tripRows[0].originPlaceId).toBe("ChIJ-import-pickup");
     });
 
-    it("IMPORT create without return depot is rejected", async () => {
+    it("IMPORT create without return depot auto-pends empty-return Draft Trips", async () => {
       const prisma = makeCreatePrisma();
       const svc = makeSvc(prisma);
 
@@ -475,8 +475,15 @@ describe("create job items (LCL optional)", () => {
           } as any,
           { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
-      ).rejects.toThrow(/Empty container return depot is required/i);
-      expect(prisma.job.create).not.toHaveBeenCalled();
+      ).resolves.toBeTruthy();
+
+      const jobData = prisma.job.create.mock.calls[0][0].data;
+      expect(jobData.returningDepotPending).toBe(true);
+      expect(jobData.deliveryAddress1).toBe("8 Gul Cir");
+      const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
+      expect(tripRows).toHaveLength(2);
+      expect(tripRows[0].destinationAddressLine1).toBe("8 Gul Cir");
+      expect(tripRows[1].destinationAddressLine1 ?? null).toBeNull();
     });
 
     it("creates IMPORT address pickup with return and generates two trips", async () => {
@@ -519,7 +526,7 @@ describe("create job items (LCL optional)", () => {
       expect(tripRows[1].jobTripTemplate).toBe("DELIVERY_TO_DEPOT");
     });
 
-    it("IMPORT create without return depot is rejected even when port code is present", async () => {
+    it("IMPORT create without return depot auto-pends even when port code is present", async () => {
       const prisma = makeCreatePrisma();
       prisma.masterLogisticsLocation = {
         findFirst: jest.fn().mockResolvedValue({ code: "JURONG", name: "Jurong Port" }),
@@ -538,7 +545,9 @@ describe("create job items (LCL optional)", () => {
           } as any,
           { userId: "u1", role: Role.TRANSPORT_STAFF },
         ),
-      ).rejects.toThrow(/Empty container return depot is required/i);
+      ).resolves.toBeTruthy();
+
+      expect(prisma.job.create.mock.calls[0][0].data.returningDepotPending).toBe(true);
     });
 
     it("creates IMPORT job with returnLastDay and return depot and generates two trips", async () => {
@@ -573,22 +582,27 @@ describe("create job items (LCL optional)", () => {
     it("creates IMPORT job with return location and generates port→delivery plus delivery→return trips", async () => {
       const prisma = makeCreatePrisma();
       prisma.masterLogisticsLocation = {
-        findFirst: jest
-          .fn()
-          .mockResolvedValueOnce({ code: "JURONG", name: "Jurong Port" })
-          .mockResolvedValueOnce({
-            id: "loc-gul",
-            code: "GUL",
-            name: "Gul Depot",
-            addressLine1: "7 Gul Circle",
-            addressLine2: null,
-            postalCode: "629563",
-            placeId: null,
-            lat: null,
-            lng: null,
-            type: "DEPOT",
-            isActive: true,
-          }),
+        findFirst: jest.fn().mockImplementation(({ where }: any) => {
+          if (where?.code === "JURONG" && where?.type === "PORT") {
+            return Promise.resolve({ code: "JURONG", name: "Jurong Port", type: "PORT" });
+          }
+          if (where?.code === "GUL" && where?.type === "DEPOT") {
+            return Promise.resolve({
+              id: "loc-gul",
+              code: "GUL",
+              name: "Gul Depot",
+              addressLine1: "7 Gul Circle",
+              addressLine2: null,
+              postalCode: "629563",
+              placeId: null,
+              lat: null,
+              lng: null,
+              type: "DEPOT",
+              isActive: true,
+            });
+          }
+          return Promise.resolve(null);
+        }),
       };
       const svc = makeSvc(prisma);
 
@@ -600,7 +614,7 @@ describe("create job items (LCL optional)", () => {
             jobType: JobType.IMPORT,
             importDetails: {
               pickupPortCode: "JURONG",
-            returningDepotAddress1: "Tuas Depot",
+              returningDepotAddress1: "Tuas Depot",
               returningDepotCode: "GUL",
             },
           } as any,

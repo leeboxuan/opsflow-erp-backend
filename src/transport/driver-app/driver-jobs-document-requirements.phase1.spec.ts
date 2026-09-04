@@ -184,19 +184,32 @@ describe("Phase 1 driver document requirements — gates and permit ACL", () => 
       },
       trip: {
         count: jest.fn().mockResolvedValue(1),
-        findFirst: jest.fn().mockResolvedValue({
-          id: tripId,
-          tenantId,
-          jobId,
-          status: TripStatus.PUBLISHED,
-          assignedDriverUserId: driverUserId,
-          plannedStartAt: day,
-          startedAt: null,
-          tripSequence: 1,
-          jobSequence: 1,
-        }),
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: tripId,
+            tenantId,
+            jobId,
+            status: TripStatus.PUBLISHED,
+            assignedDriverUserId: driverUserId,
+            plannedStartAt: day,
+            startedAt: null,
+            tripSequence: 1,
+            jobSequence: 1,
+          })
+          .mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn(),
+      },
+      chassis: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "chassis-1",
+          tenantId,
+          chassisNo: "TRL1",
+          status: "ACTIVE",
+          isBorrowed: false,
+          borrowedFromCompany: null,
+        }),
       },
       tripDocument: {
         create: jest.fn(),
@@ -227,6 +240,7 @@ describe("Phase 1 driver document requirements — gates and permit ACL", () => 
 
     await expect(
       svc.startTripWithTrailer(tenantId, jobId, tripId, driverUserId, {
+        chassisId: "chassis-1",
         trailerNumber: "TRL1",
         trailerPhoto: {
           buffer: Buffer.from("x"),

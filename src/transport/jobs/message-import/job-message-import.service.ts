@@ -247,6 +247,7 @@ export function controllerJsonFromParsed(
 
   return normalizeReviewedDraft({
     movementType,
+    movementScope: parsed.movementScope,
     collectionType,
     customerCompanyId,
     customerNameText: parsed.customerNameText ?? null,
@@ -296,6 +297,7 @@ function readControllerJson(raw: unknown): ControllerReviewedDraft {
   const c = (raw ?? {}) as Partial<ControllerReviewedDraft>;
   return normalizeReviewedDraft({
     movementType: mapParsedMovementType(String(c.movementType ?? "UNKNOWN")),
+    movementScope: c.movementScope ?? undefined,
     collectionType: (c.collectionType as ControllerReviewedDraft["collectionType"]) ?? null,
     customerCompanyId: c.customerCompanyId ?? null,
     customerNameText: c.customerNameText ?? null,
@@ -710,6 +712,7 @@ export class JobMessageImportService {
 
     if (batch.status === JobMessageImportBatchStatus.CONFIRMED) {
       const confirmedDrafts = batch.drafts.filter((d) => !!d.canonicalJobId);
+      const createdJobIds = confirmedDrafts.map((d) => String(d.canonicalJobId));
       const warnings = await this.runPostCommitImportFinalization({
         tenantId: params.tenantId,
         actorUserId: params.actorUserId,
@@ -718,10 +721,15 @@ export class JobMessageImportService {
         drafts: confirmedDrafts,
         perf,
       });
+      const tripsCreated = await this.countTripsForJobs(
+        params.tenantId,
+        createdJobIds,
+      );
       perf.flush();
       return {
-        createdJobIds: confirmedDrafts.map((d) => String(d.canonicalJobId)),
+        createdJobIds,
         createdCount: confirmedDrafts.length,
+        tripsCreated,
         warnings,
       };
     }
@@ -1002,11 +1010,27 @@ export class JobMessageImportService {
     });
 
     perf.flush();
+    const tripsCreated = await this.countTripsForJobs(
+      params.tenantId,
+      result.createdJobIds,
+    );
     return {
       createdJobIds: result.createdJobIds,
       createdCount: result.createdJobIds.length,
+      tripsCreated,
       warnings,
     };
+  }
+
+  private async countTripsForJobs(
+    tenantId: string,
+    jobIds: string[],
+  ): Promise<number> {
+    if (!jobIds.length) return 0;
+    if (typeof (this.prisma as any).trip?.count !== "function") return 0;
+    return this.prisma.trip.count({
+      where: { tenantId, jobId: { in: jobIds } },
+    });
   }
 
   private async runPostCommitImportFinalization(params: {

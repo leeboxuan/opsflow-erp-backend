@@ -39,6 +39,9 @@ export interface FleetTrackingChassisDto {
   label: string | null;
   status: string;
   notes: string | null;
+  isBorrowed: boolean;
+  borrowedFromCompany: string | null;
+  ownershipLabel: string;
   createdAt: Date;
   updatedAt: Date;
   assignedGpsDevice: AssignedGpsDeviceDto | null;

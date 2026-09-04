@@ -13,7 +13,7 @@ import {
   IsBoolean,
   IsNotEmpty,
 } from "class-validator";
-import { CollectionType, JobType } from "@prisma/client";
+import { CollectionType, JobMovementScope, JobType } from "@prisma/client";
 import { Type } from "class-transformer";
 
 
@@ -125,6 +125,16 @@ export class CreateJobImportDetailsDto {
   @IsOptional()
   @IsDateString()
   psaStorageRentLastDay?: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      "Storage rent last-day time precision. true = explicit time; false = date-only; null/omit with null date clears both. Legacy rows may be null.",
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsBoolean()
+  psaStorageRentLastDayHasTime?: boolean | null;
 
   @ApiPropertyOptional({ nullable: true })
   @IsOptional()
@@ -412,6 +422,15 @@ export class CreateJobDto {
   jobType?: JobType;
 
   @ApiPropertyOptional({
+    enum: JobMovementScope,
+    description:
+      "Operational scope within IMPORT/EXPORT. New clients must send this explicitly; omitted requests retain legacy topology.",
+  })
+  @IsOptional()
+  @IsEnum(JobMovementScope)
+  movementScope?: JobMovementScope;
+
+  @ApiPropertyOptional({
     enum: CollectionType,
     description:
       "Required when COLLECTION is among job types (EMPTY or LOADED). Ignored otherwise.",
@@ -514,6 +533,15 @@ export class CreateJobDto {
   shipper?: string | null;
 
   @ApiProperty()
+  @ValidateIf(
+    (o: CreateJobDto) =>
+      !(
+        (o.jobType === JobType.EXPORT ||
+          (Array.isArray(o.jobTypes) && o.jobTypes.includes(JobType.EXPORT))) &&
+        (o.movementScope == null ||
+          o.movementScope === JobMovementScope.EXPORT_DELIVERY_ONLY)
+      ),
+  )
   @IsString()
   @MinLength(1)
   pickupAddress1: string;
@@ -564,7 +592,11 @@ export class CreateJobDto {
         : o.jobType
           ? [o.jobType]
           : [];
-    const pureReturn = types.length === 1 && types[0] === JobType.RETURN;
+    const pureReturn =
+      (types.length === 1 && types[0] === JobType.RETURN) ||
+      (types.length === 1 &&
+        types[0] === JobType.IMPORT &&
+        o.movementScope === JobMovementScope.RETURN_ONLY);
     // RETURN-only: destination may be omitted (auto-pending). Other types still require it.
     return !pureReturn;
   })
@@ -731,6 +763,17 @@ export class CreateJobDto {
   @IsOptional()
   @IsDateString()
   psaStorageRentLastDay?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Legacy flat field (prefer importDetails.psaStorageRentLastDayHasTime)",
+    nullable: true,
+    deprecated: true,
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsBoolean()
+  psaStorageRentLastDayHasTime?: boolean | null;
 
   @ApiPropertyOptional({
     description:

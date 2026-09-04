@@ -1,4 +1,5 @@
 import type {
+  JobMovementScope,
   JobMessageImportDraftInclusionState,
   JobMessageImportDraftValidationStatus,
   JobMessageImportMovementType,
@@ -19,6 +20,7 @@ export type ControllerReviewedItem = {
  */
 export type ControllerReviewedDraft = {
   movementType: JobMessageImportMovementType;
+  movementScope: JobMovementScope | null;
   collectionType: "EMPTY" | "LOADED" | null;
   customerCompanyId: string | null;
   customerNameText: string | null;
@@ -174,5 +176,7 @@ export type JobMessageImportConfirmWarning = {
 export type JobMessageImportConfirmResult = {
   createdJobIds: string[];
   createdCount: number;
+  /** Draft trips created (or already present on idempotent confirm retry). */
+  tripsCreated: number;
   warnings: JobMessageImportConfirmWarning[];
 };

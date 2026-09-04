@@ -1,9 +1,15 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
+import { AuditService } from "../../../shared/audit/audit.service";
 import { applyQSearch } from "../../../shared/common/listing/listing.search";
 import { buildOrderBy } from "../../../shared/common/listing/listing.sort";
 import { buildPaginationMeta, parsePaginationFromQuery } from "../../../shared/common/pagination";
 import { PrismaService } from "../../../shared/prisma/prisma.service";
+import {
+  chassisOwnershipLabel,
+  normalizeChassisOwnership,
+  resolveChassisOwnershipPatch,
+} from "../chassis/chassis-ownership";
 import { AssignGpsDeviceChassisDto } from "./dto/assign-gps-device-chassis.dto";
 import { CreateChassisDto } from "./dto/create-chassis.dto";
 import { CreateGpsDeviceDto } from "./dto/create-gps-device.dto";
@@ -82,7 +88,10 @@ function mapGpsDeviceHealth(device: any): {
 
 @Injectable()
 export class FleetTrackingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   private normalizeChassisNo(value: string): string {
     return String(value ?? "")
@@ -101,6 +110,10 @@ export class FleetTrackingService {
     const trackingStatus: TrackingStatus =
       assigned && assigned.isActive ? statusFromAge(assignedAge) : "UNASSIGNED";
     const health = mapGpsDeviceHealth(assigned);
+    const isBorrowed = Boolean(row.isBorrowed);
+    const borrowedFromCompany = isBorrowed
+      ? (row.borrowedFromCompany ?? null)
+      : null;
 
     return {
       id: row.id,
@@ -109,6 +122,9 @@ export class FleetTrackingService {
       label: row.label ?? null,
       status: row.status,
       notes: row.notes ?? null,
+      isBorrowed,
+      borrowedFromCompany,
+      ownershipLabel: chassisOwnershipLabel({ isBorrowed, borrowedFromCompany }),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       assignedGpsDevice: assigned
@@ -216,7 +232,7 @@ export class FleetTrackingService {
     const where: Prisma.ChassisWhereInput = { tenantId };
 
     if (query.status) where.status = query.status;
-    applyQSearch(where as any, query.q, ["chassisNo", "label", "notes"]);
+    applyQSearch(where as any, query.q, ["chassisNo", "label", "notes", "borrowedFromCompany"]);
     if (query.trackingStatus) {
       const existingAnd = Array.isArray(where.AND)
         ? where.AND
@@ -259,12 +275,21 @@ export class FleetTrackingService {
     };
   }
 
-  async createChassis(tenantId: string, dto: CreateChassisDto): Promise<FleetTrackingChassisDto> {
+  async createChassis(
+    tenantId: string,
+    dto: CreateChassisDto,
+    actorUserId?: string | null,
+  ): Promise<FleetTrackingChassisDto> {
     const chassisNo = this.normalizeChassisNo(dto.chassisNo);
     const existing = await this.prisma.chassis.findUnique({
       where: { tenantId_chassisNo: { tenantId, chassisNo } },
     });
     if (existing) throw new BadRequestException("Chassis number already exists");
+
+    const ownership = normalizeChassisOwnership({
+      isBorrowed: dto.isBorrowed,
+      borrowedFromCompany: dto.borrowedFromCompany,
+    });
 
     const created = await this.prisma.chassis.create({
       data: {
@@ -273,9 +298,25 @@ export class FleetTrackingService {
         label: dto.label?.trim() || null,
         status: dto.status?.trim() || "ACTIVE",
         notes: dto.notes?.trim() || null,
+        isBorrowed: ownership.isBorrowed,
+        borrowedFromCompany: ownership.borrowedFromCompany,
       },
       include: { gpsDevices: { where: { isActive: true }, take: 1 } },
     });
+
+    await this.audit.log(
+      tenantId,
+      "CREATE",
+      "CHASSIS",
+      created.id,
+      {
+        chassisNo: created.chassisNo,
+        isBorrowed: ownership.isBorrowed,
+        borrowedFromCompany: ownership.borrowedFromCompany,
+      },
+      actorUserId ?? null,
+    );
+
     return this.mapChassisRow(created, new Date());
   }
 
@@ -298,6 +339,7 @@ export class FleetTrackingService {
     tenantId: string,
     id: string,
     dto: UpdateChassisDto,
+    actorUserId?: string | null,
   ): Promise<FleetTrackingChassisDto> {
     const row = await this.prisma.chassis.findFirst({ where: { id, tenantId } });
     if (!row) throw new NotFoundException("Chassis not found");
@@ -312,6 +354,21 @@ export class FleetTrackingService {
       if (dup) throw new BadRequestException("Chassis number already exists");
     }
 
+    const ownershipTouched =
+      dto.isBorrowed !== undefined || dto.borrowedFromCompany !== undefined;
+    const ownership = ownershipTouched
+      ? resolveChassisOwnershipPatch(
+          {
+            isBorrowed: Boolean(row.isBorrowed),
+            borrowedFromCompany: row.borrowedFromCompany ?? null,
+          },
+          {
+            isBorrowed: dto.isBorrowed,
+            borrowedFromCompany: dto.borrowedFromCompany,
+          },
+        )
+      : null;
+
     const updated = await this.prisma.chassis.update({
       where: { id },
       data: {
@@ -319,6 +376,12 @@ export class FleetTrackingService {
         ...(dto.label !== undefined && { label: dto.label?.trim() || null }),
         ...(dto.status !== undefined && { status: dto.status?.trim() || "ACTIVE" }),
         ...(dto.notes !== undefined && { notes: dto.notes?.trim() || null }),
+        ...(ownership
+          ? {
+              isBorrowed: ownership.isBorrowed,
+              borrowedFromCompany: ownership.borrowedFromCompany,
+            }
+          : {}),
       },
       include: {
         gpsDevices: {
@@ -328,6 +391,30 @@ export class FleetTrackingService {
         },
       },
     });
+
+    if (ownership) {
+      const before = {
+        isBorrowed: Boolean(row.isBorrowed),
+        borrowedFromCompany: row.borrowedFromCompany ?? null,
+      };
+      if (
+        before.isBorrowed !== ownership.isBorrowed ||
+        before.borrowedFromCompany !== ownership.borrowedFromCompany
+      ) {
+        await this.audit.log(
+          tenantId,
+          "UPDATE",
+          "CHASSIS",
+          id,
+          {
+            chassisNo: updated.chassisNo,
+            ownershipBefore: before,
+            ownershipAfter: ownership,
+          },
+          actorUserId ?? null,
+        );
+      }
+    }
 
     return this.mapChassisRow(updated, new Date());
   }

@@ -1,5 +1,8 @@
 import { JobType, TripDocumentType } from "@prisma/client";
-import { DriverJobsService } from "./driver-jobs.service";
+import {
+  DriverJobsService,
+  MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY,
+} from "./driver-jobs.service";
 
 describe("DriverJobsService container-linked trip document upload", () => {
   const tenantId = "tenant-1";
@@ -57,6 +60,7 @@ describe("DriverJobsService container-linked trip document upload", () => {
         }),
       },
       tripDocument: {
+        count: jest.fn().mockResolvedValue(0),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         create: jest.fn().mockImplementation(({ data }) =>
           Promise.resolve({
@@ -132,8 +136,9 @@ describe("DriverJobsService container-linked trip document upload", () => {
     expect(result.jobItemId).toBe(jobItemId);
   });
 
-  it("deactivates only the same type and same container slot", async () => {
+  it("appends without deactivating prior active photos for the same container slot", async () => {
     const { service, prisma } = makeContext();
+    (prisma.tripDocument.count as jest.Mock).mockResolvedValue(1);
 
     await service.uploadTripDocumentForDriver(
       tenantId,
@@ -147,16 +152,50 @@ describe("DriverJobsService container-linked trip document upload", () => {
       jobItemId,
     );
 
-    expect(prisma.tripDocument.updateMany).toHaveBeenCalledWith({
+    expect(prisma.tripDocument.count).toHaveBeenCalledWith({
       where: {
         tenantId,
         tripId,
+        jobItemId,
         type: TripDocumentType.SEAL_PHOTO,
         isActive: true,
-        jobItemId,
       },
-      data: { isActive: false },
     });
+    expect(prisma.tripDocument.updateMany).not.toHaveBeenCalled();
+    expect(prisma.tripDocument.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          jobItemId,
+          type: TripDocumentType.SEAL_PHOTO,
+          isActive: true,
+        }),
+      }),
+    );
+  });
+
+  it("rejects when the per-category active photo limit is reached", async () => {
+    const { service, prisma, storageUpload } = makeContext();
+    (prisma.tripDocument.count as jest.Mock).mockResolvedValue(
+      MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY,
+    );
+
+    await expect(
+      service.uploadTripDocumentForDriver(
+        tenantId,
+        jobId,
+        tripId,
+        driverUserId,
+        TripDocumentType.CONTAINER_PHOTO,
+        imageFile,
+        false,
+        undefined,
+        jobItemId,
+      ),
+    ).rejects.toThrow(
+      `At most ${MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY} active CONTAINER_PHOTO photos are allowed per container on this trip`,
+    );
+    expect(storageUpload).not.toHaveBeenCalled();
+    expect(prisma.tripDocument.create).not.toHaveBeenCalled();
   });
 
   it("rejects a job item from another job", async () => {

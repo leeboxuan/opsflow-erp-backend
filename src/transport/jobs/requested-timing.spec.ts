@@ -3,6 +3,7 @@ import {
   requestedLocalFromPersisted,
   serializeRequestedDeliveryForJob,
   serializeRequestedPickupForJob,
+  serializeRequestedStorageRentForJob,
   serializeRequestedTimingForJob,
   zonedRequestedLocalToUtc,
 } from "./requested-timing";
@@ -53,6 +54,57 @@ describe("requested-timing", () => {
   });
 
   it("does not reinterpret legacy midnight as date-only when hasTime is null", () => {
+    const midnight = zonedRequestedLocalToUtc("2026-09-04T00:00", TZ);
+    expect(
+      requestedLocalFromPersisted({
+        at: midnight,
+        hasTime: null,
+        timeZone: TZ,
+      }),
+    ).toBe("2026-09-04T00:00");
+  });
+
+  it("serializes storage rent date-only without inventing a clock time", () => {
+    const serialized = serializeRequestedStorageRentForJob("2026-09-04", TZ);
+    expect(serialized.psaStorageRentLastDayHasTime).toBe(false);
+    expect(
+      requestedLocalFromPersisted({
+        at: serialized.psaStorageRentLastDay,
+        hasTime: false,
+        timeZone: TZ,
+      }),
+    ).toBe("2026-09-04");
+  });
+
+  it("round-trips storage rent explicit time including midnight", () => {
+    const timed = serializeRequestedStorageRentForJob("2026-09-04T17:45", TZ);
+    expect(timed.psaStorageRentLastDayHasTime).toBe(true);
+    expect(
+      requestedLocalFromPersisted({
+        at: timed.psaStorageRentLastDay,
+        hasTime: true,
+        timeZone: TZ,
+      }),
+    ).toBe("2026-09-04T17:45");
+
+    const midnight = serializeRequestedStorageRentForJob("2026-09-04T00:00", TZ);
+    expect(midnight.psaStorageRentLastDayHasTime).toBe(true);
+    expect(
+      requestedLocalFromPersisted({
+        at: midnight.psaStorageRentLastDay,
+        hasTime: true,
+        timeZone: TZ,
+      }),
+    ).toBe("2026-09-04T00:00");
+  });
+
+  it("clears storage rent time while keeping the date", () => {
+    const cleared = serializeRequestedStorageRentForJob("2026-09-04", TZ);
+    expect(cleared.psaStorageRentLastDayHasTime).toBe(false);
+    expect(String(cleared.psaStorageRentLastDay)).toBeTruthy();
+  });
+
+  it("leaves legacy storage rent midnight untouched when hasTime is null", () => {
     const midnight = zonedRequestedLocalToUtc("2026-09-04T00:00", TZ);
     expect(
       requestedLocalFromPersisted({

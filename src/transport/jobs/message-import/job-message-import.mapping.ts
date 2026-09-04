@@ -1,11 +1,18 @@
-import { JobStatus, JobType } from "@prisma/client";
+import { JobMovementScope, JobStatus, JobType } from "@prisma/client";
 import type { CreateJobDto } from "../dto/create-job.dto";
 import {
   assertCreateJobItemsRequiredForJobType,
+  assertImportContainerSealsRequired,
   ensureCollectionJobItems,
+  ensureUnknownIdentityCargoSlots,
   parseValidJobItemsFromInput,
   resolveCollectionTypeForJobCreate,
 } from "../create-job-validation.helpers";
+import {
+  parentJobTypeForLegacyType,
+  scopeAllowsUnknownCargoIdentity,
+  scopeIncludesReturn,
+} from "../job-movement-scope";
 import {
   assertCanonicalRouteLocationsForCreate,
   resolveCanonicalRouteLocations,
@@ -92,28 +99,49 @@ export function reviewedDraftToCreateJobDto(input: {
   timezone: string;
 }): CreateJobDto {
   const reviewed = input.reviewed;
-  const jobType = movementTypeToJobType(reviewed.movementType);
-  if (!jobType) {
+  const legacyJobType = movementTypeToJobType(reviewed.movementType);
+  if (!legacyJobType) {
     throw new Error("UNKNOWN_MOVEMENT_TYPE");
   }
+  const jobType = parentJobTypeForLegacyType(legacyJobType);
+  const movementScope =
+    reviewed.movementScope ??
+    (legacyJobType === JobType.COLLECTION
+      ? JobMovementScope.COLLECTION_ONLY
+      : legacyJobType === JobType.RETURN
+        ? JobMovementScope.RETURN_ONLY
+        : legacyJobType === JobType.IMPORT
+          ? JobMovementScope.FULL_IMPORT
+          : legacyJobType === JobType.EXPORT
+            ? JobMovementScope.EXPORT_DELIVERY_ONLY
+            : null);
   if (!reviewed.customerCompanyId) {
     throw new Error("MISSING_CUSTOMER");
   }
 
   const collectionType =
-    jobType === JobType.COLLECTION
-      ? resolveCollectionTypeForJobCreate(jobType, reviewed.collectionType)
+    legacyJobType === JobType.COLLECTION
+      ? resolveCollectionTypeForJobCreate(legacyJobType, reviewed.collectionType)
       : null;
 
-  const mappedItems = mapReviewedItems(reviewed, jobType);
-  const validItems = ensureCollectionJobItems(
-    jobType,
-    parseValidJobItemsFromInput(mappedItems, jobType),
+  const mappedItems = mapReviewedItems(reviewed, legacyJobType);
+  const validItems = ensureUnknownIdentityCargoSlots(
+    movementScope,
+    ensureCollectionJobItems(
+      legacyJobType,
+      parseValidJobItemsFromInput(mappedItems, jobType, [jobType], {
+        allowUnknownContainerIdentity:
+          scopeAllowsUnknownCargoIdentity(movementScope),
+      }),
+    ),
   );
   assertCreateJobItemsRequiredForJobType(jobType, mappedItems, validItems);
+  if (movementScope !== JobMovementScope.RETURN_ONLY) {
+    assertImportContainerSealsRequired(jobType, validItems);
+  }
 
   const returnResolution =
-    jobType === JobType.RETURN
+    movementScope === JobMovementScope.RETURN_ONLY
       ? resolveReturnDestinationResolution({
           returningDepotPending: reviewed.returningDepotPending === true,
           returningDepotPendingText:
@@ -135,7 +163,24 @@ export function reviewedDraftToCreateJobDto(input: {
           deliveryLng: reviewed.deliveryLng,
         })
       : null;
-  if (jobType === JobType.RETURN && !returnResolution) {
+  const importReturnResolution =
+    jobType === JobType.IMPORT && scopeIncludesReturn(movementScope)
+      ? resolveReturnDestinationResolution({
+          returningDepotPending: reviewed.returningDepotPending === true,
+          returningDepotPendingText:
+            reviewed.returningDepotPendingText ??
+            reviewed.returningDepotSourceText ??
+            null,
+          returningDepotCode: reviewed.returningDepotCode,
+          returningDepotAddress1: reviewed.returningDepotAddress1,
+          returningDepotAddress2: reviewed.returningDepotAddress2,
+          returningDepotPostal: reviewed.returningDepotPostal,
+          returningDepotPlaceId: reviewed.returningDepotPlaceId,
+          returningDepotLat: reviewed.returningDepotLat,
+          returningDepotLng: reviewed.returningDepotLng,
+        })
+      : null;
+  if (movementScope === JobMovementScope.RETURN_ONLY && !returnResolution) {
     // resolveReturnDestinationResolution always returns resolved or auto-pending.
     throw new Error("MISSING_LOCATION");
   }
@@ -145,11 +190,19 @@ export function reviewedDraftToCreateJobDto(input: {
     returnResolution?.kind === "pending"
       ? pendingReturnDestinationJobFields(returnResolution.pendingText)
       : null;
+  const importReturnDepotPending =
+    importReturnResolution?.kind === "pending"
+      ? pendingReturnDestinationJobFields(importReturnResolution.pendingText)
+      : null;
+  const jobReturnDepotPending = Boolean(
+    returnDepotPending || importReturnDepotPending,
+  );
 
   const pickupAddress1 = cleanAddress1(reviewed.pickupAddress1);
   const cleanedDeliveryAddress1 = cleanAddress1(reviewed.deliveryAddress1);
   const portAddress1 = cleanAddress1(reviewed.portAddress1);
 
+  // RETURN pending wipes delivery*; IMPORT pending keeps customer delivery.
   const deliveryAddress1 = returnDepotPending
     ? returnDepotPending.deliveryAddress1
     : returnDestination?.deliveryAddress1 ?? cleanedDeliveryAddress1;
@@ -168,30 +221,31 @@ export function reviewedDraftToCreateJobDto(input: {
   const deliveryLng = returnDepotPending
     ? null
     : returnDestination?.deliveryLng ?? reviewed.deliveryLng;
-  const returningDepotAddress1 = returnDepotPending
+  const returningDepotAddress1 = jobReturnDepotPending
     ? null
     : returnDestination?.returningDepotAddress1 ?? reviewed.returningDepotAddress1;
-  const returningDepotAddress2 = returnDepotPending
+  const returningDepotAddress2 = jobReturnDepotPending
     ? null
     : returnDestination?.returningDepotAddress2 ?? reviewed.returningDepotAddress2;
-  const returningDepotPostal = returnDepotPending
+  const returningDepotPostal = jobReturnDepotPending
     ? null
     : returnDestination?.returningDepotPostal ?? reviewed.returningDepotPostal;
-  const returningDepotPlaceId = returnDepotPending
+  const returningDepotPlaceId = jobReturnDepotPending
     ? null
     : returnDestination?.returningDepotPlaceId ?? reviewed.returningDepotPlaceId;
-  const returningDepotLat = returnDepotPending
+  const returningDepotLat = jobReturnDepotPending
     ? null
     : returnDestination?.returningDepotLat ?? reviewed.returningDepotLat;
-  const returningDepotLng = returnDepotPending
+  const returningDepotLng = jobReturnDepotPending
     ? null
     : returnDestination?.returningDepotLng ?? reviewed.returningDepotLng;
-  const returningDepotCode = returnDepotPending
+  const returningDepotCode = jobReturnDepotPending
     ? null
     : returnDestination?.returningDepotCode ?? reviewed.returningDepotCode;
 
   const routeLocations = resolveCanonicalRouteLocations({
     jobType,
+    movementScope,
     pickupAddress1,
     pickupAddress2: reviewed.pickupAddress2,
     pickupPostal: reviewed.pickupPostal,
@@ -237,7 +291,8 @@ export function reviewedDraftToCreateJobDto(input: {
   });
   try {
     assertCanonicalRouteLocationsForCreate(jobType, routeLocations, {
-      allowPendingReturnDepot: Boolean(returnDepotPending),
+      allowPendingReturnDepot: jobReturnDepotPending,
+      movementScope,
     });
   } catch {
     throw new Error("MISSING_LOCATION");
@@ -261,6 +316,8 @@ export function reviewedDraftToCreateJobDto(input: {
 
   return {
     jobType,
+    jobTypes: [jobType],
+    movementScope: movementScope ?? undefined,
     collectionType: collectionType ?? undefined,
     customerCompanyId: reviewed.customerCompanyId,
     pickupDate: pickupDate ? pickupDate.toISOString() : undefined,
@@ -295,9 +352,11 @@ export function reviewedDraftToCreateJobDto(input: {
     vesselName: reviewed.vesselName ?? undefined,
     voyage: reviewed.voyage ?? undefined,
     containerNumber: seedContainer ?? undefined,
-    returningDepotPending: Boolean(returnDepotPending),
+    returningDepotPending: jobReturnDepotPending,
     returningDepotPendingText:
-      returnDepotPending?.returningDepotPendingText ?? undefined,
+      returnDepotPending?.returningDepotPendingText ??
+      importReturnDepotPending?.returningDepotPendingText ??
+      undefined,
     items: validItems.map((it) => ({
       itemCode: it.itemCode,
       description: it.description ?? undefined,
@@ -316,11 +375,12 @@ export function reviewedDraftToCreateJobDto(input: {
             returningDepotLat,
             returningDepotLng,
             returningDepotCode,
-            ...(returnDepotPending
+            ...(jobReturnDepotPending
               ? {
                   returningDepotPending: true,
                   returningDepotPendingText:
-                    returnDepotPending.returningDepotPendingText,
+                    returnDepotPending?.returningDepotPendingText ??
+                    importReturnDepotPending?.returningDepotPendingText,
                 }
               : {}),
           }

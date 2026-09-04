@@ -72,10 +72,21 @@ import {
   resolveSealNoFromItemInput,
 } from "../jobs/job-field-resolution.helpers";
 import {
+  movementScopeForLegacyType,
+  parentJobTypeForLegacyType,
+} from "../jobs/job-movement-scope";
+import {
   compareTripsByEffectiveSchedule,
   evaluateTripStartDateGate,
   tripStartDateGateErrorMessage,
 } from "./driver-trip-schedule.helpers";
+import {
+  assertChassisAvailableForCheckout,
+  CHASSIS_CHECKOUT_HOLDING_TRIP_STATUSES,
+  classifyChassisAvailability,
+} from "../fleet/chassis/chassis-availability";
+import { chassisOwnershipLabel } from "../fleet/chassis/chassis-ownership";
+import { ListDriverChassisOptionsQueryDto } from "./dto/list-driver-chassis-options-query.dto";
 import {
   DRIVER_TRIP_SEQUENCE_BLOCKING_ERROR,
   findBlockingEarlierDriverTrip,
@@ -86,6 +97,12 @@ import {
   getMissingContainerDocumentTypes,
   type ContainerDocumentationRequirement,
 } from "./container-documentation.helpers";
+import {
+  appendMissingRequiredSignableDocumentPlaceholders,
+  attachGenerationStatusToTripDocument,
+  isDriverEnsureableTripDocumentType,
+  labelForEnsureableDocumentType,
+} from "./driver-signable-document-cards";
 import { UpdateDriverOperationalDetailsDto } from "./dto/update-driver-operational-details.dto";
 import {
   evaluateJobInvoiceReadiness,
@@ -147,17 +164,24 @@ const DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPE_SET = new Set<TripDocumentType>(
   DRIVER_UPLOADABLE_TRIP_DOCUMENT_TYPES,
 );
 
+/**
+ * Soft single-active types: a new upload deactivates prior actives of the same
+ * type on the trip. CONTAINER_PHOTO / SEAL_PHOTO intentionally allow multiple
+ * active photos per (trip, jobItemId, type); see
+ * {@link MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY}.
+ */
 const DRIVER_SINGLE_ACTIVE_TRIP_DOCUMENT_TYPES = new Set<TripDocumentType>([
   TripDocumentType.PICKUP_DO,
   TripDocumentType.DELIVERY_DO,
   TripDocumentType.LORRY_CHIT,
   TripDocumentType.POD_SIGNATURE,
   TripDocumentType.PERMIT,
-  TripDocumentType.CONTAINER_PHOTO,
-  TripDocumentType.SEAL_PHOTO,
   TripDocumentType.TRAILER_START_PHOTO,
   TripDocumentType.TRAILER_END_PHOTO,
 ]);
+
+/** Max active CONTAINER_PHOTO or SEAL_PHOTO rows per trip + jobItemId + type. */
+export const MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY = 10;
 const DRIVER_NON_DELETABLE_TRIP_STATUSES = new Set<TripStatus>([
   TripStatus.COMPLETED,
   TripStatus.DONE,
@@ -200,6 +224,10 @@ function buildDriverTripExecutionCard(t: any, j: any) {
     jobInternalRef: j.internalRef ?? null,
     customerName: j.customerCompany?.name ?? null,
     jobType: j.jobType,
+    parentJobType: j.jobType ? parentJobTypeForLegacyType(j.jobType) : null,
+    movementScope:
+      j.movementScope ??
+      (j.jobType ? movementScopeForLegacyType(j.jobType) : null),
     collectionType: j.collectionType ?? null,
     originSummary,
     destinationSummary,
@@ -283,6 +311,10 @@ function toJobDto(j: any): JobDto {
     internalRef: j.internalRef,
     externalRef: j.externalRef ?? null,
     jobType: j.jobType,
+    parentJobType: j.jobType ? parentJobTypeForLegacyType(j.jobType) : null,
+    movementScope:
+      j.movementScope ??
+      (j.jobType ? movementScopeForLegacyType(j.jobType) : null),
     collectionType: j.collectionType ?? null,
     status: j.status,
     invoiceReadyAt: j.invoiceReadyAt ?? null,
@@ -383,6 +415,7 @@ function toJobDto(j: any): JobDto {
         startedAt: t.startedAt ?? null,
         closedAt: t.closedAt ?? null,
         trailerNumber: t.trailerNumber ?? null,
+        chassisId: t.chassisId ?? null,
         trailerLastLocationCode: t.trailerLastLocationCode ?? null,
         driverEarningCents: resolveDriverTripEarningCents(t),
         hasDriverPayout: resolveDriverTripEarningCents(t) != null,
@@ -817,6 +850,7 @@ export class DriverJobsService {
         closedAt: t.closedAt ?? null,
         completedAt: t.closedAt ?? (isCompleted(t.status) ? (t.updatedAt ?? null) : null),
         trailerNumber: t.trailerNumber ?? null,
+        chassisId: t.chassisId ?? null,
         containerNumber: listCargo.containerNumber,
         cargoSummary: listCargo.cargoSummary,
         cargoSource: listCargo.cargoSource,
@@ -1560,6 +1594,10 @@ export class DriverJobsService {
       jobInternalRef: job.internalRef,
       customerName: job.customerCompany?.name ?? null,
       jobType: job.jobType,
+      parentJobType: job.jobType ? parentJobTypeForLegacyType(job.jobType) : null,
+      movementScope:
+        job.movementScope ??
+        (job.jobType ? movementScopeForLegacyType(job.jobType) : null),
       collectionType: job.collectionType ?? null,
       status: JobStatus.ONGOING,
       pickupDate: job.pickupDate ?? null,
@@ -1615,6 +1653,7 @@ export class DriverJobsService {
       deliveryAddress1: exec.deliveryAddress1,
       deliveryPostal: exec.deliveryPostal,
       trailerNumber: t.trailerNumber ?? null,
+        chassisId: t.chassisId ?? null,
       containerNumber: listCargo.containerNumber,
       cargoSummary: listCargo.cargoSummary,
       cargoSource: listCargo.cargoSource,
@@ -2210,13 +2249,103 @@ export class DriverJobsService {
     return toJobDto(updated);
   }
 
+  async listChassisOptionsForDriver(
+    tenantId: string,
+    query: ListDriverChassisOptionsQueryDto,
+  ) {
+    const { page, pageSize, skip, take } = parsePaginationFromQuery({
+      page: query.page,
+      pageSize: query.pageSize,
+    });
+    const q = query.q?.trim();
+    const forTripId = query.forTripId?.trim() || null;
+
+    const where: Prisma.ChassisWhereInput = {
+      tenantId,
+      status: "ACTIVE",
+      ...(q
+        ? {
+            OR: [
+              { chassisNo: { contains: q, mode: "insensitive" } },
+              { borrowedFromCompany: { contains: q, mode: "insensitive" } },
+              { label: { contains: q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    const [total, rows, activeCheckouts] = await this.prisma.$transaction([
+      this.prisma.chassis.count({ where }),
+      this.prisma.chassis.findMany({
+        where,
+        orderBy: [{ chassisNo: "asc" }],
+        skip,
+        take,
+        select: {
+          id: true,
+          tenantId: true,
+          chassisNo: true,
+          label: true,
+          status: true,
+          isBorrowed: true,
+          borrowedFromCompany: true,
+        },
+      }),
+      this.prisma.trip.findMany({
+        where: {
+          tenantId,
+          status: { in: [...CHASSIS_CHECKOUT_HOLDING_TRIP_STATUSES] },
+          chassisId: { not: null },
+        },
+        select: { id: true, chassisId: true },
+      }),
+    ]);
+
+    const checkoutByChassis = new Map<string, string>();
+    for (const trip of activeCheckouts) {
+      if (trip.chassisId) checkoutByChassis.set(trip.chassisId, trip.id);
+    }
+
+    return {
+      data: rows.map((row) => {
+        const isBorrowed = Boolean(row.isBorrowed);
+        const borrowedFromCompany = isBorrowed
+          ? (row.borrowedFromCompany ?? null)
+          : null;
+        const activeCheckoutTripId = checkoutByChassis.get(row.id) ?? null;
+        const availability = classifyChassisAvailability({
+          chassis: row,
+          activeCheckoutTripId,
+          forTripId,
+        });
+        return {
+          id: row.id,
+          chassisNo: row.chassisNo,
+          label: row.label ?? null,
+          status: row.status,
+          isBorrowed,
+          borrowedFromCompany,
+          ownershipLabel: chassisOwnershipLabel({
+            isBorrowed,
+            borrowedFromCompany,
+          }),
+          availability: availability.availability,
+          selectable: availability.selectable,
+          currentTripId: availability.currentTripId,
+        };
+      }),
+      meta: buildPaginationMeta(page, pageSize, total),
+    };
+  }
+
   async startTripWithTrailer(
     tenantId: string,
     jobId: string,
     tripId: string,
     driverUserId: string,
     payload: {
-      trailerNumber: string;
+      chassisId: string;
+      trailerNumber?: string | null;
       trailerPhoto: Express.Multer.File;
     },
   ): Promise<JobDto> {
@@ -2235,9 +2364,9 @@ export class DriverJobsService {
       throw new BadRequestException("Job must be ONGOING to start a trip");
     }
 
-    const trailerNumber = payload.trailerNumber?.trim();
-    if (!trailerNumber) {
-      throw new BadRequestException("trailerNumber is required");
+    const chassisId = payload.chassisId?.trim();
+    if (!chassisId) {
+      throw new BadRequestException("chassisId is required");
     }
 
     const file = payload.trailerPhoto;
@@ -2259,6 +2388,35 @@ export class DriverJobsService {
     if (trip.startedAt) {
       throw new BadRequestException("Trip already started");
     }
+
+    const chassis = await this.prisma.chassis.findFirst({
+      where: { id: chassisId, tenantId },
+      select: {
+        id: true,
+        tenantId: true,
+        chassisNo: true,
+        status: true,
+        isBorrowed: true,
+        borrowedFromCompany: true,
+      },
+    });
+    const conflictingCheckout = await this.prisma.trip.findFirst({
+      where: {
+        tenantId,
+        chassisId,
+        status: { in: [...CHASSIS_CHECKOUT_HOLDING_TRIP_STATUSES] },
+        id: { not: tripId },
+      },
+      select: { id: true },
+    });
+    const validatedChassis = assertChassisAvailableForCheckout({
+      chassis,
+      tenantId,
+      chassisId,
+      forTripId: tripId,
+      conflictingTripId: conflictingCheckout?.id ?? null,
+    });
+    const trailerNumber = validatedChassis.chassisNo;
 
     const [startDocs, startRequirements] = await Promise.all([
       this.prisma.tripDocument.findMany({
@@ -2365,6 +2523,21 @@ export class DriverJobsService {
       driverUserId,
     );
     await this.prisma.$transaction(async (tx) => {
+      const conflictInsideTx = await tx.trip.findFirst({
+        where: {
+          tenantId,
+          chassisId,
+          status: { in: [...CHASSIS_CHECKOUT_HOLDING_TRIP_STATUSES] },
+          id: { not: tripId },
+        },
+        select: { id: true },
+      });
+      if (conflictInsideTx) {
+        throw new BadRequestException(
+          "Selected chassis is already checked out on another trip",
+        );
+      }
+
       await tx.tripDocument.create({
         data: {
           tenantId,
@@ -2381,6 +2554,7 @@ export class DriverJobsService {
       await tx.trip.update({
         where: { id: tripId },
         data: {
+          chassisId,
           trailerNumber,
           startedAt: now,
           startedByDriverUserId: driverUserId,
@@ -2402,6 +2576,7 @@ export class DriverJobsService {
       tripId,
       {
         jobId,
+        chassisId,
         trailerNumber,
       },
       driverUserId,
@@ -2412,7 +2587,7 @@ export class DriverJobsService {
       "TRIP_TRAILER_CHECK_IN",
       "TRIP",
       tripId,
-      { jobId, trailerNumber },
+      { jobId, chassisId, trailerNumber },
       driverUserId,
     );
 
@@ -2792,6 +2967,7 @@ export class DriverJobsService {
         {
           jobId,
           trailerNumber: trip.trailerNumber ?? null,
+      chassisId: (trip as any).chassisId ?? null,
           trailerParkingLocationCode: trailerLocation?.code ?? null,
           trailerParkingLocationName: trailerLocation?.name ?? null,
           trailerParkingAddress1: payload?.trailerParkingAddress1 ?? null,
@@ -2955,6 +3131,7 @@ export class DriverJobsService {
       missingBaseCompletionDocuments: missingDocuments,
       missingTrailerCheckoutFields,
       trailerNumber: trip.trailerNumber ?? null,
+      chassisId: (trip as any).chassisId ?? null,
       parkingLocations,
       documentRequirements,
       documentReadiness: {
@@ -3160,6 +3337,7 @@ export class DriverJobsService {
       destination: trip.destinationLabel ?? null,
 
       trailerNumber: trip.trailerNumber ?? null,
+      chassisId: (trip as any).chassisId ?? null,
       trailerLastLocationCode: trip.trailerLastLocationCode ?? null,
       trailerLastLocationName: trailerLocationName,
       trailerParkedAt: trip.trailerParkedAt ?? null,
@@ -3178,6 +3356,14 @@ export class DriverJobsService {
             internalRef: trip.job.internalRef ?? null,
             externalRef: trip.job.externalRef ?? null,
             jobType: trip.job.jobType ?? null,
+            parentJobType: trip.job.jobType
+              ? parentJobTypeForLegacyType(trip.job.jobType)
+              : null,
+            movementScope:
+              trip.job.movementScope ??
+              (trip.job.jobType
+                ? movementScopeForLegacyType(trip.job.jobType)
+                : null),
             collectionType: trip.job.collectionType ?? null,
             status: trip.job.status ?? null,
             customerName: trip.job.customerCompany?.name ?? null,
@@ -3194,44 +3380,62 @@ export class DriverJobsService {
             carrierName: (trip.job as any).carrierName ?? null,
             voyage: (trip.job as any).voyage ?? null,
             shipper: (trip.job as any).shipper ?? null,
+            psaStorageRentLastDay: (trip.job as any).psaStorageRentLastDay ?? null,
+            psaStorageRentLastDayHasTime:
+              (trip.job as any).psaStorageRentLastDayHasTime ?? null,
+            portnetReady: (trip.job as any).portnetReady ?? null,
+            permitReady: (trip.job as any).permitReady ?? null,
+            returnLastDay: (trip.job as any).returnLastDay ?? null,
+            portName: (trip.job as any).portName ?? null,
+            portTerminalCode: (trip.job as any).portTerminalCode ?? null,
           }
         : null,
 
-      documents: docsWithUrls.map((doc) => {
-        const requirement = requirementSnapshotForType(
-          trip.documentRequirements ?? [],
-          doc.type,
-        );
-        const requiresSignature = requirement
-          ? requirement.requiresSignature === true
-          : null;
-        return {
-        id: doc.id,
-        type: doc.type,
-        jobItemId: doc.jobItemId ?? null,
-        isActive: doc.isActive ?? true,
-        status: doc.signedAt ? "SIGNED" : "UPLOADED",
-        label: doc.type,
-        fileName: doc.fileName,
-        originalFileName: doc.originalFileName ?? null,
-        mimeType: doc.mimeType ?? null,
-        fileSizeBytes: doc.fileSizeBytes ?? null,
-        fileUrl: null,
-        uploadedAt: doc.uploadedAt ?? doc.createdAt,
-        signedAt: doc.signedAt ?? null,
-        isSigned: doc.isSigned === true || !!doc.signedAt,
-        requiresSignature,
-        uploadedByUserId: doc.uploadedByUserId ?? null,
-        uploadedByName: doc.uploadedByName ?? null,
-        uploadedByEmail: doc.uploadedByEmail ?? null,
-        uploadedByCurrentDriver: doc.uploadedByUserId === driverUserId,
-        canDelete:
-          doc.isActive === true
-          && doc.uploadedByUserId === driverUserId
-          && !DRIVER_NON_DELETABLE_TRIP_DOC_TYPES.has(doc.type as TripDocumentType)
-          && !DRIVER_NON_DELETABLE_TRIP_STATUSES.has(trip.status as TripStatus),
-        };
-      }),
+      documents: (() => {
+        const mapped = docsWithUrls.map((doc) => {
+          const requirement = requirementSnapshotForType(
+            trip.documentRequirements ?? [],
+            doc.type,
+          );
+          const requiresSignature = requirement
+            ? requirement.requiresSignature === true
+            : null;
+          const base = {
+            id: doc.id,
+            type: doc.type,
+            jobItemId: doc.jobItemId ?? null,
+            isActive: doc.isActive ?? true,
+            status: doc.signedAt ? "SIGNED" : "UPLOADED",
+            label: doc.type,
+            fileName: doc.fileName,
+            originalFileName: doc.originalFileName ?? null,
+            mimeType: doc.mimeType ?? null,
+            fileSizeBytes: doc.fileSizeBytes ?? null,
+            fileUrl: null,
+            uploadedAt: doc.uploadedAt ?? doc.createdAt,
+            signedAt: doc.signedAt ?? null,
+            isSigned: doc.isSigned === true || !!doc.signedAt,
+            requiresSignature,
+            uploadedByUserId: doc.uploadedByUserId ?? null,
+            uploadedByName: doc.uploadedByName ?? null,
+            uploadedByEmail: doc.uploadedByEmail ?? null,
+            uploadedByCurrentDriver: doc.uploadedByUserId === driverUserId,
+            canDelete:
+              doc.isActive === true
+              && doc.uploadedByUserId === driverUserId
+              && !DRIVER_NON_DELETABLE_TRIP_DOC_TYPES.has(doc.type as TripDocumentType)
+              && !DRIVER_NON_DELETABLE_TRIP_STATUSES.has(trip.status as TripStatus),
+          };
+          return attachGenerationStatusToTripDocument(
+            base,
+            trip.documentRequirements ?? [],
+          );
+        });
+        return appendMissingRequiredSignableDocumentPlaceholders({
+          documents: mapped,
+          requirements: trip.documentRequirements ?? [],
+        });
+      })(),
       documentRequirements: (trip.documentRequirements ?? []).map((row) => ({
         id: row.id,
         type: row.type,
@@ -3634,6 +3838,21 @@ export class DriverJobsService {
         tripId,
         normalizedJobItemId!,
       );
+
+      const activePhotoCount = await this.prisma.tripDocument.count({
+        where: {
+          tenantId,
+          tripId,
+          jobItemId: normalizedJobItemId!,
+          type,
+          isActive: true,
+        },
+      });
+      if (activePhotoCount >= MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY) {
+        throw new BadRequestException(
+          `At most ${MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY} active ${type} photos are allowed per container on this trip`,
+        );
+      }
     }
 
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
@@ -3661,9 +3880,6 @@ export class DriverJobsService {
           tripId,
           type,
           isActive: true,
-          ...(isContainerLinkedType
-            ? { jobItemId: normalizedJobItemId }
-            : {}),
         },
         data: { isActive: false },
       });
@@ -3805,6 +4021,98 @@ export class DriverJobsService {
     });
 
     return { success: true, documentId: doc.id };
+  }
+
+  /**
+   * Idempotently generate a required Delivery DO / Lorry Chit for the assigned driver.
+   * Returns the existing active document when already present — never duplicates the trip.
+   */
+  async ensureRequiredTripDocumentForDriver(
+    tenantId: string,
+    jobId: string,
+    tripId: string,
+    driverUserId: string,
+    documentTypeRaw: string,
+  ): Promise<JobDocumentDto> {
+    await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
+    const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
+    if (trip.assignedDriverUserId !== driverUserId) {
+      throw new NotFoundException("Trip not found");
+    }
+
+    const typeKey = String(documentTypeRaw ?? "")
+      .trim()
+      .toUpperCase();
+    if (!isDriverEnsureableTripDocumentType(typeKey)) {
+      throw new BadRequestException(
+        "Only Delivery DO and Lorry Chit can be generated from the driver app",
+      );
+    }
+    const documentType = typeKey as TripDocumentType;
+
+    const requirements = await this.loadTripDocumentRequirementSnapshots(
+      tenantId,
+      tripId,
+    );
+    const requirement = requirementSnapshotForType(requirements, documentType);
+    if (!requirement || requirement.isRequired !== true) {
+      throw new BadRequestException(
+        `${labelForEnsureableDocumentType(documentType)} is not required for this trip`,
+      );
+    }
+
+    const existing = await this.prisma.tripDocument.findFirst({
+      where: {
+        tenantId,
+        tripId,
+        type: documentType,
+        isActive: true,
+      },
+      include: documentUploadedByInclude,
+    });
+    if (existing) {
+      return this.attachTripDocumentMetadata(existing);
+    }
+
+    if (!this.opsJobs?.generateTripDeliveryDoDocument) {
+      throw new BadRequestException(
+        `${labelForEnsureableDocumentType(documentType)} generation is unavailable`,
+      );
+    }
+
+    try {
+      const generated = await this.opsJobs.generateTripDeliveryDoDocument(
+        tenantId,
+        jobId,
+        tripId,
+        { userId: driverUserId },
+        "MANUAL_REGENERATE",
+        null,
+        documentType,
+      );
+      return this.attachTripDocumentMetadata(generated);
+    } catch (error: unknown) {
+      const message =
+        error instanceof BadRequestException
+          ? (() => {
+              const res = error.getResponse();
+              if (typeof res === "string") return res;
+              if (res && typeof res === "object" && "message" in res) {
+                const m = (res as { message?: unknown }).message;
+                return Array.isArray(m) ? m.join(", ") : String(m ?? error.message);
+              }
+              return error.message;
+            })()
+          : error instanceof Error
+            ? error.message
+            : "Document generation failed";
+      throw new BadRequestException({
+        code: "TRIP_DOCUMENT_GENERATION_FAILED",
+        documentType,
+        tripId,
+        message: `${labelForEnsureableDocumentType(documentType)} generation failed: ${message}`,
+      });
+    }
   }
 
   async signTripDocumentForDriver(

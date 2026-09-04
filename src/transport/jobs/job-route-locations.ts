@@ -1,5 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
-import { JobTripTemplate, JobType } from "@prisma/client";
+import { JobMovementScope, JobTripTemplate, JobType } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import { hasAutocompleteLocation } from "./create-job-validation.helpers";
 
@@ -26,6 +26,7 @@ export type CanonicalRouteLocations = {
 
 export type CanonicalRouteLocationInput = {
   jobType: JobType;
+  movementScope?: JobMovementScope | null;
   pickupAddress1?: string | null;
   pickupAddress2?: string | null;
   pickupPostal?: string | null;
@@ -169,6 +170,30 @@ export function resolveCanonicalRouteLocations(
   }
 
   if (input.jobType === JobType.IMPORT) {
+    if (input.movementScope === JobMovementScope.RETURN_ONLY) {
+      return {
+        customer: loc({
+          address1: input.pickupAddress1,
+          address2: input.pickupAddress2,
+          postal: input.pickupPostal,
+          placeId: input.pickupPlaceId,
+          lat: input.pickupLat,
+          lng: input.pickupLng,
+          contactName: input.pickupContactName,
+          contactPhone: input.pickupContactPhone,
+        }),
+        returnDepot: loc({
+          address1: importDetails.returningDepotAddress1,
+          address2: importDetails.returningDepotAddress2,
+          postal: importDetails.returningDepotPostal,
+          placeId: importDetails.returningDepotPlaceId,
+          lat: importDetails.returningDepotLat,
+          lng: importDetails.returningDepotLng,
+          code:
+            importDetails.returningDepotCode || input.returningDepotCode,
+        }),
+      };
+    }
     return {
       port: loc({
         address1: input.pickupAddress1,
@@ -256,22 +281,36 @@ export function resolveCanonicalRouteLocations(
 export function assertCanonicalRouteLocationsForCreate(
   jobType: JobType,
   locations: CanonicalRouteLocations,
-  options?: { allowPendingReturnDepot?: boolean },
+  options?: {
+    allowPendingReturnDepot?: boolean;
+    movementScope?: JobMovementScope | null;
+  },
 ): void {
   if (jobType === JobType.EXPORT) {
-    // Empty-container depot is optional commercial/reference only.
+    if (
+      options?.movementScope !== JobMovementScope.COLLECTION_ONLY &&
+      !locationIsPresent(locations.port)
+    ) {
+      throw new BadRequestException("Export port / terminal is required.");
+    }
+    if (
+      options?.movementScope !== JobMovementScope.EXPORT_DELIVERY_ONLY &&
+      !locationIsPresent(locations.depot)
+    ) {
+      throw new BadRequestException("Empty container depot is required.");
+    }
     if (!locationIsPresent(locations.customer)) {
       throw new BadRequestException(
         "Customer / stuffing location is required.",
       );
     }
-    if (!locationIsPresent(locations.port)) {
-      throw new BadRequestException("Export port / terminal is required.");
-    }
     return;
   }
   if (jobType === JobType.IMPORT) {
-    if (!locationIsPresent(locations.port)) {
+    if (
+      options?.movementScope !== JobMovementScope.RETURN_ONLY &&
+      !locationIsPresent(locations.port)
+    ) {
       throw new BadRequestException("Import port / terminal is required.");
     }
     if (!locationIsPresent(locations.customer)) {
@@ -279,7 +318,11 @@ export function assertCanonicalRouteLocationsForCreate(
         "Customer / delivery location is required.",
       );
     }
-    if (!locationIsPresent(locations.returnDepot)) {
+    if (
+      options?.movementScope !== JobMovementScope.IMPORT_DELIVERY_ONLY &&
+      !options?.allowPendingReturnDepot &&
+      !locationIsPresent(locations.returnDepot)
+    ) {
       throw new BadRequestException(
         "Empty container return depot is required.",
       );
@@ -349,7 +392,7 @@ function tripPicFields(
 
 /**
  * Create-time Trip origin/destination snapshots from operational route roles.
- * EXPORT: Customer/Stuffing → Export Port (one Trip).
+ * EXPORT: Customer/Stuffing → Export Port (one Trip per container).
  * RETURN: Pickup → Depot (one Trip).
  * ONE_WAY / LCL / COLLECTION: Pickup → Delivery.
  * Historical DEPOT_TO_DELIVERY / PORT_TO_DEPOT rows remain display-only.
@@ -360,6 +403,11 @@ export function canonicalAutoTripRouteSnapshots(
 ): Partial<Record<JobTripTemplate, Partial<Prisma.TripCreateManyInput>>> {
   if (jobType === JobType.EXPORT) {
     return {
+      [JobTripTemplate.DEPOT_TO_DELIVERY]: {
+        ...originFields(locations.depot),
+        ...destinationFields(locations.customer),
+        ...tripPicFields(locations.customer),
+      },
       [JobTripTemplate.DELIVERY_TO_PORT]: {
         ...originFields(locations.customer),
         ...destinationFields(locations.port),

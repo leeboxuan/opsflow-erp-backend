@@ -221,6 +221,49 @@ describe("canonical auto-trip creation", () => {
     });
   });
 
+  it("EXPORT creates 1 trip per container and links each JobItem onto its leg only", async () => {
+    const prisma = makeStatefulPrisma();
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.EXPORT,
+        customerCompanyId: "comp1",
+        deliveryAddress1: "20 Gul Way",
+        receiverName: "PIC",
+        receiverPhone: "91234567",
+        exportDetails: { exportPortAddress1: "Pasir Panjang Terminal" },
+        items: [
+          { containerNumber: "MSCU1111111", sealNo: "A" },
+          { containerNumber: "MSCU2222222", sealNo: "B" },
+          { containerNumber: "MSCU3333333", sealNo: "C" },
+        ],
+      } as any,
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
+    );
+
+    expect(tripTemplates(prisma)).toEqual([
+      JobTripTemplate.DELIVERY_TO_PORT,
+      JobTripTemplate.DELIVERY_TO_PORT,
+      JobTripTemplate.DELIVERY_TO_PORT,
+    ]);
+    expect(prisma._state.trips.map((t: any) => t.tripSequence)).toEqual([1, 2, 3]);
+    const itemIds = prisma._state.jobItems.map((i: any) => i.id);
+    expect(itemIds).toHaveLength(3);
+    const sortedTrips = [...prisma._state.trips].sort(
+      (a: any, b: any) => a.tripSequence - b.tripSequence,
+    );
+    expect(linkedItemIdsForTrip(prisma, sortedTrips[0].id)).toEqual([itemIds[0]]);
+    expect(linkedItemIdsForTrip(prisma, sortedTrips[1].id)).toEqual([itemIds[1]]);
+    expect(linkedItemIdsForTrip(prisma, sortedTrips[2].id)).toEqual([itemIds[2]]);
+    for (const trip of sortedTrips) {
+      expect(trip.originAddressLine1).toBe("20 Gul Way");
+      expect(trip.destinationAddressLine1).toBe("Pasir Panjang Terminal");
+      expect(trip.jobTripTemplate).toBe(JobTripTemplate.DELIVERY_TO_PORT);
+    }
+  });
+
   it("EXPORT create succeeds without empty-container depot fields", async () => {
     const prisma = makeStatefulPrisma();
     const svc = makeSvc(prisma);
@@ -270,6 +313,10 @@ describe("canonical auto-trip creation", () => {
     expect(prisma._state.trips[0].destinationAddressLine1).toBe(
       "Pasir Panjang Terminal",
     );
+    // Optional empty-depot fields must not invent a collection/return leg.
+    expect(prisma._state.trips.map((t: any) => t.jobTripTemplate)).toEqual([
+      JobTripTemplate.DELIVERY_TO_PORT,
+    ]);
   });
 
   it("does not run post-commit finalization when the interactive transaction throws P2028", async () => {
@@ -309,7 +356,7 @@ describe("canonical auto-trip creation", () => {
     });
   });
 
-  it("IMPORT creates exactly 2 trips and links every container JobItem onto both legs", async () => {
+  it("IMPORT creates 2 trips per container and links each JobItem onto its pair only", async () => {
     const prisma = makeStatefulPrisma();
     const svc = makeSvc(prisma);
 
@@ -331,20 +378,61 @@ describe("canonical auto-trip creation", () => {
       { userId: "u1", role: Role.TRANSPORT_STAFF },
     );
 
-    expect(tripTemplates(prisma)).toEqual(CANONICAL_AUTO_TRIP_TEMPLATES[JobType.IMPORT]);
-    expect(prisma._state.trips.map((t: any) => t.tripSequence)).toEqual([1, 2]);
-    const itemIds = prisma._state.jobItems.map((i: any) => i.id).sort();
+    expect(tripTemplates(prisma)).toEqual([
+      ...CANONICAL_AUTO_TRIP_TEMPLATES[JobType.IMPORT],
+      ...CANONICAL_AUTO_TRIP_TEMPLATES[JobType.IMPORT],
+    ]);
+    expect(prisma._state.trips.map((t: any) => t.tripSequence)).toEqual([1, 2, 3, 4]);
+    const itemIds = prisma._state.jobItems.map((i: any) => i.id);
     expect(itemIds).toHaveLength(2);
-    for (const trip of prisma._state.trips) {
-      expect(linkedItemIdsForTrip(prisma, trip.id)).toEqual(itemIds);
-    }
-    const [portToCustomer, customerToDepot] = [...prisma._state.trips].sort(
+    const sortedTrips = [...prisma._state.trips].sort(
       (a: any, b: any) => a.tripSequence - b.tripSequence,
     );
-    expect(portToCustomer.originAddressLine1).toBe("Jurong Port");
-    expect(portToCustomer.destinationAddressLine1).toBe("Customer yard");
-    expect(customerToDepot.originAddressLine1).toBe("Customer yard");
-    expect(customerToDepot.destinationAddressLine1).toBe("Tuas Depot");
+    expect(linkedItemIdsForTrip(prisma, sortedTrips[0].id)).toEqual([itemIds[0]]);
+    expect(linkedItemIdsForTrip(prisma, sortedTrips[1].id)).toEqual([itemIds[0]]);
+    expect(linkedItemIdsForTrip(prisma, sortedTrips[2].id)).toEqual([itemIds[1]]);
+    expect(linkedItemIdsForTrip(prisma, sortedTrips[3].id)).toEqual([itemIds[1]]);
+    expect(sortedTrips[0].originAddressLine1).toBe("Jurong Port");
+    expect(sortedTrips[0].destinationAddressLine1).toBe("Customer yard");
+    expect(sortedTrips[1].originAddressLine1).toBe("Customer yard");
+    expect(sortedTrips[1].destinationAddressLine1).toBe("Tuas Depot");
+    expect(sortedTrips[2].originAddressLine1).toBe("Jurong Port");
+    expect(sortedTrips[3].destinationAddressLine1).toBe("Tuas Depot");
+  });
+
+  it("IMPORT with pending return depot creates empty-return Draft Trips with null destination", async () => {
+    const prisma = makeStatefulPrisma();
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.IMPORT,
+        customerCompanyId: "comp1",
+        pickupAddress1: "Jurong Port",
+        deliveryAddress1: "Customer yard",
+        receiverName: "PIC",
+        receiverPhone: "91234567",
+        returningDepotPending: true,
+        returningDepotPendingText: "TBA — waiting for carrier",
+        items: [
+          { containerNumber: "GESU1111111", sealNo: "A" },
+          { containerNumber: "GESU2222222", sealNo: "B" },
+        ],
+      } as any,
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
+    );
+
+    expect(prisma._state.jobs[0].returningDepotPending).toBe(true);
+    expect(prisma._state.jobs[0].deliveryAddress1).toBe("Customer yard");
+    expect(prisma._state.trips).toHaveLength(4);
+    const sorted = [...prisma._state.trips].sort(
+      (a: any, b: any) => a.tripSequence - b.tripSequence,
+    );
+    expect(sorted[0].destinationAddressLine1).toBe("Customer yard");
+    expect(sorted[1].destinationAddressLine1 ?? null).toBeNull();
+    expect(sorted[2].destinationAddressLine1).toBe("Customer yard");
+    expect(sorted[3].destinationAddressLine1 ?? null).toBeNull();
   });
 
   it("LCL creates exactly 1 trip and links all JobItems to that trip", async () => {

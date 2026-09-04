@@ -3,6 +3,7 @@ import { tripCreateManyForJob } from "../workflows/job-workflow.helpers";
 import {
   assertExportDestinationFieldsConsistent,
   collectionContainerCountForTripGeneration,
+  exportContainerCountForTripGeneration,
   orderCreatedJobItemIdsBySubmitOrder,
   parseValidJobItemsFromInput,
   resolveCollectionTypeForJobCreate,
@@ -805,10 +806,25 @@ describe("parseValidJobItemsFromInput container cargo", () => {
     expect(rows[0].qty).toBe(1);
   });
 
-  it("EXPORT trip generation creates exactly one Customer→Port leg", () => {
+  it("EXPORT trip generation creates one Customer→Port leg by default", () => {
     const rows = tripCreateManyForJob("t1", "j1", JobType.EXPORT, null, null, null);
     expect(rows).toHaveLength(1);
     expect(rows.map((r) => r.displayTitle)).toEqual(["Customer to Port"]);
+  });
+
+  it("EXPORT trip generation creates one Customer→Port leg per container", () => {
+    const rows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.EXPORT,
+      null,
+      null,
+      null,
+      undefined,
+      { exportContainerCount: 3 },
+    );
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.displayTitle === "Customer to Port")).toBe(true);
   });
 
   it("COLLECTION container count keeps null-identity cargo slots", () => {
@@ -823,6 +839,19 @@ describe("parseValidJobItemsFromInput container cargo", () => {
     expect(valid.map((row) => row.itemCode)).toEqual(["AAAU1", null, "ZZZU2"]);
     expect(collectionContainerCountForTripGeneration(JobType.COLLECTION, valid)).toBe(3);
     expect(collectionContainerCountForTripGeneration(JobType.LCL, valid)).toBeUndefined();
+  });
+
+  it("EXPORT container count for trip generation matches parsed slots", () => {
+    const valid = parseValidJobItemsFromInput(
+      [
+        { containerNumber: "MSCU1" },
+        { containerNumber: "MSCU2" },
+      ],
+      JobType.EXPORT,
+    );
+    expect(exportContainerCountForTripGeneration(JobType.EXPORT, valid)).toBe(2);
+    expect(exportContainerCountForTripGeneration(JobType.IMPORT, valid)).toBeUndefined();
+    expect(exportContainerCountForTripGeneration(JobType.COLLECTION, valid)).toBeUndefined();
   });
 
   it("orderCreatedJobItemIdsBySubmitOrder matches duplicate identities by submit order", () => {

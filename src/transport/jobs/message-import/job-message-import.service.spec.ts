@@ -253,6 +253,16 @@ function makePrismaMemory() {
         }
         return { count: rows.length };
       }),
+      count: jest.fn(async ({ where }: any = {}) =>
+        trips.filter((t) => {
+          if (where?.tenantId && t.tenantId !== where.tenantId) return false;
+          if (where?.jobId?.in) {
+            return where.jobId.in.includes(t.jobId);
+          }
+          if (where?.jobId && t.jobId !== where.jobId) return false;
+          return true;
+        }).length,
+      ),
       findMany: jest.fn(async ({ where }: any = {}) =>
         trips.filter((t) => {
           if (where?.tenantId && t.tenantId !== where.tenantId) return false;

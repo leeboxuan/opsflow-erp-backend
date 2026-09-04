@@ -41,7 +41,7 @@ describe("FleetTrackingService", () => {
   it("rejects duplicate chassis create", async () => {
     const prisma = makePrisma();
     prisma.chassis.findUnique.mockResolvedValue({ id: "existing" });
-    const svc = new FleetTrackingService(prisma);
+    const svc = new FleetTrackingService(prisma, { log: jest.fn() } as any);
 
     await expect(
       svc.createChassis("tenant-1", { chassisNo: " tclu123 ", status: "ACTIVE" }),
@@ -71,7 +71,7 @@ describe("FleetTrackingService", () => {
       updatedAt: new Date(),
     });
 
-    const svc = new FleetTrackingService(prisma);
+    const svc = new FleetTrackingService(prisma, { log: jest.fn() } as any);
     const result = await svc.createGpsDevice("tenant-1", { terminalId: "001234567890" });
 
     expect(prisma.gpsDevice.create).toHaveBeenCalledWith(
@@ -110,7 +110,7 @@ describe("FleetTrackingService", () => {
       updatedAt: new Date(),
     });
 
-    const svc = new FleetTrackingService(prisma);
+    const svc = new FleetTrackingService(prisma, { log: jest.fn() } as any);
     await svc.assignGpsDeviceChassis("tenant-1", "dev-2", { chassisId: "chassis-1" });
 
     expect(prisma.gpsDevice.updateMany).toHaveBeenCalledWith({
@@ -215,7 +215,7 @@ describe("FleetTrackingService", () => {
       },
     ]);
 
-    const svc = new FleetTrackingService(prisma);
+    const svc = new FleetTrackingService(prisma, { log: jest.fn() } as any);
     const result = await svc.listChassis("tenant-1", {} as any);
 
     expect(result.data.map((d) => d.trackingStatus)).toEqual([
@@ -231,7 +231,7 @@ describe("FleetTrackingService", () => {
     prisma.chassis.findFirst.mockResolvedValue(null);
     prisma.gpsDevice.findFirst.mockResolvedValue(null);
 
-    const svc = new FleetTrackingService(prisma);
+    const svc = new FleetTrackingService(prisma, { log: jest.fn() } as any);
 
     await expect(svc.getChassisById("tenant-1", "c-1")).rejects.toThrow(
       new NotFoundException("Chassis not found"),
@@ -239,5 +239,115 @@ describe("FleetTrackingService", () => {
     await expect(svc.getGpsDeviceById("tenant-1", "g-1")).rejects.toThrow(
       new NotFoundException("GPS device not found"),
     );
+  });
+
+  it("creates company-owned chassis by default", async () => {
+    const prisma = makePrisma();
+    const audit = { log: jest.fn() };
+    prisma.chassis.findUnique.mockResolvedValue(null);
+    prisma.chassis.create.mockResolvedValue({
+      id: "c-new",
+      tenantId: "tenant-1",
+      chassisNo: "TRD1",
+      label: null,
+      status: "ACTIVE",
+      notes: null,
+      isBorrowed: false,
+      borrowedFromCompany: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      gpsDevices: [],
+    });
+
+    const svc = new FleetTrackingService(prisma, audit as any);
+    const result = await svc.createChassis("tenant-1", { chassisNo: "trd1" }, "user-1");
+
+    expect(prisma.chassis.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          chassisNo: "TRD1",
+          isBorrowed: false,
+          borrowedFromCompany: null,
+        }),
+      }),
+    );
+    expect(result.isBorrowed).toBe(false);
+    expect(result.ownershipLabel).toBe("Company-owned");
+    expect(audit.log).toHaveBeenCalledWith(
+      "tenant-1",
+      "CREATE",
+      "CHASSIS",
+      "c-new",
+      expect.objectContaining({ isBorrowed: false }),
+      "user-1",
+    );
+  });
+
+  it("requires borrowed company and clears it when unmarked", async () => {
+    const prisma = makePrisma();
+    const audit = { log: jest.fn() };
+    prisma.chassis.findUnique.mockResolvedValue(null);
+    prisma.chassis.create.mockResolvedValue({
+      id: "c-borrowed",
+      tenantId: "tenant-1",
+      chassisNo: "TRD2",
+      label: null,
+      status: "ACTIVE",
+      notes: null,
+      isBorrowed: true,
+      borrowedFromCompany: "Acme",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      gpsDevices: [],
+    });
+
+    const svc = new FleetTrackingService(prisma, audit as any);
+
+    await expect(
+      svc.createChassis("tenant-1", { chassisNo: "TRD2", isBorrowed: true }),
+    ).rejects.toThrow(BadRequestException);
+
+    await svc.createChassis("tenant-1", {
+      chassisNo: "TRD2",
+      isBorrowed: true,
+      borrowedFromCompany: " Acme ",
+    });
+
+    prisma.chassis.findFirst.mockResolvedValue({
+      id: "c-borrowed",
+      tenantId: "tenant-1",
+      chassisNo: "TRD2",
+      isBorrowed: true,
+      borrowedFromCompany: "Acme",
+    });
+    prisma.chassis.update.mockResolvedValue({
+      id: "c-borrowed",
+      tenantId: "tenant-1",
+      chassisNo: "TRD2",
+      label: null,
+      status: "ACTIVE",
+      notes: null,
+      isBorrowed: false,
+      borrowedFromCompany: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      gpsDevices: [],
+    });
+
+    const updated = await svc.updateChassis(
+      "tenant-1",
+      "c-borrowed",
+      { isBorrowed: false },
+      "user-1",
+    );
+    expect(prisma.chassis.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          isBorrowed: false,
+          borrowedFromCompany: null,
+        }),
+      }),
+    );
+    expect(updated.ownershipLabel).toBe("Company-owned");
   });
 });

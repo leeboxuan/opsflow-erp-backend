@@ -1,7 +1,16 @@
 import { BadRequestException } from "@nestjs/common";
-import { CollectionType, ContainerSize, JobType } from "@prisma/client";
+import {
+  CollectionType,
+  ContainerSize,
+  JobMovementScope,
+  JobType,
+} from "@prisma/client";
 import { cargoModeForJobTypes, jobTypesInclude } from "./job-types";
 import { parseContainerSizeInput } from "./container-size";
+
+/** Exact row-level message for IMPORT seal enforcement (Create / Edit / Message Import). */
+export const IMPORT_CONTAINER_SEAL_REQUIRED_MESSAGE =
+  "Seal number is required for this import container.";
 
 function isContainerCargoJobType(jobType: JobType | null | undefined): boolean {
   return (
@@ -11,6 +20,36 @@ function isContainerCargoJobType(jobType: JobType | null | undefined): boolean {
     || jobType === JobType.RETURN
     || jobType === JobType.ONE_WAY
   );
+}
+
+/** True when this job is IMPORT (not COLLECTION/EXPORT/etc.). */
+export function jobRequiresImportContainerSeal(
+  jobType?: JobType | null,
+  jobTypes?: readonly JobType[],
+): boolean {
+  if (jobType === JobType.IMPORT) return true;
+  if (jobTypes && jobTypes.length > 0) {
+    return jobTypesInclude(jobTypes, JobType.IMPORT);
+  }
+  return false;
+}
+
+/**
+ * Reject missing/blank seals on IMPORT cargo when items are intentionally submitted.
+ * Does not invent values; trims only. COLLECTION/EXPORT/RETURN/ONE_WAY/LCL unchanged.
+ */
+export function assertImportContainerSealsRequired(
+  jobType: JobType | null | undefined,
+  items: Array<{ sealNo: string | null }>,
+  jobTypes?: readonly JobType[],
+): void {
+  if (!jobRequiresImportContainerSeal(jobType, jobTypes)) return;
+  for (let index = 0; index < items.length; index += 1) {
+    const seal = items[index]?.sealNo;
+    if (seal == null || !String(seal).trim()) {
+      throw new BadRequestException(IMPORT_CONTAINER_SEAL_REQUIRED_MESSAGE);
+    }
+  }
 }
 
 /** Accept `items` or FE alias `cargoItems`; default to [] when omitted. */
@@ -37,7 +76,10 @@ export function parseValidJobItemsFromInput(
   rawItems: unknown[],
   jobType?: JobType | null,
   jobTypes?: readonly JobType[],
-  opts?: { requireContainerSize?: boolean },
+  opts?: {
+    requireContainerSize?: boolean;
+    allowUnknownContainerIdentity?: boolean;
+  },
 ): Array<{
   itemCode: string | null;
   description: string | null;
@@ -61,17 +103,19 @@ export function parseValidJobItemsFromInput(
   const containerStyle = mode === "CONTAINER";
   const requireContainerSize =
     opts?.requireContainerSize === true && containerStyle && !isCollection;
+  const allowUnknownIdentity =
+    isCollection || opts?.allowUnknownContainerIdentity === true;
 
   return rawItems
     .map((i: any) => {
       const itemCode = String(i?.itemCode ?? i?.containerNumber ?? "").trim() || null;
-      if (!itemCode && !isCollection) return null;
+      if (!itemCode && !allowUnknownIdentity) return null;
       const rawQty = i?.qty;
       let qty: number | null;
       if (containerStyle) {
         qty =
           rawQty == null || rawQty === ""
-            ? isCollection
+            ? allowUnknownIdentity
               ? 1
               : null
             : Math.max(1, Number(rawQty) || 1);
@@ -398,12 +442,58 @@ export function collectionContainerCountForTripGeneration(
   return validItems.length;
 }
 
+/**
+ * IMPORT auto-trip count uses parsed cargo slots (2 trips per container).
+ */
+export function importContainerCountForTripGeneration(
+  jobType: JobType,
+  validItems: ParsedCreateJobItem[],
+): number | undefined {
+  if (jobType !== JobType.IMPORT) return undefined;
+  return validItems.length;
+}
+
+/**
+ * EXPORT auto-trip count uses parsed cargo slots (1 trip per container).
+ */
+export function exportContainerCountForTripGeneration(
+  jobType: JobType,
+  validItems: ParsedCreateJobItem[],
+): number | undefined {
+  if (jobType !== JobType.EXPORT) return undefined;
+  return validItems.length;
+}
+
 /** Collection always materializes at least one JobItem with null cargo identity. */
 export function ensureCollectionJobItems(
   jobType: JobType | null | undefined,
   validItems: ParsedCreateJobItem[],
 ): ParsedCreateJobItem[] {
   if (jobType !== JobType.COLLECTION) return validItems;
+  if (validItems.length > 0) return validItems;
+  return [
+    {
+      itemCode: null,
+      description: null,
+      sealNo: null,
+      containerSize: null,
+      pickupReference: null,
+      qty: 1,
+    },
+  ];
+}
+
+/** Full Export and Collection-only create canonical cargo slots before identity is known. */
+export function ensureUnknownIdentityCargoSlots(
+  movementScope: JobMovementScope | null | undefined,
+  validItems: ParsedCreateJobItem[],
+): ParsedCreateJobItem[] {
+  if (
+    movementScope !== JobMovementScope.FULL_EXPORT &&
+    movementScope !== JobMovementScope.COLLECTION_ONLY
+  ) {
+    return validItems;
+  }
   if (validItems.length > 0) return validItems;
   return [
     {

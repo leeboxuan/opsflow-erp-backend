@@ -12,6 +12,7 @@ import {
 import {
   JobMessageImportDraftInclusionState,
   JobMessageImportMovementType,
+  JobMovementScope,
 } from "@prisma/client";
 
 export class JobMessageImportDraftItemDto {
@@ -44,6 +45,18 @@ export class JobMessageImportPatchDraftDto {
   @IsOptional()
   @IsIn(["COLLECTION", "IMPORT", "EXPORT", "LCL", "RETURN", "ONE_WAY", "UNKNOWN"])
   movementType?: JobMessageImportMovementType;
+
+  @ApiProperty({ required: false, nullable: true, enum: JobMovementScope })
+  @IsOptional()
+  @IsIn([
+    "FULL_IMPORT",
+    "IMPORT_DELIVERY_ONLY",
+    "RETURN_ONLY",
+    "FULL_EXPORT",
+    "COLLECTION_ONLY",
+    "EXPORT_DELIVERY_ONLY",
+  ])
+  movementScope?: JobMovementScope | null;
 
   @ApiProperty({ required: false, nullable: true, enum: ["EMPTY", "LOADED"] })
   @IsOptional()

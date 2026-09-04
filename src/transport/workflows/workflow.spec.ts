@@ -94,31 +94,77 @@ describe("workflow helpers", () => {
   describe("canonical auto-trip cargo ownership", () => {
     const itemIds = ["item-a", "item-b"];
 
-    it("IMPORT links every JobItem to Port→Customer and Customer→Depot", () => {
+    it("IMPORT links one JobItem per container pair (laden + empty-return)", () => {
       expect(
         jobItemIdsForCanonicalAutoTrip({
           jobType: JobType.IMPORT,
           jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
           jobItemIds: itemIds,
+          tripSequence: 1,
         }),
-      ).toEqual(itemIds);
+      ).toEqual(["item-a"]);
       expect(
         jobItemIdsForCanonicalAutoTrip({
           jobType: JobType.IMPORT,
           jobTripTemplate: JobTripTemplate.DELIVERY_TO_DEPOT,
           jobItemIds: itemIds,
+          tripSequence: 2,
         }),
-      ).toEqual(itemIds);
+      ).toEqual(["item-a"]);
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.IMPORT,
+          jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
+          jobItemIds: itemIds,
+          tripSequence: 3,
+        }),
+      ).toEqual(["item-b"]);
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.IMPORT,
+          jobTripTemplate: JobTripTemplate.DELIVERY_TO_DEPOT,
+          jobItemIds: itemIds,
+          tripSequence: 4,
+        }),
+      ).toEqual(["item-b"]);
     });
 
-    it("EXPORT links JobItems to Customer→Port; historical Port→Depot still carries none", () => {
+    it("IMPORT with one container still links that item to both legs", () => {
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.IMPORT,
+          jobTripTemplate: JobTripTemplate.PICKUP_TO_DELIVERY,
+          jobItemIds: ["item-a"],
+          tripSequence: 1,
+        }),
+      ).toEqual(["item-a"]);
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.IMPORT,
+          jobTripTemplate: JobTripTemplate.DELIVERY_TO_DEPOT,
+          jobItemIds: ["item-a"],
+          tripSequence: 2,
+        }),
+      ).toEqual(["item-a"]);
+    });
+
+    it("EXPORT links one JobItem per Customer→Port trip; historical Port→Depot still carries none", () => {
       expect(
         jobItemIdsForCanonicalAutoTrip({
           jobType: JobType.EXPORT,
           jobTripTemplate: JobTripTemplate.DELIVERY_TO_PORT,
           jobItemIds: itemIds,
+          tripSequence: 1,
         }),
-      ).toEqual(itemIds);
+      ).toEqual(["item-a"]);
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.EXPORT,
+          jobTripTemplate: JobTripTemplate.DELIVERY_TO_PORT,
+          jobItemIds: itemIds,
+          tripSequence: 2,
+        }),
+      ).toEqual(["item-b"]);
       expect(
         canonicalAutoTripCarriesCreatedJobItems(
           JobType.EXPORT,
@@ -132,6 +178,16 @@ describe("workflow helpers", () => {
           jobItemIds: itemIds,
         }),
       ).toEqual([]);
+    });
+
+    it("EXPORT with one container links that item to its single trip", () => {
+      expect(
+        jobItemIdsForCanonicalAutoTrip({
+          jobType: JobType.EXPORT,
+          jobTripTemplate: JobTripTemplate.DELIVERY_TO_PORT,
+          jobItemIds: ["item-a"],
+        }),
+      ).toEqual(["item-a"]);
     });
 
     it("LCL links all JobItems to the single Pickup→Delivery trip", () => {
@@ -174,7 +230,7 @@ describe("workflow helpers", () => {
     });
   });
 
-  it("IMPORT auto-trips are always port→customer then customer→depot", () => {
+  it("IMPORT auto-trips are port→customer then customer→depot (one pair by default)", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -208,6 +264,37 @@ describe("workflow helpers", () => {
     expect(rows[1].status).toBe("DRAFT");
   });
 
+  it("IMPORT auto-trips expand to two legs per container", () => {
+    const rows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.IMPORT,
+      new Date("2026-03-15"),
+      null,
+      null,
+      undefined,
+      { importContainerCount: 3 },
+    );
+    expect(rows).toHaveLength(6);
+    expect(rows.map((r) => r.tripSequence)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(rows.map((r) => r.jobTripTemplate)).toEqual([
+      JobTripTemplate.PICKUP_TO_DELIVERY,
+      JobTripTemplate.DELIVERY_TO_DEPOT,
+      JobTripTemplate.PICKUP_TO_DELIVERY,
+      JobTripTemplate.DELIVERY_TO_DEPOT,
+      JobTripTemplate.PICKUP_TO_DELIVERY,
+      JobTripTemplate.DELIVERY_TO_DEPOT,
+    ]);
+    expect(rows.map((r) => r.displayTitle)).toEqual([
+      "Port to Customer",
+      "Customer to Depot",
+      "Port to Customer",
+      "Customer to Depot",
+      "Port to Customer",
+      "Customer to Depot",
+    ]);
+  });
+
   it("tripCreateManyForJob accepts route snapshot overrides", () => {
     const rows = tripCreateManyForJob(
       "t1",
@@ -227,7 +314,7 @@ describe("workflow helpers", () => {
     expect(rows[0].destinationLabel).toBe("Delivery Address");
   });
 
-  it("tripCreateManyForJob creates one EXPORT Customer→Port leg", () => {
+  it("tripCreateManyForJob creates one EXPORT Customer→Port leg by default", () => {
     const rows = tripCreateManyForJob(
       "t1",
       "j1",
@@ -245,6 +332,29 @@ describe("workflow helpers", () => {
       TRIP_COMPLETION_RULES[JobTripTemplate.DELIVERY_TO_PORT],
     );
     expect(rows.every((r) => r.status === "DRAFT")).toBe(true);
+  });
+
+  it("tripCreateManyForJob creates one EXPORT leg per container", () => {
+    const rows = tripCreateManyForJob(
+      "t1",
+      "j1",
+      JobType.EXPORT,
+      new Date("2026-03-15"),
+      null,
+      null,
+      undefined,
+      { exportContainerCount: 3 },
+    );
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => r.tripSequence)).toEqual([1, 2, 3]);
+    expect(rows.every((r) => r.jobTripTemplate === JobTripTemplate.DELIVERY_TO_PORT)).toBe(
+      true,
+    );
+    expect(rows.map((r) => r.displayTitle)).toEqual([
+      "Customer to Port",
+      "Customer to Port",
+      "Customer to Port",
+    ]);
   });
 
   it("tripCreateManyForJob creates one COLLECTION leg when no containers are provided", () => {

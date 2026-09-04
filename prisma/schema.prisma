@@ -380,6 +380,8 @@ model Trip {
   payoutItemId            String?
   earningLabelSnapshot    String?
   trailerNumber           String?
+  /// Canonical chassis link when selected from the tenant chassis register. Legacy trips may have trailerNumber only.
+  chassisId               String?
   trailerLastLocationCode String?
   trailerParkingAddress1  String?
   trailerParkingAddress2  String?
@@ -428,6 +430,7 @@ model Trip {
   job                  Job?                      @relation(fields: [jobId], references: [id], onDelete: Cascade)
   earningRateMaster    DriverTripRateMaster?     @relation(fields: [earningRateMasterId], references: [id], onDelete: SetNull)
   payoutItem           DriverPayoutItem?         @relation(fields: [payoutItemId], references: [id], onDelete: SetNull)
+  chassis              Chassis?                  @relation(fields: [chassisId], references: [id], onDelete: SetNull)
   documents            TripDocument[]
   payoutLines          TripPayoutLine[]
   documentRequirements TripDocumentRequirement[]
@@ -443,6 +446,7 @@ model Trip {
   @@index([tenantId, driverId])
   @@index([tenantId, vehicleId])
   @@index([tenantId, fleetVehicleId])
+  @@index([tenantId, chassisId])
   @@index([tenantId, payoutItemId])
   @@index([tenantId, jobId])
   @@index([tenantId, jobId, jobSequence])
@@ -934,6 +938,8 @@ model Job {
   externalRef        String?
   /// Compatibility singular only. Null for canonical multi-type jobs; never invent first-of-array.
   jobType            JobType?
+  /// Canonical operational movement within IMPORT/EXPORT. Null on legacy rows and LCL/ONE_WAY.
+  movementScope      JobMovementScope?
   /// COLLECTION only: EMPTY or LOADED; null for other job types.
   collectionType     CollectionType?
   status             JobStatus @default(ONGOING)
@@ -1002,6 +1008,9 @@ model Job {
   portTerminalCode String?
   portName         String?
   psaStorageRentLastDay DateTime?
+  /// Storage rent last-day time precision: null = legacy/unknown (do not reinterpret);
+  /// true = explicit time; false = date-only (time not specified).
+  psaStorageRentLastDayHasTime Boolean?
   vesselName       String?
   vesselEta        DateTime?
   /// Optional shipping refs for all job types (IMPORT/EXPORT/COLLECTION/LCL).
@@ -1859,6 +1868,15 @@ enum JobType {
   ONE_WAY
 }
 
+enum JobMovementScope {
+  FULL_IMPORT
+  IMPORT_DELIVERY_ONLY
+  RETURN_ONLY
+  FULL_EXPORT
+  COLLECTION_ONLY
+  EXPORT_DELIVERY_ONLY
+}
+
 /// Phase 4 canonical multi-value job types (tenant-bound).
 /// Compatibility Job.jobType is nullable and must not classify multi-type jobs.
 model JobTypeAssignment {
@@ -2689,22 +2707,27 @@ model PushDevice {
 }
 
 model Chassis {
-  id        String   @id @default(cuid())
-  tenantId  String
-  chassisNo String
-  label     String?
-  status    String   @default("ACTIVE")
-  notes     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  tenantId            String
+  chassisNo           String
+  label               String?
+  status              String   @default("ACTIVE")
+  notes               String?
+  /// When false, chassis is company-owned. When true, borrowedFromCompany is required.
+  isBorrowed          Boolean  @default(false)
+  borrowedFromCompany String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   gpsDevices   GpsDevice[]
   gpsPositions GpsPosition[]
+  trips        Trip[]
 
   @@unique([tenantId, chassisNo])
   @@index([tenantId])
   @@index([tenantId, status])
+  @@index([tenantId, isBorrowed])
   @@map("chassis")
 }
 

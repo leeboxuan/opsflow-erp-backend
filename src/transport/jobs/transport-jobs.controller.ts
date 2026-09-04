@@ -35,7 +35,7 @@ import {
 } from "../../shared/auth/guards/module-entitlement.guard";
 import { DestructiveActionGuard } from "../../shared/auth/guards/destructive-action.guard";
 import { DestructiveAction } from "../../shared/auth/guards/destructive-action.decorator";
-import { Role, JobType, TripPendingState, TenantModule, CanonicalTenantRole } from "@prisma/client";
+import { Role, JobType, TripPendingState, TenantModule, CanonicalTenantRole, TripDocumentType } from "@prisma/client";
 import { TransportJobsService } from "./transport-jobs.service";
 import { InvoicesService } from "../finance/invoices.service";
 import { TripExpensesService, TRIP_EXPENSE_RECEIPT_MAX_BYTES } from "../finance/trip-expenses.service";
@@ -1136,6 +1136,30 @@ export class TransportJobsController {
       tripId,
       accessUser,
       "MANUAL_REGENERATE",
+    );
+  }
+
+  @Post(":jobId/trips/:tripId/documents/lorry-chit/generate")
+  @ApiOperation({ summary: "Generate or regenerate trip Lorry Chit PDF" })
+  @ApiOkResponse({
+    description:
+      "Generates an active trip LORRY_CHIT document for this trip’s linked container only. Previous unsigned active Lorry Chit is deactivated; signed versions are preserved.",
+  })
+  async generateTripLorryChit(
+    @Req() req: any,
+    @Param("jobId") jobId: string,
+    @Param("tripId") tripId: string,
+  ) {
+    const tenantId = req.tenant.tenantId;
+    const accessUser = accessActorFromRequest(req);
+    return this.jobs.generateTripDeliveryDoDocument(
+      tenantId,
+      jobId,
+      tripId,
+      accessUser,
+      "MANUAL_REGENERATE",
+      null,
+      TripDocumentType.LORRY_CHIT,
     );
   }
 

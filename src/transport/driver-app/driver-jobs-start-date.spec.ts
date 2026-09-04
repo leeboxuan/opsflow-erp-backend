@@ -23,17 +23,30 @@ describe("DriverJobsService startTripWithTrailer date gate", () => {
       },
       trip: {
         count: jest.fn().mockResolvedValue(1),
-        findFirst: jest.fn().mockResolvedValue({
-          id: tripId,
-          tenantId,
-          jobId,
-          status: TripStatus.PUBLISHED,
-          assignedDriverUserId: driverUserId,
-          plannedStartAt: opts.plannedStartAt,
-          startedAt: null,
-        }),
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: tripId,
+            tenantId,
+            jobId,
+            status: TripStatus.PUBLISHED,
+            assignedDriverUserId: driverUserId,
+            plannedStartAt: opts.plannedStartAt,
+            startedAt: null,
+          })
+          .mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn(),
+      },
+      chassis: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "chassis-1",
+          tenantId,
+          chassisNo: "TRL1",
+          status: "ACTIVE",
+          isBorrowed: false,
+          borrowedFromCompany: null,
+        }),
       },
       tripDocument: {
         create: jest.fn(),
@@ -46,7 +59,7 @@ describe("DriverJobsService startTripWithTrailer date gate", () => {
       $transaction: jest.fn(async (cb: any) =>
         cb({
           tripDocument: { create: jest.fn() },
-          trip: { update: jest.fn() },
+          trip: { update: jest.fn(), findFirst: jest.fn().mockResolvedValue(null) },
         }),
       ),
     };
@@ -79,6 +92,7 @@ describe("DriverJobsService startTripWithTrailer date gate", () => {
   });
 
   const trailerPayload = {
+    chassisId: "chassis-1",
     trailerNumber: "TRL1",
     trailerPhoto: {
       buffer: Buffer.from("x"),

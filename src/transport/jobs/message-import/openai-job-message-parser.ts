@@ -43,6 +43,7 @@ export const JOB_MESSAGE_IMPORT_JSON_SCHEMA = {
           required: [
             "clientDraftId",
             "movementType",
+            "movementScope",
             "customerNameText",
             "earliestAt",
             "latestAt",
@@ -75,6 +76,18 @@ export const JOB_MESSAGE_IMPORT_JSON_SCHEMA = {
                 "RETURN",
                 "ONE_WAY",
                 "UNKNOWN",
+              ],
+            },
+            movementScope: {
+              type: ["string", "null"],
+              enum: [
+                "FULL_IMPORT",
+                "IMPORT_DELIVERY_ONLY",
+                "RETURN_ONLY",
+                "FULL_EXPORT",
+                "COLLECTION_ONLY",
+                "EXPORT_DELIVERY_ONLY",
+                null,
               ],
             },
             customerNameText: { type: ["string", "null"] },
@@ -353,6 +366,10 @@ export class OpenAIJobMessageParser implements JobMessageParser {
     const drafts: JobMessageImportParsedDraft[] = draftsRaw.map((d: any) => ({
       clientDraftId: String(d?.clientDraftId ?? ""),
       movementType: String(d?.movementType ?? "UNKNOWN") as JobMessageImportParsedDraft["movementType"],
+      movementScope:
+        d?.movementScope == null
+          ? null
+          : String(d.movementScope) as JobMessageImportParsedDraft["movementScope"],
       customerNameText: d?.customerNameText == null ? null : String(d.customerNameText),
       earliestAt: d?.earliestAt == null ? null : String(d.earliestAt),
       latestAt: d?.latestAt == null ? null : String(d.latestAt),
@@ -431,7 +448,11 @@ Do not invent ISO timestamps. If a date or time is a window or deadline, still c
 Preserve exact supporting source fragments for each draft field.
 Never create tenant IDs, database IDs, permissions, assignments, trips, prices, routes, or eligibility decisions.
 
-Movement types: COLLECTION, IMPORT, EXPORT, LCL, RETURN, ONE_WAY.
+Movement types remain compatibility labels: COLLECTION, IMPORT, EXPORT, LCL, RETURN, ONE_WAY.
+Also classify movementScope semantically. Collection = COLLECTION_ONLY; Return = RETURN_ONLY.
+Explicit full import = FULL_IMPORT; import delivery only = IMPORT_DELIVERY_ONLY.
+Explicit full export = FULL_EXPORT; export delivery only = EXPORT_DELIVERY_ONLY.
+For a bare/ambiguous IMP or EXP, set movementScope null and add a blocking review warning; never guess an extra leg.
 COLLECTION: copy equipment tokens such as 1x40HC into containerSizeType and quantity; leave containerNumber and sealNumber null unless an actual container number appears in the source. Do not copy pickup references into containerNumber.
 Keep Singapore unit numbers (e.g. #07-20) inside the delivery/pickup rawText. Do not invent unit numbers from street numbers such as "Pioneer Sector 2".
 RETURN is a container return to a depot (not Import's automatic customer-to-depot leg).
