@@ -32,7 +32,7 @@ import {
 } from "./job-message-import.items-map";
 import { zonedLocalDateTimeToUtc } from "./job-message-import.timing";
 import { stripDirectionalLocationPrefix } from "./job-message-import.text-normalize";
-import { requestedLocalHasTime } from "../requested-timing";
+import { requestedLocalHasTime, relocateRequestedTimingForVisibility, requestedTimingVisibility } from "../requested-timing";
 
 function cleanAddress1(value: string | null | undefined): string | null {
   return stripDirectionalLocationPrefix(value) ?? trimToNull(value);
@@ -98,7 +98,9 @@ export function reviewedDraftToCreateJobDto(input: {
   reviewed: ControllerReviewedDraft;
   timezone: string;
 }): CreateJobDto {
-  const reviewed = input.reviewed;
+  const reviewed = relocateRequestedTimingForVisibility(input.reviewed, [
+    input.reviewed.movementType,
+  ]);
   const legacyJobType = movementTypeToJobType(reviewed.movementType);
   if (!legacyJobType) {
     throw new Error("UNKNOWN_MOVEMENT_TYPE");
@@ -298,18 +300,21 @@ export function reviewedDraftToCreateJobDto(input: {
     throw new Error("MISSING_LOCATION");
   }
 
-  const pickupDate = reviewed.pickupDateLocal
+  const vis = requestedTimingVisibility([jobType]);
+  const pickupDate = vis.showPickup && reviewed.pickupDateLocal
     ? zonedLocalDateTimeToUtc(reviewed.pickupDateLocal, input.timezone)
     : null;
-  const pickupDateHasTime = reviewed.pickupDateLocal
-    ? requestedLocalHasTime(reviewed.pickupDateLocal)
-    : null;
-  const deliveryDate = reviewed.deliveryDateLocal
+  const pickupDateHasTime =
+    vis.showPickup && reviewed.pickupDateLocal
+      ? requestedLocalHasTime(reviewed.pickupDateLocal)
+      : null;
+  const deliveryDate = vis.showDelivery && reviewed.deliveryDateLocal
     ? zonedLocalDateTimeToUtc(reviewed.deliveryDateLocal, input.timezone)
     : null;
-  const deliveryDateHasTime = reviewed.deliveryDateLocal
-    ? requestedLocalHasTime(reviewed.deliveryDateLocal)
-    : null;
+  const deliveryDateHasTime =
+    vis.showDelivery && reviewed.deliveryDateLocal
+      ? requestedLocalHasTime(reviewed.deliveryDateLocal)
+      : null;
   const firstContainer = validItems[0]?.itemCode ?? null;
   const seedContainer =
     jobType === JobType.IMPORT || jobType === JobType.EXPORT ? firstContainer : null;

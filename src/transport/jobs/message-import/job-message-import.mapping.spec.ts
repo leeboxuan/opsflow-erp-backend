@@ -121,11 +121,11 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
 
   it("maps date-only requested pickup without inventing a clock time flag", () => {
     const reviewed = normalizeReviewedDraft({
-      movementType: JobMessageImportMovementType.IMPORT,
+      movementType: JobMessageImportMovementType.EXPORT,
       customerCompanyId: "comp_1",
       pickupAddress1: "Tuas",
       deliveryAddress1: "DB warehouse",
-      returningDepotAddress1: "Tuas Depot",
+      portAddress1: "Pasir Panjang Terminal",
       pickupDateLocal: "2026-09-04",
       pickupDateDisplay: "4 Sep 2026 · Time not specified",
       pickupDateNeedsReview: false,
@@ -139,6 +139,7 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
     });
     expect(dto.pickupDateHasTime).toBe(false);
     expect(dto.pickupDate).toBeTruthy();
+    expect(dto.deliveryDate).toBeUndefined();
     const canonical = reviewedDraftToCanonicalJobCreate({
       reviewed,
       timezone: "Asia/Singapore",
@@ -167,6 +168,7 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
     });
     expect(dto.deliveryDateHasTime).toBe(false);
     expect(dto.deliveryDate).toBeTruthy();
+    expect(dto.pickupDate).toBeUndefined();
     expect(dto.notes ?? "").not.toMatch(/Delivery:/i);
     const canonical = reviewedDraftToCanonicalJobCreate({
       reviewed,
@@ -193,7 +195,8 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
       reviewed,
       timezone: "Asia/Singapore",
     });
-    expect(dto.pickupDateHasTime).toBe(true);
-    expect(dto.pickupDate).toBe("2026-09-04T00:30:00.000Z");
+    expect(dto.deliveryDateHasTime).toBe(true);
+    expect(dto.deliveryDate).toBe("2026-09-04T00:30:00.000Z");
+    expect(dto.pickupDate).toBeUndefined();
   });
 });

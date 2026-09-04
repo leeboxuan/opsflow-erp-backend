@@ -15,6 +15,10 @@ import type {
   JobMessageImportFieldError,
 } from "./job-message-import.types";
 import {
+  relocateRequestedTimingForVisibility,
+  requestedTimingVisibility,
+} from "../requested-timing";
+import {
   normalizeCompanyName,
   normalizeLocationLabel,
   normalizeNotes,
@@ -206,7 +210,9 @@ export function normalizeReviewedDraft(
     }),
   };
 
-  const promoted = promoteReturnDeliveryToDepot(draft);
+  const promoted = promoteReturnDeliveryToDepot(
+    relocateRequestedTimingForVisibility(draft, [draft.movementType]),
+  );
   // Pending-depot: RETURN (wipes delivery*) and IMPORT empty-return (keeps customer).
   if (
     promoted.movementType !== JobMessageImportMovementType.RETURN &&
@@ -590,7 +596,8 @@ export function validateReviewedDraft(
     pushBlocking("deliveryPostal", "INVALID_POSTAL", "Postal code must be 6 digits.");
   }
 
-  if (reviewed.pickupDateNeedsReview) {
+  const timingVis = requestedTimingVisibility([reviewed.movementType]);
+  if (timingVis.showPickup && reviewed.pickupDateNeedsReview) {
     const display = reviewed.pickupDateDisplay || "";
     const ambiguous =
       /needs review|ambiguous|constraint|window|could not/i.test(display);
@@ -605,7 +612,7 @@ export function validateReviewedDraft(
       );
     }
   }
-  if (reviewed.deliveryDateNeedsReview) {
+  if (timingVis.showDelivery && reviewed.deliveryDateNeedsReview) {
     const display = reviewed.deliveryDateDisplay || "";
     const ambiguous =
       /needs review|ambiguous|constraint|window|could not/i.test(display);

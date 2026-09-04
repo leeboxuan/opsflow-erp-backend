@@ -185,3 +185,96 @@ export function serializeRequestedStorageRentForJob(
     psaStorageRentLastDayHasTime: serialized.hasTime,
   };
 }
+
+export type RequestedTimingVisibility = {
+  showPickup: boolean;
+  showDelivery: boolean;
+};
+
+/**
+ * LCL + IMPORT collect requested delivery only.
+ * EXPORT collects requested pickup only.
+ * Other types (COLLECTION / RETURN / ONE_WAY / mixed) keep both.
+ */
+export function requestedTimingVisibility(
+  types: Array<string | null | undefined>,
+): RequestedTimingVisibility {
+  const normalized = [
+    ...new Set(
+      types
+        .map((t) => String(t ?? "").trim().toUpperCase())
+        .filter((t) => t.length > 0),
+    ),
+  ];
+  if (normalized.length === 0) {
+    return { showPickup: true, showDelivery: true };
+  }
+  let showPickup = false;
+  let showDelivery = false;
+  for (const t of normalized) {
+    if (t === "IMPORT" || t === "LCL") {
+      showDelivery = true;
+      continue;
+    }
+    if (t === "EXPORT") {
+      showPickup = true;
+      continue;
+    }
+    showPickup = true;
+    showDelivery = true;
+  }
+  return { showPickup, showDelivery };
+}
+
+export function relocateRequestedTimingForVisibility<
+  T extends {
+    pickupDateLocal?: string | null;
+    deliveryDateLocal?: string | null;
+    pickupDateDisplay?: string | null;
+    deliveryDateDisplay?: string | null;
+    pickupDateNeedsReview?: boolean;
+    deliveryDateNeedsReview?: boolean;
+  },
+>(reviewed: T, types: Array<string | null | undefined>): T {
+  const vis = requestedTimingVisibility(types);
+  const pickupLocal = String(reviewed.pickupDateLocal ?? "").trim();
+  const deliveryLocal = String(reviewed.deliveryDateLocal ?? "").trim();
+  let next = reviewed;
+
+  if (!vis.showPickup && vis.showDelivery) {
+    if (!deliveryLocal && pickupLocal) {
+      next = {
+        ...next,
+        deliveryDateLocal: reviewed.pickupDateLocal ?? null,
+        deliveryDateDisplay: reviewed.pickupDateDisplay ?? null,
+        deliveryDateNeedsReview: Boolean(reviewed.pickupDateNeedsReview),
+      };
+    }
+    next = {
+      ...next,
+      pickupDateLocal: null,
+      pickupDateDisplay: null,
+      pickupDateNeedsReview: false,
+    };
+  }
+
+  if (!vis.showDelivery && vis.showPickup) {
+    if (!pickupLocal && deliveryLocal) {
+      next = {
+        ...next,
+        pickupDateLocal: reviewed.deliveryDateLocal ?? null,
+        pickupDateDisplay: reviewed.deliveryDateDisplay ?? null,
+        pickupDateNeedsReview: Boolean(reviewed.deliveryDateNeedsReview),
+      };
+    }
+    next = {
+      ...next,
+      deliveryDateLocal: null,
+      deliveryDateDisplay: null,
+      deliveryDateNeedsReview: false,
+    };
+  }
+
+  return next;
+}
+

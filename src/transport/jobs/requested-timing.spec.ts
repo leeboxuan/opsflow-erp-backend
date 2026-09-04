@@ -1,6 +1,7 @@
 import {
   formatRequestedTimingDisplay,
   requestedLocalFromPersisted,
+  requestedTimingVisibility,
   serializeRequestedDeliveryForJob,
   serializeRequestedPickupForJob,
   serializeRequestedStorageRentForJob,
@@ -113,5 +114,16 @@ describe("requested-timing", () => {
         timeZone: TZ,
       }),
     ).toBe("2026-09-04T00:00");
+  });
+
+  it("IMPORT/LCL are delivery-only and EXPORT is pickup-only", () => {
+    expect(requestedTimingVisibility(["IMPORT", "LCL"])).toEqual({
+      showPickup: false,
+      showDelivery: true,
+    });
+    expect(requestedTimingVisibility(["EXPORT"])).toEqual({
+      showPickup: true,
+      showDelivery: false,
+    });
   });
 });
