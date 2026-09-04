@@ -2760,6 +2760,67 @@ describe("job charge workflow hardening", () => {
     expect(result.canPublish).toBe(true);
   });
 
+  it("getTripDetail canPublish is true for IMPORT empty-return when trip destination is set", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip2",
+          tenantId: "t1",
+          jobId: "job1",
+          status: "DRAFT",
+          pendingState: "NONE",
+          createdAt: new Date(),
+          assignedDriverUserId: "u1",
+          vehicleId: "v1",
+          fleetVehicleId: null,
+          jobTripTemplate: "DELIVERY_TO_DEPOT",
+          destinationAddressLine1: "7 Gul Circle",
+          documents: [],
+          payoutLines: [
+            {
+              id: "pl1",
+              label: "Trip payout",
+              isManual: true,
+              quantity: 1,
+              amountCents: 1800,
+              totalCents: 1800,
+            },
+          ],
+          documentRequirements: [],
+          job: {
+            id: "job1",
+            customerCompanyId: "c1",
+            internalRef: "WFL-0003-IMP",
+            externalRef: null,
+            jobType: "IMPORT",
+            status: "ONGOING",
+            receiverName: "Receiver",
+            receiverPhone: "123",
+            createdAt: new Date(),
+            createdByUserId: "u1",
+            createdBy: { id: "u1", name: "Ops", email: "ops@example.com" },
+            customerCompany: { name: "Customer F" },
+            items: [{ id: "it1", itemCode: "OOCU9212981", sealNo: "X" }],
+          },
+        }),
+      },
+      tripJobItem: {
+        findMany: jest.fn().mockResolvedValue([
+          { jobItemId: "it1", jobItem: { id: "it1", itemCode: "OOCU9212981" } },
+        ]),
+      },
+      tenantMembership: { findMany: jest.fn().mockResolvedValue([]) },
+      driverLocationLatest: { findUnique: jest.fn().mockResolvedValue(null) },
+      drivers: { findFirst: jest.fn().mockResolvedValue({ hasPsaPortAccess: false }) },
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) } as any;
+    const supabaseService = { getClient: jest.fn() } as any;
+    const svc = new TransportJobsService(prisma, audit, supabaseService);
+
+    const result = await svc.getTripDetail("t1", "trip2", { role: Role.TRANSPORT_STAFF });
+    expect(result.canPublish).toBe(true);
+  });
+
   it("getTripDetail canPublish is false when multi-container IMPORT has no TripJobItem links", async () => {
     const prisma: any = {
       trip: {

@@ -826,6 +826,8 @@ function toJobDto(j: any): JobDto {
           driverHasPsaPortAccess:
             t.drivers?.hasPsaPortAccess === true ||
             t._driverHasPsaPortAccess === true,
+          destinationAddressLine1: t.destinationAddressLine1 ?? null,
+          returningDepotPending: j.returningDepotPending === true,
         }).canPublish,
         requiresPsaPortAccess: t.requiresPsaPortAccess === true,
         ...(() => {
@@ -5305,7 +5307,14 @@ export class TransportJobsService {
 
     const safeRef = this.safeFileName(refForFile);
     const isLorry = pdfType === TripDocumentType.LORRY_CHIT;
-    const fileName = isLorry ? `${safeRef}_lorry-chit.pdf` : `${safeRef}_delivery-do.pdf`;
+    const tripSeq = trip.tripSequence ?? trip.jobSequence ?? null;
+    const tripSuffix =
+      tripSeq != null && Number.isFinite(Number(tripSeq))
+        ? `_T${String(tripSeq).padStart(2, "0")}`
+        : "";
+    const fileName = isLorry
+      ? `${safeRef}${tripSuffix}_lorry-chit.pdf`
+      : `${safeRef}${tripSuffix}_delivery-do.pdf`;
     const storageFolder = isLorry ? "lorry-chit" : "delivery-do";
     const storageKey = `${tenantId}/jobs/${jobId}/trips/${tripId}/${storageFolder}/${Date.now()}-${fileName}`;
 
@@ -8229,6 +8238,8 @@ export class TransportJobsService {
         jobTripTemplate: t.jobTripTemplate ?? null,
         requiresPsaPortAccess,
         driverHasPsaPortAccess,
+        destinationAddressLine1: t.destinationAddressLine1 ?? null,
+        returningDepotPending: job.returningDepotPending === true,
       });
       const driverEarningCentsTotal = resolveCanonicalTripPayoutCents({
         driverEarningCents: t.driverEarningCents ?? null,
@@ -8675,6 +8686,7 @@ export class TransportJobsService {
     const variant =
       doType === TripDocumentType.PICKUP_DO ? "pickup" : "delivery";
     let pdfBuffer: Buffer;
+    let lorryTripSequence: number | null = null;
     if (doType === TripDocumentType.LORRY_CHIT) {
       const cargo = await this.resolveLorryChitCargoForTrip(tenantId, tripId);
       const tripRow = await this.prisma.trip.findFirst({
@@ -8685,6 +8697,7 @@ export class TransportJobsService {
           chassis: { select: { chassisNo: true } },
         },
       });
+      lorryTripSequence = tripRow?.tripSequence ?? tripRow?.jobSequence ?? null;
       const header = await this.resolveLorryChitPdfHeader(
         tenantId,
         tripRow ?? {},
@@ -8721,8 +8734,14 @@ export class TransportJobsService {
     const refForFile =
       job.externalRef?.trim() || job.internalRef?.trim() || job.id;
     const safeRef = this.safeFileName(refForFile);
+    const tripSuffix =
+      doType === TripDocumentType.LORRY_CHIT
+      && lorryTripSequence != null
+      && Number.isFinite(Number(lorryTripSequence))
+        ? `_T${String(lorryTripSequence).padStart(2, "0")}`
+        : "";
     const suffix = doFileSuffixForType(doType);
-    const fileName = `${safeRef}_${suffix}.pdf`;
+    const fileName = `${safeRef}${tripSuffix}_${suffix}.pdf`;
     const folder = doStorageFolderForType(doType);
     const storageKey = `${tenantId}/jobs/${jobId}/trips/${tripId}/${folder}/${Date.now()}-${fileName}`;
     const previousStorageKey = doDoc.storageKey;
@@ -8851,18 +8870,16 @@ export class TransportJobsService {
     });
 
     if (isSignableDoType(updated.type)) {
-      await this.refreshSignedDoPdf(tenantId, jobId, tripId, updated.type, {
+      void this.refreshSignedDoPdf(tenantId, jobId, tripId, updated.type, {
         signatureImageBytes,
         recipientName: updated.signedByName,
         signedAt: updated.signedAt,
+      }).catch((error: unknown) => {
+        this.logger.error(
+          `Signed PDF refresh failed after sign (${updated.type} trip=${tripId})`,
+          error instanceof Error ? error.stack : error,
+        );
       });
-      const refreshed = await this.prisma.tripDocument.findFirst({
-        where: { id: documentId, tenantId, tripId, isActive: true },
-        include: documentUploadedByInclude,
-      });
-      if (refreshed) {
-        return this.attachSignedUrl(refreshed);
-      }
     }
 
     return this.attachSignedUrl(updated);
@@ -9052,6 +9069,8 @@ export class TransportJobsService {
       jobTripTemplate: trip.jobTripTemplate ?? null,
       requiresPsaPortAccess,
       driverHasPsaPortAccess,
+      destinationAddressLine1: trip.destinationAddressLine1 ?? null,
+      returningDepotPending: trip.job?.returningDepotPending === true,
     });
     const cargoBuilt = buildTripCargoFromLinks({
       jobType: trip.job?.jobType,

@@ -273,15 +273,37 @@ describe("DriverJobsService.signTripDocumentForDriver DO signing rules", () => {
     expect(opsJobs.deactivatePreviousSignedDoSignatureArtifacts).toHaveBeenCalled();
   });
 
-  it("keeps previous signature active when re-sign PDF refresh fails", async () => {
+  it("returns sign success without waiting for signed PDF rebuild", async () => {
+    const doc = makeDoDoc(TripDocumentType.PICKUP_DO);
+    const { svc, opsJobs, tripDocumentUpdate } = makeService(TripStatus.ONGOING, doc);
+    jest.spyOn(opsJobs, "refreshSignedDoPdf").mockReturnValue(new Promise(() => undefined));
+
+    const result = await Promise.race([
+      svc.signTripDocumentForDriver(tenantId, jobId, tripId, doc.id, driverUserId, {
+        signedByName: "Shipper Sam",
+        signatureBase64: TINY_PNG_BASE64,
+      }),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("sign blocked on PDF rebuild")), 80);
+      }),
+    ]);
+
+    expect(result.signedByName).toBe("Shipper Sam");
+    expect(tripDocumentUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ isSigned: true, signedByName: "Shipper Sam" }),
+      }),
+    );
+    expect(opsJobs.refreshSignedDoPdf).toHaveBeenCalled();
+    expect(opsJobs.deactivatePreviousSignedDoSignatureArtifacts).toHaveBeenCalled();
+  });
+
+  it("keeps the new signature when re-sign PDF refresh fails in the background", async () => {
     const doc = makeDoDoc(TripDocumentType.PICKUP_DO, {
       isSigned: true,
       signedByName: "Shipper Sam",
     });
-    const { svc, prisma, opsJobs, tripDocumentUpdate } = makeService(
-      TripStatus.ONGOING,
-      doc,
-    );
+    const { svc, opsJobs, tripDocumentUpdate } = makeService(TripStatus.ONGOING, doc);
     jest
       .spyOn(opsJobs, "refreshSignedDoPdf")
       .mockRejectedValue(new Error("pdf upload failed"));
@@ -298,19 +320,19 @@ describe("DriverJobsService.signTripDocumentForDriver DO signing rules", () => {
           signatureBase64: TINY_PNG_BASE64,
         },
       ),
-    ).rejects.toThrow("pdf upload failed");
+    ).resolves.toMatchObject({ signedByName: "Shipper Sam Retry" });
 
-    expect(tripDocumentUpdate).toHaveBeenCalledWith({
-      where: { id: "sig-new-1" },
-      data: { isActive: false },
-    });
-    expect(opsJobs.deactivatePreviousSignedDoSignatureArtifacts).not.toHaveBeenCalled();
-    expect(tripDocumentUpdate).not.toHaveBeenCalledWith(
+    expect(opsJobs.deactivatePreviousSignedDoSignatureArtifacts).toHaveBeenCalled();
+    expect(tripDocumentUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: doc.id },
         data: expect.objectContaining({ isSigned: true }),
       }),
     );
+    expect(tripDocumentUpdate).not.toHaveBeenCalledWith({
+      where: { id: "sig-new-1" },
+      data: { isActive: false },
+    });
   });
 
   it("uses latest active signature artifact for admin PDF embed after successful re-sign", () => {

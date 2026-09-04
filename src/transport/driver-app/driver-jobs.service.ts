@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Logger,
   Optional,
 } from "@nestjs/common";
 import {
@@ -439,6 +440,7 @@ let trailerParkingLocationsCache:
 
 @Injectable()
 export class DriverJobsService {
+  private readonly logger = new Logger(DriverJobsService.name);
   private readonly tenantTimezoneCache = new Map<string, { timezone: string; expiresAt: number }>();
 
   constructor(
@@ -4206,14 +4208,6 @@ export class DriverJobsService {
         newSignatureDocId = persisted.id;
       }
 
-      if (isDoDocument) {
-        await this.opsJobs?.refreshSignedDoPdf(tenantId, jobId, tripId, doc.type, {
-          signatureImageBytes,
-          recipientName: normalizedSignedByName ?? doc.signedByName,
-          signedAt,
-        });
-      }
-
       const updated = await this.prisma.tripDocument.update({
         where: { id: documentId },
         data: {
@@ -4252,13 +4246,20 @@ export class DriverJobsService {
       });
 
       if (isDoDocument) {
-        const refreshed = await this.prisma.tripDocument.findFirst({
-          where: { id: documentId, tenantId, tripId, isActive: true },
-          include: documentUploadedByInclude,
-        });
-        if (refreshed) {
-          return this.attachTripDocumentSignedUrl(refreshed);
-        }
+        // Lorry Chit / DO PDF rebuild (CJK font + stamp + storage) can take
+        // tens of seconds. Do not block the driver sign response on it.
+        void this.opsJobs
+          ?.refreshSignedDoPdf(tenantId, jobId, tripId, doc.type, {
+            signatureImageBytes,
+            recipientName: normalizedSignedByName ?? doc.signedByName,
+            signedAt,
+          })
+          .catch((error: unknown) => {
+            this.logger.error(
+              `Signed PDF refresh failed after driver sign (${doc.type} trip=${tripId})`,
+              error instanceof Error ? error.stack : error,
+            );
+          });
       }
 
       return this.attachTripDocumentSignedUrl(updated);
