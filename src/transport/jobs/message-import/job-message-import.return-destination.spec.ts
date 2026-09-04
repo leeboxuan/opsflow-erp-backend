@@ -132,7 +132,7 @@ describe("RETURN destination contract", () => {
     expect(collectionDto.pickupReference).toBe("SGBKKCAE9294");
   });
 
-  it("fails clearly when RETURN depot destination is missing", () => {
+  it("auto-pends missing RETURN destination into Draft Trip intake (no MISSING_LOCATION)", () => {
     expect(
       resolveReturnDestinationFields({
         returningDepotCode: null,
@@ -140,36 +140,39 @@ describe("RETURN destination contract", () => {
         deliveryAddress1: null,
       }),
     ).toBeNull();
-    expect(() =>
-      reviewedDraftToCreateJobDto({
-        reviewed: normalizeReviewedDraft({
-          movementType: JobMessageImportMovementType.RETURN,
-          customerCompanyId: "comp_1",
-          pickupAddress1: "DB Warehouse",
-          deliveryAddress1: null,
-          returningDepotAddress1: null,
-          returningDepotCode: null,
-          items: [
-            {
-              containerNumber: "UASU1061210",
-              sealNumber: null,
-              referenceNumber: null,
-              quantity: 1,
-            },
-          ],
-        }),
-        timezone: "Asia/Singapore",
+    const dto = reviewedDraftToCreateJobDto({
+      reviewed: normalizeReviewedDraft({
+        movementType: JobMessageImportMovementType.RETURN,
+        customerCompanyId: "comp_1",
+        pickupAddress1: "DB Warehouse",
+        deliveryAddress1: null,
+        returningDepotAddress1: null,
+        returningDepotCode: null,
+        items: [
+          {
+            containerNumber: "UASU1061210",
+            sealNumber: null,
+            referenceNumber: null,
+            quantity: 1,
+          },
+        ],
       }),
-    ).toThrow(/MISSING_LOCATION/);
+      timezone: "Asia/Singapore",
+    });
+    expect(dto.jobType).toBe(JobType.RETURN);
+    expect(dto.returningDepotPending).toBe(true);
+    expect(dto.deliveryAddress1).toBe("");
+    expect(dto.importDetails?.returningDepotCode).toBeFalsy();
   });
 
-  it("does not treat TBA text as a successful destination without selection", () => {
+  it("auto-pends TBA text as pending notes without blocking confirm", () => {
     const reviewed = normalizeReviewedDraft({
       movementType: JobMessageImportMovementType.RETURN,
       customerCompanyId: "comp_1",
       pickupAddress1: "DB Warehouse",
       returningDepotAddress1: "TBA (wait carrier)",
       returningDepotCode: null,
+      returningDepotSourceText: "TBA (wait carrier)",
       returningDepotVerificationStatus: "UNRESOLVED",
       items: [
         {
@@ -180,11 +183,18 @@ describe("RETURN destination contract", () => {
         },
       ],
     });
+    expect(reviewed.returningDepotPending).toBe(true);
+    expect(reviewed.returningDepotAddress1).toBeNull();
+    expect(reviewed.returningDepotPendingText).toMatch(/TBA/i);
     const validation = validateReviewedDraft(reviewed);
-    expect(validation.hasBlockingErrors).toBe(true);
-    expect(
-      validation.fieldErrors.some((e) => e.code === "LOCATION_UNRESOLVED"),
-    ).toBe(true);
+    expect(validation.hasBlockingErrors).toBe(false);
+    const dto = reviewedDraftToCreateJobDto({
+      reviewed,
+      timezone: "Asia/Singapore",
+    });
+    expect(dto.returningDepotPending).toBe(true);
+    expect(dto.returningDepotPendingText).toMatch(/TBA/i);
+    expect(dto.deliveryAddress1).toBe("");
   });
 
   it("allows Draft confirm when TBA is acknowledged as depot pending", () => {
@@ -287,13 +297,11 @@ describe("RETURN destination contract", () => {
     expect(errors.some((e) => e.property === "deliveryAddress1")).toBe(true);
   });
 
-  it("CreateJobDto: RETURN pending still waives deliveryAddress1", async () => {
+  it("CreateJobDto: RETURN without deliveryAddress1 is allowed (auto-pending intake)", async () => {
     const payload = {
       jobType: JobType.RETURN,
       customerCompanyId: "comp_1",
       pickupAddress1: "DB Warehouse",
-      returningDepotPending: true,
-      returningDepotPendingText: "TBA",
       receiverName: "Ops",
       receiverPhone: "91234567",
       items: [{ itemCode: "MSDU7515916", qty: 1 }],

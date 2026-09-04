@@ -136,6 +136,7 @@ export function reviewedDraftToCreateJobDto(input: {
         })
       : null;
   if (jobType === JobType.RETURN && !returnResolution) {
+    // resolveReturnDestinationResolution always returns resolved or auto-pending.
     throw new Error("MISSING_LOCATION");
   }
   const returnDestination =

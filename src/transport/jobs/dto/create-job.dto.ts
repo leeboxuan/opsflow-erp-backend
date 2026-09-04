@@ -555,7 +555,7 @@ export class CreateJobDto {
 
   @ApiPropertyOptional({
     description:
-      "Delivery / destination address. Required unless job type is RETURN and returningDepotPending is true (Draft intake with unset destination).",
+      "Delivery / destination address. Required except for pure RETURN intake, where a missing destination auto-normalizes to pending Draft Trip state.",
   })
   @ValidateIf((o: CreateJobDto) => {
     const types =
@@ -565,11 +565,8 @@ export class CreateJobDto {
           ? [o.jobType]
           : [];
     const pureReturn = types.length === 1 && types[0] === JobType.RETURN;
-    const pending =
-      o.returningDepotPending === true ||
-      o.importDetails?.returningDepotPending === true;
-    // Pending-depot exemption is RETURN-only. Other job types still require destination.
-    return !(pureReturn && pending);
+    // RETURN-only: destination may be omitted (auto-pending). Other types still require it.
+    return !pureReturn;
   })
   @IsString()
   @MinLength(1)

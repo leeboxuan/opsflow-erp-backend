@@ -575,4 +575,55 @@ describe("canonical auto-trip creation", () => {
       ),
     ).rejects.toThrow(/Export port \/ terminal is required/i);
   });
+
+  it("RETURN create without destination auto-pends depot and creates one Draft Trip", async () => {
+    const prisma = makeStatefulPrisma();
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.RETURN,
+        customerCompanyId: "comp1",
+        pickupAddress1: "DB Warehouse",
+        receiverName: "PIC",
+        receiverPhone: "91234567",
+        items: [{ containerNumber: "MSDU7515916" }],
+      } as any,
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
+    );
+
+    expect(prisma._state.jobs).toHaveLength(1);
+    expect(prisma._state.jobs[0].status).toBe("ONGOING");
+    expect(prisma._state.jobs[0].returningDepotPending).toBe(true);
+    expect(prisma._state.jobs[0].deliveryAddress1).toBeFalsy();
+    expect(prisma._state.trips).toHaveLength(1);
+    expect(prisma._state.trips[0].status).toBe("DRAFT");
+    expect(prisma._state.trips[0].destinationAddressLine1 ?? null).toBeNull();
+  });
+
+  it("RETURN create with TBA notes preserves text and leaves destination unset", async () => {
+    const prisma = makeStatefulPrisma();
+    const svc = makeSvc(prisma);
+
+    await svc.create(
+      "t1",
+      {
+        jobType: JobType.RETURN,
+        customerCompanyId: "comp1",
+        pickupAddress1: "DB Warehouse",
+        returningDepotPending: true,
+        returningDepotPendingText: "TBA — waiting for carrier",
+        receiverName: "PIC",
+        receiverPhone: "91234567",
+        items: [{ containerNumber: "MSDU7515916" }],
+      } as any,
+      { userId: "u1", role: Role.TRANSPORT_STAFF },
+    );
+
+    expect(prisma._state.jobs[0].returningDepotPending).toBe(true);
+    expect(prisma._state.jobs[0].returningDepotPendingText).toMatch(/TBA/);
+    expect(prisma._state.jobs[0].returningDepotAddress1 ?? null).toBeNull();
+    expect(prisma._state.trips[0].destinationAddressLine1 ?? null).toBeNull();
+  });
 });

@@ -21,6 +21,7 @@ import {
 } from "./job-message-import.text-normalize";
 import {
   type AddressVerificationStatus,
+  isUnresolvedLocationText,
   resolveImportedLocation,
 } from "./job-message-import.location-verification";
 
@@ -192,7 +193,7 @@ export function normalizeReviewedDraft(
   };
 
   const promoted = promoteReturnDeliveryToDepot(draft);
-  // Pending-depot acknowledgement is RETURN-only. Never clear destinations for other types.
+  // Pending-depot is RETURN-only. Never clear destinations for other types.
   if (promoted.movementType !== JobMessageImportMovementType.RETURN) {
     if (!promoted.returningDepotPending && !promoted.returningDepotPendingText) {
       return promoted;
@@ -203,10 +204,30 @@ export function normalizeReviewedDraft(
       returningDepotPendingText: null,
     };
   }
-  if (!promoted.returningDepotPending) return promoted;
+
+  const depotAddress = trimToNull(promoted.returningDepotAddress1);
+  const hasCode = Boolean(trimToNull(promoted.returningDepotCode));
+  const hasPlace = Boolean(trimToNull(promoted.returningDepotPlaceId));
+  const tbaOnly =
+    Boolean(depotAddress) &&
+    isUnresolvedLocationText(depotAddress) &&
+    !hasCode &&
+    !hasPlace;
+  const missingDestination = !hasCode && !depotAddress && !hasPlace;
+  const shouldPending =
+    promoted.returningDepotPending === true || missingDestination || tbaOnly;
+
+  if (!shouldPending) return promoted;
+
+  const pendingText =
+    trimToNull(promoted.returningDepotPendingText) ??
+    trimToNull(promoted.returningDepotSourceText) ??
+    (tbaOnly ? depotAddress : null);
+
   return {
     ...promoted,
-    // Pending acknowledgement: keep source text, never treat TBA as a real address.
+    // Auto or explicit pending: keep source notes, never treat TBA as a real address.
+    returningDepotPending: true,
     returningDepotAddress1: null,
     returningDepotAddress2: null,
     returningDepotPostal: null,
@@ -220,9 +241,8 @@ export function normalizeReviewedDraft(
     deliveryPlaceId: null,
     deliveryLat: null,
     deliveryLng: null,
-    returningDepotPendingText:
-      promoted.returningDepotPendingText ??
-      promoted.returningDepotSourceText,
+    returningDepotPendingText: pendingText,
+    returningDepotVerificationStatus: "UNRESOLVED",
   };
 }
 
@@ -459,35 +479,8 @@ export function validateReviewedDraft(
     if (!reviewed.pickupAddress1) {
       pushBlocking("pickupAddress1", "MISSING_PICKUP", "Pickup location is required.");
     }
-    const depotPending = reviewed.returningDepotPending === true;
-    const hasDepot = Boolean(reviewed.returningDepotAddress1 || reviewed.returningDepotCode);
-    if (depotPending) {
-      // Intake acknowledgement: Draft confirm allowed; publish still requires a depot.
-    } else if (!hasDepot) {
-      pushBlocking(
-        "returningDepotAddress1",
-        "MISSING_RETURN_DEPOT",
-        "Select a return depot, or choose Depot not confirmed yet.",
-      );
-    } else if (
-      reviewed.returningDepotVerificationStatus === "UNRESOLVED" &&
-      !reviewed.returningDepotCode
-    ) {
-      pushBlocking(
-        "returningDepotAddress1",
-        "LOCATION_UNRESOLVED",
-        "Location is unresolved (TBA or unusable). Select a depot, enter a custom address, or choose Depot not confirmed yet.",
-      );
-    } else if (
-      reviewed.returningDepotVerificationStatus === "NEEDS_REVIEW" &&
-      !reviewed.returningDepotCode
-    ) {
-      pushBlocking(
-        "returningDepotAddress1",
-        "RETURN_DEPOT_NEEDS_CONFIRMATION",
-        "Return depot needs confirmation. Select a depot, enter a custom address, or choose Depot not confirmed yet.",
-      );
-    }
+    // Missing / TBA destination auto-normalizes to pending Draft Trip intake — not a blocker.
+    // Publish still requires a resolved depot.
   } else {
     if (!reviewed.pickupAddress1) {
       pushBlocking("pickupAddress1", "MISSING_PICKUP", "Pickup location is required.");

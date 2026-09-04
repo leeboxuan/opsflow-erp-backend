@@ -4,9 +4,12 @@
  * deliveryAddress1 when resolved (DB + CreateJobDto); that value is the depot's
  * canonical address (or the custom depot address), never a second user-entered destination.
  *
- * Intake may explicitly mark the depot as pending: Draft Job + Trip with unset
- * destination are allowed; publish/dispatch still requires a resolved depot.
+ * Intake: missing / blank / TBA destination auto-normalizes to pending Draft Trip
+ * intake (Job stays ONGOING — JobStatus has no DRAFT). Publish still requires a
+ * resolved depot. Never invents a real address from TBA/pending text.
  */
+
+import { isUnresolvedLocationText } from "./message-import/job-message-import.location-verification";
 
 export const RETURN_DEPOT_PENDING_SELECT_VALUE = "__depot_pending__";
 
@@ -54,9 +57,24 @@ export function isReturnDepotPendingSelection(
   return String(value ?? "").trim() === RETURN_DEPOT_PENDING_SELECT_VALUE;
 }
 
+function collectPendingNotes(input: {
+  returningDepotPendingText?: string | null;
+  returningDepotAddress1?: string | null;
+  deliveryAddress1?: string | null;
+}): string | null {
+  const explicit = trimToNull(input.returningDepotPendingText);
+  if (explicit) return explicit;
+  const depot = trimToNull(input.returningDepotAddress1);
+  if (depot && isUnresolvedLocationText(depot)) return depot;
+  const delivery = trimToNull(input.deliveryAddress1);
+  if (delivery && isUnresolvedLocationText(delivery)) return delivery;
+  return null;
+}
+
 /**
- * Resolve RETURN destination from depot selection / custom address / explicit pending.
+ * Resolve RETURN destination from depot selection / custom address / pending intake.
  * Prefer returningDepot*; fall back to delivery* only for legacy payloads.
+ * Missing, blank, or TBA-only destinations auto-normalize to pending.
  * Never invents an address from TBA/pending text.
  */
 export function resolveReturnDestinationResolution(input: {
@@ -75,20 +93,30 @@ export function resolveReturnDestinationResolution(input: {
   deliveryPlaceId?: string | null;
   deliveryLat?: number | null;
   deliveryLng?: number | null;
-}): ReturnDestinationResolution | null {
+}): ReturnDestinationResolution {
+  const pendingText = collectPendingNotes(input);
+
   if (input.returningDepotPending === true) {
-    return {
-      kind: "pending",
-      pendingText:
-        trimToNull(input.returningDepotPendingText) ??
-        trimToNull(input.returningDepotAddress1) ??
-        trimToNull(input.deliveryAddress1),
-    };
+    return { kind: "pending", pendingText };
   }
 
   const fields = resolveReturnDestinationFields(input);
-  if (!fields) return null;
-  return { kind: "resolved", fields };
+  if (fields) {
+    const placeholderOnly =
+      !fields.returningDepotCode &&
+      !fields.returningDepotPlaceId &&
+      isUnresolvedLocationText(fields.deliveryAddress1);
+    if (placeholderOnly) {
+      return {
+        kind: "pending",
+        pendingText: pendingText ?? trimToNull(fields.deliveryAddress1),
+      };
+    }
+    return { kind: "resolved", fields };
+  }
+
+  // Auto-pending at Draft Trip intake — no explicit acknowledgement required.
+  return { kind: "pending", pendingText };
 }
 
 /**
@@ -163,7 +191,7 @@ export function resolveReturnDestinationFields(input: {
   };
 }
 
-/** Job create payload shape for an explicitly pending RETURN depot. */
+/** Job create payload shape for a pending RETURN depot (auto or explicit). */
 export function pendingReturnDestinationJobFields(pendingText: string | null): {
   deliveryAddress1: string;
   deliveryAddress2: null;
