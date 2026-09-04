@@ -410,6 +410,9 @@ const JOB_LIST_ITEM_SELECT = {
   collectionType: true,
   status: true,
   pickupDate: true,
+  pickupDateHasTime: true,
+  deliveryDate: true,
+  deliveryDateHasTime: true,
   createdAt: true,
   updatedAt: true,
   jobTypeAssignments: { select: { jobType: true } },
@@ -528,6 +531,9 @@ function toJobListItemDto(
     collectionType: j.collectionType ?? null,
     status: j.status,
     pickupDate: j.pickupDate ?? null,
+    pickupDateHasTime: j.pickupDateHasTime ?? null,
+    deliveryDate: j.deliveryDate ?? null,
+    deliveryDateHasTime: j.deliveryDateHasTime ?? null,
     createdAt: j.createdAt,
     updatedAt: j.updatedAt,
     assignedDriverId,
@@ -636,6 +642,9 @@ function toJobDto(j: any): JobDto {
     exportPortCode: j.exportPortCode ?? null,
 
     pickupDate: j.pickupDate,
+    pickupDateHasTime: j.pickupDateHasTime ?? null,
+    deliveryDate: j.deliveryDate ?? null,
+    deliveryDateHasTime: j.deliveryDateHasTime ?? null,
     pickupAddress1: j.pickupAddress1,
     pickupAddress2: j.pickupAddress2,
     pickupPostal: j.pickupPostal,
@@ -3114,7 +3123,37 @@ export class TransportJobsService {
 
     const internalRef = await this.getNextInternalRef(tenantId, resolvedJobTypes);
 
-    const pickupDateParsed = dto.pickupDate ? new Date(dto.pickupDate) : null;
+    const pickupDateRaw = String(dto.pickupDate ?? "").trim();
+    const pickupDateParsed = pickupDateRaw ? new Date(pickupDateRaw) : null;
+    const pickupDateSafe =
+      pickupDateParsed && !Number.isNaN(pickupDateParsed.getTime())
+        ? pickupDateParsed
+        : null;
+    const pickupDateHasTime =
+      dto.pickupDateHasTime !== undefined
+        ? dto.pickupDateHasTime
+        : !pickupDateRaw
+          ? null
+          : /^\d{4}-\d{2}-\d{2}$/.test(pickupDateRaw)
+            ? false
+            : true;
+    const deliveryDateRaw = String(dto.deliveryDate ?? "").trim();
+    const deliveryDateParsed = deliveryDateRaw ? new Date(deliveryDateRaw) : null;
+    const deliveryDateSafe =
+      deliveryDateParsed && !Number.isNaN(deliveryDateParsed.getTime())
+        ? deliveryDateParsed
+        : null;
+    const deliveryDateHasTime =
+      dto.deliveryDateHasTime !== undefined
+        ? dto.deliveryDateHasTime
+        : !deliveryDateRaw
+          ? null
+          : /^\d{4}-\d{2}-\d{2}$/.test(deliveryDateRaw)
+            ? false
+            : true;
+    // Date-only requested timing must not seed Trip.plannedStartAt (ops assigns later).
+    const plannedStartSeed =
+      pickupDateHasTime === false ? null : pickupDateSafe;
 
     // Cargo/shipping defaults are applied inside tripCreateManyForJob only for IMPORT/EXPORT; LCL legs are skipped.
     const seededContainerNumber = String(dto.containerNumber ?? "").trim() || null;
@@ -3157,7 +3196,10 @@ export class TransportJobsService {
           voyage: normalizeOptionalTrimmedText(dto.voyage),
           shipper: normalizeOptionalTrimmedText(dto.shipper),
           createdByUserId: actorUserId,
-          pickupDate: pickupDateParsed,
+          pickupDate: pickupDateSafe,
+          pickupDateHasTime,
+          deliveryDate: deliveryDateSafe,
+          deliveryDateHasTime,
           pickupAddress1:
             pureExport
               ? exportPickup.address1
@@ -3256,7 +3298,7 @@ export class TransportJobsService {
             tenantId,
             createdJob.id,
             topologyType,
-            pickupDateParsed,
+            plannedStartSeed,
             seededContainerNumber,
             seededShippingRefs,
             autoTripRouteSnapshots,
@@ -4100,6 +4142,31 @@ export class TransportJobsService {
     }
     if (dto.pickupDate !== undefined) {
       data.pickupDate = dto.pickupDate ? new Date(dto.pickupDate) : null;
+      if (dto.pickupDateHasTime === undefined) {
+        const raw = String(dto.pickupDate ?? "").trim();
+        data.pickupDateHasTime = !raw
+          ? null
+          : /^\d{4}-\d{2}-\d{2}$/.test(raw)
+            ? false
+            : true;
+      }
+    }
+    if (dto.pickupDateHasTime !== undefined) {
+      data.pickupDateHasTime = dto.pickupDateHasTime;
+    }
+    if (dto.deliveryDate !== undefined) {
+      data.deliveryDate = dto.deliveryDate ? new Date(dto.deliveryDate) : null;
+      if (dto.deliveryDateHasTime === undefined) {
+        const raw = String(dto.deliveryDate ?? "").trim();
+        data.deliveryDateHasTime = !raw
+          ? null
+          : /^\d{4}-\d{2}-\d{2}$/.test(raw)
+            ? false
+            : true;
+      }
+    }
+    if (dto.deliveryDateHasTime !== undefined) {
+      data.deliveryDateHasTime = dto.deliveryDateHasTime;
     }
     if (dto.pickupAddress1 !== undefined)
       data.pickupAddress1 = dto.pickupAddress1;

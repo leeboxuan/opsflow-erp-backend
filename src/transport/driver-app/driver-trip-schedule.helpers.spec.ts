@@ -133,5 +133,30 @@ describe("driver-trip-schedule.helpers", () => {
         expect(result.reason).toBe("too_late");
       }
     });
+
+    it("does not gate start on date-only requested pickup without plannedStartAt", () => {
+      const result = evaluateTripStartDateGate({
+        plannedStartAt: null,
+        jobPickupDate: new Date("2026-07-16T16:00:00.000Z"),
+        jobPickupDateHasTime: false,
+        now: new Date("2026-07-20T02:00:00.000Z"),
+        timeZone: tz,
+      });
+      expect(result).toEqual({ allowed: true });
+    });
+
+    it("still gates legacy pickupDate when hasTime is null", () => {
+      const result = evaluateTripStartDateGate({
+        plannedStartAt: null,
+        jobPickupDate: new Date("2026-07-16T16:00:00.000Z"),
+        jobPickupDateHasTime: null,
+        now: new Date("2026-07-20T02:00:00.000Z"),
+        timeZone: tz,
+      });
+      expect(result.allowed).toBe(false);
+      if (result.allowed === false) {
+        expect(result.reason).toBe("too_late");
+      }
+    });
   });
 });

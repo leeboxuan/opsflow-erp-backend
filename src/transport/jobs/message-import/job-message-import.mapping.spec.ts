@@ -102,4 +102,82 @@ describe("reviewedDraftToCanonicalJobCreate", () => {
     expect(dto.exportDetails?.stuffingAddress1).toBe("Nat Test Company");
     expect(dto.exportDetails?.exportPortAddress1).not.toBe(dto.deliveryAddress1);
   });
+
+  it("maps date-only requested pickup without inventing a clock time flag", () => {
+    const reviewed = normalizeReviewedDraft({
+      movementType: JobMessageImportMovementType.IMPORT,
+      customerCompanyId: "comp_1",
+      pickupAddress1: "Tuas",
+      deliveryAddress1: "DB warehouse",
+      returningDepotAddress1: "Tuas Depot",
+      pickupDateLocal: "2026-09-04",
+      pickupDateDisplay: "4 Sep 2026 · Time not specified",
+      pickupDateNeedsReview: false,
+      items: [
+        { containerNumber: "GESU6311344", sealNumber: null, referenceNumber: null, quantity: 1 },
+      ],
+    });
+    const dto = reviewedDraftToCreateJobDto({
+      reviewed,
+      timezone: "Asia/Singapore",
+    });
+    expect(dto.pickupDateHasTime).toBe(false);
+    expect(dto.pickupDate).toBeTruthy();
+    const canonical = reviewedDraftToCanonicalJobCreate({
+      reviewed,
+      timezone: "Asia/Singapore",
+    });
+    expect(canonical.pickupDateHasTime).toBe(false);
+    expect(canonical.pickupDate).not.toBeNull();
+  });
+
+  it("maps date-only requested delivery onto structured deliveryDate fields", () => {
+    const reviewed = normalizeReviewedDraft({
+      movementType: JobMessageImportMovementType.IMPORT,
+      customerCompanyId: "comp_1",
+      pickupAddress1: "Tuas",
+      deliveryAddress1: "DB warehouse",
+      returningDepotAddress1: "Tuas Depot",
+      deliveryDateLocal: "2026-09-05",
+      deliveryDateDisplay: "5 Sep 2026 · Time not specified",
+      deliveryDateNeedsReview: false,
+      items: [
+        { containerNumber: "GESU6311344", sealNumber: null, referenceNumber: null, quantity: 1 },
+      ],
+    });
+    const dto = reviewedDraftToCreateJobDto({
+      reviewed,
+      timezone: "Asia/Singapore",
+    });
+    expect(dto.deliveryDateHasTime).toBe(false);
+    expect(dto.deliveryDate).toBeTruthy();
+    expect(dto.notes ?? "").not.toMatch(/Delivery:/i);
+    const canonical = reviewedDraftToCanonicalJobCreate({
+      reviewed,
+      timezone: "Asia/Singapore",
+    });
+    expect(canonical.deliveryDateHasTime).toBe(false);
+    expect(canonical.deliveryDate).not.toBeNull();
+  });
+
+  it("maps explicit 08:30 with hasTime true", () => {
+    const reviewed = normalizeReviewedDraft({
+      movementType: JobMessageImportMovementType.IMPORT,
+      customerCompanyId: "comp_1",
+      pickupAddress1: "Tuas",
+      deliveryAddress1: "DB warehouse",
+      returningDepotAddress1: "Tuas Depot",
+      pickupDateLocal: "2026-09-04T08:30",
+      pickupDateNeedsReview: false,
+      items: [
+        { containerNumber: "GESU6311344", sealNumber: null, referenceNumber: null, quantity: 1 },
+      ],
+    });
+    const dto = reviewedDraftToCreateJobDto({
+      reviewed,
+      timezone: "Asia/Singapore",
+    });
+    expect(dto.pickupDateHasTime).toBe(true);
+    expect(dto.pickupDate).toBe("2026-09-04T00:30:00.000Z");
+  });
 });

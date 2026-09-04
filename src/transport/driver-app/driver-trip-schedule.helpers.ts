@@ -1,13 +1,16 @@
 /**
- * Effective scheduled datetime for driver list ordering:
- * trip.plannedStartAt → job.pickupDate → null (unscheduled last).
+ * Effective scheduled datetime for driver list ordering / start gate:
+ * trip.plannedStartAt → job.pickupDate (only when pickup has an explicit time or is legacy) → null.
+ * Date-only requested pickup (pickupDateHasTime=false) is not an exact schedule constraint.
  */
 export function resolveEffectiveScheduledAt(input: {
   plannedStartAt?: Date | string | null;
   jobPickupDate?: Date | string | null;
+  jobPickupDateHasTime?: boolean | null;
 }): Date | null {
   const planned = toValidDate(input.plannedStartAt);
   if (planned) return planned;
+  if (input.jobPickupDateHasTime === false) return null;
   return toValidDate(input.jobPickupDate);
 }
 
@@ -21,6 +24,7 @@ export type SchedulableTripSortRow = {
   id: string;
   plannedStartAt?: Date | string | null;
   jobPickupDate?: Date | string | null;
+  jobPickupDateHasTime?: boolean | null;
   tripSequence?: number | null;
   jobSequence?: number | null;
   createdAt?: Date | string | null;
@@ -37,10 +41,12 @@ export function compareTripsByEffectiveSchedule(
   const aAt = resolveEffectiveScheduledAt({
     plannedStartAt: a.plannedStartAt,
     jobPickupDate: a.jobPickupDate,
+    jobPickupDateHasTime: a.jobPickupDateHasTime,
   });
   const bAt = resolveEffectiveScheduledAt({
     plannedStartAt: b.plannedStartAt,
     jobPickupDate: b.jobPickupDate,
+    jobPickupDateHasTime: b.jobPickupDateHasTime,
   });
   const aMs = aAt?.getTime() ?? null;
   const bMs = bAt?.getTime() ?? null;
@@ -92,16 +98,19 @@ export function formatCalendarDayKeyLong(dayKey: string): string {
 
 /**
  * Resolve the scheduled calendar day for start-trip gating:
- * Trip.plannedStartAt first, else Job.pickupDate.
+ * Trip.plannedStartAt first, else Job.pickupDate when it carries an explicit time (or legacy null hasTime).
+ * Date-only requested pickup does not create a start-day constraint.
  */
 export function resolveTripScheduledDayKey(input: {
   plannedStartAt?: Date | string | null;
   jobPickupDate?: Date | string | null;
+  jobPickupDateHasTime?: boolean | null;
   timeZone: string;
 }): string | null {
   const effective = resolveEffectiveScheduledAt({
     plannedStartAt: input.plannedStartAt,
     jobPickupDate: input.jobPickupDate,
+    jobPickupDateHasTime: input.jobPickupDateHasTime,
   });
   if (!effective) return null;
   return getDateKeyInTimeZone(effective, input.timeZone);
@@ -118,6 +127,7 @@ export type TripStartDateGateResult =
 export function evaluateTripStartDateGate(input: {
   plannedStartAt?: Date | string | null;
   jobPickupDate?: Date | string | null;
+  jobPickupDateHasTime?: boolean | null;
   now?: Date;
   timeZone: string;
 }): TripStartDateGateResult {

@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { PrismaModule } from "../shared/prisma/prisma.module";
 import { AuthModule } from "../shared/auth/auth.module";
 import { AuditModule } from "../shared/audit/audit.module";
+import { PlacesModule } from "../shared/places/places.module";
 import { TransportJobsController } from "./jobs/transport-jobs.controller";
 import { TransportTripsController } from "./trips/transport-trips.controller";
 import { DriverJobsController } from "./driver-app/driver-jobs.controller";
@@ -20,7 +21,7 @@ import { JOB_MESSAGE_PARSER_TOKEN } from "./jobs/message-import/job-message-impo
 import { createJobMessageParser } from "./jobs/message-import/job-message-parser.factory";
 
 @Module({
-  imports: [PrismaModule, AuthModule, AuditModule, FinanceModule, DriversModule],
+  imports: [PrismaModule, AuthModule, AuditModule, FinanceModule, DriversModule, PlacesModule],
   controllers: [
     TransportJobsController,
     TransportTripsController,

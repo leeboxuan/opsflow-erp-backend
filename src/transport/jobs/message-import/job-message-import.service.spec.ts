@@ -490,6 +490,17 @@ function makeImportSvc(
     wrapImportAudit(prisma, audit) as any,
     parser as any,
     makeJobsService(prisma),
+    {
+      details: async (placeId: string) => ({
+        postalCode: "639386",
+        formattedAddress: `Place ${placeId}, Singapore 639386`,
+        addressLine1: `Place ${placeId}`,
+        placeId,
+        lat: null,
+        lng: null,
+        addressLine2: "",
+      }),
+    } as any,
   );
 }
 
@@ -1962,6 +1973,17 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
       wrapImportAudit(prisma, audit) as any,
       parser as any,
       jobs,
+      {
+        details: async (placeId: string) => ({
+          postalCode: "639386",
+          formattedAddress: `Place ${placeId}, Singapore 639386`,
+          addressLine1: `Place ${placeId}`,
+          placeId,
+          lat: null,
+          lng: null,
+          addressLine2: "",
+        }),
+      } as any,
     );
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
@@ -1999,6 +2021,17 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
       wrapImportAudit(prisma, audit) as any,
       parser as any,
       jobs,
+      {
+        details: async (placeId: string) => ({
+          postalCode: "639386",
+          formattedAddress: `Place ${placeId}, Singapore 639386`,
+          addressLine1: `Place ${placeId}`,
+          placeId,
+          lat: null,
+          lng: null,
+          addressLine2: "",
+        }),
+      } as any,
     );
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
@@ -2033,6 +2066,17 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
       wrapImportAudit(prisma, audit) as any,
       parser as any,
       jobs,
+      {
+        details: async (placeId: string) => ({
+          postalCode: "639386",
+          formattedAddress: `Place ${placeId}, Singapore 639386`,
+          addressLine1: `Place ${placeId}`,
+          placeId,
+          lat: null,
+          lng: null,
+          addressLine2: "",
+        }),
+      } as any,
     );
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
@@ -2066,6 +2110,17 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
       wrapImportAudit(prisma, audit) as any,
       parser as any,
       jobs,
+      {
+        details: async (placeId: string) => ({
+          postalCode: "639386",
+          formattedAddress: `Place ${placeId}, Singapore 639386`,
+          addressLine1: `Place ${placeId}`,
+          placeId,
+          lat: null,
+          lng: null,
+          addressLine2: "",
+        }),
+      } as any,
     );
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
@@ -2103,6 +2158,17 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
       wrapImportAudit(prisma, audit) as any,
       parser as any,
       jobs,
+      {
+        details: async (placeId: string) => ({
+          postalCode: "639386",
+          formattedAddress: `Place ${placeId}, Singapore 639386`,
+          addressLine1: `Place ${placeId}`,
+          placeId,
+          lat: null,
+          lng: null,
+          addressLine2: "",
+        }),
+      } as any,
     );
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
@@ -2146,6 +2212,17 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
       wrapImportAudit(prisma, audit) as any,
       parser as any,
       jobs,
+      {
+        details: async (placeId: string) => ({
+          postalCode: "639386",
+          formattedAddress: `Place ${placeId}, Singapore 639386`,
+          addressLine1: `Place ${placeId}`,
+          placeId,
+          lat: null,
+          lng: null,
+          addressLine2: "",
+        }),
+      } as any,
     );
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",
@@ -2207,6 +2284,17 @@ describe("JobMessageImportService production WhatsApp field extraction", () => {
       wrapImportAudit(prisma, audit) as any,
       parser as any,
       jobs,
+      {
+        details: async (placeId: string) => ({
+          postalCode: "639386",
+          formattedAddress: `Place ${placeId}, Singapore 639386`,
+          addressLine1: `Place ${placeId}`,
+          placeId,
+          lat: null,
+          lng: null,
+          addressLine2: "",
+        }),
+      } as any,
     );
     const preview = await svc.createPreviewBatch({
       tenantId: "t1",

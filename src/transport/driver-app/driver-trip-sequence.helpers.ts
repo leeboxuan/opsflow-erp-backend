@@ -34,6 +34,7 @@ function tripRunDayKey(
   const effective = resolveEffectiveScheduledAt({
     plannedStartAt: trip.plannedStartAt,
     jobPickupDate: trip.jobPickupDate,
+    jobPickupDateHasTime: trip.jobPickupDateHasTime,
   });
   const reference = effective ?? (trip.createdAt ? new Date(trip.createdAt) : null);
   if (!reference || Number.isNaN(reference.getTime())) return null;

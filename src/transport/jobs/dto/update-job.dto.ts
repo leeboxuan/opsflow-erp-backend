@@ -126,6 +126,31 @@ export class UpdateJobDto {
   pickupDate?: string;
 
   @ApiPropertyOptional({
+    nullable: true,
+    description:
+      "Requested pickup time precision. true = explicit time; false = date-only; null clears with pickupDate.",
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsBoolean()
+  pickupDateHasTime?: boolean | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  deliveryDate?: string;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      "Requested delivery time precision. true = explicit time; false = date-only; null clears with deliveryDate.",
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsBoolean()
+  deliveryDateHasTime?: boolean | null;
+
+  @ApiPropertyOptional({
     description: "Job-level pickup reference",
     nullable: true,
   })

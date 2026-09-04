@@ -7,6 +7,7 @@ import { ConfigService } from "@nestjs/config";
 import {
   buildPlacesAddressLine1,
   buildPlacesAddressLine2FromSubpremise,
+  extractSingaporePostalFromText,
 } from "./places-address-line";
 
 type GoogleAddressComponent = {
@@ -124,9 +125,15 @@ export class PlacesService {
     const addressLine2 = buildPlacesAddressLine2FromSubpremise(
       this.pickAddressComponent(components, "subpremise"),
     );
+    const formattedAddress = String(result?.formatted_address ?? "").trim();
+    if (!postalCode) {
+      postalCode =
+        extractSingaporePostalFromText(formattedAddress) ??
+        extractSingaporePostalFromText(addressLine1);
+    }
 
     return {
-      formattedAddress: String(result?.formatted_address ?? "").trim(),
+      formattedAddress,
       addressLine1,
       addressLine2,
       postalCode: postalCode ?? "",

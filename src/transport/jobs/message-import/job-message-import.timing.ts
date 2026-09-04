@@ -1,3 +1,8 @@
+import {
+  formatRequestedTimingDisplay,
+  zonedRequestedLocalToUtc,
+} from "../requested-timing";
+
 export type OperationalTimingParseInput = {
   text: string | null | undefined;
   /** Parse-time anchor for relative phrases such as "today" / "tomorrow" (YYYY-MM-DD, tenant timezone). */
@@ -6,7 +11,8 @@ export type OperationalTimingParseInput = {
 };
 export type OperationalTimingParseResult = {
   locationHint: string | null;
-  pickupDateLocal: string | null; // YYYY-MM-DDTHH:mm
+  /** YYYY-MM-DD (date-only), YYYY-MM-DDTHH:mm (date+time), or null (unset). */
+  pickupDateLocal: string | null;
   deliveryDateLocal: string | null;
   display: string | null;
   needsReview: boolean;
@@ -86,26 +92,7 @@ function addDays(base: { year: number; month: number; day: number }, days: numbe
 }
 
 function formatDisplay(local: string): string {
-  const [datePart, timePart = "00:00"] = local.split("T");
-  const [y, m, d] = datePart.split("-").map(Number);
-  const [hh, mm] = timePart.split(":").map(Number);
-  const months = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-  ];
-  const hour12 = ((hh + 11) % 12) + 1;
-  const ampm = hh >= 12 ? "PM" : "AM";
-  return `${d} ${months[m - 1]} ${y}, ${hour12}:${pad2(mm)} ${ampm}`;
+  return formatRequestedTimingDisplay(local) ?? local;
 }
 
 function parseTimeToken(raw: string): { hour: number; minute: number } | "ambiguous" | null {
@@ -208,9 +195,10 @@ export function parseOperationalTiming(
     return {
       ...empty,
       locationHint,
-      needsReview: true,
+      // Do not block confirmation or invent a pickup date from detention text.
+      needsReview: false,
       reason: "Detention date is not a requested pickup time.",
-      display: `${raw} — detention date (not pickup time)`,
+      display: null,
     };
   }
 
@@ -315,12 +303,12 @@ export function parseOperationalTiming(
     const dateOnly = ymd(date.year, date.month, date.day);
     return {
       locationHint,
-      // Do not invent midnight when the source supplied a date without a time.
-      pickupDateLocal: null,
+      // Date-only requested timing is valid — do not invent midnight or block confirm.
+      pickupDateLocal: dateOnly,
       deliveryDateLocal: null,
-      display: `${dateOnly} — time not specified`,
-      needsReview: true,
-      reason: "Date found without a specific time.",
+      display: formatRequestedTimingDisplay(dateOnly),
+      needsReview: false,
+      reason: null,
     };
   }
 
@@ -335,43 +323,7 @@ export function parseOperationalTiming(
   };
 }
 
-function tzParts(date: Date, timeZone: string) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
-  return {
-    year: get("year"),
-    month: get("month"),
-    day: get("day"),
-    hour: get("hour"),
-    minute: get("minute"),
-  };
-}
-
-/** Convert a wall-clock `YYYY-MM-DDTHH:mm` in `timeZone` to a UTC Date. */
+/** Convert a wall-clock `YYYY-MM-DD` or `YYYY-MM-DDTHH:mm` in `timeZone` to a UTC Date. */
 export function zonedLocalDateTimeToUtc(local: string, timeZone: string): Date {
-  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(local);
-  if (!m) return new Date(local);
-  const year = Number(m[1]);
-  const month = Number(m[2]);
-  const day = Number(m[3]);
-  const hour = Number(m[4]);
-  const minute = Number(m[5]);
-  let utc = Date.UTC(year, month - 1, day, hour, minute, 0);
-  for (let i = 0; i < 4; i += 1) {
-    const got = tzParts(new Date(utc), timeZone);
-    const gotUtc = Date.UTC(got.year, got.month - 1, got.day, got.hour, got.minute);
-    const desired = Date.UTC(year, month - 1, day, hour, minute);
-    const delta = desired - gotUtc;
-    if (delta === 0) break;
-    utc += delta;
-  }
-  return new Date(utc);
+  return zonedRequestedLocalToUtc(local, timeZone);
 }

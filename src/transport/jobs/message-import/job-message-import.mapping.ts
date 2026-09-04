@@ -21,12 +21,16 @@ import {
   mapReviewedItemsForParse,
 } from "./job-message-import.items-map";
 import { zonedLocalDateTimeToUtc } from "./job-message-import.timing";
+import { requestedLocalHasTime } from "../requested-timing";
 
 export type CanonicalJobCreateData = {
   jobType: JobType;
   collectionType: ReturnType<typeof resolveCollectionTypeForJobCreate>;
   customerCompanyId: string;
   pickupDate: Date | null;
+  pickupDateHasTime?: boolean | null;
+  deliveryDate: Date | null;
+  deliveryDateHasTime?: boolean | null;
   pickupAddress1: string;
   pickupAddress2: string | null;
   pickupPostal: string | null;
@@ -56,8 +60,8 @@ export type CanonicalJobCreateData = {
 function composeNotes(reviewed: ControllerReviewedDraft): string | null {
   const parts: string[] = [];
   if (reviewed.timingText) parts.push(reviewed.timingText);
-  if (reviewed.pickupDateDisplay) parts.push(`Pickup: ${reviewed.pickupDateDisplay}`);
-  if (reviewed.deliveryDateDisplay) parts.push(`Delivery: ${reviewed.deliveryDateDisplay}`);
+  // Structured pickup/delivery timing persists on Job.pickupDate / Job.deliveryDate —
+  // do not duplicate them into notes as the only store.
   for (const i of reviewed.instructions) parts.push(i);
   if (reviewed.notes) parts.push(reviewed.notes);
   const out = parts.map((p) => p.trim()).filter(Boolean).join("\n");
@@ -201,6 +205,15 @@ export function reviewedDraftToCreateJobDto(input: {
   const pickupDate = reviewed.pickupDateLocal
     ? zonedLocalDateTimeToUtc(reviewed.pickupDateLocal, input.timezone)
     : null;
+  const pickupDateHasTime = reviewed.pickupDateLocal
+    ? requestedLocalHasTime(reviewed.pickupDateLocal)
+    : null;
+  const deliveryDate = reviewed.deliveryDateLocal
+    ? zonedLocalDateTimeToUtc(reviewed.deliveryDateLocal, input.timezone)
+    : null;
+  const deliveryDateHasTime = reviewed.deliveryDateLocal
+    ? requestedLocalHasTime(reviewed.deliveryDateLocal)
+    : null;
   const firstContainer = validItems[0]?.itemCode ?? null;
   const seedContainer =
     jobType === JobType.IMPORT || jobType === JobType.EXPORT ? firstContainer : null;
@@ -210,6 +223,9 @@ export function reviewedDraftToCreateJobDto(input: {
     collectionType: collectionType ?? undefined,
     customerCompanyId: reviewed.customerCompanyId,
     pickupDate: pickupDate ? pickupDate.toISOString() : undefined,
+    pickupDateHasTime: pickupDateHasTime === null ? undefined : pickupDateHasTime,
+    deliveryDate: deliveryDate ? deliveryDate.toISOString() : undefined,
+    deliveryDateHasTime: deliveryDateHasTime === null ? undefined : deliveryDateHasTime,
     pickupAddress1: reviewed.pickupAddress1,
     pickupAddress2: reviewed.pickupAddress2 ?? undefined,
     pickupPostal: reviewed.pickupPostal ?? undefined,
@@ -298,6 +314,11 @@ export function reviewedDraftToCanonicalJobCreate(input: {
         : null,
     customerCompanyId: dto.customerCompanyId,
     pickupDate: dto.pickupDate ? new Date(dto.pickupDate) : null,
+    pickupDateHasTime:
+      dto.pickupDateHasTime === undefined ? null : dto.pickupDateHasTime ?? null,
+    deliveryDate: dto.deliveryDate ? new Date(dto.deliveryDate) : null,
+    deliveryDateHasTime:
+      dto.deliveryDateHasTime === undefined ? null : dto.deliveryDateHasTime ?? null,
     pickupAddress1: dto.pickupAddress1,
     pickupAddress2: dto.pickupAddress2 ?? null,
     pickupPostal: dto.pickupPostal ?? null,

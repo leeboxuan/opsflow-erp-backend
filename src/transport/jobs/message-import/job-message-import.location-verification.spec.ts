@@ -5,6 +5,7 @@ import {
   locationVerificationWarning,
   matchMasterLocation,
   resolveImportedLocation,
+  revalidateReviewedPlacesWithTrustedDetails,
 } from "./job-message-import.location-verification";
 
 describe("job-message-import location verification", () => {
@@ -90,12 +91,24 @@ describe("job-message-import location verification", () => {
     expect(resolved.sourceText).toBe("31 Jurong Port Road");
   });
 
-  it("verifies Google placeId only when a Singapore postal is present", () => {
+  it("does not verify client-shaped placeId+postal without trusted Places resolution", () => {
     const resolved = resolveImportedLocation({
       rawText: "31 Jurong Port Road",
       placeId: "ChIJplace",
       address1: "31 Jurong Port Road",
       postal: "619123",
+    });
+    expect(resolved.verificationStatus).toBe("NEEDS_REVIEW");
+    expect(resolved.postal).toBe("619123");
+  });
+
+  it("verifies placeId+postal only after trusted Places resolution", () => {
+    const resolved = resolveImportedLocation({
+      rawText: "31 Jurong Port Road",
+      placeId: "ChIJplace",
+      address1: "31 Jurong Port Road",
+      postal: "619123",
+      trustedPlacesResolution: true,
     });
     expect(resolved.verificationStatus).toBe("VERIFIED");
     expect(resolved.postal).toBe("619123");
@@ -168,5 +181,86 @@ describe("job-message-import location verification", () => {
     expect(locationVerificationWarning("NEEDS_REVIEW")?.message).toBe(
       "Postal code not verified — select an address or enter it manually.",
     );
+  });
+
+  it("upgrades placeId to VERIFIED only when trusted Places details yield a postal", async () => {
+    const next = await revalidateReviewedPlacesWithTrustedDetails(
+      {
+        movementType: "EXPORT",
+        pickupAddress1: "Yard",
+        pickupAddress2: null,
+        pickupPostal: "619123",
+        pickupPlaceId: "ChIJ-a",
+        pickupLat: null,
+        pickupLng: null,
+        pickupVerificationStatus: "NEEDS_REVIEW",
+        deliveryAddress1: null,
+        deliveryAddress2: null,
+        deliveryPostal: null,
+        deliveryPlaceId: null,
+        deliveryLat: null,
+        deliveryLng: null,
+        portAddress1: "PSA Tuas",
+        portPostal: "639386",
+        portPlaceId: "ChIJ-port",
+        portVerificationStatus: "NEEDS_REVIEW",
+        returningDepotAddress1: null,
+        returningDepotAddress2: null,
+        returningDepotPostal: null,
+        returningDepotPlaceId: null,
+        returningDepotLat: null,
+        returningDepotLng: null,
+        returningDepotCode: null,
+      },
+      async (placeId) => {
+        if (placeId === "ChIJ-port") {
+          return {
+            postalCode: "",
+            formattedAddress: "PSA Tuas Port, Singapore 639386",
+          };
+        }
+        if (placeId === "ChIJ-a") {
+          return { postalCode: "619123", formattedAddress: "Yard, Singapore 619123" };
+        }
+        return null;
+      },
+    );
+    expect(next.portVerificationStatus).toBe("VERIFIED");
+    expect(next.portPostal).toBe("639386");
+    expect(next.pickupVerificationStatus).toBe("VERIFIED");
+  });
+
+  it("keeps placeId reviewable when Places has no postal", async () => {
+    const next = await revalidateReviewedPlacesWithTrustedDetails(
+      {
+        movementType: "EXPORT",
+        pickupAddress1: "Somewhere",
+        pickupAddress2: null,
+        pickupPostal: null,
+        pickupPlaceId: "ChIJ-empty",
+        pickupLat: null,
+        pickupLng: null,
+        pickupVerificationStatus: "NEEDS_REVIEW",
+        deliveryAddress1: null,
+        deliveryAddress2: null,
+        deliveryPostal: null,
+        deliveryPlaceId: null,
+        deliveryLat: null,
+        deliveryLng: null,
+        portAddress1: null,
+        portPostal: null,
+        portPlaceId: null,
+        returningDepotAddress1: null,
+        returningDepotAddress2: null,
+        returningDepotPostal: null,
+        returningDepotPlaceId: null,
+        returningDepotLat: null,
+        returningDepotLng: null,
+        returningDepotCode: null,
+      },
+      async () => ({ postalCode: "", formattedAddress: "No postal here" }),
+    );
+    expect(next.pickupVerificationStatus).toBe("NEEDS_REVIEW");
+    expect(next.pickupPostal).toBeNull();
   });
 });

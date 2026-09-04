@@ -942,7 +942,16 @@ model Job {
   pickupReference    String?
   /// Job-level description (distinct from LCL item descriptions and Job.notes).
   description        String?   @db.Text
+  /// Requested customer pickup calendar instant (tenant-local day anchor when date-only).
   pickupDate         DateTime?
+  /// Requested pickup time precision: null = legacy/unknown (do not reinterpret);
+  /// true = explicit requested time; false = date-only (time not specified).
+  pickupDateHasTime  Boolean?
+  /// Requested customer delivery calendar instant (tenant-local day anchor when date-only).
+  deliveryDate       DateTime?
+  /// Requested delivery time precision: null = legacy/unknown (do not reinterpret);
+  /// true = explicit requested time; false = date-only (time not specified).
+  deliveryDateHasTime Boolean?
   pickupAddress1     String
   pickupAddress2     String?
   pickupPostal       String?

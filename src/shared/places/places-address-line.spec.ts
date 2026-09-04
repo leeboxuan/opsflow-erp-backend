@@ -1,6 +1,7 @@
 import {
   buildPlacesAddressLine1,
   buildPlacesAddressLine2FromSubpremise,
+  extractSingaporePostalFromText,
 } from "./places-address-line";
 
 describe("places address line helpers", () => {
@@ -28,5 +29,12 @@ describe("places address line helpers", () => {
     expect(buildPlacesAddressLine2FromSubpremise("07-20")).toBe("#07-20");
     expect(buildPlacesAddressLine2FromSubpremise("#07-20")).toBe("#07-20");
     expect(buildPlacesAddressLine2FromSubpremise(null)).toBe("");
+  });
+
+  it("extracts Singapore postal from formatted address text", () => {
+    expect(
+      extractSingaporePostalFromText("PSA Tuas Port Transport Hub, Singapore 639386"),
+    ).toBe("639386");
+    expect(extractSingaporePostalFromText("No postal here")).toBeNull();
   });
 });

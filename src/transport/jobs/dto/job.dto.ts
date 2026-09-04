@@ -422,6 +422,10 @@ export class JobListItemDto {
   collectionType?: CollectionType | null;
   status!: JobStatus;
   pickupDate!: Date | null;
+  /** null = legacy/unknown; true = explicit requested time; false = date-only. */
+  pickupDateHasTime?: boolean | null;
+  deliveryDate?: Date | null;
+  deliveryDateHasTime?: boolean | null;
   createdAt!: Date;
   updatedAt!: Date;
   assignedDriverId?: string | null;
@@ -493,6 +497,11 @@ export class JobDto {
   exportPortCode?: string | null;
 
   pickupDate: Date | null;
+  /** null = legacy/unknown; true = explicit requested time; false = date-only. */
+  pickupDateHasTime?: boolean | null;
+  deliveryDate?: Date | null;
+  /** null = legacy/unknown; true = explicit requested time; false = date-only. */
+  deliveryDateHasTime?: boolean | null;
   pickupAddress1: string;
   pickupAddress2: string | null;
   pickupPostal: string | null;

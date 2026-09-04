@@ -1,3 +1,11 @@
+/** First standalone 6-digit token (Singapore postal) in free text. */
+export function extractSingaporePostalFromText(
+  value: string | null | undefined,
+): string | null {
+  const match = String(value ?? "").match(/\b(\d{6})\b/);
+  return match?.[1] ?? null;
+}
+
 /** Collapse Rd/Road, punctuation, and case so place name vs street do not duplicate. */
 export function normalizePlacesAddressCompareKey(value: string): string {
   return value

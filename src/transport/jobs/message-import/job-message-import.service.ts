@@ -62,7 +62,7 @@ import {
 } from "./job-message-import.labelled-fields";
 import { parseOperationalTiming } from "./job-message-import.timing";
 import { enrichAddressFields } from "./job-message-import.address-parse";
-import { applyResolvedLocationsOntoReviewed } from "./job-message-import.location-verification";
+import { applyResolvedLocationsOntoReviewed, revalidateReviewedPlacesWithTrustedDetails } from "./job-message-import.location-verification";
 import { sanitizeReviewedDraftForResponse } from "./job-message-import.repair";
 import type {
   ControllerReviewedDraft,
@@ -73,6 +73,7 @@ import type {
   ReviewableJobDraft,
 } from "./job-message-import.types";
 import type { ReviewedDraftPatch } from "./job-message-import.validator";
+import { PlacesService } from "../../../shared/places/places.service";
 
 export type JobMessageImportConfirmDraftInput = {
   draftId: string;
@@ -356,6 +357,7 @@ export class JobMessageImportService {
     private readonly audit: AuditService,
     @Inject(JOB_MESSAGE_PARSER_TOKEN) private readonly parser: JobMessageParser,
     private readonly jobs: TransportJobsService,
+    private readonly places: PlacesService,
   ) {}
 
   private async loadImportLocationCatalogues() {
@@ -759,9 +761,23 @@ export class JobMessageImportService {
         if (draft.confirmedAt) {
           throw new BadRequestException("Draft already confirmed");
         }
-        const reviewed = applyResolvedLocationsOntoReviewed(
-          mergeReviewedDraftPatch(readControllerJson(draft.controllerJson), row),
-          catalogues,
+        const reviewed = await revalidateReviewedPlacesWithTrustedDetails(
+          applyResolvedLocationsOntoReviewed(
+            mergeReviewedDraftPatch(readControllerJson(draft.controllerJson), row),
+            catalogues,
+          ),
+          async (placeId) => {
+            try {
+              const details = await this.places.details(placeId);
+              return {
+                postalCode: details.postalCode,
+                formattedAddress: details.formattedAddress,
+                addressLine1: details.addressLine1,
+              };
+            } catch {
+              return null;
+            }
+          },
         );
         const validation = validateReviewedDraft(reviewed);
         if (validation.hasBlockingErrors) {

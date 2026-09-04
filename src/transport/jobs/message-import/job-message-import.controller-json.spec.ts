@@ -39,7 +39,7 @@ describe("controllerJsonFromParsed labelled field extraction", () => {
     const reviewed = controllerJsonFromParsed(parsed, null, context);
     expect(reviewed.pickupAddress1).toBe("PSA");
     expect(reviewed.pickupDateLocal).toBe("2026-08-13T23:00");
-    expect(reviewed.pickupDateDisplay).toBe("13 August 2026, 11:00 PM");
+    expect(reviewed.pickupDateDisplay).toBe("13 Aug 2026, 11:00 PM");
     expect(reviewed.timingText).toBe("13/08 @ 2300");
     expect(reviewed.instructions).toEqual(["Call PIC 30 minutes before arrival."]);
   });
@@ -156,7 +156,7 @@ describe("controllerJsonFromParsed labelled field extraction", () => {
     expect(reviewed.deliveryAddress1).toBeNull();
     expect(reviewed.pickupDateLocal).toBeNull();
     expect(reviewed.timingText).toBe("det 04/09");
-    expect(reviewed.pickupDateNeedsReview).toBe(true);
-    expect(reviewed.pickupDateDisplay).toMatch(/detention/i);
+    expect(reviewed.pickupDateNeedsReview).toBe(false);
+    expect(reviewed.pickupDateDisplay).toBeNull();
   });
 });

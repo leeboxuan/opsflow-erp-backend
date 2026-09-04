@@ -12,7 +12,7 @@ describe("parseOperationalTiming", () => {
     });
     expect(result.locationHint).toBe("PSA");
     expect(result.pickupDateLocal).toBe("2026-08-12T23:00");
-    expect(result.display).toBe("12 August 2026, 11:00 PM");
+    expect(result.display).toBe("12 Aug 2026, 11:00 PM");
     expect(result.needsReview).toBe(false);
   });
 
@@ -62,19 +62,19 @@ describe("parseOperationalTiming", () => {
       timezone: TZ,
     });
     expect(result.pickupDateLocal).toBeNull();
-    expect(result.needsReview).toBe(true);
+    expect(result.needsReview).toBe(false);
+    expect(result.display).toBeNull();
     expect(result.reason).toMatch(/detention/i);
-    expect(result.display).toMatch(/detention/i);
   });
 
-  it("does not invent midnight when a date has no time", () => {
+  it("keeps date-only requests without inventing midnight or blocking review", () => {
     const result = parseOperationalTiming({
       text: "04/09",
       referenceDate: "2026-09-01",
       timezone: TZ,
     });
-    expect(result.pickupDateLocal).toBeNull();
-    expect(result.needsReview).toBe(true);
-    expect(result.display).toMatch(/time not specified/i);
+    expect(result.pickupDateLocal).toBe("2026-09-04");
+    expect(result.needsReview).toBe(false);
+    expect(result.display).toBe("4 Sep 2026 · Time not specified");
   });
 });

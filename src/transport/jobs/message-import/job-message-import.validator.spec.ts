@@ -1,10 +1,12 @@
 import { JobMessageImportMovementType } from "@prisma/client";
 import {
   classifyValidationStatus,
+  mergeReviewedDraftPatch,
   normalizeReviewedDraft,
   validateReviewedDraft,
 } from "./job-message-import.validator";
 import { JobMessageImportDraftValidationStatus } from "@prisma/client";
+import { reviewedDraftToCreateJobDto } from "./job-message-import.mapping";
 
 function baseDraft(overrides: Record<string, unknown> = {}) {
   return normalizeReviewedDraft({
@@ -95,5 +97,91 @@ describe("job-message-import.validator", () => {
         duplicateOverrideAcknowledged: true,
       }),
     ).toBe(JobMessageImportDraftValidationStatus.READY);
+  });
+
+  it("EXPORT: Google port selection clears UNRESOLVED and survives confirm mapping", () => {
+    const unresolved = normalizeReviewedDraft({
+      movementType: JobMessageImportMovementType.EXPORT,
+      customerCompanyId: "comp_1",
+      deliveryAddress1: "Stuffing yard",
+      deliveryPostal: "629563",
+      deliveryPlaceId: "ChIJ-stuffing",
+      portAddress1: "TBA",
+      portSourceText: "TBA",
+      portPlaceId: null,
+      portPostal: null,
+      items: [
+        {
+          containerNumber: "UASU1061210",
+          sealNumber: null,
+          referenceNumber: null,
+          quantity: 1,
+        },
+      ],
+    });
+    expect(unresolved.portVerificationStatus).toBe("UNRESOLVED");
+    expect(
+      validateReviewedDraft(unresolved).fieldErrors.some(
+        (e) => e.field === "portAddress1" && e.code === "LOCATION_UNRESOLVED",
+      ),
+    ).toBe(true);
+
+    const selected = mergeReviewedDraftPatch(unresolved, {
+      portAddress1: "PSA Tuas Port Transport Hub, 200 Tuas South Avenue 5",
+      portPostal: "639386",
+      portPlaceId: "ChIJ-psa-tuas",
+      portLat: 1.27,
+      portLng: 103.64,
+    });
+    // placeId+postal alone is reviewable until trusted Places/master confirms.
+    expect(selected.portVerificationStatus).toBe("NEEDS_REVIEW");
+    expect(validateReviewedDraft(selected).hasBlockingErrors).toBe(false);
+
+    // Stale client status must not win over evidence on normalize.
+    const withStaleStatus = normalizeReviewedDraft({
+      ...selected,
+      portVerificationStatus: "UNRESOLVED",
+    });
+    expect(withStaleStatus.portVerificationStatus).toBe("NEEDS_REVIEW");
+
+    const dto = reviewedDraftToCreateJobDto({
+      reviewed: withStaleStatus,
+      timezone: "Asia/Singapore",
+    });
+    expect(dto.exportDetails?.exportPortAddress1).toBe(
+      "PSA Tuas Port Transport Hub, 200 Tuas South Avenue 5",
+    );
+  });
+
+  it("EXPORT: genuine TBA port remains blocked", () => {
+    const reviewed = mergeReviewedDraftPatch(
+      normalizeReviewedDraft({
+        movementType: JobMessageImportMovementType.EXPORT,
+        customerCompanyId: "comp_1",
+        deliveryAddress1: "Stuffing yard",
+        deliveryPostal: "629563",
+        deliveryPlaceId: "ChIJ-stuffing",
+        portAddress1: null,
+        items: [
+          {
+            containerNumber: "UASU1061210",
+            sealNumber: null,
+            referenceNumber: null,
+            quantity: 1,
+          },
+        ],
+      }),
+      {
+        portAddress1: "TBA (wait carrier)",
+        portPlaceId: null,
+        portPostal: null,
+      },
+    );
+    expect(reviewed.portVerificationStatus).toBe("UNRESOLVED");
+    expect(
+      validateReviewedDraft(reviewed).fieldErrors.some(
+        (e) => e.field === "portAddress1" && e.code === "LOCATION_UNRESOLVED",
+      ),
+    ).toBe(true);
   });
 });

@@ -1,3 +1,5 @@
+import { extractSingaporePostalFromText } from "../../../shared/places/places-address-line";
+
 export type AddressVerificationStatus =
   | "VERIFIED"
   | "MANUAL_CONFIRMED"
@@ -90,6 +92,10 @@ export function findAmbiguousMasterLocations(
 /**
  * Server-side location classification. Callers must not pass a client verification
  * status — Google/master VERIFIED is earned here, not trusted from the wire.
+ *
+ * placeId + postal alone is not enough for VERIFIED: pass trustedPlacesResolution
+ * only after PlacesService.details (or equivalent trusted Places resolution) confirms
+ * the place. Master catalogue match still yields VERIFIED without Places.
  */
 export function resolveImportedLocation(input: {
   rawText: string | null | undefined;
@@ -101,6 +107,8 @@ export function resolveImportedLocation(input: {
   lat?: number | null;
   lng?: number | null;
   code?: string | null;
+  /** True only after trusted Places details resolution (not client-shaped placeId+postal). */
+  trustedPlacesResolution?: boolean;
 }): ResolvedLocation {
   const sourceText = trimOrNull(input.rawText);
   const address1 = trimOrNull(input.address1);
@@ -144,7 +152,7 @@ export function resolveImportedLocation(input: {
     };
   }
 
-  if (placeId && isSingaporePostal(postal)) {
+  if (placeId && isSingaporePostal(postal) && input.trustedPlacesResolution === true) {
     return {
       sourceText,
       address1: address1 ?? sourceText,
@@ -155,6 +163,21 @@ export function resolveImportedLocation(input: {
       lng: input.lng ?? null,
       code,
       verificationStatus: "VERIFIED",
+    };
+  }
+
+  if (placeId && isSingaporePostal(postal)) {
+    return {
+      sourceText,
+      address1: address1 ?? sourceText,
+      address2: trimOrNull(input.address2),
+      postal,
+      placeId,
+      lat: input.lat ?? null,
+      lng: input.lng ?? null,
+      code,
+      // Client-shaped placeId+postal is reviewable until Places/master confirms.
+      verificationStatus: "NEEDS_REVIEW",
     };
   }
 
@@ -423,5 +446,162 @@ export function applyResolvedLocationsOntoReviewed<T extends ReviewedLocationDra
     portPlaceId: portFields.placeId,
     portVerificationStatus: matched.port.verificationStatus,
     portSourceText: reviewed.portSourceText ?? matched.port.sourceText,
+  };
+}
+
+export type TrustedPlacesDetails = {
+  postalCode?: string | null;
+  formattedAddress?: string | null;
+  addressLine1?: string | null;
+};
+
+/**
+ * Confirm-time Places revalidation. Upgrades placeId slots to VERIFIED only when
+ * Places details yield a Singapore postal (postal_code or formatted_address extract).
+ * Never fabricates a postal when Places has none.
+ */
+export async function revalidateReviewedPlacesWithTrustedDetails<
+  T extends ReviewedLocationDraft,
+>(
+  reviewed: T,
+  fetchDetails: (placeId: string) => Promise<TrustedPlacesDetails | null>,
+): Promise<T> {
+  const resolveSlot = async (slot: {
+    address1: string | null;
+    address2: string | null;
+    postal: string | null;
+    placeId: string | null;
+    lat: number | null;
+    lng: number | null;
+    code?: string | null;
+    sourceText?: string | null;
+    status: AddressVerificationStatus | undefined;
+  }) => {
+    if (slot.status === "VERIFIED" && slot.code) {
+      return slot;
+    }
+    const placeId = trimOrNull(slot.placeId);
+    if (!placeId) return slot;
+
+    let details: TrustedPlacesDetails | null = null;
+    try {
+      details = await fetchDetails(placeId);
+    } catch {
+      details = null;
+    }
+    if (!details) {
+      return { ...slot, status: "NEEDS_REVIEW" as const };
+    }
+
+    const placesPostal =
+      (isSingaporePostal(details.postalCode)
+        ? String(details.postalCode).trim()
+        : null) ??
+      extractSingaporePostalFromText(details.formattedAddress) ??
+      extractSingaporePostalFromText(details.addressLine1);
+
+    if (!placesPostal) {
+      return {
+        ...slot,
+        // Keep client postal if present but stay reviewable — do not invent.
+        status: "NEEDS_REVIEW" as const,
+      };
+    }
+
+    const trusted = resolveImportedLocation({
+      rawText: slot.sourceText ?? slot.address1,
+      address1: slot.address1,
+      address2: slot.address2,
+      postal: placesPostal,
+      placeId,
+      lat: slot.lat,
+      lng: slot.lng,
+      code: slot.code,
+      trustedPlacesResolution: true,
+    });
+
+    return {
+      address1: trusted.address1,
+      address2: trusted.address2,
+      postal: trusted.postal,
+      placeId: trusted.placeId,
+      lat: trusted.lat,
+      lng: trusted.lng,
+      code: trusted.code,
+      sourceText: slot.sourceText,
+      status: trusted.verificationStatus,
+    };
+  };
+
+  const pickup = await resolveSlot({
+    address1: reviewed.pickupAddress1,
+    address2: reviewed.pickupAddress2,
+    postal: reviewed.pickupPostal,
+    placeId: reviewed.pickupPlaceId,
+    lat: reviewed.pickupLat,
+    lng: reviewed.pickupLng,
+    sourceText: reviewed.pickupSourceText,
+    status: reviewed.pickupVerificationStatus,
+  });
+  const delivery = await resolveSlot({
+    address1: reviewed.deliveryAddress1,
+    address2: reviewed.deliveryAddress2,
+    postal: reviewed.deliveryPostal,
+    placeId: reviewed.deliveryPlaceId,
+    lat: reviewed.deliveryLat,
+    lng: reviewed.deliveryLng,
+    sourceText: reviewed.deliverySourceText,
+    status: reviewed.deliveryVerificationStatus,
+  });
+  const depot = await resolveSlot({
+    address1: reviewed.returningDepotAddress1,
+    address2: reviewed.returningDepotAddress2,
+    postal: reviewed.returningDepotPostal,
+    placeId: reviewed.returningDepotPlaceId,
+    lat: reviewed.returningDepotLat,
+    lng: reviewed.returningDepotLng,
+    code: reviewed.returningDepotCode,
+    sourceText: reviewed.returningDepotSourceText,
+    status: reviewed.returningDepotVerificationStatus,
+  });
+  const port = await resolveSlot({
+    address1: reviewed.portAddress1,
+    address2: null,
+    postal: reviewed.portPostal,
+    placeId: reviewed.portPlaceId,
+    lat: null,
+    lng: null,
+    sourceText: reviewed.portSourceText,
+    status: reviewed.portVerificationStatus,
+  });
+
+  return {
+    ...reviewed,
+    pickupAddress1: pickup.address1,
+    pickupAddress2: pickup.address2,
+    pickupPostal: pickup.postal,
+    pickupPlaceId: pickup.placeId,
+    pickupLat: pickup.lat,
+    pickupLng: pickup.lng,
+    pickupVerificationStatus: pickup.status,
+    deliveryAddress1: delivery.address1,
+    deliveryAddress2: delivery.address2,
+    deliveryPostal: delivery.postal,
+    deliveryPlaceId: delivery.placeId,
+    deliveryLat: delivery.lat,
+    deliveryLng: delivery.lng,
+    deliveryVerificationStatus: delivery.status,
+    returningDepotAddress1: depot.address1,
+    returningDepotAddress2: depot.address2,
+    returningDepotPostal: depot.postal,
+    returningDepotPlaceId: depot.placeId,
+    returningDepotLat: depot.lat,
+    returningDepotLng: depot.lng,
+    returningDepotCode: depot.code ?? reviewed.returningDepotCode,
+    returningDepotVerificationStatus: depot.status,
+    portAddress1: port.address1,
+    portPostal: port.postal,
+    portPlaceId: port.placeId,
+    portVerificationStatus: port.status,
   };
 }

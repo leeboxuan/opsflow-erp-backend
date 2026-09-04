@@ -428,6 +428,33 @@ export class CreateJobDto {
   pickupDate?: string;
 
   @ApiPropertyOptional({
+    nullable: true,
+    description:
+      "Requested pickup time precision. true = explicit time; false = date-only; null/omit with null pickupDate clears both. Legacy rows may be null.",
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsBoolean()
+  pickupDateHasTime?: boolean | null;
+
+  @ApiPropertyOptional({
+    description: "Requested customer delivery instant (ISO). Date-only uses tenant-local midnight as calendar anchor only.",
+  })
+  @IsOptional()
+  @IsDateString()
+  deliveryDate?: string;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      "Requested delivery time precision. true = explicit time; false = date-only; null/omit with null deliveryDate clears both. Legacy rows may be null.",
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsBoolean()
+  deliveryDateHasTime?: boolean | null;
+
+  @ApiPropertyOptional({
     description:
       "Job-level pickup reference (IMPORT/EXPORT/COLLECTION). Preferred over per-item pickupReference.",
     nullable: true,
