@@ -61,8 +61,15 @@ describe("resolveLorryChitCargoFromTripLinks", () => {
     }
   });
 
-  it("flags zero links", () => {
-    expect(() => resolveLorryChitCargoFromTripLinks([])).toThrow(BadRequestException);
+  it("emits a blank cargo row when the trip has no link yet", () => {
+    const resolved = resolveLorryChitCargoFromTripLinks([], { tripId: "trip-1" });
+    expect(resolved.jobItemId).toBe("");
+    expect(resolved.containerNumber).toBeNull();
+    expect(resolved.cargoRow).toEqual({
+      containerOrCargo: "",
+      sizeOrPackage: "",
+      remarks: "",
+    });
   });
 
   it("two Trips under the same Job each resolve only their own container", () => {

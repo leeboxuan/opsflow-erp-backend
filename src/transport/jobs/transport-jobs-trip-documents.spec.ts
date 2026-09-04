@@ -60,13 +60,17 @@ function makeService(overrides?: {
     },
     tripDocument: {
       findMany: jest.fn().mockImplementation(({ where }: any) => {
+        const allowedTypes: string[] | undefined = where.type?.in;
+        const matchesType = (d: any) =>
+          !allowedTypes || allowedTypes.includes(d.type);
         if (where.tripId?.in) {
           return Promise.resolve(
             tripDocuments.filter(
               (d) =>
                 d.tenantId === where.tenantId
                 && d.isActive === true
-                && where.tripId.in.includes(d.tripId),
+                && where.tripId.in.includes(d.tripId)
+                && matchesType(d),
             ),
           );
         }
@@ -76,7 +80,8 @@ function makeService(overrides?: {
               (d) =>
                 d.tenantId === where.tenantId
                 && d.isActive === true
-                && d.tripId === where.tripId,
+                && d.tripId === where.tripId
+                && matchesType(d),
             ),
           );
         }
@@ -116,6 +121,29 @@ describe("TransportJobsService admin trip documents", () => {
     generatedBySystem: false,
     isSigned: false,
   };
+
+  it("listTripDocuments returns generated Lorry Chit for ops workspace", async () => {
+    const lorryDoc = {
+      id: "doc-lorry",
+      tenantId: "t1",
+      tripId: "trip-auto",
+      type: TripDocumentType.LORRY_CHIT,
+      storageKey: "t1/jobs/job1/trips/trip-auto/lorry-chit/chit.pdf",
+      originalName: "chit.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 300,
+      isActive: true,
+      createdAt: new Date("2026-06-10T07:30:00.000Z"),
+      uploadedByUserId: null,
+      uploadedBy: null,
+      generatedBySystem: true,
+      isSigned: false,
+    };
+    const { svc } = makeService({ tripDocuments: [lorryDoc] });
+    const docs = await svc.listTripDocuments("t1", "job1", "trip-auto", user);
+    expect(docs).toHaveLength(1);
+    expect(docs[0].type).toBe(TripDocumentType.LORRY_CHIT);
+  });
 
   it("listTripDocuments returns TRAILER_START_PHOTO for appended trip", async () => {
     const { svc } = makeService({ tripDocuments: [trailerStartDoc] });

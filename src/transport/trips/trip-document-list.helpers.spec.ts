@@ -1,5 +1,14 @@
 import { TripDocumentType } from "@prisma/client";
-import { deriveTripDocumentStatus } from "./trip-document-list.helpers";
+import {
+  ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES,
+  deriveTripDocumentStatus,
+} from "./trip-document-list.helpers";
+
+describe("ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES", () => {
+  it("includes Lorry Chit so web workspace can show generated PDFs", () => {
+    expect(ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES).toContain(TripDocumentType.LORRY_CHIT);
+  });
+});
 
 describe("deriveTripDocumentStatus", () => {
   it("marks trailer start photo as uploaded when present", () => {

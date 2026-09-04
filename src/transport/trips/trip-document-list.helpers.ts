@@ -4,6 +4,7 @@ import { TripDocumentType } from "@prisma/client";
 export const ADMIN_VISIBLE_TRIP_DOCUMENT_TYPES: TripDocumentType[] = [
   TripDocumentType.PICKUP_DO,
   TripDocumentType.DELIVERY_DO,
+  TripDocumentType.LORRY_CHIT,
   TripDocumentType.POD_PHOTO,
   TripDocumentType.POD_SIGNATURE,
   TripDocumentType.PICKUP_SIGNATURE,

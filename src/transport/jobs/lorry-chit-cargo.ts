@@ -35,9 +35,18 @@ export function resolveLorryChitCargoFromTripLinks(
   const rows = Array.isArray(links) ? links : [];
 
   if (rows.length === 0) {
-    throw new BadRequestException(
-      `Lorry Chit requires exactly one TripJobItem link for this Trip; found 0.${tripHint} Flag for review.`,
-    );
+    // Job-create can require a Lorry Chit before cargo is linked (Import draft,
+    // collection without a container yet). Still emit an unsigned PDF so the
+    // requirement is not left in GENERATION_FAILED; regenerate later fills cargo.
+    return {
+      jobItemId: "",
+      containerNumber: null,
+      cargoRow: {
+        containerOrCargo: "",
+        sizeOrPackage: "",
+        remarks: "",
+      },
+    };
   }
 
   if (rows.length > 1) {
