@@ -7,7 +7,11 @@ describe("DriverJobsService updateOperationalDetails", () => {
   const tripId = "trip1";
   const driverUserId = "driver-1";
 
-  function makeSvc(opts?: { tripStatus?: TripStatus; containerNumber?: string | null }) {
+  function makeSvc(opts?: {
+    tripStatus?: TripStatus;
+    containerNumber?: string | null;
+    opsJobs?: { regenerateUnsignedLorryChitAfterContainerUpdate: jest.Mock };
+  }) {
     const jobItemUpdate = jest.fn();
     const tripUpdate = jest.fn();
     const auditLog = jest.fn();
@@ -78,6 +82,7 @@ describe("DriverJobsService updateOperationalDetails", () => {
       prisma,
       { log: auditLog } as any,
       { getClient: jest.fn() } as any,
+      opts?.opsJobs as any,
     );
 
     return { svc, prisma, jobItemUpdate, tripUpdate, auditLog };
@@ -136,6 +141,39 @@ describe("DriverJobsService updateOperationalDetails", () => {
     );
     expect(result.driverRemarks).toBe("Late at gate");
     expect(result.job.description).toBe("Ops description");
+  });
+
+  it("returns after the write without waiting for unsigned lorry chit regeneration", async () => {
+    let finishRegen!: () => void;
+    const regen = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRegen = resolve;
+        }),
+    );
+    const { svc } = makeSvc({
+      opsJobs: { regenerateUnsignedLorryChitAfterContainerUpdate: regen },
+    });
+
+    const result = await svc.updateOperationalDetails(
+      tenantId,
+      jobId,
+      tripId,
+      driverUserId,
+      {
+        containers: [
+          {
+            itemId: "item-1",
+            containerNumber: "CONT-NEW",
+            sealNumber: "SEAL-NEW",
+          },
+        ],
+      },
+    );
+
+    expect(result).toBeDefined();
+    expect(regen).toHaveBeenCalled();
+    finishRegen();
   });
 
   it("preserves previous remarks in audit history on edit", async () => {

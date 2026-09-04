@@ -1,9 +1,12 @@
 import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import { loadInvoiceAssetBuffer } from "../finance/invoice-render";
+import { formatLorryChitDateLabel } from "../jobs/lorry-chit-fields";
 
 /** Packaged Noto Sans SC subset (OFL). Copied to dist via nest-cli finance assets. */
 export const LORRY_CHIT_CJK_FONT_ASSET = "NotoSansSC-Regular.otf";
+/** Replace this file later with the real company chop. */
+export const LORRY_CHIT_STAMP_ASSET = "WF-company-stamp.png";
 
 export type LorryChitCargoRow = {
   containerOrCargo: string;
@@ -167,7 +170,8 @@ export async function buildLorryChitPdfBuffer(input: LorryChitPdfInput): Promise
   drawText(page, title, (PAGE_W - titleW) / 2, y - 52, titleSize, bold);
 
   const rightColX = PAGE_W - MARGIN - 220;
-  fieldWithLine(page, "Date:", input.dateLabel?.trim() || "", rightColX, y - 18, bold, font, 10, 200);
+  const dateLabel = input.dateLabel?.trim() || formatLorryChitDateLabel(new Date());
+  fieldWithLine(page, "Date:", dateLabel, rightColX, y - 18, bold, font, 10, 200);
   {
     const labelSize = 10;
     const prefix = "Truck No.: (";
@@ -348,6 +352,23 @@ export async function buildLorryChitPdfBuffer(input: LorryChitPdfInput): Promise
   const stampLineW = 180;
   drawUnderline(page, MARGIN, y, sigLineW);
   drawUnderline(page, PAGE_W - MARGIN - stampLineW, y, stampLineW);
+
+  const stampBytes = loadInvoiceAssetBuffer(LORRY_CHIT_STAMP_ASSET);
+  if (stampBytes?.length) {
+    try {
+      const stamp = await pdf.embedPng(stampBytes);
+      const stampW = 92;
+      const stampH = (stamp.height / stamp.width) * stampW;
+      page.drawImage(stamp, {
+        x: PAGE_W - MARGIN - stampLineW + (stampLineW - stampW) / 2,
+        y: y + 6,
+        width: stampW,
+        height: stampH,
+      });
+    } catch {
+      // Stamp embed is best-effort; the printed "Company Stamp" label remains.
+    }
+  }
 
   if (input.signatureImageBytes?.length) {
     try {

@@ -2599,6 +2599,35 @@ export class DriverJobsService {
     });
     rt.publishDriverActiveJobsUpdated(this.realtime, tenantId, driverUserId);
 
+    try {
+      const unsignedLorry = await this.prisma.tripDocument.findFirst({
+        where: {
+          tenantId,
+          tripId,
+          type: TripDocumentType.LORRY_CHIT,
+          isActive: true,
+          isSigned: { not: true },
+        },
+        select: { id: true },
+      });
+      if (unsignedLorry && this.opsJobs?.generateTripDeliveryDoDocument) {
+        await this.opsJobs.generateTripDeliveryDoDocument(
+          tenantId,
+          jobId,
+          tripId,
+          { userId: driverUserId },
+          "MANUAL_REGENERATE",
+          null,
+          TripDocumentType.LORRY_CHIT,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `[DriverJobsService] Lorry Chit refresh after start failed for ${tripId}:`,
+        error,
+      );
+    }
+
     return this.getOneForDriver(tenantId, jobId, driverUserId);
   }
 
@@ -3702,21 +3731,24 @@ export class DriverJobsService {
       (u) => u.containerNumber !== undefined,
     );
     if (containerNumberChanged && this.opsJobs?.regenerateUnsignedLorryChitAfterContainerUpdate) {
-      try {
-        await this.opsJobs.regenerateUnsignedLorryChitAfterContainerUpdate(
+      // Do not block the driver PATCH on PDF regeneration. Awaiting it made the
+      // request exceed the mobile 15s timeout after the DB write had already
+      // succeeded, so the app showed a false "could not reach" error.
+      void this.opsJobs
+        .regenerateUnsignedLorryChitAfterContainerUpdate(
           tenantId,
           jobId,
           tripId,
           { userId: driverUserId, role: Role.DRIVER },
-        );
-      } catch (err) {
-        console.warn("lorry_chit_unsigned_regenerate_after_container_update_failed", {
-          tenantId,
-          jobId,
-          tripId,
-          message: err instanceof Error ? err.message : String(err),
+        )
+        .catch((err) => {
+          console.warn("lorry_chit_unsigned_regenerate_after_container_update_failed", {
+            tenantId,
+            jobId,
+            tripId,
+            message: err instanceof Error ? err.message : String(err),
+          });
         });
-      }
     }
 
     const detail = await this.getTripDetailForDriver(tenantId, tripId, driverUserId);
@@ -4070,7 +4102,11 @@ export class DriverJobsService {
       },
       include: documentUploadedByInclude,
     });
-    if (existing) {
+    const shouldRefreshUnsignedLorryChit =
+      documentType === TripDocumentType.LORRY_CHIT
+      && existing
+      && existing.isSigned !== true;
+    if (existing && !shouldRefreshUnsignedLorryChit) {
       return this.attachTripDocumentMetadata(existing);
     }
 

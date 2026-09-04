@@ -122,6 +122,30 @@ describe("DriverJobsService.ensureRequiredTripDocumentForDriver", () => {
     );
   });
 
+  it("refreshes an existing unsigned Lorry Chit so truck/date/stamp are current", async () => {
+    const existing = {
+      id: "doc-stale",
+      type: TripDocumentType.LORRY_CHIT,
+      tripId,
+      tenantId,
+      isActive: true,
+      isSigned: false,
+      originalName: "lorry.pdf",
+      mimeType: "application/pdf",
+      createdAt: new Date(),
+    };
+    const { svc, opsJobs } = makeSvc({ existingDoc: existing });
+    const doc = await svc.ensureRequiredTripDocumentForDriver(
+      tenantId,
+      jobId,
+      tripId,
+      driverUserId,
+      "LORRY_CHIT",
+    );
+    expect(doc.id).toBe("doc-new");
+    expect(opsJobs.generateTripDeliveryDoDocument).toHaveBeenCalled();
+  });
+
   it("returns existing document without regenerating (idempotent)", async () => {
     const existing = {
       id: "doc-existing",

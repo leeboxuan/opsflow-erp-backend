@@ -13,12 +13,21 @@ export type JobDetailsTripSummaryInput<
 > = {
   id: string;
   status: string;
+  tripSequence?: number | null;
+  jobSequence?: number | null;
   payoutLines?: TLine[] | null;
   tripJobItems?: Array<{
     id: string;
     jobItemId: string;
     containerNumberSnapshot?: string | null;
   }> | null;
+};
+
+export type JobContainerSummaryTripLink = {
+  tripId: string;
+  tripDisplayRef: string | null;
+  tripJobItemId: string | null;
+  containerNumberSnapshot: string | null;
 };
 
 export type JobDetailsItemSummaryInput = {
@@ -55,30 +64,54 @@ export function buildJobPayoutSummary(
   };
 }
 
+function tripSequenceKey(
+  trip: JobDetailsTripSummaryInput,
+  fallbackIndex: number,
+): number {
+  if (typeof trip.tripSequence === "number") return trip.tripSequence;
+  if (typeof trip.jobSequence === "number") return trip.jobSequence;
+  return fallbackIndex;
+}
+
+function toContainerRow(
+  item: JobDetailsItemSummaryInput,
+  tripLinks: JobContainerSummaryTripLink[],
+) {
+  const first = tripLinks[0];
+  return {
+    id: item.id,
+    tripJobItemId: first?.tripJobItemId ?? null,
+    itemCode: item.itemCode,
+    sealNo: item.sealNo ?? null,
+    containerSize: item.containerSize ?? null,
+    description: item.description ?? null,
+    qty: item.qty ?? null,
+    pickupReference: item.pickupReference ?? null,
+    tripId: first?.tripId ?? null,
+    tripDisplayRef: first?.tripDisplayRef ?? null,
+    containerNumberSnapshot: first?.containerNumberSnapshot ?? null,
+    trips: tripLinks,
+  };
+}
+
 export function buildJobContainerSummary(
   items: JobDetailsItemSummaryInput[],
   trips: JobDetailsTripSummaryInput[],
   tripDisplayRefById: ReadonlyMap<string, string>,
 ) {
   const itemById = new Map(items.map((item) => [item.id, item]));
-  const linkedItemIds = new Set<string>();
-  const containers: Array<{
-    id: string;
-    tripJobItemId: string | null;
-    itemCode: string;
-    sealNo: string | null;
-    containerSize: string | null;
-    description: string | null;
-    qty: number | null;
-    pickupReference: string | null;
-    tripId: string | null;
-    tripDisplayRef: string | null;
-    containerNumberSnapshot: string | null;
-  }> = [];
+  const tripsByItemId = new Map<string, Map<string, JobContainerSummaryTripLink>>();
   let tripsWithContainers = 0;
   let tripsWithoutContainers = 0;
 
-  for (const trip of trips) {
+  const orderedTrips = trips
+    .map((trip, index) => ({ trip, index }))
+    .sort(
+      (a, b) =>
+        tripSequenceKey(a.trip, a.index) - tripSequenceKey(b.trip, b.index),
+    );
+
+  for (const { trip } of orderedTrips) {
     const links = trip.tripJobItems ?? [];
     if (trip.status !== "CANCELLED") {
       if (links.length > 0) tripsWithContainers += 1;
@@ -87,42 +120,34 @@ export function buildJobContainerSummary(
     for (const link of links) {
       const item = itemById.get(link.jobItemId);
       if (!item) continue;
-      linkedItemIds.add(item.id);
-      containers.push({
-        id: item.id,
-        tripJobItemId: link.id,
-        itemCode: item.itemCode,
-        sealNo: item.sealNo ?? null,
-        containerSize: item.containerSize ?? null,
-        description: item.description ?? null,
-        qty: item.qty ?? null,
-        pickupReference: item.pickupReference ?? null,
+      let byTripId = tripsByItemId.get(item.id);
+      if (!byTripId) {
+        byTripId = new Map();
+        tripsByItemId.set(item.id, byTripId);
+      }
+      if (byTripId.has(trip.id)) continue;
+      byTripId.set(trip.id, {
         tripId: trip.id,
         tripDisplayRef: tripDisplayRefById.get(trip.id) ?? null,
+        tripJobItemId: link.id,
         containerNumberSnapshot: link.containerNumberSnapshot ?? null,
       });
     }
   }
 
-  for (const item of items) {
-    if (linkedItemIds.has(item.id)) continue;
-    containers.push({
-      id: item.id,
-      tripJobItemId: null,
-      itemCode: item.itemCode,
-      sealNo: item.sealNo ?? null,
-      containerSize: item.containerSize ?? null,
-      description: item.description ?? null,
-      qty: item.qty ?? null,
-      pickupReference: item.pickupReference ?? null,
-      tripId: null,
-      tripDisplayRef: null,
-      containerNumberSnapshot: null,
-    });
-  }
+  const seenItemIds = new Set<string>();
+  const containers = items
+    .filter((item) => {
+      if (seenItemIds.has(item.id)) return false;
+      seenItemIds.add(item.id);
+      return true;
+    })
+    .map((item) =>
+      toContainerRow(item, Array.from(tripsByItemId.get(item.id)?.values() ?? [])),
+    );
 
   return {
-    totalContainers: items.length,
+    totalContainers: containers.length,
     tripsWithContainers,
     tripsWithoutContainers,
     containers,

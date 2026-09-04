@@ -731,6 +731,13 @@ export class JobPayoutSummaryDto {
   tripsWithoutPayout!: number;
 }
 
+export class JobContainerSummaryTripLinkDto {
+  tripId!: string;
+  tripDisplayRef!: string | null;
+  tripJobItemId!: string | null;
+  containerNumberSnapshot!: string | null;
+}
+
 export class JobContainerSummaryItemDto {
   id!: string;
   tripJobItemId!: string | null;
@@ -741,9 +748,12 @@ export class JobContainerSummaryItemDto {
   description!: string | null;
   qty!: number | null;
   pickupReference!: string | null;
+  /** First linked trip in sequence order; null when unassigned. */
   tripId!: string | null;
   tripDisplayRef!: string | null;
   containerNumberSnapshot!: string | null;
+  /** Deduplicated TripJobItem links, ordered by trip sequence. */
+  trips!: JobContainerSummaryTripLinkDto[];
 }
 
 export class JobContainerSummaryDto {

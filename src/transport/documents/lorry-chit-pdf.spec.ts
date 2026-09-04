@@ -3,11 +3,18 @@ import {
   buildLorryChitPdfBuffer,
   LORRY_CHIT_CJK_FONT_ASSET,
   LORRY_CHIT_COMPANY,
+  LORRY_CHIT_STAMP_ASSET,
   textNeedsCjkFont,
 } from "./lorry-chit-pdf";
 import { loadInvoiceAssetBuffer } from "../finance/invoice-render";
 
 describe("Lorry Chit PDF layout", () => {
+  it("requires the packaged placeholder company stamp", () => {
+    const stamp = loadInvoiceAssetBuffer(LORRY_CHIT_STAMP_ASSET);
+    expect(stamp).not.toBeNull();
+    expect(stamp!.length).toBeGreaterThan(1_000);
+  });
+
   it("requires the packaged Wisdom Force logo asset", () => {
     const logo = loadInvoiceAssetBuffer("WF-logo.jpeg");
     expect(logo).not.toBeNull();

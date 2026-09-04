@@ -51,6 +51,7 @@ describe("DriverJobsService startTripWithTrailer date gate", () => {
       tripDocument: {
         create: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       tripDocumentRequirement: {
         findMany: jest.fn().mockResolvedValue([]),

@@ -140,7 +140,126 @@ describe("job details summaries", () => {
       id: "item-3",
       tripId: null,
       tripDisplayRef: null,
+      trips: [],
     });
+    expect(summary.containers[0].trips).toEqual([
+      expect.objectContaining({ tripId: "trip-1", tripJobItemId: "link-1" }),
+    ]);
+  });
+
+  it("emits one row per JobItem with stacked unique trips in sequence order", () => {
+    const items = [
+      { id: "item-a", itemCode: "OOCU9212980", sealNo: "S1", description: "A", qty: 1 },
+      { id: "item-b", itemCode: "CSNU7730628", sealNo: "S2", description: "B", qty: 1 },
+      { id: "item-c", itemCode: "FFAU2879099", sealNo: "S3", description: "C", qty: 1 },
+    ];
+    const trips = [
+      {
+        id: "trip-2",
+        status: TripStatus.ONGOING,
+        tripSequence: 2,
+        tripJobItems: [
+          { id: "link-a2", jobItemId: "item-a", containerNumberSnapshot: "OOCU9212980" },
+          { id: "link-a2-dup", jobItemId: "item-a", containerNumberSnapshot: "OOCU9212980" },
+        ],
+      },
+      {
+        id: "trip-1",
+        status: TripStatus.ONGOING,
+        tripSequence: 1,
+        tripJobItems: [
+          { id: "link-a1", jobItemId: "item-a", containerNumberSnapshot: "OOCU9212980" },
+        ],
+      },
+      {
+        id: "trip-3",
+        status: TripStatus.ONGOING,
+        tripSequence: 3,
+        tripJobItems: [
+          { id: "link-b3", jobItemId: "item-b", containerNumberSnapshot: "CSNU7730628" },
+        ],
+      },
+      {
+        id: "trip-4",
+        status: TripStatus.ONGOING,
+        tripSequence: 4,
+        tripJobItems: [
+          { id: "link-b4", jobItemId: "item-b", containerNumberSnapshot: "CSNU7730628" },
+        ],
+      },
+      {
+        id: "trip-5",
+        status: TripStatus.ONGOING,
+        tripSequence: 5,
+        tripJobItems: [
+          { id: "link-c5", jobItemId: "item-c", containerNumberSnapshot: "FFAU2879099" },
+        ],
+      },
+      {
+        id: "trip-6",
+        status: TripStatus.ONGOING,
+        tripSequence: 6,
+        tripJobItems: [
+          { id: "link-c6", jobItemId: "item-c", containerNumberSnapshot: "FFAU2879099" },
+        ],
+      },
+    ];
+
+    const summary = buildJobContainerSummary(
+      items,
+      trips,
+      new Map([
+        ["trip-1", "JOB-1-T01"],
+        ["trip-2", "JOB-1-T02"],
+        ["trip-3", "JOB-1-T03"],
+        ["trip-4", "JOB-1-T04"],
+        ["trip-5", "JOB-1-T05"],
+        ["trip-6", "JOB-1-T06"],
+      ]),
+    );
+
+    expect(summary.containers).toHaveLength(3);
+    expect(summary.containers.map((row) => row.itemCode)).toEqual([
+      "OOCU9212980",
+      "CSNU7730628",
+      "FFAU2879099",
+    ]);
+    expect(summary.containers[0].qty).toBe(1);
+    expect(summary.containers[0].trips.map((link) => link.tripDisplayRef)).toEqual([
+      "JOB-1-T01",
+      "JOB-1-T02",
+    ]);
+    expect(summary.containers.flatMap((row) => row.trips)).toHaveLength(6);
+  });
+
+  it("keeps distinct JobItems with a shared container number and null numbers separate", () => {
+    const summary = buildJobContainerSummary(
+      [
+        { id: "item-1", itemCode: "SAME", qty: 2 },
+        { id: "item-2", itemCode: "SAME", qty: 3 },
+        { id: "item-3", itemCode: "", qty: 1 },
+        { id: "item-4", itemCode: "", qty: 1 },
+      ],
+      [
+        {
+          id: "trip-1",
+          status: TripStatus.ONGOING,
+          tripSequence: 1,
+          tripJobItems: [{ id: "l1", jobItemId: "item-1" }],
+        },
+      ],
+      new Map([["trip-1", "JOB-1-T01"]]),
+    );
+
+    expect(summary.containers).toHaveLength(4);
+    expect(summary.containers.map((row) => row.id)).toEqual([
+      "item-1",
+      "item-2",
+      "item-3",
+      "item-4",
+    ]);
+    expect(summary.containers[1].qty).toBe(3);
+    expect(summary.containers[1].trips).toEqual([]);
   });
 });
 
@@ -276,6 +395,12 @@ describe("TransportJobsService.getDetails", () => {
       id: "item-1",
       tripId: "trip-1",
       sealNo: "SEAL-1",
+      trips: [
+        expect.objectContaining({
+          tripId: "trip-1",
+          tripDisplayRef: "JOB-1-T01",
+        }),
+      ],
     });
     expect(result.trips[0]).toMatchObject({
       payoutTotalCents: 1000,

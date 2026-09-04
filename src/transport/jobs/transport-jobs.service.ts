@@ -237,6 +237,10 @@ import {
   lorryChitCargoRowsFromResolved,
   resolveLorryChitCargoFromTripLinks,
 } from "./lorry-chit-cargo";
+import {
+  formatLorryChitDateLabel,
+  resolveLorryChitTruckNumber,
+} from "./lorry-chit-fields";
 import { toContainerSizeWire } from "./container-size";
 import { isUniqueConstraintError } from "../../shared/idempotency/idempotency.util";
 import {
@@ -2316,6 +2320,79 @@ export class TransportJobsService {
   ) {
     const links = await loadTripJobItemLinks(this.prisma as any, tenantId, tripId);
     return resolveLorryChitCargoFromTripLinks(links as any, { tripId });
+  }
+
+  private async resolveLorryChitPdfHeader(
+    tenantId: string,
+    trip: {
+      assignedDriverUserId?: string | null;
+      driverId?: string | null;
+      acceptedVehicleNo?: string | null;
+      trailerNumber?: string | null;
+      vessel?: string | null;
+      shipper?: string | null;
+      vehicles?: { plateNo?: string | null } | null;
+      fleetVehicle?: { plateNo?: string | null } | null;
+      chassis?: { chassisNo?: string | null } | null;
+    },
+    job: {
+      externalRef?: string | null;
+      vesselName?: string | null;
+      shipper?: string | null;
+      customerCompany?: { name?: string | null } | null;
+    },
+  ) {
+    const driverUserId = trip.assignedDriverUserId ?? null;
+    const driverProfileId = trip.driverId ?? null;
+    const [tenant, driver, userVehicle, userFleetVehicle] = await Promise.all([
+      this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { timezone: true },
+      }),
+      driverUserId || driverProfileId
+        ? this.prisma.drivers.findFirst({
+            where: {
+              tenantId,
+              OR: [
+                ...(driverUserId ? [{ userId: driverUserId }] : []),
+                ...(driverProfileId ? [{ id: driverProfileId }] : []),
+              ],
+            },
+            select: {
+              assignedVehicle: { select: { plateNo: true } },
+              assignedFleetVehicle: { select: { plateNo: true } },
+            },
+          })
+        : Promise.resolve(null),
+      driverUserId
+        ? this.prisma.vehicle.findFirst({
+            where: { tenantId, driverId: driverUserId },
+            select: { plateNo: true },
+          })
+        : Promise.resolve(null),
+      driverUserId
+        ? this.prisma.fleetVehicle.findFirst({
+            where: { tenantId, driverId: driverUserId },
+            select: { plateNo: true },
+          })
+        : Promise.resolve(null),
+    ]);
+    return {
+      dateLabel: formatLorryChitDateLabel(new Date(), tenant?.timezone),
+      truckNumber: resolveLorryChitTruckNumber({
+        driverFleetPlate:
+          driver?.assignedFleetVehicle?.plateNo ?? userFleetVehicle?.plateNo,
+        driverVehiclePlate:
+          driver?.assignedVehicle?.plateNo ?? userVehicle?.plateNo,
+        tripFleetPlate: trip.fleetVehicle?.plateNo,
+        tripVehiclePlate: trip.vehicles?.plateNo,
+        acceptedVehicleNo: trip.acceptedVehicleNo,
+      }),
+      trailerNumber: trip.trailerNumber ?? trip.chassis?.chassisNo ?? null,
+      vessel: trip.vessel ?? job.vesselName ?? null,
+      shipper: trip.shipper ?? job.shipper ?? job.customerCompany?.name ?? null,
+      bookingRef: job.externalRef ?? null,
+    };
   }
 
   private async getActiveLogisticsLocationById(
@@ -5136,6 +5213,11 @@ export class TransportJobsService {
 
     const trip = await this.prisma.trip.findFirst({
       where: { id: tripId, tenantId, jobId },
+      include: {
+        vehicles: { select: { plateNo: true } },
+        fleetVehicle: { select: { plateNo: true } },
+        chassis: { select: { chassisNo: true } },
+      },
     });
     if (!trip) {
       throw new NotFoundException("Trip not found");
@@ -5184,34 +5266,22 @@ export class TransportJobsService {
       ]);
     }
 
-    const previousDo = await this.replaceTripDocumentByType(
-      tenantId,
-      tripId,
-      pdfType,
-      false,
-      pdfType === TripDocumentType.LORRY_CHIT ? { unsignedOnly: true } : undefined,
-    );
-
     const pdfStarted = Date.now();
     let pdfBuffer: Buffer;
     if (pdfType === TripDocumentType.LORRY_CHIT) {
       const cargo = await this.resolveLorryChitCargoForTrip(tenantId, tripId);
       const cargoRows = lorryChitCargoRowsFromResolved(cargo);
+      const header = await this.resolveLorryChitPdfHeader(tenantId, trip, job);
       pdfBuffer = await buildLorryChitPdfBuffer({
         internalRef: job.internalRef ?? null,
         externalRef: job.externalRef ?? null,
         customerName: job.customerCompany?.name ?? null,
-        truckNumber: (trip as { acceptedVehicleNo?: string | null }).acceptedVehicleNo ?? null,
-        trailerNumber: (trip as { trailerNumber?: string | null }).trailerNumber ?? null,
-        vessel:
-          (trip as { vessel?: string | null }).vessel
-          ?? (job as { vesselName?: string | null }).vesselName
-          ?? null,
-        shipper:
-          (trip as { shipper?: string | null }).shipper
-          ?? (job as { shipper?: string | null }).shipper
-          ?? null,
-        bookingRef: job.externalRef ?? null,
+        dateLabel: header.dateLabel,
+        truckNumber: header.truckNumber,
+        trailerNumber: header.trailerNumber,
+        vessel: header.vessel,
+        shipper: header.shipper,
+        bookingRef: header.bookingRef,
         cargoRows,
         containerSummary: cargo.cargoRow.containerOrCargo || null,
         notes: job.notes ?? null,
@@ -5259,6 +5329,16 @@ export class TransportJobsService {
         `Failed to upload DO PDF: ${uploadError.message}`,
       );
     }
+
+    // Deactivate the previous file only after the replacement PDF is in storage
+    // so drivers never see a "Generation failed" gap during slow PDF work.
+    const previousDo = await this.replaceTripDocumentByType(
+      tenantId,
+      tripId,
+      pdfType,
+      false,
+      pdfType === TripDocumentType.LORRY_CHIT ? { unsignedOnly: true } : undefined,
+    );
 
     const uploadActor = await loadUploadActorFields(this.prisma, userId, user);
     const doc = await this.prisma.tripDocument.create({
@@ -8599,26 +8679,27 @@ export class TransportJobsService {
       const cargo = await this.resolveLorryChitCargoForTrip(tenantId, tripId);
       const tripRow = await this.prisma.trip.findFirst({
         where: { id: tripId, tenantId, jobId },
+        include: {
+          vehicles: { select: { plateNo: true } },
+          fleetVehicle: { select: { plateNo: true } },
+          chassis: { select: { chassisNo: true } },
+        },
       });
+      const header = await this.resolveLorryChitPdfHeader(
+        tenantId,
+        tripRow ?? {},
+        job ?? {},
+      );
       pdfBuffer = await buildLorryChitPdfBuffer({
         internalRef: job?.internalRef ?? null,
         externalRef: job?.externalRef ?? null,
         customerName: job?.customerCompany?.name ?? null,
-        vessel:
-          (tripRow as { vessel?: string | null } | null)?.vessel
-          ?? (job as { vesselName?: string | null } | null)?.vesselName
-          ?? null,
-        bookingRef: job?.externalRef ?? null,
-        shipper:
-          (tripRow as { shipper?: string | null } | null)?.shipper
-          ?? (job as { shipper?: string | null } | null)?.shipper
-          ?? null,
-        truckNumber:
-          (tripRow as { acceptedVehicleNo?: string | null } | null)?.acceptedVehicleNo
-          ?? null,
-        trailerNumber:
-          (tripRow as { trailerNumber?: string | null } | null)?.trailerNumber
-          ?? null,
+        dateLabel: header.dateLabel,
+        truckNumber: header.truckNumber,
+        trailerNumber: header.trailerNumber,
+        vessel: header.vessel,
+        shipper: header.shipper,
+        bookingRef: header.bookingRef,
         cargoRows: lorryChitCargoRowsFromResolved(cargo),
         containerSummary: cargo.cargoRow.containerOrCargo || null,
         notes: job?.notes ?? null,
