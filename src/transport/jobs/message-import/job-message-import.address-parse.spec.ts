@@ -26,6 +26,26 @@ describe("parseSingaporeAddress", () => {
     expect(parsed.addressLine1).not.toMatch(/#\d/);
   });
 
+  it("extracts hash unit without requiring a comma (fixture delivery line)", () => {
+    expect(
+      parseSingaporeAddress("HOCK CHUAN. 31 JURONG PORT ROAD #07-20"),
+    ).toEqual({
+      addressLine1: "HOCK CHUAN. 31 JURONG PORT ROAD",
+      postalCode: null,
+      addressLine2: "#07-20",
+      unitLevel: "07",
+      unitNumber: "20",
+    });
+  });
+
+  it("does not invent a unit from Pioneer Sector street numbers", () => {
+    const parsed = parseSingaporeAddress("EK 30 pioneer sector 2");
+    expect(parsed.addressLine2).toBeNull();
+    expect(parsed.unitLevel).toBeNull();
+    expect(parsed.unitNumber).toBeNull();
+    expect(parsed.addressLine1).toMatch(/sector 2/i);
+  });
+
   it("supports alternate postal and unit formats", () => {
     expect(parseSingaporeAddress("Acme, 1 Road, S128578, Unit 01-01")).toMatchObject({
       postalCode: "128578",

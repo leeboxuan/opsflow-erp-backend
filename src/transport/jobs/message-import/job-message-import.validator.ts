@@ -92,7 +92,7 @@ export function normalizeReviewedDraft(
     return Number.isFinite(n) ? n : null;
   };
 
-  return {
+  const draft: ControllerReviewedDraft = {
     movementType: input.movementType,
     collectionType,
     customerCompanyId: trimToNull(input.customerCompanyId),
@@ -145,6 +145,11 @@ export function normalizeReviewedDraft(
       input.autoTripDocumentRequirements,
     ),
     items,
+    pickupReference:
+      trimToNull((input as { pickupReference?: string | null }).pickupReference) ??
+      (input.movementType === JobMessageImportMovementType.COLLECTION
+        ? items.map((it) => it.referenceNumber).find((v) => !!v) ?? null
+        : null),
     pickupSourceText: trimToNull(input.pickupSourceText) ?? normalizeLocationLabel(input.pickupAddress1),
     deliverySourceText:
       trimToNull(input.deliverySourceText) ?? normalizeLocationLabel(input.deliveryAddress1),
@@ -178,6 +183,44 @@ export function normalizeReviewedDraft(
       code: input.returningDepotCode,
     }),
   };
+
+  return promoteReturnDeliveryToDepot(draft);
+}
+
+/** When type is RETURN, keep extracted "to - …" on returningDepot* (not empty Custom). */
+export function promoteReturnDeliveryToDepot(
+  draft: ControllerReviewedDraft,
+): ControllerReviewedDraft {
+  if (draft.movementType !== JobMessageImportMovementType.RETURN) return draft;
+  if (draft.returningDepotAddress1 || draft.returningDepotCode || draft.returningDepotSourceText) {
+    return draft;
+  }
+  const source =
+    draft.deliverySourceText || draft.deliveryAddress1;
+  if (!source) return draft;
+  return {
+    ...draft,
+    returningDepotAddress1: draft.deliveryAddress1 ?? source,
+    returningDepotAddress2: draft.deliveryAddress2,
+    returningDepotPostal: draft.deliveryPostal,
+    returningDepotPlaceId: draft.deliveryPlaceId,
+    returningDepotLat: draft.deliveryLat,
+    returningDepotLng: draft.deliveryLng,
+    returningDepotSourceText: source,
+    deliveryAddress1: null,
+    deliveryAddress2: null,
+    deliveryPostal: null,
+    deliveryPlaceId: null,
+    deliveryLat: null,
+    deliveryLng: null,
+    deliverySourceText: null,
+    returningDepotVerificationStatus: resolveSlotVerification({
+      sourceText: source,
+      address1: draft.deliveryAddress1 ?? source,
+      postal: draft.deliveryPostal,
+      placeId: draft.deliveryPlaceId,
+    }),
+  };
 }
 
 export type ReviewedDraftPatch = Omit<Partial<ControllerReviewedDraft>, "items"> & {
@@ -187,6 +230,7 @@ export type ReviewedDraftPatch = Omit<Partial<ControllerReviewedDraft>, "items">
     referenceNumber?: string | null;
     quantity?: number | null;
   }>;
+  pickupReference?: string | null;
 };
 
 export function mergeReviewedDraftPatch(
@@ -270,6 +314,9 @@ export function mergeReviewedDraftPatch(
       ? { autoTripDocumentRequirements: patch.autoTripDocumentRequirements }
       : {}),
     ...(patch.items !== undefined ? { items: patch.items } : {}),
+    ...((patch as { pickupReference?: string | null }).pickupReference !== undefined
+      ? { pickupReference: (patch as { pickupReference?: string | null }).pickupReference }
+      : {}),
   });
 }
 
@@ -373,11 +420,30 @@ export function validateReviewedDraft(
     if (!reviewed.pickupAddress1) {
       pushBlocking("pickupAddress1", "MISSING_PICKUP", "Pickup location is required.");
     }
-    if (!reviewed.returningDepotAddress1 && !reviewed.returningDepotCode) {
+    const hasDepot = Boolean(reviewed.returningDepotAddress1 || reviewed.returningDepotCode);
+    if (!hasDepot) {
       pushBlocking(
         "returningDepotAddress1",
         "MISSING_RETURN_DEPOT",
-        "Return depot is required.",
+        "Select a return depot.",
+      );
+    } else if (
+      reviewed.returningDepotVerificationStatus === "UNRESOLVED" &&
+      !reviewed.returningDepotCode
+    ) {
+      pushBlocking(
+        "returningDepotAddress1",
+        "LOCATION_UNRESOLVED",
+        "Location is unresolved (TBA or unusable). Select an address before confirming.",
+      );
+    } else if (
+      reviewed.returningDepotVerificationStatus === "NEEDS_REVIEW" &&
+      !reviewed.returningDepotCode
+    ) {
+      pushBlocking(
+        "returningDepotAddress1",
+        "RETURN_DEPOT_NEEDS_CONFIRMATION",
+        "Return depot needs confirmation. Select a depot or enter a custom address.",
       );
     }
   } else {
@@ -427,11 +493,7 @@ export function validateReviewedDraft(
     );
   } else if (reviewed.movementType === JobMessageImportMovementType.RETURN) {
     pushUnresolved("pickupAddress1", reviewed.pickupVerificationStatus, Boolean(reviewed.pickupAddress1));
-    pushUnresolved(
-      "returningDepotAddress1",
-      reviewed.returningDepotVerificationStatus,
-      Boolean(reviewed.returningDepotAddress1 || reviewed.returningDepotCode),
-    );
+    // Return depot confirmation / unresolved handled above with priority messages.
   } else {
     pushUnresolved("pickupAddress1", reviewed.pickupVerificationStatus, Boolean(reviewed.pickupAddress1));
     pushUnresolved(

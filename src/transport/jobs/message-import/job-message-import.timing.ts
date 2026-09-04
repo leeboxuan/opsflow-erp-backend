@@ -203,6 +203,17 @@ export function parseOperationalTiming(
   const locationHint = extractLocationHint(raw);
   const lower = raw.toLowerCase();
 
+  // Detention phrases are operational metadata, not requested pickup/delivery times.
+  if (/\bdet(?:ention)?\b/.test(lower)) {
+    return {
+      ...empty,
+      locationHint,
+      needsReview: true,
+      reason: "Detention date is not a requested pickup time.",
+      display: `${raw} — detention date (not pickup time)`,
+    };
+  }
+
   if (/\bbefore\b/.test(lower) || /\bafter\b/.test(lower)) {
     return {
       ...empty,
@@ -301,11 +312,13 @@ export function parseOperationalTiming(
   }
 
   if (!time) {
+    const dateOnly = ymd(date.year, date.month, date.day);
     return {
       locationHint,
-      pickupDateLocal: localDateTime(date.year, date.month, date.day, 0, 0),
+      // Do not invent midnight when the source supplied a date without a time.
+      pickupDateLocal: null,
       deliveryDateLocal: null,
-      display: `${formatDisplay(localDateTime(date.year, date.month, date.day, 0, 0)).replace(/, 12:00 AM$/, "")} — time not specified`,
+      display: `${dateOnly} — time not specified`,
       needsReview: true,
       reason: "Date found without a specific time.",
     };

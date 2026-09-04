@@ -37,8 +37,11 @@ export function parseSingaporeAddress(raw: string | null | undefined): ParsedSin
   let unitLevel: string | null = null;
   let unitNumber: string | null = null;
 
+  // Prefer comma-delimited units; also accept a trailing hash unit without a comma
+  // (e.g. "31 JURONG PORT ROAD #07-20"). Never treat "Sector 2" / street numbers as units.
   const trailingUnitPatterns = [
     /,\s*(#\s*\d{1,2}\s*-\s*\d{2,4})\s*$/i,
+    /\s+(#\s*\d{1,2}\s*-\s*\d{2,4})\s*$/i,
     /,\s*Unit\s+(\d{1,2})\s*-\s*(\d{2,4})\s*$/i,
     /,\s*(\d{2})\s*-\s*(\d{2,4})\s*$/,
     /,\s*Level\s+(\d{1,2})\s*$/i,

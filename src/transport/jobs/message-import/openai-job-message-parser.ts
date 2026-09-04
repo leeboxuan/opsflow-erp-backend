@@ -433,6 +433,7 @@ Never create tenant IDs, database IDs, permissions, assignments, trips, prices, 
 
 Movement types: COLLECTION, IMPORT, EXPORT, LCL, RETURN, ONE_WAY.
 COLLECTION: copy equipment tokens such as 1x40HC into containerSizeType and quantity; leave containerNumber and sealNumber null unless an actual container number appears in the source. Do not copy pickup references into containerNumber.
+Keep Singapore unit numbers (e.g. #07-20) inside the delivery/pickup rawText. Do not invent unit numbers from street numbers such as "Pioneer Sector 2".
 RETURN is a container return to a depot (not Import's automatic customer-to-depot leg).
 ONE_WAY is a single pickup-to-delivery container move.
 Never invent postal codes, place IDs, or coordinates.

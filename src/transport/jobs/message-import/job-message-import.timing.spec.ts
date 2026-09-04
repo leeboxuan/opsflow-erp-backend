@@ -54,4 +54,27 @@ describe("parseOperationalTiming", () => {
         .pickupDateLocal,
     ).toBeNull();
   });
+
+  it("does not map detention phrases into requested pickup midnight", () => {
+    const result = parseOperationalTiming({
+      text: "det 04/09",
+      referenceDate: REFERENCE,
+      timezone: TZ,
+    });
+    expect(result.pickupDateLocal).toBeNull();
+    expect(result.needsReview).toBe(true);
+    expect(result.reason).toMatch(/detention/i);
+    expect(result.display).toMatch(/detention/i);
+  });
+
+  it("does not invent midnight when a date has no time", () => {
+    const result = parseOperationalTiming({
+      text: "04/09",
+      referenceDate: "2026-09-01",
+      timezone: TZ,
+    });
+    expect(result.pickupDateLocal).toBeNull();
+    expect(result.needsReview).toBe(true);
+    expect(result.display).toMatch(/time not specified/i);
+  });
 });

@@ -210,27 +210,63 @@ export function controllerJsonFromParsed(
           quantity: it.quantity,
         }));
 
+  const movementType = mapParsedMovementType(parsed.movementType);
   const collectionType = inferCollectionTypeFromFragment(parsed.sourceFragment);
 
+  const pickupSource =
+    pickupSplit.location ?? parsed.pickup?.rawText ?? null;
+  const deliverySource =
+    deliverySplit.location ?? parsed.delivery?.rawText ?? null;
+
+  let pickupAddress1 = pickupEnriched.address1;
+  let pickupAddress2 = pickupEnriched.address2;
+  let pickupPostal = pickupEnriched.postal;
+  let pickupSourceText = pickupSource;
+  let deliveryAddress1 = deliveryEnriched.address1;
+  let deliveryAddress2 = deliveryEnriched.address2;
+  let deliveryPostal = deliveryEnriched.postal;
+  let deliverySourceText = deliverySource;
+  let returningDepotAddress1: string | null = null;
+  let returningDepotAddress2: string | null = null;
+  let returningDepotPostal: string | null = null;
+  let returningDepotSourceText: string | null = null;
+
+  // RETURN destinations arrive as delivery.rawText ("to - cogent"). Map them onto
+  // returningDepot* so review UI / depot matching see the extracted destination.
+  if (movementType === JobMessageImportMovementType.RETURN) {
+    returningDepotAddress1 = deliveryEnriched.address1 ?? deliverySource;
+    returningDepotAddress2 = deliveryEnriched.address2;
+    returningDepotPostal = deliveryEnriched.postal;
+    returningDepotSourceText = deliverySource ?? deliveryEnriched.address1;
+    deliveryAddress1 = null;
+    deliveryAddress2 = null;
+    deliveryPostal = null;
+    deliverySourceText = null;
+  }
+
   return normalizeReviewedDraft({
-    movementType: mapParsedMovementType(parsed.movementType),
+    movementType,
     collectionType,
     customerCompanyId,
     customerNameText: parsed.customerNameText ?? null,
-    pickupAddress1: pickupEnriched.address1,
-    pickupAddress2: pickupEnriched.address2,
-    pickupPostal: pickupEnriched.postal,
+    pickupAddress1,
+    pickupAddress2,
+    pickupPostal,
     pickupPlaceId: null,
     pickupLat: null,
     pickupLng: null,
-    pickupSourceText: pickupSplit.location ?? parsed.pickup?.rawText ?? null,
-    deliveryAddress1: deliveryEnriched.address1,
-    deliveryAddress2: deliveryEnriched.address2,
-    deliveryPostal: deliveryEnriched.postal,
+    pickupSourceText,
+    deliveryAddress1,
+    deliveryAddress2,
+    deliveryPostal,
     deliveryPlaceId: null,
     deliveryLat: null,
     deliveryLng: null,
-    deliverySourceText: deliverySplit.location ?? parsed.delivery?.rawText ?? null,
+    deliverySourceText,
+    returningDepotAddress1,
+    returningDepotAddress2,
+    returningDepotPostal,
+    returningDepotSourceText,
     pickupDateLocal: resolvedPickupTiming.pickupDateLocal,
     deliveryDateLocal: resolvedDeliveryTiming.pickupDateLocal,
     pickupDateDisplay: resolvedPickupTiming.display,
@@ -248,6 +284,10 @@ export function controllerJsonFromParsed(
     voyage: parsed.voyage ?? null,
     containerSizeType: parsed.containerSizeType ?? null,
     items,
+    pickupReference:
+      movementType === JobMessageImportMovementType.COLLECTION
+        ? items.map((it) => it.referenceNumber).find((v) => !!v) ?? null
+        : null,
   });
 }
 
@@ -301,6 +341,7 @@ function readControllerJson(raw: unknown): ControllerReviewedDraft {
     containerSizeType: c.containerSizeType ?? null,
     autoTripDocumentRequirements: c.autoTripDocumentRequirements,
     items: c.items ?? [],
+    pickupReference: (c as { pickupReference?: string | null }).pickupReference ?? null,
   });
 }
 

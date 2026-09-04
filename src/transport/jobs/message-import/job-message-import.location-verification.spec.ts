@@ -1,4 +1,6 @@
 import {
+  applyResolvedLocationsOntoReviewed,
+  findAmbiguousMasterLocations,
   isUnresolvedLocationText,
   locationVerificationWarning,
   matchMasterLocation,
@@ -15,6 +17,21 @@ describe("job-message-import location verification", () => {
       placeId: "place-cogent",
       lat: 1.3,
       lng: 103.7,
+    },
+  ];
+
+  const ambiguousCogent = [
+    {
+      code: "COG1",
+      name: "Cogent Jurong",
+      addressLine1: "1 Jurong",
+      postalCode: "629117",
+    },
+    {
+      code: "COG2",
+      name: "Cogent Tuas",
+      addressLine1: "2 Tuas",
+      postalCode: "639123",
     },
   ];
 
@@ -46,6 +63,19 @@ describe("job-message-import location verification", () => {
     expect(resolved.verificationStatus).toBe("VERIFIED");
     expect(resolved.postal).toBe("629117");
     expect(resolved.code).toBe("COGENT");
+  });
+
+  it("does not silently pick the first Cogent when several match", () => {
+    expect(matchMasterLocation("cogent", ambiguousCogent)).toBeNull();
+    expect(findAmbiguousMasterLocations("cogent", ambiguousCogent)).toHaveLength(2);
+    const resolved = resolveImportedLocation({
+      rawText: "cogent",
+      catalogue: ambiguousCogent,
+    });
+    expect(resolved.verificationStatus).toBe("NEEDS_REVIEW");
+    expect(resolved.code).toBeNull();
+    expect(resolved.address1).toBe("cogent");
+    expect(resolved.sourceText).toBe("cogent");
   });
 
   it("treats Google placeId without a 6-digit postal as needs review", () => {
@@ -80,6 +110,58 @@ describe("job-message-import location verification", () => {
     expect(resolved.verificationStatus).toBe("MANUAL_CONFIRMED");
     expect(resolved.sourceText).toBe("mystery yard xyz");
     expect(resolved.placeId).toBeNull();
+  });
+
+  it("overwrites a conflicting depot address when a canonical depot code matches", () => {
+    const catalogues = {
+      ports: [],
+      depots: [
+        {
+          code: "ACS1",
+          name: "Allcontainer Services",
+          addressLine1: "7 Gul Circle",
+          addressLine2: null,
+          postalCode: "629563",
+          placeId: "ChIJ-acs1",
+          lat: 1.3,
+          lng: 103.7,
+        },
+      ],
+    };
+    const next = applyResolvedLocationsOntoReviewed(
+      {
+        movementType: "RETURN",
+        pickupAddress1: "Customer",
+        pickupAddress2: null,
+        pickupPostal: null,
+        pickupPlaceId: null,
+        pickupLat: null,
+        pickupLng: null,
+        deliveryAddress1: null,
+        deliveryAddress2: null,
+        deliveryPostal: null,
+        deliveryPlaceId: null,
+        deliveryLat: null,
+        deliveryLng: null,
+        portAddress1: null,
+        portPostal: null,
+        portPlaceId: null,
+        returningDepotAddress1: "14 Pioneer Sector 2",
+        returningDepotAddress2: null,
+        returningDepotPostal: "628071",
+        returningDepotPlaceId: null,
+        returningDepotLat: null,
+        returningDepotLng: null,
+        returningDepotCode: "ACS1",
+      },
+      catalogues,
+    );
+    expect(next.returningDepotCode).toBe("ACS1");
+    expect(next.returningDepotAddress1).toBe("7 Gul Circle");
+    expect(next.returningDepotPostal).toBe("629563");
+    expect((next as { returningDepotVerificationStatus?: string }).returningDepotVerificationStatus).toBe(
+      "VERIFIED",
+    );
   });
 
   it("returns the review copy for unverified addresses", () => {

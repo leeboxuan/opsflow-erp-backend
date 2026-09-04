@@ -589,6 +589,76 @@ describe("create job items (LCL optional)", () => {
       const tripRows = prisma.trip.createMany.mock.calls[0][0].data;
       expect(tripRows).toHaveLength(2);
     });
+
+    it("RETURN create prefers master depot address over conflicting client address when code resolves", async () => {
+      const prisma = makeCreatePrisma();
+      prisma.masterLogisticsLocation = {
+        findFirst: jest.fn().mockResolvedValue({
+          code: "ACS1",
+          name: "Allcontainer Services",
+          addressLine1: "7 Gul Circle",
+          addressLine2: null,
+          postalCode: "629563",
+          placeId: "ChIJ-acs1",
+          lat: 1.3,
+          lng: 103.7,
+          type: "DEPOT",
+          isActive: true,
+        }),
+      };
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.RETURN,
+            pickupAddress1: "Customer yard",
+            deliveryAddress1: "14 Pioneer Sector 2",
+            importDetails: {
+              returningDepotCode: "ACS1",
+              returningDepotAddress1: "14 Pioneer Sector 2",
+              returningDepotPostal: "628071",
+            },
+          } as any,
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
+        ),
+      ).resolves.toBeTruthy();
+
+      const jobData = prisma.job.create.mock.calls[0][0].data;
+      expect(jobData.returningDepotCode).toBe("ACS1");
+      expect(jobData.deliveryAddress1).toBe("7 Gul Circle");
+      expect(jobData.deliveryPostal).toBe("629563");
+    });
+
+    it("RETURN create keeps custom depot address when no depot code is supplied", async () => {
+      const prisma = makeCreatePrisma();
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.RETURN,
+            pickupAddress1: "Customer yard",
+            deliveryAddress1: "15 Tuas Avenue 18",
+            importDetails: {
+              returningDepotCode: null,
+              returningDepotAddress1: "15 Tuas Avenue 18",
+              returningDepotPostal: "638905",
+            },
+          } as any,
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
+        ),
+      ).resolves.toBeTruthy();
+
+      const jobData = prisma.job.create.mock.calls[0][0].data;
+      expect(jobData.returningDepotCode).toBeNull();
+      expect(jobData.deliveryAddress1).toBe("15 Tuas Avenue 18");
+      expect(jobData.deliveryPostal).toBe("638905");
+    });
   });
 
   describe("TransportJobsService.update", () => {

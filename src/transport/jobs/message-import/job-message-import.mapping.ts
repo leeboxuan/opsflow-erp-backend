@@ -10,7 +10,11 @@ import {
   assertCanonicalRouteLocationsForCreate,
   resolveCanonicalRouteLocations,
 } from "../job-route-locations";
-import { movementTypeToJobType } from "./job-message-import.validator";
+import { resolveReturnDestinationFields } from "../return-destination";
+import {
+  movementTypeToJobType,
+  trimToNull,
+} from "./job-message-import.validator";
 import type { ControllerReviewedDraft } from "./job-message-import.types";
 import {
   collectionPickupReferenceFromReviewed,
@@ -96,6 +100,53 @@ export function reviewedDraftToCreateJobDto(input: {
   );
   assertCreateJobItemsRequiredForJobType(jobType, mappedItems, validItems);
 
+  const returnDestination =
+    jobType === JobType.RETURN
+      ? resolveReturnDestinationFields({
+          returningDepotCode: reviewed.returningDepotCode,
+          returningDepotAddress1: reviewed.returningDepotAddress1,
+          returningDepotAddress2: reviewed.returningDepotAddress2,
+          returningDepotPostal: reviewed.returningDepotPostal,
+          returningDepotPlaceId: reviewed.returningDepotPlaceId,
+          returningDepotLat: reviewed.returningDepotLat,
+          returningDepotLng: reviewed.returningDepotLng,
+          deliveryAddress1: reviewed.deliveryAddress1,
+          deliveryAddress2: reviewed.deliveryAddress2,
+          deliveryPostal: reviewed.deliveryPostal,
+          deliveryPlaceId: reviewed.deliveryPlaceId,
+          deliveryLat: reviewed.deliveryLat,
+          deliveryLng: reviewed.deliveryLng,
+        })
+      : null;
+  if (jobType === JobType.RETURN && !returnDestination) {
+    throw new Error("MISSING_LOCATION");
+  }
+
+  const deliveryAddress1 =
+    returnDestination?.deliveryAddress1 ?? reviewed.deliveryAddress1;
+  const deliveryAddress2 =
+    returnDestination?.deliveryAddress2 ?? reviewed.deliveryAddress2;
+  const deliveryPostal =
+    returnDestination?.deliveryPostal ?? reviewed.deliveryPostal;
+  const deliveryPlaceId =
+    returnDestination?.deliveryPlaceId ?? reviewed.deliveryPlaceId;
+  const deliveryLat = returnDestination?.deliveryLat ?? reviewed.deliveryLat;
+  const deliveryLng = returnDestination?.deliveryLng ?? reviewed.deliveryLng;
+  const returningDepotAddress1 =
+    returnDestination?.returningDepotAddress1 ?? reviewed.returningDepotAddress1;
+  const returningDepotAddress2 =
+    returnDestination?.returningDepotAddress2 ?? reviewed.returningDepotAddress2;
+  const returningDepotPostal =
+    returnDestination?.returningDepotPostal ?? reviewed.returningDepotPostal;
+  const returningDepotPlaceId =
+    returnDestination?.returningDepotPlaceId ?? reviewed.returningDepotPlaceId;
+  const returningDepotLat =
+    returnDestination?.returningDepotLat ?? reviewed.returningDepotLat;
+  const returningDepotLng =
+    returnDestination?.returningDepotLng ?? reviewed.returningDepotLng;
+  const returningDepotCode =
+    returnDestination?.returningDepotCode ?? reviewed.returningDepotCode;
+
   const routeLocations = resolveCanonicalRouteLocations({
     jobType,
     pickupAddress1: reviewed.pickupAddress1,
@@ -106,12 +157,12 @@ export function reviewedDraftToCreateJobDto(input: {
     pickupLng: reviewed.pickupLng,
     pickupContactName: reviewed.picName,
     pickupContactPhone: reviewed.picPhone,
-    deliveryAddress1: reviewed.deliveryAddress1,
-    deliveryAddress2: reviewed.deliveryAddress2,
-    deliveryPostal: reviewed.deliveryPostal,
-    deliveryPlaceId: reviewed.deliveryPlaceId,
-    deliveryLat: reviewed.deliveryLat,
-    deliveryLng: reviewed.deliveryLng,
+    deliveryAddress1,
+    deliveryAddress2,
+    deliveryPostal,
+    deliveryPlaceId,
+    deliveryLat,
+    deliveryLng,
     receiverName: reviewed.picName,
     receiverPhone: reviewed.picPhone,
     exportDetails:
@@ -131,13 +182,13 @@ export function reviewedDraftToCreateJobDto(input: {
     importDetails:
       jobType === JobType.IMPORT || jobType === JobType.RETURN
         ? {
-            returningDepotAddress1: reviewed.returningDepotAddress1,
-            returningDepotAddress2: reviewed.returningDepotAddress2,
-            returningDepotPostal: reviewed.returningDepotPostal,
-            returningDepotPlaceId: reviewed.returningDepotPlaceId,
-            returningDepotLat: reviewed.returningDepotLat,
-            returningDepotLng: reviewed.returningDepotLng,
-            returningDepotCode: reviewed.returningDepotCode,
+            returningDepotAddress1,
+            returningDepotAddress2,
+            returningDepotPostal,
+            returningDepotPlaceId,
+            returningDepotLat,
+            returningDepotLng,
+            returningDepotCode,
           }
         : null,
   });
@@ -165,20 +216,20 @@ export function reviewedDraftToCreateJobDto(input: {
     pickupPlaceId: reviewed.pickupPlaceId ?? undefined,
     pickupLat: reviewed.pickupLat ?? undefined,
     pickupLng: reviewed.pickupLng ?? undefined,
-    deliveryAddress1: reviewed.deliveryAddress1,
-    deliveryAddress2: reviewed.deliveryAddress2 ?? undefined,
-    deliveryPostal: reviewed.deliveryPostal ?? undefined,
-    deliveryPlaceId: reviewed.deliveryPlaceId ?? undefined,
-    deliveryLat: reviewed.deliveryLat ?? undefined,
-    deliveryLng: reviewed.deliveryLng ?? undefined,
+    deliveryAddress1: deliveryAddress1!,
+    deliveryAddress2: deliveryAddress2 ?? undefined,
+    deliveryPostal: deliveryPostal ?? undefined,
+    deliveryPlaceId: deliveryPlaceId ?? undefined,
+    deliveryLat: deliveryLat ?? undefined,
+    deliveryLng: deliveryLng ?? undefined,
     pickupContactName: reviewed.picName ?? undefined,
     pickupContactPhone: reviewed.picPhone ?? undefined,
     receiverName: reviewed.picName ?? "",
     receiverPhone: reviewed.picPhone ?? "",
     pickupReference:
-      jobType === JobType.COLLECTION
-        ? collectionPickupReferenceFromReviewed(reviewed) ?? undefined
-        : undefined,
+      trimToNull(reviewed.pickupReference) ??
+      collectionPickupReferenceFromReviewed(reviewed) ??
+      undefined,
     description: reviewed.timingText ?? undefined,
     notes: composeNotes(reviewed) ?? undefined,
     autoTripDocumentRequirements: reviewed.autoTripDocumentRequirements,
@@ -198,13 +249,13 @@ export function reviewedDraftToCreateJobDto(input: {
     importDetails:
       jobType === JobType.IMPORT || jobType === JobType.RETURN
         ? {
-            returningDepotAddress1: reviewed.returningDepotAddress1,
-            returningDepotAddress2: reviewed.returningDepotAddress2,
-            returningDepotPostal: reviewed.returningDepotPostal,
-            returningDepotPlaceId: reviewed.returningDepotPlaceId,
-            returningDepotLat: reviewed.returningDepotLat,
-            returningDepotLng: reviewed.returningDepotLng,
-            returningDepotCode: reviewed.returningDepotCode,
+            returningDepotAddress1,
+            returningDepotAddress2,
+            returningDepotPostal,
+            returningDepotPlaceId,
+            returningDepotLat,
+            returningDepotLng,
+            returningDepotCode,
           }
         : undefined,
     exportDetails:

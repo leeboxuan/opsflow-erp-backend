@@ -119,6 +119,67 @@ export class JobMessageImportPatchDraftDto {
   @ApiProperty({ required: false, nullable: true })
   @IsOptional()
   @IsString()
+  portAddress1?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  portAddress2?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  portPostal?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  portPlaceId?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  portLat?: number | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  portLng?: number | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  returningDepotAddress1?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  returningDepotAddress2?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  returningDepotPostal?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  returningDepotPlaceId?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  returningDepotLat?: number | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  returningDepotLng?: number | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
+  returningDepotCode?: string | null;
+
+  @ApiProperty({ required: false, nullable: true })
+  @IsOptional()
+  @IsString()
   pickupDateLocal?: string | null;
 
   @ApiProperty({ required: false, nullable: true })
@@ -212,6 +273,15 @@ export class JobMessageImportPatchDraftDto {
     signedDeliveryDoRequired?: boolean;
     signedLorryChitRequired?: boolean;
   }>;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    description: "Job-level pickup reference (not container / booking / permit identity).",
+  })
+  @IsOptional()
+  @IsString()
+  pickupReference?: string | null;
 
   @ApiProperty({ required: false, enum: ["INCLUDED", "EXCLUDED"] })
   @IsOptional()

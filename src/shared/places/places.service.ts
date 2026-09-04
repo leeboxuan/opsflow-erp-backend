@@ -4,6 +4,10 @@ import {
   InternalServerErrorException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import {
+  buildPlacesAddressLine1,
+  buildPlacesAddressLine2FromSubpremise,
+} from "./places-address-line";
 
 type GoogleAddressComponent = {
   long_name: string;
@@ -116,8 +120,10 @@ export class PlacesService {
     const name = String(result?.name ?? "").trim();
     const block = this.pickAddressComponent(components, "street_number");
     const route = this.pickAddressComponent(components, "route");
-    const addressLine1 = this.buildAddressLine1({ name, block, route });
-    const addressLine2 = this.buildAddressLine2(components);
+    const addressLine1 = buildPlacesAddressLine1({ name, block, route });
+    const addressLine2 = buildPlacesAddressLine2FromSubpremise(
+      this.pickAddressComponent(components, "subpremise"),
+    );
 
     return {
       formattedAddress: String(result?.formatted_address ?? "").trim(),
@@ -184,33 +190,6 @@ export class PlacesService {
     const found = components.find((c) => c.types?.includes(type));
     const value = String(found?.long_name ?? "").trim();
     return value || null;
-  }
-
-  private buildAddressLine1(parts: {
-    name: string;
-    block: string | null;
-    route: string | null;
-  }): string {
-    const street = [parts.block, parts.route].filter(Boolean).join(" ").trim();
-    const tokens = [parts.name, street].filter(Boolean) as string[];
-    const deduped: string[] = [];
-    for (const token of tokens) {
-      if (!deduped.some((x) => x.toLowerCase() === token.toLowerCase())) {
-        deduped.push(token);
-      }
-    }
-    return deduped.join(", ");
-  }
-
-  private buildAddressLine2(components: GoogleAddressComponent[]): string {
-    const subpremise = this.pickAddressComponent(components, "subpremise");
-    const premise = this.pickAddressComponent(components, "premise");
-    const locality = this.pickAddressComponent(components, "locality");
-    const adminArea = this.pickAddressComponent(components, "administrative_area_level_1");
-    const country = this.pickAddressComponent(components, "country");
-    return [subpremise, premise, locality, adminArea, country]
-      .filter(Boolean)
-      .join(", ");
   }
 
   private async fetchJson(url: string, label: string): Promise<any> {

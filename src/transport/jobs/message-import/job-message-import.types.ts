@@ -77,6 +77,8 @@ export type ControllerReviewedDraft = {
     signedLorryChitRequired: boolean;
   }>;
   items: ControllerReviewedItem[];
+  /** Job-level pickup reference (Create Job parity). Not container/booking/permit identity. */
+  pickupReference: string | null;
 };
 
 export type DuplicateCandidate = {

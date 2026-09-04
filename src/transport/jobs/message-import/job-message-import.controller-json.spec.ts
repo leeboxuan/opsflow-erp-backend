@@ -113,4 +113,50 @@ describe("controllerJsonFromParsed labelled field extraction", () => {
     expect(reviewed.timingText).toBe("tomorrow 9am");
     expect(reviewed.instructions).toEqual(["Contact receiver upon arrival."]);
   });
+
+  it("maps RETURN destination onto returningDepot and keeps detention out of pickup time", () => {
+    const parsed: JobMessageImportParsedDraft = {
+      clientDraftId: "ret-1",
+      movementType: "RETURN",
+      customerNameText: null,
+      earliestAt: null,
+      latestAt: null,
+      timingText: "det 04/09",
+      pickup: { rawText: "db whse" },
+      delivery: { rawText: "cogent" },
+      carrier: null,
+      shipper: null,
+      vessel: null,
+      voyage: null,
+      containerSizeType: null,
+      items: [
+        {
+          containerNumber: "UASU1061210",
+          sealNumber: null,
+          referenceNumber: null,
+          quantity: 1,
+        },
+      ],
+      picName: null,
+      picPhone: null,
+      instructions: [],
+      notes: null,
+      sourceFragment: "UASU1061210 - det 04/09\nto - cogent",
+      fieldEvidence: [],
+      warnings: [],
+    };
+
+    const reviewed = controllerJsonFromParsed(parsed, null, {
+      timezone: "Asia/Singapore",
+      referenceDate: "2026-09-01",
+    });
+    expect(reviewed.movementType).toBe("RETURN");
+    expect(reviewed.returningDepotAddress1).toMatch(/cogent/i);
+    expect(reviewed.returningDepotSourceText).toMatch(/cogent/i);
+    expect(reviewed.deliveryAddress1).toBeNull();
+    expect(reviewed.pickupDateLocal).toBeNull();
+    expect(reviewed.timingText).toBe("det 04/09");
+    expect(reviewed.pickupDateNeedsReview).toBe(true);
+    expect(reviewed.pickupDateDisplay).toMatch(/detention/i);
+  });
 });

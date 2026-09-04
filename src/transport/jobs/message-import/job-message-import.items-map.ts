@@ -32,8 +32,10 @@ export function mapReviewedItemsForParse(
 }
 
 export function collectionPickupReferenceFromReviewed(
-  reviewed: Pick<ControllerReviewedDraft, "items">,
+  reviewed: Pick<ControllerReviewedDraft, "items" | "pickupReference">,
 ): string | null {
+  const direct = String(reviewed.pickupReference ?? "").trim();
+  if (direct) return direct;
   for (const it of reviewed.items) {
     const ref = String(it.referenceNumber ?? "").trim();
     if (ref) return ref;

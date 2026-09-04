@@ -194,6 +194,7 @@ import {
   canonicalAutoTripRouteSnapshots,
   resolveCanonicalRouteLocations,
 } from "./job-route-locations";
+import { resolveReturnDestinationFields } from "./return-destination";
 import {
   documentTypeSupportsCustomerSignature,
   ensureDefaultTripDocumentRequirementSnapshots,
@@ -2914,6 +2915,38 @@ export class TransportJobsService {
       }
     }
 
+    // RETURN: resolve depot code to canonical master address before destination contract.
+    let returnMasterDepot: {
+      addressLine1: string;
+      addressLine2: string | null;
+      postalCode: string | null;
+      placeId: string | null;
+      lat: number | null;
+      lng: number | null;
+    } | null = null;
+    if (compatibilityJobType === JobType.RETURN && returningDepotCode) {
+      const returnDepot = await this.prisma.masterLogisticsLocation.findFirst({
+        where: {
+          code: returningDepotCode,
+          type: LogisticsLocationType.DEPOT,
+          isActive: true,
+        },
+      });
+      if (!returnDepot) {
+        throw new BadRequestException(
+          `Unknown returningDepotCode: ${returningDepotCode}`,
+        );
+      }
+      returnMasterDepot = {
+        addressLine1: returnDepot.addressLine1,
+        addressLine2: returnDepot.addressLine2 ?? null,
+        postalCode: returnDepot.postalCode ?? null,
+        placeId: returnDepot.placeId ?? null,
+        lat: returnDepot.lat ?? null,
+        lng: returnDepot.lng ?? null,
+      };
+    }
+
     const exportPickup = resolveExportPickupFields({
       pickupAddress1: dto.pickupAddress1,
       pickupAddress2: dto.pickupAddress2,
@@ -2960,6 +2993,61 @@ export class TransportJobsService {
       });
     }
 
+    const returnDestination =
+      routeTopologyType === JobType.RETURN
+        ? resolveReturnDestinationFields({
+            returningDepotCode,
+            returningDepotAddress1:
+              returnMasterDepot?.addressLine1 ||
+              importDetails.returningDepotAddress1 ||
+              null,
+            returningDepotAddress2:
+              returnMasterDepot?.addressLine2 ||
+              importDetails.returningDepotAddress2 ||
+              null,
+            returningDepotPostal:
+              returnMasterDepot?.postalCode ||
+              importDetails.returningDepotPostal ||
+              null,
+            returningDepotPlaceId:
+              returnMasterDepot?.placeId ||
+              importDetails.returningDepotPlaceId ||
+              null,
+            returningDepotLat:
+              returnMasterDepot?.lat ?? importDetails.returningDepotLat ?? null,
+            returningDepotLng:
+              returnMasterDepot?.lng ?? importDetails.returningDepotLng ?? null,
+            deliveryAddress1: dto.deliveryAddress1,
+            deliveryAddress2: dto.deliveryAddress2,
+            deliveryPostal: dto.deliveryPostal,
+            deliveryPlaceId: dto.deliveryPlaceId,
+            deliveryLat: dto.deliveryLat,
+            deliveryLng: dto.deliveryLng,
+          })
+        : null;
+    if (routeTopologyType === JobType.RETURN && !returnDestination) {
+      throw new BadRequestException("Return depot is required.");
+    }
+
+    const resolvedDeliveryAddress1 =
+      pureExport
+        ? stuffingAddress1 ?? dto.deliveryAddress1
+        : returnDestination?.deliveryAddress1 ?? dto.deliveryAddress1;
+    const resolvedDeliveryAddress2 =
+      pureExport
+        ? stuffingAddress2 ?? dto.deliveryAddress2
+        : returnDestination?.deliveryAddress2 ?? dto.deliveryAddress2;
+    const resolvedDeliveryPostal =
+      pureExport
+        ? stuffingPostal ?? dto.deliveryPostal
+        : returnDestination?.deliveryPostal ?? dto.deliveryPostal;
+    const resolvedDeliveryPlaceId =
+      returnDestination?.deliveryPlaceId ?? dto.deliveryPlaceId;
+    const resolvedDeliveryLat =
+      returnDestination?.deliveryLat ?? dto.deliveryLat;
+    const resolvedDeliveryLng =
+      returnDestination?.deliveryLng ?? dto.deliveryLng;
+
     const routeLocations = resolveCanonicalRouteLocations({
       jobType: routeTopologyType,
       pickupAddress1:
@@ -2974,21 +3062,12 @@ export class TransportJobsService {
       pickupContactName: dto.pickupContactName,
       pickupContactPhone: dto.pickupContactPhone,
       pickupPortCode,
-      deliveryAddress1:
-        pureExport
-          ? stuffingAddress1 ?? dto.deliveryAddress1
-          : dto.deliveryAddress1,
-      deliveryAddress2:
-        pureExport
-          ? stuffingAddress2 ?? dto.deliveryAddress2
-          : dto.deliveryAddress2,
-      deliveryPostal:
-        pureExport
-          ? stuffingPostal ?? dto.deliveryPostal
-          : dto.deliveryPostal,
-      deliveryPlaceId: dto.deliveryPlaceId,
-      deliveryLat: dto.deliveryLat,
-      deliveryLng: dto.deliveryLng,
+      deliveryAddress1: resolvedDeliveryAddress1,
+      deliveryAddress2: resolvedDeliveryAddress2,
+      deliveryPostal: resolvedDeliveryPostal,
+      deliveryPlaceId: resolvedDeliveryPlaceId,
+      deliveryLat: resolvedDeliveryLat,
+      deliveryLng: resolvedDeliveryLng,
       receiverName: stuffingContactName ?? dto.receiverName,
       receiverPhone: stuffingContactPhone ?? dto.receiverPhone,
       exportDetails: {
@@ -3007,9 +3086,27 @@ export class TransportJobsService {
       importDetails: {
         ...importDetails,
         pickupPortCode,
-        returningDepotCode,
+        returningDepotCode:
+          returnDestination?.returningDepotCode ?? returningDepotCode,
+        returningDepotAddress1:
+          returnDestination?.returningDepotAddress1 ??
+          importDetails.returningDepotAddress1,
+        returningDepotAddress2:
+          returnDestination?.returningDepotAddress2 ??
+          importDetails.returningDepotAddress2,
+        returningDepotPostal:
+          returnDestination?.returningDepotPostal ??
+          importDetails.returningDepotPostal,
+        returningDepotPlaceId:
+          returnDestination?.returningDepotPlaceId ??
+          importDetails.returningDepotPlaceId,
+        returningDepotLat:
+          returnDestination?.returningDepotLat ?? importDetails.returningDepotLat,
+        returningDepotLng:
+          returnDestination?.returningDepotLng ?? importDetails.returningDepotLng,
       },
-      returningDepotCode,
+      returningDepotCode:
+        returnDestination?.returningDepotCode ?? returningDepotCode,
       exportPortCode,
       exportOriginDepotCode,
     });
@@ -3078,15 +3175,15 @@ export class TransportJobsService {
           deliveryAddress1:
             pureExport
               ? (stuffingAddress1 ?? dto.deliveryAddress1)
-              : dto.deliveryAddress1,
+              : (resolvedDeliveryAddress1 ?? dto.deliveryAddress1),
           deliveryAddress2:
             pureExport
               ? (stuffingAddress2 ?? null)
-              : (dto.deliveryAddress2 ?? null),
+              : (resolvedDeliveryAddress2 ?? dto.deliveryAddress2 ?? null),
           deliveryPostal:
             pureExport
               ? (stuffingPostal ?? null)
-              : (dto.deliveryPostal ?? null),
+              : (resolvedDeliveryPostal ?? dto.deliveryPostal ?? null),
           receiverName:
             pureExport
               ? (stuffingContactName ?? dto.receiverName ?? "")

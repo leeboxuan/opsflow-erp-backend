@@ -54,6 +54,7 @@ function trimOrNull(value: string | null | undefined): string | null {
 /**
  * Tenant/master match only. No hardcoded nicknames.
  * Unique exact code or unique exact name → confident match.
+ * Never silently picks the first of several partial alias hits (e.g. "Cogent").
  */
 export function matchMasterLocation(
   raw: string | null | undefined,
@@ -63,9 +64,27 @@ export function matchMasterLocation(
   if (!key || isUnresolvedLocationText(raw)) return null;
   const byCode = catalogue.filter((row) => normalizeKey(row.code) === key);
   if (byCode.length === 1) return byCode[0]!;
+  if (byCode.length > 1) return null;
   const byName = catalogue.filter((row) => normalizeKey(row.name) === key);
   if (byName.length === 1) return byName[0]!;
+  if (byName.length > 1) return null;
   return null;
+}
+
+/** Partial alias hits when exact match fails (for ambiguity UI; never auto-select). */
+export function findAmbiguousMasterLocations(
+  raw: string | null | undefined,
+  catalogue: readonly MasterLocationRecord[],
+): MasterLocationRecord[] {
+  const key = normalizeKey(raw ?? "");
+  if (!key || isUnresolvedLocationText(raw) || key.length < 3) return [];
+  if (matchMasterLocation(raw, catalogue)) return [];
+  const hits = catalogue.filter((row) => {
+    const code = normalizeKey(row.code);
+    const name = normalizeKey(row.name);
+    return code.includes(key) || name.includes(key) || key.includes(code) || key.includes(name);
+  });
+  return hits.length > 1 ? hits : [];
 }
 
 /**
@@ -207,6 +226,7 @@ export function applyMasterMatchesToReviewedDraft(
     returningDepotLat: number | null;
     returningDepotLng: number | null;
     returningDepotAddress2: string | null;
+    returningDepotSourceText?: string | null;
   },
   catalogues: {
     ports: readonly MasterLocationRecord[];
@@ -235,7 +255,7 @@ export function applyMasterMatchesToReviewedDraft(
     catalogue: catalogues.depots,
   });
   const depot = resolveImportedLocation({
-    rawText: reviewed.returningDepotAddress1,
+    rawText: reviewed.returningDepotSourceText ?? reviewed.returningDepotAddress1,
     address1: reviewed.returningDepotAddress1,
     postal: reviewed.returningDepotPostal,
     placeId: reviewed.returningDepotPlaceId,
