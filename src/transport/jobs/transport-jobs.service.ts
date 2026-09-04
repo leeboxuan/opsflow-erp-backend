@@ -199,6 +199,10 @@ import {
   resolveReturnDestinationResolution,
 } from "./return-destination";
 import {
+  resolveReturningDepotCodeFromId,
+  resolveReturningDepotMasterByCode,
+} from "./return-depot-master";
+import {
   documentTypeSupportsCustomerSignature,
   ensureDefaultTripDocumentRequirementSnapshots,
   isTripDocumentRequirementFrozen,
@@ -2385,16 +2389,14 @@ export class TransportJobsService {
       include: { trips: { orderBy: [{ tripSequence: "asc" }, { createdAt: "asc" }] } },
     });
     if (!job) return;
-    const [pickupPort, returnDepot, exportPort, exportOriginDepot] = await Promise.all([
+    const [pickupPort, returnDepotResolved, exportPort, exportOriginDepot] = await Promise.all([
       (this.prisma as any).masterLogisticsLocation && job.pickupPortCode
         ? this.prisma.masterLogisticsLocation.findFirst({
             where: { isActive: true, type: LogisticsLocationType.PORT, code: job.pickupPortCode },
           })
         : Promise.resolve(null),
-      (this.prisma as any).masterLogisticsLocation && job.returningDepotCode
-        ? this.prisma.masterLogisticsLocation.findFirst({
-            where: { isActive: true, type: LogisticsLocationType.DEPOT, code: job.returningDepotCode },
-          })
+      job.returningDepotCode
+        ? resolveReturningDepotMasterByCode(this.prisma as any, job.returningDepotCode)
         : Promise.resolve(null),
       (this.prisma as any).masterLogisticsLocation && job.exportPortCode
         ? this.prisma.masterLogisticsLocation.findFirst({
@@ -2411,6 +2413,21 @@ export class TransportJobsService {
           })
         : Promise.resolve(null),
     ]);
+    const returnDepot = returnDepotResolved
+      ? {
+          id: returnDepotResolved.logisticsLocationId,
+          code: returnDepotResolved.code,
+          name: returnDepotResolved.addressLine1,
+          addressLine1: returnDepotResolved.addressLine1,
+          addressLine2: returnDepotResolved.addressLine2,
+          postalCode: returnDepotResolved.postalCode,
+          placeId: returnDepotResolved.placeId,
+          lat: returnDepotResolved.lat,
+          lng: returnDepotResolved.lng,
+          type: LogisticsLocationType.DEPOT,
+          country: "SG",
+        }
+      : null;
 
     for (const trip of job.trips ?? []) {
       if (
@@ -2872,10 +2889,7 @@ export class TransportJobsService {
       pureExport
         ? null
         : returningDepotCodeInput ??
-          (await this.resolveLogisticsCodeFromId(
-            returningDepotId,
-            LogisticsLocationType.DEPOT,
-          ));
+          (await resolveReturningDepotCodeFromId(this.prisma as any, returningDepotId));
     const returnLastDay =
       pureExport
         ? null
@@ -2933,13 +2947,10 @@ export class TransportJobsService {
         }
       }
       if (returningDepotCode) {
-        const returnDepotForImport = await this.prisma.masterLogisticsLocation.findFirst({
-          where: {
-            code: returningDepotCode,
-            type: LogisticsLocationType.DEPOT,
-            isActive: true,
-          },
-        });
+        const returnDepotForImport = await resolveReturningDepotMasterByCode(
+          this.prisma as any,
+          returningDepotCode,
+        );
         if (!returnDepotForImport) {
           throw new BadRequestException(
             `Unknown returningDepotCode: ${returningDepotCode}`,
@@ -2958,13 +2969,10 @@ export class TransportJobsService {
       lng: number | null;
     } | null = null;
     if (compatibilityJobType === JobType.RETURN && returningDepotCode) {
-      const returnDepot = await this.prisma.masterLogisticsLocation.findFirst({
-        where: {
-          code: returningDepotCode,
-          type: LogisticsLocationType.DEPOT,
-          isActive: true,
-        },
-      });
+      const returnDepot = await resolveReturningDepotMasterByCode(
+        this.prisma as any,
+        returningDepotCode,
+      );
       if (!returnDepot) {
         throw new BadRequestException(
           `Unknown returningDepotCode: ${returningDepotCode}`,

@@ -218,6 +218,7 @@ describe("create job items (LCL optional)", () => {
           createMany: jest.fn().mockResolvedValue({ count: 0 }),
         },
         masterLogisticsLocation: { findFirst: jest.fn().mockResolvedValue(null) },
+        masterSingaporeDepot: { findUnique: jest.fn().mockResolvedValue(null) },
       };
       return withInteractiveTransaction(prisma);
     }
@@ -481,7 +482,18 @@ describe("create job items (LCL optional)", () => {
     it("creates IMPORT address pickup with return and generates two trips", async () => {
       const prisma = makeCreatePrisma();
       prisma.masterLogisticsLocation = {
-        findFirst: jest.fn().mockResolvedValue({ code: "GUL", name: "Gul Depot" }),
+        findFirst: jest.fn().mockResolvedValue({
+          code: "GUL",
+          name: "Gul Depot",
+          addressLine1: "7 Gul Circle",
+          addressLine2: null,
+          postalCode: "629563",
+          placeId: null,
+          lat: null,
+          lng: null,
+          type: "DEPOT",
+          isActive: true,
+        }),
       };
       const svc = makeSvc(prisma);
 
@@ -564,7 +576,19 @@ describe("create job items (LCL optional)", () => {
         findFirst: jest
           .fn()
           .mockResolvedValueOnce({ code: "JURONG", name: "Jurong Port" })
-          .mockResolvedValueOnce({ code: "GUL", name: "Gul Depot" }),
+          .mockResolvedValueOnce({
+            id: "loc-gul",
+            code: "GUL",
+            name: "Gul Depot",
+            addressLine1: "7 Gul Circle",
+            addressLine2: null,
+            postalCode: "629563",
+            placeId: null,
+            lat: null,
+            lng: null,
+            type: "DEPOT",
+            isActive: true,
+          }),
       };
       const svc = makeSvc(prisma);
 
@@ -630,6 +654,125 @@ describe("create job items (LCL optional)", () => {
       expect(jobData.returningDepotCode).toBe("ACS1");
       expect(jobData.deliveryAddress1).toBe("7 Gul Circle");
       expect(jobData.deliveryPostal).toBe("629563");
+    });
+
+    it("IMPORT create accepts ACS1 from MasterSingaporeDepot when logistics DEPOT is missing", async () => {
+      const prisma = makeCreatePrisma();
+      prisma.masterSingaporeDepot = {
+        findUnique: jest.fn().mockResolvedValue({
+          code: "ACS1",
+          addressLine1: "14 Pioneer Sector 2",
+          addressLine2: null,
+          postalCode: "628071",
+          placeId: "ChIJ-acs1",
+          lat: 1.31,
+          lng: 103.69,
+        }),
+      };
+      prisma.masterLogisticsLocation = {
+        findFirst: jest.fn().mockImplementation(({ where }: any) => {
+          if (where?.code === "JURONG" && where?.type === "PORT") {
+            return Promise.resolve({ code: "JURONG", name: "Jurong Port" });
+          }
+          return Promise.resolve(null);
+        }),
+      };
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.IMPORT,
+            importDetails: {
+              pickupPortCode: "JURONG",
+              returningDepotCode: "ACS1",
+              returningDepotAddress1: "14 Pioneer Sector 2",
+            },
+          } as any,
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
+        ),
+      ).resolves.toBeTruthy();
+
+      const jobData = prisma.job.create.mock.calls[0][0].data;
+      expect(jobData.returningDepotCode).toBe("ACS1");
+      expect(prisma.masterSingaporeDepot.findUnique).toHaveBeenCalled();
+    });
+
+    it("IMPORT create rejects unknown returningDepotCode", async () => {
+      const prisma = makeCreatePrisma();
+      prisma.masterLogisticsLocation = {
+        findFirst: jest.fn().mockImplementation(({ where }: any) => {
+          if (where?.code === "JURONG" && where?.type === "PORT") {
+            return Promise.resolve({ code: "JURONG", name: "Jurong Port" });
+          }
+          return Promise.resolve(null);
+        }),
+      };
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.IMPORT,
+            importDetails: {
+              pickupPortCode: "JURONG",
+              returningDepotCode: "NOPE",
+              returningDepotAddress1: "Somewhere",
+            },
+          } as any,
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
+        ),
+      ).rejects.toThrow(/Unknown returningDepotCode: NOPE/);
+      expect(prisma.job.create).not.toHaveBeenCalled();
+    });
+
+    it("IMPORT create still accepts logistics-only returningDepotCode (GUL fallback)", async () => {
+      const prisma = makeCreatePrisma();
+      prisma.masterLogisticsLocation = {
+        findFirst: jest.fn().mockImplementation(({ where }: any) => {
+          if (where?.code === "JURONG" && where?.type === "PORT") {
+            return Promise.resolve({ code: "JURONG", name: "Jurong Port" });
+          }
+          if (where?.code === "GUL" && where?.type === "DEPOT") {
+            return Promise.resolve({
+              id: "loc-gul",
+              code: "GUL",
+              name: "Gul Depot",
+              addressLine1: "7 Gul Circle",
+              addressLine2: null,
+              postalCode: "629563",
+              placeId: null,
+              lat: null,
+              lng: null,
+              type: "DEPOT",
+              isActive: true,
+            });
+          }
+          return Promise.resolve(null);
+        }),
+      };
+      const svc = makeSvc(prisma);
+
+      await expect(
+        svc.create(
+          "t1",
+          {
+            ...baseLclDto,
+            jobType: JobType.IMPORT,
+            importDetails: {
+              pickupPortCode: "JURONG",
+              returningDepotCode: "GUL",
+            },
+          } as any,
+          { userId: "u1", role: Role.TRANSPORT_STAFF },
+        ),
+      ).resolves.toBeTruthy();
+
+      expect(prisma.job.create.mock.calls[0][0].data.returningDepotCode).toBe("GUL");
     });
 
     it("RETURN create keeps custom depot address when no depot code is supplied", async () => {

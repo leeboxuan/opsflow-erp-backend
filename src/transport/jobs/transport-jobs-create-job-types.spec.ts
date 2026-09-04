@@ -95,6 +95,9 @@ describe("job create: EXPORT and COLLECTION", () => {
       masterLogisticsLocation: {
         findFirst: jest.fn().mockResolvedValue({ code: "DEPOT-A", name: "Depot A" }),
       },
+      masterSingaporeDepot: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
     };
     return withInteractiveTransaction(prisma);
   }
