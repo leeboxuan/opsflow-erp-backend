@@ -199,7 +199,11 @@ export class InvoiceDto {
   @ApiProperty() taxCents: number;
   @ApiProperty() totalCents: number;
 
-  @ApiProperty({ type: [InvoiceLineItemDto] })
+  @ApiProperty({
+    type: [InvoiceLineItemDto],
+    description:
+      "Full lines on invoice detail. Staff and customer list endpoints return an empty array.",
+  })
   lineItems: InvoiceLineItemDto[];
 
   @ApiPropertyOptional({

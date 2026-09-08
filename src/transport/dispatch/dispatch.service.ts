@@ -17,6 +17,11 @@ import {
   DispatchReorderTripsDto,
 } from "./dto/dispatch.dto";
 import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
+import {
+  elapsedMs,
+  jsonResponseBytes,
+  opsflowPerfApiLog,
+} from "../../shared/perf/opsflow-perf-api";
 
 const JOB_DOCUMENTS_BUCKET = "job-documents";
 const GOOGLE_ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes";
@@ -69,6 +74,8 @@ export class DispatchService {
     expiresAtMs: number;
     value: DispatchRouteResponseDto;
   }>();
+  /** Coalesce concurrent Google Routes misses for the same geometry key. */
+  private readonly dispatchRouteInflight = new Map<string, Promise<DispatchRouteResponseDto>>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -98,6 +105,12 @@ export class DispatchService {
     return value.toFixed(5);
   }
 
+  /**
+   * Geometry cache key: travel mode + rounded origin/destination.
+   * Trip id is not included — it does not change road geometry, and including it
+   * would duplicate Google calls for identical OD pairs.
+   * Tenant isolation is enforced by trip lookup before this key is used.
+   */
   private buildDispatchRouteCacheKey(input: {
     fromLat: number;
     fromLng: number;
@@ -105,7 +118,6 @@ export class DispatchService {
     toLng: number;
     mode: DispatchRouteMode;
     cacheKey?: string;
-    tripId?: string;
   }): string {
     const mode = input.mode || DispatchRouteMode.DRIVE;
     const base = [
@@ -116,7 +128,6 @@ export class DispatchService {
       this.roundedCoord(input.toLng),
     ].join(":");
     if (input.cacheKey?.trim()) return `${base}:cache:${input.cacheKey.trim()}`;
-    if (input.tripId?.trim()) return `${base}:trip:${input.tripId.trim()}`;
     return base;
   }
 
@@ -199,7 +210,6 @@ export class DispatchService {
       toLng: input.toLng,
       mode,
       cacheKey: input.cacheKey,
-      tripId: input.tripId,
     });
     const now = Date.now();
     const cached = this.dispatchRouteCache.get(cacheKey);
@@ -207,6 +217,30 @@ export class DispatchService {
       return { ...cached.value, cached: true };
     }
 
+    const inflight = this.dispatchRouteInflight.get(cacheKey);
+    if (inflight) {
+      const value = await inflight;
+      return { ...value, cached: true };
+    }
+
+    const pending = this.fetchAndCacheDispatchRoute(tenantId, input, mode, cacheKey, now);
+    this.dispatchRouteInflight.set(cacheKey, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.dispatchRouteInflight.get(cacheKey) === pending) {
+        this.dispatchRouteInflight.delete(cacheKey);
+      }
+    }
+  }
+
+  private async fetchAndCacheDispatchRoute(
+    tenantId: string,
+    input: DispatchRouteQueryDto,
+    mode: DispatchRouteMode,
+    cacheKey: string,
+    startedAt: number,
+  ): Promise<DispatchRouteResponseDto> {
     const keyEnv = this.resolveRouteApiKey();
     const apiKey = keyEnv.apiKey;
     if (!apiKey) {
@@ -296,7 +330,7 @@ export class DispatchService {
         cached: false,
       };
       this.dispatchRouteCache.set(cacheKey, {
-        expiresAtMs: now + 60_000,
+        expiresAtMs: startedAt + 60_000,
         value: result,
       });
       return result;
@@ -324,6 +358,7 @@ export class DispatchService {
     tenantId: string,
     tripId: string,
   ): Promise<DispatchRouteResponseDto> {
+    const startedAt = Date.now();
     const trip = await this.prisma.trip.findFirst({
       where: { id: tripId, tenantId, status: { not: TripStatus.DRAFT } },
       select: {
@@ -343,7 +378,7 @@ export class DispatchService {
     ) {
       throw new BadRequestException("Trip is missing route coordinates");
     }
-    return this.getDispatchRoute(tenantId, {
+    const route = await this.getDispatchRoute(tenantId, {
       fromLat: trip.originLat,
       fromLng: trip.originLng,
       toLat: trip.destinationLat,
@@ -351,6 +386,84 @@ export class DispatchService {
       mode: DispatchRouteMode.DRIVE,
       tripId: trip.id,
     });
+    opsflowPerfApiLog("GET /dispatch/trips/:tripId/route", {
+      durationMs: elapsedMs(startedAt),
+      cached: route.cached,
+      hasPolyline: Boolean(route.polyline),
+      hasError: Boolean(route.error),
+    });
+    return route;
+  }
+
+  async getTripTrailerPhotos(tenantId: string, tripId: string) {
+    const startedAt = Date.now();
+    const trip = await this.prisma.trip.findFirst({
+      where: { id: tripId, tenantId, status: { not: TripStatus.DRAFT } },
+      select: {
+        id: true,
+        documents: {
+          where: {
+            isActive: true,
+            type: {
+              in: [TripDocumentType.TRAILER_START_PHOTO, TripDocumentType.TRAILER_END_PHOTO],
+            },
+          },
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            type: true,
+            storageKey: true,
+            originalName: true,
+            mimeType: true,
+            sizeBytes: true,
+          },
+        },
+      },
+    });
+    if (!trip) throw new NotFoundException("Trip not found");
+
+    const startPhoto = (trip.documents ?? []).find(
+      (d) => d.type === TripDocumentType.TRAILER_START_PHOTO,
+    );
+    const endPhoto = (trip.documents ?? []).find(
+      (d) => d.type === TripDocumentType.TRAILER_END_PHOTO,
+    );
+    const signedUrlByKey = await this.createSignedUrlMap([
+      startPhoto?.storageKey,
+      endPhoto?.storageKey,
+    ]);
+    const startUrl = startPhoto?.storageKey
+      ? (signedUrlByKey.get(startPhoto.storageKey) ?? null)
+      : null;
+    const endUrl = endPhoto?.storageKey
+      ? (signedUrlByKey.get(endPhoto.storageKey) ?? null)
+      : null;
+    const result = {
+      tripId: trip.id,
+      startPhotoUrl: startUrl,
+      endPhotoUrl: endUrl,
+      startPhoto: startPhoto
+        ? {
+            fileUrl: startUrl,
+            ...buildDocumentFileDisplayFields(startPhoto),
+            mimeType: documentMimeTypeOrNull(startPhoto.mimeType),
+          }
+        : null,
+      endPhoto: endPhoto
+        ? {
+            fileUrl: endUrl,
+            ...buildDocumentFileDisplayFields(endPhoto),
+            mimeType: documentMimeTypeOrNull(endPhoto.mimeType),
+          }
+        : null,
+    };
+    opsflowPerfApiLog("GET /dispatch/trips/:tripId/trailer-photos", {
+      durationMs: elapsedMs(startedAt),
+      hasStartPhoto: Boolean(startPhoto),
+      hasEndPhoto: Boolean(endPhoto),
+      signedUrlCount: [startPhoto?.storageKey, endPhoto?.storageKey].filter(Boolean).length,
+    });
+    return result;
   }
 
   private toLocalDayKey(value: Date | null | undefined): string | null {
@@ -409,7 +522,6 @@ export class DispatchService {
   private toBoardTrip(
     trip: any,
     trailerLocationMap: Map<string, string>,
-    signedUrlByKey?: Map<string, string | null>,
   ) {
     const startPhoto = (trip.documents ?? []).find(
       (d: any) => d.type === TripDocumentType.TRAILER_START_PHOTO,
@@ -417,22 +529,16 @@ export class DispatchService {
     const endPhoto = (trip.documents ?? []).find(
       (d: any) => d.type === TripDocumentType.TRAILER_END_PHOTO,
     );
-    const startUrl = startPhoto?.storageKey
-      ? (signedUrlByKey?.get(startPhoto.storageKey) ?? null)
-      : null;
-    const endUrl = endPhoto?.storageKey
-      ? (signedUrlByKey?.get(endPhoto.storageKey) ?? null)
-      : null;
     const startMeta = startPhoto
       ? {
-          fileUrl: startUrl,
+          fileUrl: null,
           ...buildDocumentFileDisplayFields(startPhoto),
           mimeType: documentMimeTypeOrNull(startPhoto.mimeType),
         }
       : null;
     const endMeta = endPhoto
       ? {
-          fileUrl: endUrl,
+          fileUrl: null,
           ...buildDocumentFileDisplayFields(endPhoto),
           mimeType: documentMimeTypeOrNull(endPhoto.mimeType),
         }
@@ -486,59 +592,32 @@ export class DispatchService {
       trailerLastLocationName: trip.trailerLastLocationCode
         ? trailerLocationMap.get(trip.trailerLastLocationCode) ?? null
         : null,
-      trailerStartPhotoUrl: startUrl,
-      trailerEndPhotoUrl: endUrl,
+      trailerStartPhotoUrl: null,
+      trailerEndPhotoUrl: null,
       trailerStartPhoto: startMeta,
       trailerEndPhoto: endMeta,
-    };
-  }
-
-  /** Attach Google driving route to a board trip (null polyline on failure — no straight-line fallback). */
-  private async attachBoardTripRoute(tenantId: string, trip: Record<string, any>) {
-    if (
-      trip.originLat == null
-      || trip.originLng == null
-      || trip.destinationLat == null
-      || trip.destinationLng == null
-    ) {
-      return {
-        ...trip,
-        routePolyline: null,
-        encodedPolyline: null,
-        routeProvider: null,
-        routeDistanceMeters: null,
-        routeDurationSeconds: null,
-        routeError: "Trip is missing route coordinates",
-      };
-    }
-
-    const route = await this.getDispatchRoute(tenantId, {
-      fromLat: trip.originLat,
-      fromLng: trip.originLng,
-      toLat: trip.destinationLat,
-      toLng: trip.destinationLng,
-      mode: DispatchRouteMode.DRIVE,
-      tripId: trip.id,
-    });
-
-    return {
-      ...trip,
-      routePolyline: route.polyline,
-      encodedPolyline: route.polyline,
-      routeProvider: route.provider,
-      routeDistanceMeters: route.distanceMeters,
-      routeDurationSeconds: route.durationSeconds,
-      routeError: route.error ?? null,
+      hasTrailerStartPhoto: Boolean(startPhoto),
+      hasTrailerEndPhoto: Boolean(endPhoto),
+      trailerStartPhotoDocumentId: startPhoto?.id ?? null,
+      trailerEndPhotoDocumentId: endPhoto?.id ?? null,
+      routePolyline: null,
+      encodedPolyline: null,
+      routeProvider: null,
+      routeDistanceMeters: null,
+      routeDurationSeconds: null,
+      routeError: null,
     };
   }
 
   async getBoard(tenantId: string, date?: string) {
+    const totalStartedAt = Date.now();
     const selectedDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date))
       ? date
       : this.toLocalDayKey(new Date())!;
     const { dayStart, dayEnd } = this.localDayBounds(selectedDate);
     const generatedAt = new Date();
 
+    const dbStartedAt = Date.now();
     const driverMemberships = await this.prisma.tenantMembership.findMany({
       where: {
         tenantId,
@@ -595,6 +674,14 @@ export class DispatchService {
               type: { in: [TripDocumentType.TRAILER_START_PHOTO, TripDocumentType.TRAILER_END_PHOTO] },
             },
             orderBy: { createdAt: "desc" },
+            select: {
+              id: true,
+              type: true,
+              storageKey: true,
+              originalName: true,
+              mimeType: true,
+              sizeBytes: true,
+            },
           },
         },
       }),
@@ -602,13 +689,6 @@ export class DispatchService {
         .findMany({ select: { code: true, name: true } })
         .catch(() => []),
     ]);
-
-    const trailerLocationMap = new Map<string, string>(
-      trailerLocations.map((l) => [l.code, l.name]),
-    );
-    const locationMap = new Map<string, (typeof locations)[number]>(
-      locations.map((l) => [l.driverUserId, l]),
-    );
 
     const driverProfiles = await this.prisma.drivers.findMany({
       where: { tenantId, userId: { in: driverUserIds } },
@@ -619,6 +699,15 @@ export class DispatchService {
         assignedFleetVehicle: { select: { plateNo: true } },
       },
     });
+    const dbMs = elapsedMs(dbStartedAt);
+
+    const assemblyStartedAt = Date.now();
+    const trailerLocationMap = new Map<string, string>(
+      trailerLocations.map((l) => [l.code, l.name]),
+    );
+    const locationMap = new Map<string, (typeof locations)[number]>(
+      locations.map((l) => [l.driverUserId, l]),
+    );
     const profileMap = new Map<string, (typeof driverProfiles)[number]>(
       driverProfiles.map((d) => [d.userId ?? "", d]),
     );
@@ -628,20 +717,9 @@ export class DispatchService {
       (trip) => this.toLocalDayKey(trip.plannedStartAt ?? trip.createdAt) === selectedDate,
     );
 
-    const storageKeys: Array<string | null | undefined> = [];
-    for (const trip of selectedDateTrips) {
-      for (const doc of trip.documents ?? []) {
-        storageKeys.push(doc.storageKey);
-      }
-    }
-    const signedUrlByKey = await this.createSignedUrlMap(storageKeys);
-
     const boardTripById = new Map<string, ReturnType<DispatchService["toBoardTrip"]>>();
     for (const trip of selectedDateTrips) {
-      boardTripById.set(
-        trip.id,
-        this.toBoardTrip(trip, trailerLocationMap, signedUrlByKey),
-      );
+      boardTripById.set(trip.id, this.toBoardTrip(trip, trailerLocationMap));
     }
 
     const ongoingTrips = selectedDateTrips.filter((t) => t.status === TripStatus.ONGOING);
@@ -649,7 +727,7 @@ export class DispatchService {
       (t) => !t.assignedDriverUserId && this.isOpenStatus(t.status),
     );
 
-    const drivers = await Promise.all(driverUsers.map(async (driver) => {
+    const drivers = driverUsers.map((driver) => {
       const driverTrips = selectedDateTrips
         .filter((t) => t.assignedDriverUserId === driver.id)
         .sort(
@@ -725,24 +803,37 @@ export class DispatchService {
         lastGpsAgeMinutes,
         stationaryMinutes,
         gpsStatus,
-        activeTrip: activeTrip
-          ? await this.attachBoardTripRoute(
-            tenantId,
-            boardTripById.get(activeTrip.id)!,
-          )
-          : null,
+        activeTrip: activeTrip ? boardTripById.get(activeTrip.id)! : null,
         todayTrips: boardTrips,
         trips: boardTrips,
       };
-    }));
+    });
 
-    return {
+    const result = {
       generatedAt: generatedAt.toISOString(),
       date: selectedDate,
       drivers,
       unassignedTrips: unassignedTrips.map((trip) => boardTripById.get(trip.id)!),
       ongoingTrips: ongoingTrips.map((trip) => boardTripById.get(trip.id)!),
     };
+    const assemblyMs = elapsedMs(assemblyStartedAt);
+    const responseBytes = jsonResponseBytes(result);
+    opsflowPerfApiLog("GET /dispatch/board", {
+      durationMs: elapsedMs(totalStartedAt),
+      dbMs,
+      assemblyMs,
+      signedUrlMs: 0,
+      signedUrlCount: 0,
+      googleRoutesMs: 0,
+      googleCalls: 0,
+      routeCacheHits: 0,
+      routeCacheMisses: 0,
+      tripCount: selectedDateTrips.length,
+      activeTripCount: ongoingTrips.length,
+      driverCount: drivers.length,
+      responseBytes,
+    });
+    return result;
   }
 
   async reorderDriverTrips(

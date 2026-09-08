@@ -1,5 +1,5 @@
 import { DispatchService, resolveGoogleRoutesApiKey } from "./dispatch.service";
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, NotFoundException } from "@nestjs/common";
 
 describe("resolveGoogleRoutesApiKey", () => {
   const originalRoutesKey = process.env.GOOGLE_ROUTES_API_KEY;
@@ -169,8 +169,12 @@ describe("DispatchService", () => {
     expect(trip.carrier).toBe("Carrier A");
     expect(trip.shipper).toBe("Shipper A");
     expect(trip.vessel).toBe("Vessel A");
+    expect(trip.status).toBe("ONGOING");
+    expect(trip.hasTrailerStartPhoto).toBe(false);
+    expect(trip.hasTrailerEndPhoto).toBe(false);
     expect(trip.routePolyline).toBeNull();
-    expect(trip.routeError).toContain("GOOGLE_MAPS_API_KEY");
+    expect(trip.routeError).toBeNull();
+    expect(prisma.trip.findMany).toHaveBeenCalled();
   });
 
   it("getDispatchRoute uses GOOGLE_MAPS_API_KEY when GOOGLE_ROUTES_API_KEY is unset", async () => {
@@ -202,22 +206,9 @@ describe("DispatchService", () => {
     expect(fetchCall[1].headers["X-Goog-Api-Key"]).toBe("maps-only-key");
   });
 
-  it("activeTrip includes Google driving route polyline when Routes API succeeds", async () => {
+  it("does not call Google Routes on the initial board response even when active trips have coordinates", async () => {
     process.env.GOOGLE_ROUTES_API_KEY = "test-key";
-    (global as any).fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        routes: [
-          {
-            distanceMeters: 4200,
-            duration: "600s",
-            staticDuration: "540s",
-            polyline: { encodedPolyline: "encoded-driving-route" },
-            routeLabels: ["DEFAULT_ROUTE"],
-          },
-        ],
-      }),
-    });
+    (global as any).fetch = jest.fn().mockImplementation(() => new Promise(() => undefined));
 
     const prisma: any = {
       tenantMembership: {
@@ -276,11 +267,13 @@ describe("DispatchService", () => {
     const svc = new DispatchService(prisma, { getClient: jest.fn() } as any);
     const res = await svc.getBoard("tenant-1", "2026-04-30");
     const trip = res.drivers[0].activeTrip;
-    expect(trip.routePolyline).toBe("encoded-driving-route");
-    expect(trip.routeProvider).toBe("GOOGLE_ROUTES");
-    expect(trip.routeDistanceMeters).toBe(4200);
-    expect(trip.routeDurationSeconds).toBe(600);
+    expect(trip.id).toBe("trip-gul");
+    expect(trip.originLat).toBe(1.3136718);
+    expect(trip.destinationLat).toBe(1.3107274);
+    expect(trip.routePolyline).toBeNull();
+    expect(trip.routeProvider).toBeNull();
     expect(trip.routeError).toBeNull();
+    expect((global as any).fetch).not.toHaveBeenCalled();
   });
 
   it("returns nulls safely for optional route/timeline/gps fields", async () => {
@@ -350,10 +343,10 @@ describe("DispatchService", () => {
     expect(res.drivers[0].gpsStatus).toBe("NO_GPS");
   });
 
-  it("board trip exposes trailer photo urls plus filename metadata without storage keys", async () => {
+  it("board trip exposes trailer photo metadata without signing URLs or leaking storage keys", async () => {
     const createSignedUrl = jest
       .fn()
-      .mockResolvedValue({ data: { signedUrl: "https://signed/start" } });
+      .mockImplementation(() => new Promise(() => undefined));
     const prisma: any = {
       tenantMembership: {
         findMany: jest.fn().mockResolvedValue([
@@ -395,6 +388,7 @@ describe("DispatchService", () => {
             },
             documents: [
               {
+                id: "doc-start-1",
                 type: "TRAILER_START_PHOTO",
                 storageKey: "t1/jobs/j1/trips/t1/trailer_start_photo/99-start.jpg",
                 originalName: "start.jpg",
@@ -427,20 +421,20 @@ describe("DispatchService", () => {
     const svc = new DispatchService(prisma, supabaseService);
     const res = await svc.getBoard("tenant-1", "2026-04-30");
     const trip = res.drivers[0].activeTrip;
-    expect(createSignedUrl).toHaveBeenCalledTimes(1);
-    expect(createSignedUrl).toHaveBeenCalledWith(
-      "t1/jobs/j1/trips/t1/trailer_start_photo/99-start.jpg",
-      60 * 60,
-    );
-    expect(trip.trailerStartPhotoUrl).toBe("https://signed/start");
-    expect(trip.trailerStartPhoto?.fileUrl).toBe("https://signed/start");
+    expect(createSignedUrl).not.toHaveBeenCalled();
+    expect(trip.trailerStartPhotoUrl).toBeNull();
+    expect(trip.trailerStartPhoto?.fileUrl).toBeNull();
+    expect(trip.hasTrailerStartPhoto).toBe(true);
+    expect(trip.hasTrailerEndPhoto).toBe(false);
+    expect(trip.trailerStartPhotoDocumentId).toBe("doc-start-1");
     expect(trip.trailerStartPhoto?.fileName).toBe("start.jpg");
     expect(trip.trailerStartPhoto?.originalFileName).toBe("start.jpg");
     expect(trip.trailerStartPhoto?.mimeType).toBe("image/jpeg");
     expect(trip.trailerStartPhoto?.fileSizeBytes).toBe(42);
     expect(JSON.stringify(trip)).not.toMatch(/storageKey/);
-    expect(res.drivers[0].todayTrips[0].trailerStartPhotoUrl).toBe("https://signed/start");
-    expect(res.drivers[0].trips[0].trailerStartPhotoUrl).toBe("https://signed/start");
+    expect(JSON.stringify(trip)).not.toMatch(/https:\/\//);
+    expect(res.drivers[0].todayTrips[0].hasTrailerStartPhoto).toBe(true);
+    expect(res.drivers[0].trips[0].trailerStartPhotoUrl).toBeNull();
   });
 
   it("scopes board trips to selected date using plannedStartAt fallback createdAt", async () => {
@@ -579,8 +573,10 @@ describe("DispatchService", () => {
     } as any;
     const svc = new DispatchService(prisma, supabaseService);
     const res = await svc.getBoard("tenant-1", "2026-05-05");
+    expect(res.drivers[0].activeTrip.id).toBe("trip1");
     expect(res.drivers[0].activeTrip.trailerStartPhotoUrl).toBeNull();
     expect(res.drivers[0].activeTrip.trailerLastLocationName).toBeNull();
+    expect(res.drivers[0].activeTrip.hasTrailerStartPhoto).toBe(true);
   });
 
   it("uses updatedAt for gps age when capturedAt is missing", async () => {
@@ -948,6 +944,209 @@ describe("DispatchService", () => {
     expect(first.cached).toBe(false);
     expect(second.cached).toBe(true);
     expect((global as any).fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces concurrent cache misses into one Google Routes call", async () => {
+    process.env.GOOGLE_ROUTES_API_KEY = "test-key";
+    let resolveFetch: (value: any) => void = () => undefined;
+    (global as any).fetch = jest.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    const svc = new DispatchService({} as any, { getClient: jest.fn() } as any);
+    const query = {
+      fromLat: 1.29,
+      fromLng: 103.85,
+      toLat: 1.3,
+      toLng: 103.86,
+      mode: "DRIVE" as any,
+    };
+    const first = svc.getDispatchRoute("tenant-1", query);
+    const second = svc.getDispatchRoute("tenant-1", query);
+    expect((global as any).fetch).toHaveBeenCalledTimes(1);
+    resolveFetch({
+      ok: true,
+      json: async () => ({
+        routes: [{
+          distanceMeters: 1000,
+          duration: "120s",
+          staticDuration: "110s",
+          polyline: { encodedPolyline: "abc123" },
+          routeLabels: ["DEFAULT_ROUTE"],
+        }],
+      }),
+    });
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.polyline).toBe("abc123");
+    expect(b.polyline).toBe("abc123");
+    expect((global as any).fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares geometry cache across trips with the same origin and destination", async () => {
+    process.env.GOOGLE_ROUTES_API_KEY = "test-key";
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        routes: [{
+          distanceMeters: 1000,
+          duration: "120s",
+          polyline: { encodedPolyline: "shared" },
+        }],
+      }),
+    });
+    const svc = new DispatchService({} as any, { getClient: jest.fn() } as any);
+    const first = await svc.getDispatchRoute("tenant-1", {
+      fromLat: 1.29,
+      fromLng: 103.85,
+      toLat: 1.3,
+      toLng: 103.86,
+      mode: "DRIVE" as any,
+      tripId: "trip-a",
+    });
+    const second = await svc.getDispatchRoute("tenant-2", {
+      fromLat: 1.29,
+      fromLng: 103.85,
+      toLat: 1.3,
+      toLng: 103.86,
+      mode: "DRIVE" as any,
+      tripId: "trip-b",
+    });
+    expect(first.cached).toBe(false);
+    expect(second.cached).toBe(true);
+    expect((global as any).fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("getTripRoute enforces tenant isolation and returns a cache miss then hit", async () => {
+    process.env.GOOGLE_ROUTES_API_KEY = "test-key";
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        routes: [{
+          distanceMeters: 4200,
+          duration: "600s",
+          staticDuration: "540s",
+          polyline: { encodedPolyline: "encoded-driving-route" },
+          routeLabels: ["DEFAULT_ROUTE"],
+        }],
+      }),
+    });
+    const prisma: any = {
+      trip: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValue({
+            id: "trip-gul",
+            originLat: 1.3136718,
+            originLng: 103.6730866,
+            destinationLat: 1.3107274,
+            destinationLng: 103.6749418,
+          }),
+      },
+    };
+    const svc = new DispatchService(prisma, { getClient: jest.fn() } as any);
+    await expect(svc.getTripRoute("other-tenant", "trip-gul")).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    const miss = await svc.getTripRoute("tenant-1", "trip-gul");
+    expect(miss.cached).toBe(false);
+    expect(miss.polyline).toBe("encoded-driving-route");
+    const hit = await svc.getTripRoute("tenant-1", "trip-gul");
+    expect(hit.cached).toBe(true);
+    expect(hit.polyline).toBe("encoded-driving-route");
+    expect((global as any).fetch).toHaveBeenCalledTimes(1);
+    expect(prisma.trip.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: "trip-gul", tenantId: "tenant-1" }),
+      }),
+    );
+  });
+
+  it("getTripTrailerPhotos signs only that trip and stays tenant-scoped", async () => {
+    const createSignedUrl = jest
+      .fn()
+      .mockResolvedValue({ data: { signedUrl: "https://signed/start" } });
+    const prisma: any = {
+      trip: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValue({
+            id: "trip1",
+            documents: [
+              {
+                id: "doc-start-1",
+                type: "TRAILER_START_PHOTO",
+                storageKey: "t1/jobs/j1/trips/t1/trailer_start_photo/99-start.jpg",
+                originalName: "start.jpg",
+                mimeType: "image/jpeg",
+                sizeBytes: 42,
+              },
+            ],
+          }),
+      },
+    };
+    const supabaseService = {
+      getClient: jest.fn().mockReturnValue({
+        storage: {
+          from: jest.fn().mockReturnValue({ createSignedUrl }),
+        },
+      }),
+    } as any;
+    const svc = new DispatchService(prisma, supabaseService);
+    await expect(svc.getTripTrailerPhotos("other-tenant", "trip1")).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    const photos = await svc.getTripTrailerPhotos("tenant-1", "trip1");
+    expect(createSignedUrl).toHaveBeenCalledTimes(1);
+    expect(createSignedUrl).toHaveBeenCalledWith(
+      "t1/jobs/j1/trips/t1/trailer_start_photo/99-start.jpg",
+      60 * 60,
+    );
+    expect(photos.startPhotoUrl).toBe("https://signed/start");
+    expect(photos.startPhoto?.fileName).toBe("start.jpg");
+    expect(JSON.stringify(photos)).not.toMatch(/storageKey/);
+    expect(prisma.trip.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: "trip1", tenantId: "tenant-1" }),
+      }),
+    );
+  });
+
+  it("getTripTrailerPhotos stays private when signing fails", async () => {
+    const prisma: any = {
+      trip: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "trip1",
+          documents: [
+            {
+              id: "doc-start-1",
+              type: "TRAILER_START_PHOTO",
+              storageKey: "secret/path.jpg",
+              originalName: "start.jpg",
+              mimeType: "image/jpeg",
+              sizeBytes: 12,
+            },
+          ],
+        }),
+      },
+    };
+    const supabaseService = {
+      getClient: jest.fn().mockReturnValue({
+        storage: {
+          from: jest.fn().mockReturnValue({
+            createSignedUrl: jest.fn().mockRejectedValue(new Error("storage fail")),
+          }),
+        },
+      }),
+    } as any;
+    const svc = new DispatchService(prisma, supabaseService);
+    const photos = await svc.getTripTrailerPhotos("tenant-1", "trip1");
+    expect(photos.startPhotoUrl).toBeNull();
+    expect(photos.startPhoto?.fileName).toBe("start.jpg");
+    expect(JSON.stringify(photos)).not.toMatch(/storageKey|secret\/path/);
   });
 
   it("handles google route failure gracefully", async () => {

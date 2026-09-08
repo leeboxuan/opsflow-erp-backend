@@ -5,11 +5,21 @@ import {
   TripStatus,
 } from "@prisma/client";
 import { PrismaService } from "../../shared/prisma/prisma.service";
+import {
+  elapsedMs,
+  isOpsflowPerfApiEnabled,
+  jsonResponseBytes,
+  opsflowPerfApiLog,
+} from "../../shared/perf/opsflow-perf-api";
 import { CANONICAL_TRIP_PAYOUT_LINE_SELECT } from "../trips/trip-payout.helpers";
 import {
   aggregateAttributableInvoiceRevenueByJob,
   type InvoiceLineAttributionInput,
 } from "./job-finance-invoice-attribution";
+import {
+  jobFinanceSummaryCountSql,
+  jobFinanceSummaryPageSql,
+} from "./job-finance-summary-list.sql";
 import {
   buildJobFinanceSummary,
   JOB_FINANCE_CURRENCY,
@@ -22,9 +32,6 @@ const RECOGNIZED_INVOICE_STATUSES: InvoiceStatus[] = [
   InvoiceStatus.ISSUED,
   InvoiceStatus.PAID,
 ];
-
-/** Job scan batch for listSummaries — never caps the tenant-wide result set. */
-const LIST_JOB_BATCH_SIZE = 200;
 
 export type JobFinanceSummaryRow = JobFinanceSummary & {
   jobId: string;
@@ -176,9 +183,8 @@ export class JobFinanceSummaryService {
   }
 
   /**
-   * Complete tenant pagination/filter without an arbitrary newest-N cap.
-   * Scans jobs in ordered batches; keeps at most one page of rows in memory
-   * while still computing the full filtered `meta.total`.
+   * Paginate job IDs in SQL, then compute finance figures for that page only.
+   * financeStatus is pushed down before LIMIT so totals/pages stay correct.
    */
   async listSummaries(
     tenantId: string,
@@ -191,56 +197,106 @@ export class JobFinanceSummaryService {
     data: JobFinanceSummaryRow[];
     meta: { page: number; pageSize: number; total: number };
   }> {
+    const totalStartedAt = Date.now();
+    let prismaCalls = 0;
     const page = Math.max(1, Number(query.page ?? 1) || 1);
     const pageSize = Math.min(
       100,
       Math.max(1, Number(query.pageSize ?? 20) || 20),
     );
+    const skip = (page - 1) * pageSize;
     const statusFilter = query.financeStatus;
-    const pageStart = (page - 1) * pageSize;
-    const pageEnd = pageStart + pageSize;
 
-    const data: JobFinanceSummaryRow[] = [];
-    let matchedTotal = 0;
-    let offset = 0;
+    const candidateStartedAt = Date.now();
+    const { jobs, total, pagePrismaCalls } = await this.listSummaryJobPage(
+      tenantId,
+      skip,
+      pageSize,
+      statusFilter,
+    );
+    prismaCalls += pagePrismaCalls;
+    const candidateQueryMs = elapsedMs(candidateStartedAt);
 
-    for (;;) {
-      const jobs = await this.prisma.job.findMany({
-        where: { tenantId },
-        select: { id: true, internalRef: true },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        skip: offset,
-        take: LIST_JOB_BATCH_SIZE,
-      });
-      if (jobs.length === 0) break;
+    const enrichmentStartedAt = Date.now();
+    const summaries = await this.summarizeJobs(
+      tenantId,
+      jobs.map((j) => j.id),
+    );
+    prismaCalls += jobs.length === 0 ? 0 : 4;
+    const pageEnrichmentMs = elapsedMs(enrichmentStartedAt);
 
-      const summaries = await this.summarizeJobs(
-        tenantId,
-        jobs.map((j) => j.id),
-      );
+    const data: JobFinanceSummaryRow[] = jobs.map((job) => {
+      const summary =
+        summaries.get(job.id) ??
+        buildJobFinanceSummary({
+          currency: JOB_FINANCE_CURRENCY,
+          driverPayoutCents: 0,
+          miscPayoutCents: 0,
+          totalJobBillableCents: 0,
+          invoiceRevenueCents: null,
+        });
+      return {
+        jobId: job.id,
+        jobInternalRef: job.internalRef ?? null,
+        ...summary,
+      };
+    });
 
-      for (const job of jobs) {
-        const summary = summaries.get(job.id);
-        if (!summary) continue;
-        if (statusFilter && summary.financeStatus !== statusFilter) continue;
+    const result = {
+      data,
+      meta: { page, pageSize, total },
+    };
+    opsflowPerfApiLog("GET /finance/jobs/summaries", {
+      durationMs: elapsedMs(totalStartedAt),
+      candidateQueryMs,
+      pageEnrichmentMs,
+      prismaCalls,
+      jobsScanned: jobs.length,
+      returned: data.length,
+      responseBytes: isOpsflowPerfApiEnabled() ? jsonResponseBytes(result) : 0,
+    });
+    return result;
+  }
 
-        if (matchedTotal >= pageStart && matchedTotal < pageEnd) {
-          data.push({
-            jobId: job.id,
-            jobInternalRef: job.internalRef ?? null,
-            ...summary,
-          });
-        }
-        matchedTotal += 1;
-      }
-
-      if (jobs.length < LIST_JOB_BATCH_SIZE) break;
-      offset += LIST_JOB_BATCH_SIZE;
+  private async listSummaryJobPage(
+    tenantId: string,
+    skip: number,
+    take: number,
+    financeStatus?: JobFinanceStatus,
+  ): Promise<{
+    jobs: Array<{ id: string; internalRef: string | null }>;
+    total: number;
+    pagePrismaCalls: number;
+  }> {
+    if (!financeStatus) {
+      const [total, jobs] = await this.prisma.$transaction([
+        this.prisma.job.count({ where: { tenantId } }),
+        this.prisma.job.findMany({
+          where: { tenantId },
+          select: { id: true, internalRef: true },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          skip,
+          take,
+        }),
+      ]);
+      return { jobs, total, pagePrismaCalls: 2 };
     }
 
+    const [countRows, idRows] = await Promise.all([
+      this.prisma.$queryRaw(jobFinanceSummaryCountSql(tenantId, financeStatus)) as Promise<
+        Array<{ c: bigint | number }>
+      >,
+      this.prisma.$queryRaw(
+        jobFinanceSummaryPageSql(tenantId, financeStatus, skip, take),
+      ) as Promise<Array<{ id: string; internalRef: string | null }>>,
+    ]);
     return {
-      data,
-      meta: { page, pageSize, total: matchedTotal },
+      jobs: idRows.map((row) => ({
+        id: row.id,
+        internalRef: row.internalRef ?? null,
+      })),
+      total: Number(countRows[0]?.c ?? 0),
+      pagePrismaCalls: 2,
     };
   }
 

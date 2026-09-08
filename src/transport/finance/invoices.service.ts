@@ -29,12 +29,24 @@ import { actorIsCustomerAdmin } from "../../shared/auth/access-actor";
 import { hasRole } from "../../shared/auth/canonical-tenant-role";
 import { CanonicalTenantRole } from "@prisma/client";
 import { AuditService } from "../../shared/audit/audit.service";
+import {
+  elapsedMs,
+  isOpsflowPerfApiEnabled,
+  jsonResponseBytes,
+  opsflowPerfApiLog,
+} from "../../shared/perf/opsflow-perf-api";
 import { loadInvoiceAssetBuffer, renderInvoiceHtml } from "./invoice-render";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { evaluateJobInvoiceReadiness } from "../jobs/job-invoice-readiness";
 import { buildTripDisplayRef } from "../trips/trip-display-ref";
 import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
 import * as rt from "../../shared/realtime/realtime-publish";
+import {
+  customerInvoiceListCountSql,
+  customerInvoiceListPageSql,
+  invoiceMatchesCustomerCompany,
+  portalCustomerInvoiceIdsSql,
+} from "./customer-invoice-visibility";
 import {
   canMarkInvoicePaid,
   canVoidInvoice,
@@ -80,12 +92,35 @@ function extractDraftMeta(snapshot: any) {
   };
 }
 
-function normalizeCustomerCompanyName(name: string): string {
-  return String(name ?? "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
+const INVOICE_LIST_SELECT = {
+  id: true,
+  invoiceNo: true,
+  customerName: true,
+  customerCompanyId: true,
+  sourceJobId: true,
+  sourceCustomerQuotationId: true,
+  templateCode: true,
+  currency: true,
+  status: true,
+  issueDate: true,
+  dueDate: true,
+  notes: true,
+  subtotalCents: true,
+  taxCents: true,
+  totalCents: true,
+  createdAt: true,
+  updatedAt: true,
+  issuedAt: true,
+  issuedByUserId: true,
+  snapshot: true,
+  pdfKey: true,
+  pdfGeneratedAt: true,
+  paidAt: true,
+  paidByUserId: true,
+  sentAt: true,
+  sentByUserId: true,
+  orders: { select: { id: true } },
+} as const;
 
 function firstText(...values: Array<string | null | undefined>): string | null {
   for (const value of values) {
@@ -1191,6 +1226,27 @@ export class InvoicesService {
     };
   }
 
+  private invoiceListOrderBy(query?: {
+    sortBy?: string;
+    sortDir?: string;
+  }): Array<Record<string, "asc" | "desc">> {
+    const primary = buildOrderBy(
+      query?.sortBy,
+      query?.sortDir,
+      [
+        "createdAt",
+        "updatedAt",
+        "invoiceNo",
+        "status",
+        "issueDate",
+        "issuedAt",
+      ],
+      { createdAt: "desc" },
+    );
+    const rows = Array.isArray(primary) ? primary : [primary];
+    return [...rows, { id: "desc" }];
+  }
+
   async listInvoices(
     tenantId: string,
     query?: {
@@ -1207,6 +1263,7 @@ export class InvoicesService {
     data: any[];
     meta: { page: number; pageSize: number; total: number };
   }> {
+    const totalStartedAt = Date.now();
     const { page, pageSize, skip, take } = parsePaginationFromQuery(
       query ?? {},
     );
@@ -1217,7 +1274,9 @@ export class InvoicesService {
       ? this.getCustomerCompanyIdOrThrow(user)
       : null;
     applyQSearch(where, query?.q?.trim(), ["invoiceNo", "customerName"]);
-    applyMappedFilter(where, query?.filter ?? (query as { status?: string })?.status, {
+    const statusFilter =
+      query?.filter ?? (query as { status?: string } | undefined)?.status;
+    applyMappedFilter(where, statusFilter, {
       Draft: { status: INVOICE_STATUS.DRAFT },
       DRAFT: { status: INVOICE_STATUS.DRAFT },
       Generated: { status: INVOICE_STATUS.GENERATED },
@@ -1230,24 +1289,7 @@ export class InvoicesService {
       VOID: { status: INVOICE_STATUS.VOID },
     });
 
-    const orderBy = buildOrderBy(
-      query?.sortBy,
-      query?.sortDir,
-      [
-        "createdAt",
-        "updatedAt",
-        "invoiceNo",
-        "status",
-        "issueDate",
-        "issuedAt",
-      ],
-      { createdAt: "desc" },
-    );
-
-    const include = {
-      lineItems: true,
-      orders: { select: { id: true } },
-    };
+    const orderBy = this.invoiceListOrderBy(query);
 
     if (!isCustomer) {
       const [total, invoices] = await this.prisma.$transaction([
@@ -1257,39 +1299,72 @@ export class InvoicesService {
           orderBy,
           skip,
           take,
-          include,
+          select: INVOICE_LIST_SELECT,
         }),
       ]);
 
-      // Keep lineItems in list DTOs (required by InvoiceDto / edit flows).
-      // Batch confirmer/issuer user lookups for the page instead of N queries.
       const data = await this.toDtosWithNames(invoices);
-      return { data, meta: buildPaginationMeta(page, pageSize, total) };
+      const result = { data, meta: buildPaginationMeta(page, pageSize, total) };
+      opsflowPerfApiLog("GET /finance/invoices", {
+        durationMs: elapsedMs(totalStartedAt),
+        invoiceRowsLoaded: invoices.length,
+        lineItemRowsLoaded: 0,
+        visibilityCandidateCount: 0,
+        returned: data.length,
+        responseBytes: isOpsflowPerfApiEnabled() ? jsonResponseBytes(result) : 0,
+      });
+      return result;
     }
 
-    // CUSTOMER visibility is company-scoped and derived from invoice orders
-    // and/or draft snapshot.orderIds (for unlinked draft scenarios).
-    // Name-fallback membership means we cannot safely tighten SQL by
-    // customerCompanyId alone without changing visibility.
-    const customerCandidates = await this.prisma.invoice.findMany({
-      where,
-      orderBy,
-      include: {
-        lineItems: true,
-        orders: { select: { id: true, customerCompanyId: true } },
-      },
+    const company = await this.prisma.customer_companies.findFirst({
+      where: { id: customerCompanyId as string, tenantId },
+      select: { normalizedName: true },
     });
-
-    const visible = await this.filterInvoicesBelongingToCustomerCompany(
+    const visibilityInput = {
       tenantId,
-      customerCandidates,
-      customerCompanyId as string,
+      customerCompanyId: customerCompanyId as string,
+      companyNormalizedName: company?.normalizedName ?? "",
+      q: query?.q?.trim(),
+      status: statusFilter,
+      sortBy: query?.sortBy,
+      sortDir: query?.sortDir,
+      skip,
+      take,
+    };
+    const [countRows, idRows] = await Promise.all([
+      this.prisma.$queryRaw(customerInvoiceListCountSql(visibilityInput)) as Promise<
+        Array<{ c: bigint | number }>
+      >,
+      this.prisma.$queryRaw(customerInvoiceListPageSql(visibilityInput)) as Promise<
+        Array<{ id: string }>
+      >,
+    ]);
+    const total = Number(countRows[0]?.c ?? 0);
+    const orderedIds = idRows.map((row) => row.id);
+    const invoices =
+      orderedIds.length === 0
+        ? []
+        : await this.prisma.invoice.findMany({
+            where: { tenantId, id: { in: orderedIds } },
+            select: INVOICE_LIST_SELECT,
+          });
+    const orderIdx = new Map(orderedIds.map((id, index) => [id, index]));
+    invoices.sort(
+      (a, b) =>
+        Number(orderIdx.get(a.id) ?? 0) - Number(orderIdx.get(b.id) ?? 0),
     );
 
-    const total = visible.length;
-    const pageItems = visible.slice(skip, skip + take);
-    const data = await this.toDtosWithNames(pageItems);
-    return { data, meta: buildPaginationMeta(page, pageSize, total) };
+    const data = await this.toDtosWithNames(invoices);
+    const result = { data, meta: buildPaginationMeta(page, pageSize, total) };
+    opsflowPerfApiLog("GET /finance/invoices", {
+      durationMs: elapsedMs(totalStartedAt),
+      invoiceRowsLoaded: invoices.length,
+      lineItemRowsLoaded: 0,
+      visibilityCandidateCount: total,
+      returned: data.length,
+      responseBytes: isOpsflowPerfApiEnabled() ? jsonResponseBytes(result) : 0,
+    });
+    return result;
   }
 
   async getInvoice(tenantId: string, id: string, user: any) {
@@ -3156,20 +3231,15 @@ export class InvoicesService {
     const visible = [...linkedOk];
     for (const inv of needFurtherCheck) {
       const snap = inv?.snapshot as any;
-      const snapshotOrderIds = Array.isArray(snap?.orderIds)
-        ? (snap.orderIds as string[])
-        : [];
-      if (snapshotOrderIds.some((id) => matchingOrderIds.has(String(id)))) {
-        visible.push(inv);
-        continue;
-      }
-
-      const normalizedInvoiceCustomerName = normalizeCustomerCompanyName(
-        inv?.customerName,
-      );
       if (
-        normalizedInvoiceCustomerName &&
-        company?.normalizedName === normalizedInvoiceCustomerName
+        invoiceMatchesCustomerCompany({
+          customerName: inv?.customerName,
+          orders: inv?.orders,
+          snapshot: snap,
+          matchingSnapshotOrderIds: matchingOrderIds,
+          companyNormalizedName: company?.normalizedName ?? null,
+          customerCompanyId,
+        })
       ) {
         visible.push(inv);
       }
@@ -3201,50 +3271,53 @@ export class InvoicesService {
     tenantId: string,
     customerCompanyId?: string,
   ): Promise<PortalInvoiceDto[]> {
-    const customerCompanyName = customerCompanyId
-      ? (
-          await this.prisma.customer_companies.findFirst({
-            where: { id: customerCompanyId, tenantId },
-            select: { name: true },
-          })
-        )?.name ?? ""
-      : "";
+    const totalStartedAt = Date.now();
+    const company = customerCompanyId
+      ? await this.prisma.customer_companies.findFirst({
+          where: { id: customerCompanyId, tenantId },
+          select: { name: true, normalizedName: true },
+        })
+      : null;
+    const customerCompanyName = company?.name ?? "";
 
-    const invoices = await this.prisma.invoice.findMany({
-      where: this.buildPortalInvoiceWhere({
-        tenantId,
-        customerCompanyId,
-        // Prefer pdfKey presence for list hasPdf; download still verifies storage.
-        // Do not rely on pdfGeneratedAt (older data might have null metadata).
-        requireGeneratedAt: false,
-      }),
-      orderBy: { createdAt: "desc" },
-      include: {
-        orders: {
+    const portalWhere = this.buildPortalInvoiceWhere({
+      tenantId,
+      customerCompanyId,
+      requireGeneratedAt: false,
+    });
+
+    const invoices = customerCompanyId
+      ? await this.listPortalInvoicesForCompany(
+          tenantId,
+          customerCompanyId,
+          company?.normalizedName ?? "",
+        )
+      : await this.prisma.invoice.findMany({
+          where: portalWhere,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           select: {
-            customerCompanyId: true,
-            customerCompany: {
+            id: true,
+            invoiceNo: true,
+            issueDate: true,
+            dueDate: true,
+            status: true,
+            currency: true,
+            subtotalCents: true,
+            taxCents: true,
+            totalCents: true,
+            pdfKey: true,
+            createdAt: true,
+            orders: {
               select: {
-                name: true,
+                customerCompanyId: true,
+                customerCompany: { select: { name: true } },
               },
             },
           },
-        },
-      },
-    });
-
-    const candidates = customerCompanyId
-      ? await this.filterInvoicesBelongingToCustomerCompany(
-          tenantId,
-          invoices as any[],
-          customerCompanyId,
-        )
-      : (invoices as any[]);
+        });
 
     const results: PortalInvoiceDto[] = [];
-    for (const inv of candidates) {
-      // List path: treat stored pdfKey as hasPdf without sequential signed-URL probes.
-      // Download endpoint still verifies the object exists in storage.
+    for (const inv of invoices) {
       const hasPdf = Boolean(inv.pdfKey);
       if (!hasPdf) continue;
 
@@ -3267,7 +3340,62 @@ export class InvoicesService {
       });
     }
 
+    opsflowPerfApiLog("GET /portal/invoices", {
+      durationMs: elapsedMs(totalStartedAt),
+      invoiceRowsLoaded: invoices.length,
+      lineItemRowsLoaded: 0,
+      visibilityCandidateCount: customerCompanyId ? invoices.length : 0,
+      returned: results.length,
+      responseBytes: isOpsflowPerfApiEnabled() ? jsonResponseBytes(results) : 0,
+    });
     return results;
+  }
+
+  private async listPortalInvoicesForCompany(
+    tenantId: string,
+    customerCompanyId: string,
+    companyNormalizedName: string,
+  ) {
+    const idRows = (await this.prisma.$queryRaw(
+      portalCustomerInvoiceIdsSql({
+        tenantId,
+        customerCompanyId,
+        companyNormalizedName,
+      }),
+    )) as Array<{ id: string }>;
+    const orderedIds = idRows.map((row) => row.id);
+    if (orderedIds.length === 0) return [];
+
+    const invoices = await this.prisma.invoice.findMany({
+      where: { tenantId, id: { in: orderedIds } },
+      select: {
+        id: true,
+        invoiceNo: true,
+        issueDate: true,
+        dueDate: true,
+        status: true,
+        currency: true,
+        subtotalCents: true,
+        taxCents: true,
+        totalCents: true,
+        pdfKey: true,
+        createdAt: true,
+        orders: {
+          select: {
+            customerCompanyId: true,
+            customerCompany: {
+              select: { name: true },
+            },
+          },
+        },
+      },
+    });
+    const orderIdx = new Map(orderedIds.map((id, index) => [id, index]));
+    invoices.sort(
+      (a, b) =>
+        Number(orderIdx.get(a.id) ?? 0) - Number(orderIdx.get(b.id) ?? 0),
+    );
+    return invoices;
   }
 
   async downloadPortalInvoicePdf(

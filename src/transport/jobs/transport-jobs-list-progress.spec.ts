@@ -149,17 +149,22 @@ describe("TransportJobsService.list trip and invoice contract", () => {
     ]);
     invoiceFindMany.mockResolvedValue([]);
     await svc.list("t1", { page: 1, pageSize: 20 } as any, staff);
-    expect(tripFindMany).toHaveBeenCalledTimes(2);
+    expect(tripFindMany).toHaveBeenCalledTimes(1);
     expect(invoiceFindMany).toHaveBeenCalledTimes(1);
     expect(queryRaw).not.toHaveBeenCalled();
     expect(tripFindMany.mock.calls[0][0].where).toEqual({
       tenantId: "t1",
       jobId: { in: ["job1", "job2"] },
     });
-    expect(tripFindMany.mock.calls[1][0].where).toEqual({
-      tenantId: "t1",
-      jobId: { in: ["job1", "job2"] },
-    });
+    expect(tripFindMany.mock.calls[0][0].select).toEqual(
+      expect.objectContaining({
+        id: true,
+        jobId: true,
+        status: true,
+        documents: expect.any(Object),
+        documentRequirements: expect.any(Object),
+      }),
+    );
     expect(invoiceFindMany.mock.calls[0][0].select).toEqual({
       id: true,
       status: true,
@@ -302,5 +307,73 @@ describe("TransportJobsService.list trip and invoice contract", () => {
     expect(encoded).toContain("pickupDate");
     expect(encoded).toContain("plannedStartAt");
     expect(encoded).not.toContain('"createdAt"');
+  });
+
+  it("computes document readiness from the single page trip query", async () => {
+    const { svc, tripFindMany } = makeListPrisma();
+    tripFindMany.mockResolvedValue([
+      {
+        id: "trip-block",
+        jobId: "job1",
+        status: TripStatus.PUBLISHED,
+        documents: [],
+        documentRequirements: [
+          {
+            id: "req-1",
+            type: "POD",
+            label: "Proof of delivery",
+            isRequired: true,
+            requiresSignature: false,
+            minCount: 1,
+            sortOrder: 1,
+            responsibleUploader: "DRIVER",
+            requirementStage: "COMPLETE",
+          },
+        ],
+      },
+    ]);
+    const res = await svc.list("t1", {} as any, staff);
+    expect(tripFindMany).toHaveBeenCalledTimes(1);
+    expect(res.data[0].documentReadiness).toEqual(
+      expect.objectContaining({
+        missingDocumentCount: 1,
+        missingLabels: ["Awaiting Driver: Proof of delivery"],
+        primaryTripId: "trip-block",
+      }),
+    );
+    expect(res.data[0].tripProgress).toEqual({
+      completed: 0,
+      total: 1,
+      isComplete: false,
+    });
+  });
+
+  it("logs GET /jobs timings and counts without payload contents", async () => {
+    process.env.OPSFLOW_PERF_API = "true";
+    const spy = jest.spyOn(console, "info").mockImplementation(() => undefined);
+    const { svc } = makeListPrisma();
+    await svc.list("t1", {} as any, staff);
+    const jobsLog = spy.mock.calls.find(
+      (call) => call[0] === "[OPSFLOW_PERF_API]" && call[1] === "GET /jobs",
+    );
+    expect(jobsLog?.[2]).toEqual(
+      expect.objectContaining({
+        durationMs: expect.any(Number),
+        pageLoadMs: expect.any(Number),
+        tripQueryMs: expect.any(Number),
+        readinessMs: expect.any(Number),
+        prismaCalls: expect.any(Number),
+        jobCount: 1,
+        tripCount: 2,
+        documentCount: 0,
+        requirementCount: 0,
+        responseBytes: expect.any(Number),
+      }),
+    );
+    expect(JSON.stringify(jobsLog)).not.toMatch(
+      /internalRef|Driver One|ACME|Proof of delivery|EXT-1/i,
+    );
+    spy.mockRestore();
+    delete process.env.OPSFLOW_PERF_API;
   });
 });

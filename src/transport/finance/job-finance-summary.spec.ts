@@ -151,11 +151,14 @@ describe("JobFinanceSummaryService set-based aggregation", () => {
 
   function makeService(overrides: Record<string, unknown> = {}) {
     const prisma: any = {
+      $transaction: jest.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
+      $queryRaw: jest.fn().mockResolvedValue([]),
       job: {
         findFirst: jest.fn().mockResolvedValue({
           id: "job-1",
           internalRef: "JOB-1",
         }),
+        count: jest.fn().mockResolvedValue(2),
         findMany: jest.fn().mockResolvedValue([
           { id: "job-1", internalRef: "JOB-1" },
           { id: "job-2", internalRef: "JOB-2" },
@@ -263,6 +266,14 @@ describe("JobFinanceSummaryService set-based aggregation", () => {
         where: expect.objectContaining({ tenantId }),
       }),
     );
+    expect(prisma.jobCharge.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId,
+          currency: "SGD",
+        }),
+      }),
+    );
     expect(prisma.invoice.findMany).not.toHaveBeenCalled();
   });
 
@@ -345,76 +356,59 @@ describe("JobFinanceSummaryService set-based aggregation", () => {
     );
   });
 
-  it("listSummaries finds NEGATIVE jobs beyond the first 2000 newest jobs", async () => {
-    const BATCH = 200;
-    const totalJobs = 2100;
-    const jobs = Array.from({ length: totalJobs }, (_, i) => ({
-      id: `job-${i}`,
-      internalRef: `JOB-${i}`,
-    }));
-    // Newest first: index 0 is newest; oldest negative at the end of the list.
-    const oldestNegativeId = `job-${totalJobs - 1}`;
-
+  it("listSummaries paginates NEGATIVE jobs in SQL without scanning the tenant", async () => {
+    const oldestNegativeId = "job-2099";
     const prisma: any = {
+      $transaction: jest.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValueOnce([{ c: 1n }])
+        .mockResolvedValueOnce([
+          { id: oldestNegativeId, internalRef: "JOB-2099" },
+        ]),
       job: {
-        findMany: jest.fn().mockImplementation(async ({ skip, take }) => {
-          return jobs.slice(skip, skip + take);
-        }),
+        count: jest.fn(),
+        findMany: jest.fn(),
       },
-      trip: { findMany: jest.fn().mockResolvedValue([]) },
-      jobCharge: { groupBy: jest.fn().mockResolvedValue([]) },
-      tripExpense: {
-        groupBy: jest.fn().mockImplementation(async ({ where }) => {
-          const ids: string[] = where.jobId.in;
-          return ids
-            .filter((id) => id === oldestNegativeId)
-            .map((jobId) => ({ jobId, _sum: { amountCents: 0 } }));
-        }),
-      },
-      invoiceLineItem: {
-        findMany: jest.fn().mockImplementation(async ({ where }) => {
-          const ids: string[] = where.jobCharge.jobId.in;
-          if (!ids.includes(oldestNegativeId)) return [];
-          return [
-            {
-              id: "line-old",
-              tenantId,
-              amountCents: 100,
-              taxCents: 0,
-              jobChargeId: "jc-old",
-              jobCharge: { jobId: oldestNegativeId, tenantId },
-              invoice: {
-                id: "inv-old",
-                tenantId,
-                status: "ISSUED",
-                currency: "SGD",
+      trip: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "trip-old",
+            jobId: oldestNegativeId,
+            status: "COMPLETED",
+            driverEarningCents: null,
+            payoutLines: [
+              {
+                totalCents: 500,
+                amountCents: 500,
+                quantity: 1,
+                isSelectableForTripEarning: true,
               },
+            ],
+          },
+        ]),
+      },
+      jobCharge: { groupBy: jest.fn().mockResolvedValue([]) },
+      tripExpense: { groupBy: jest.fn().mockResolvedValue([]) },
+      invoiceLineItem: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "line-old",
+            tenantId,
+            amountCents: 100,
+            taxCents: 0,
+            jobChargeId: "jc-old",
+            jobCharge: { jobId: oldestNegativeId, tenantId },
+            invoice: {
+              id: "inv-old",
+              tenantId,
+              status: "ISSUED",
+              currency: "SGD",
             },
-          ];
-        }),
+          },
+        ]),
       },
     };
-    // Driver cost for oldest job only — make it negative vs 100 revenue.
-    prisma.trip.findMany = jest.fn().mockImplementation(async ({ where }) => {
-      const ids: string[] = where.jobId.in;
-      if (!ids.includes(oldestNegativeId)) return [];
-      return [
-        {
-          id: "trip-old",
-          jobId: oldestNegativeId,
-          status: "COMPLETED",
-          driverEarningCents: null,
-          payoutLines: [
-            {
-              totalCents: 500,
-              amountCents: 500,
-              quantity: 1,
-              isSelectableForTripEarning: true,
-            },
-          ],
-        },
-      ];
-    });
 
     const svc = new JobFinanceSummaryService(prisma);
     const result = await svc.listSummaries(tenantId, {
@@ -427,13 +421,85 @@ describe("JobFinanceSummaryService set-based aggregation", () => {
     expect(result.data).toHaveLength(1);
     expect(result.data[0]?.jobId).toBe(oldestNegativeId);
     expect(result.data[0]?.financeStatus).toBe("NEGATIVE");
-    // Must scan past 2000 (at least 11 batches of 200).
-    expect(prisma.job.findMany.mock.calls.length).toBeGreaterThanOrEqual(
-      Math.ceil(totalJobs / BATCH),
+    expect(prisma.job.findMany).not.toHaveBeenCalled();
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(prisma.trip.findMany.mock.calls[0][0].where.jobId.in).toEqual([
+      oldestNegativeId,
+    ]);
+  });
+
+  it("unfiltered page 2 only loads page-size jobs, not the tenant", async () => {
+    const pageJobs = Array.from({ length: 20 }, (_, i) => ({
+      id: `job-${20 + i}`,
+      internalRef: `JOB-${20 + i}`,
+    }));
+    const { svc, prisma } = makeService({
+      job: {
+        findFirst: jest.fn(),
+        count: jest.fn().mockResolvedValue(5000),
+        findMany: jest.fn().mockResolvedValue(pageJobs),
+      },
+      trip: { findMany: jest.fn().mockResolvedValue([]) },
+      jobCharge: { groupBy: jest.fn().mockResolvedValue([]) },
+      tripExpense: { groupBy: jest.fn().mockResolvedValue([]) },
+      invoiceLineItem: { findMany: jest.fn().mockResolvedValue([]) },
+    });
+
+    const result = await svc.listSummaries(tenantId, {
+      page: 2,
+      pageSize: 20,
+    });
+
+    expect(result.meta.total).toBe(5000);
+    expect(result.data).toHaveLength(20);
+    expect(prisma.job.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.job.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenantId },
+        skip: 20,
+        take: 20,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      }),
     );
-    expect(prisma.job.findMany.mock.calls.some((c: any[]) => c[0]?.take === 2000)).toBe(
-      false,
+    expect(prisma.trip.findMany.mock.calls[0][0].where.jobId.in).toHaveLength(
+      20,
     );
+    expect(prisma.trip.findMany.mock.calls[0][0].where.jobId.in).toEqual(
+      pageJobs.map((j) => j.id),
+    );
+  });
+
+  it("listSummaries page values match getForJob for the same jobs", async () => {
+    const { svc } = makeService();
+    const one = await svc.getForJob(tenantId, "job-1");
+    const list = await svc.listSummaries(tenantId, { page: 1, pageSize: 20 });
+    const row = list.data.find((r) => r.jobId === "job-1");
+    expect(row).toEqual(one);
+    expect(list.meta.total).toBe(2);
+  });
+
+  it("listSummaries isolates tenant in unfiltered and filtered paths", async () => {
+    const { svc, prisma } = makeService();
+    await svc.listSummaries("other-tenant", { page: 1, pageSize: 20 });
+    expect(prisma.job.count).toHaveBeenCalledWith({
+      where: { tenantId: "other-tenant" },
+    });
+    expect(prisma.job.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenantId: "other-tenant" },
+      }),
+    );
+
+    prisma.$queryRaw = jest
+      .fn()
+      .mockResolvedValueOnce([{ c: 0n }])
+      .mockResolvedValueOnce([]);
+    await svc.listSummaries("other-tenant", {
+      financeStatus: "NOT_INVOICED",
+      page: 1,
+      pageSize: 20,
+    });
+    expect(prisma.$queryRaw.mock.calls[0][0].values).toContain("other-tenant");
   });
 });
 

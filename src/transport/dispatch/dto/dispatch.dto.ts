@@ -132,7 +132,7 @@ export class DispatchRouteResponseDto {
   error?: string | null;
 }
 
-/** Trailer checkout photo metadata (URLs only; no storage keys). */
+/** Trailer checkout photo metadata (no storage keys; signed URLs only on lazy photo endpoint). */
 export class DispatchBoardTrailerPhotoDto {
   @ApiPropertyOptional()
   fileUrl!: string | null;
@@ -148,6 +148,23 @@ export class DispatchBoardTrailerPhotoDto {
 
   @ApiPropertyOptional()
   fileSizeBytes!: number | null;
+}
+
+export class DispatchTripTrailerPhotosResponseDto {
+  @ApiProperty()
+  tripId!: string;
+
+  @ApiPropertyOptional()
+  startPhotoUrl!: string | null;
+
+  @ApiPropertyOptional()
+  endPhotoUrl!: string | null;
+
+  @ApiPropertyOptional({ type: () => DispatchBoardTrailerPhotoDto })
+  startPhoto!: DispatchBoardTrailerPhotoDto | null;
+
+  @ApiPropertyOptional({ type: () => DispatchBoardTrailerPhotoDto })
+  endPhoto!: DispatchBoardTrailerPhotoDto | null;
 }
 
 export class DispatchBoardTripDto {
@@ -247,10 +264,14 @@ export class DispatchBoardTripDto {
   @ApiPropertyOptional()
   trailerLastLocationName!: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Signed URL omitted from board; use GET /dispatch/trips/:tripId/trailer-photos",
+  })
   trailerStartPhotoUrl!: string | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Signed URL omitted from board; use GET /dispatch/trips/:tripId/trailer-photos",
+  })
   trailerEndPhotoUrl!: string | null;
 
   @ApiPropertyOptional({ type: () => DispatchBoardTrailerPhotoDto })
@@ -259,8 +280,21 @@ export class DispatchBoardTripDto {
   @ApiPropertyOptional({ type: () => DispatchBoardTrailerPhotoDto })
   trailerEndPhoto!: DispatchBoardTrailerPhotoDto | null;
 
+  @ApiProperty()
+  hasTrailerStartPhoto!: boolean;
+
+  @ApiProperty()
+  hasTrailerEndPhoto!: boolean;
+
+  @ApiPropertyOptional()
+  trailerStartPhotoDocumentId!: string | null;
+
+  @ApiPropertyOptional()
+  trailerEndPhotoDocumentId!: string | null;
+
   @ApiPropertyOptional({
-    description: "Google Routes encoded polyline (null when route unavailable)",
+    description:
+      "Google Routes encoded polyline. Board omits generation; use GET /dispatch/trips/:tripId/route",
   })
   routePolyline!: string | null;
 

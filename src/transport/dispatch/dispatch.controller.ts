@@ -24,6 +24,7 @@ import {
   DispatchBoardResponseDto,
   DispatchRouteQueryDto,
   DispatchRouteResponseDto,
+  DispatchTripTrailerPhotosResponseDto,
   DispatchOptimiseRouteDto,
   DispatchReorderTripsDto,
 } from "./dto/dispatch.dto";
@@ -115,6 +116,18 @@ export class DispatchController {
     @Param("tripId") tripId: string,
   ) {
     return this.dispatchService.getTripRoute(req.tenant.tenantId, tripId);
+  }
+
+  @Get("trips/:tripId/trailer-photos")
+  @ApiOperation({
+    summary: "Get signed trailer start/end photo URLs for a dispatch trip",
+  })
+  @ApiOkResponse({ type: DispatchTripTrailerPhotosResponseDto })
+  async getTripTrailerPhotos(
+    @Req() req: any,
+    @Param("tripId") tripId: string,
+  ) {
+    return this.dispatchService.getTripTrailerPhotos(req.tenant.tenantId, tripId);
   }
 
   @Patch("drivers/:driverUserId/trips/reorder")

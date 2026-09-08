@@ -122,6 +122,12 @@ import {
   type JobListTripProgress,
 } from "./job-list-progress";
 import { RealtimeEventsService } from "../../shared/realtime/realtime-events.service";
+import {
+  elapsedMs,
+  isOpsflowPerfApiEnabled,
+  jsonResponseBytes,
+  opsflowPerfApiLog,
+} from "../../shared/perf/opsflow-perf-api";
 import * as rt from "../../shared/realtime/realtime-publish";
 import { tripDocumentTypeLabel } from "../../shared/notifications/document-type-label";
 import { resolveTripDetailsNotificationKind } from "../../shared/notifications/trip-details-notification";
@@ -453,6 +459,38 @@ const JOB_LIST_ITEM_SELECT = {
     orderBy: [{ tripSequence: "asc" as const }, { createdAt: "asc" as const }],
     take: 1,
     select: { assignedDriverUserId: true },
+  },
+} as const;
+
+/** One trip query feeds list progress + document readiness maps. */
+const JOB_LIST_TRIP_ENRICHMENT_SELECT = {
+  id: true,
+  jobId: true,
+  status: true,
+  documents: {
+    where: { isActive: true },
+    select: {
+      type: true,
+      isActive: true,
+      isSigned: true,
+      signedAt: true,
+      mimeType: true,
+      originalName: true,
+    },
+  },
+  documentRequirements: {
+    orderBy: [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }],
+    select: {
+      id: true,
+      type: true,
+      label: true,
+      isRequired: true,
+      requiresSignature: true,
+      minCount: true,
+      sortOrder: true,
+      responsibleUploader: true,
+      requirementStage: true,
+    },
   },
 } as const;
 
@@ -2707,6 +2745,8 @@ export class TransportJobsService {
     query: JobListQueryDto,
     user: any,
   ): Promise<PaginatedResponse<JobListItemDto>> {
+    const totalStartedAt = Date.now();
+    let prismaCalls = 0;
     const { page, pageSize, skip, take } = parsePaginationFromQuery(query);
     const constraints = this.buildJobListConstraints(tenantId, query, user);
     const where = jobListPrismaWhere(constraints);
@@ -2717,6 +2757,7 @@ export class TransportJobsService {
       { createdAt: "desc" },
     );
 
+    const pageStartedAt = Date.now();
     let total: number;
     let jobs: any[];
     if (constraints.invoiceStatus) {
@@ -2728,6 +2769,7 @@ export class TransportJobsService {
           jobListFilteredPageIdsSql(constraints, skip, take),
         ) as Promise<Array<{ id: string }>>,
       ]);
+      prismaCalls += 2;
       total = Number(countRows[0]?.count ?? 0);
       const pageIds = idRows.map((row) => row.id);
       const unordered = pageIds.length
@@ -2741,6 +2783,7 @@ export class TransportJobsService {
             select: JOB_LIST_ITEM_SELECT,
           })
         : [];
+      if (pageIds.length) prismaCalls += 1;
       const byId = new Map(unordered.map((job) => [job.id, job]));
       jobs = pageIds
         .map((id) => byId.get(id))
@@ -2756,76 +2799,87 @@ export class TransportJobsService {
           select: JOB_LIST_ITEM_SELECT,
         }),
       ]);
+      prismaCalls += 2;
       total = count;
       jobs = rows;
     }
+    const pageLoadMs = elapsedMs(pageStartedAt);
 
     const jobIds = jobs.map((job) => job.id);
-    const [driverNameMap, tripRows, pageInvoices, readinessTripRows] =
-      await Promise.all([
-      this.buildUserNameMapByIds(
-        tenantId,
-        Array.from(
-          new Set(
-            jobs
-              .map((j) => j.trips?.[0]?.assignedDriverUserId)
-              .filter(Boolean) as string[],
-          ),
-        ),
+    const driverUserIds = Array.from(
+      new Set(
+        jobs
+          .map((j) => j.trips?.[0]?.assignedDriverUserId)
+          .filter(Boolean) as string[],
       ),
-      jobIds.length
-        ? this.prisma.trip.findMany({
+    );
+
+    let tripQueryMs = 0;
+    const tripQueryStartedAt = Date.now();
+    const tripQuery = jobIds.length
+      ? this.prisma.trip
+          .findMany({
             where: { tenantId, jobId: { in: jobIds } },
-            select: { jobId: true, status: true },
+            select: JOB_LIST_TRIP_ENRICHMENT_SELECT,
           })
-        : Promise.resolve([]),
+          .then((rows) => {
+            tripQueryMs = elapsedMs(tripQueryStartedAt);
+            return rows;
+          })
+      : Promise.resolve(
+          [] as Array<{
+            id: string;
+            jobId: string;
+            status: TripStatus;
+            documents: Array<{
+              type: string;
+              isActive: boolean;
+              isSigned: boolean;
+              signedAt: Date | null;
+              mimeType: string | null;
+              originalName: string | null;
+            }>;
+            documentRequirements: Array<{
+              id: string;
+              type: string;
+              label: string;
+              isRequired: boolean;
+              requiresSignature: boolean;
+              minCount: number;
+              sortOrder: number;
+              responsibleUploader: string;
+              requirementStage: string;
+            }>;
+          }>,
+        );
+    if (jobIds.length) prismaCalls += 1;
+    if (driverUserIds.length) prismaCalls += 1;
+    if (jobIds.length) prismaCalls += 1;
+
+    const [driverNameMap, tripRows, pageInvoices] = await Promise.all([
+      this.buildUserNameMapByIds(tenantId, driverUserIds),
+      tripQuery,
       jobIds.length
         ? this.prisma.invoice.findMany(jobListPageInvoiceQuery(tenantId, jobIds))
-        : Promise.resolve([]),
-      jobIds.length
-        ? this.prisma.trip.findMany({
-            where: { tenantId, jobId: { in: jobIds } },
-            select: {
-              id: true,
-              jobId: true,
-              status: true,
-              documents: {
-                where: { isActive: true },
-                select: {
-                  type: true,
-                  isActive: true,
-                  isSigned: true,
-                  signedAt: true,
-                  mimeType: true,
-                  originalName: true,
-                },
-              },
-              documentRequirements: {
-                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-                select: {
-                  id: true,
-                  type: true,
-                  label: true,
-                  isRequired: true,
-                  requiresSignature: true,
-                  minCount: true,
-                  sortOrder: true,
-                  responsibleUploader: true,
-                  requirementStage: true,
-                },
-              },
-            },
-          })
         : Promise.resolve([]),
     ]);
 
     const tripsByJobId = new Map<string, Array<{ status: TripStatus }>>();
+    const readinessTripsByJob = new Map<string, typeof tripRows>();
+    let documentRowCount = 0;
+    let requirementRowCount = 0;
     for (const trip of tripRows) {
-      const list = tripsByJobId.get(trip.jobId) ?? [];
-      list.push({ status: trip.status });
-      tripsByJobId.set(trip.jobId, list);
+      const progressList = tripsByJobId.get(trip.jobId) ?? [];
+      progressList.push({ status: trip.status });
+      tripsByJobId.set(trip.jobId, progressList);
+      const readinessList = readinessTripsByJob.get(trip.jobId) ?? [];
+      readinessList.push(trip);
+      readinessTripsByJob.set(trip.jobId, readinessList);
+      documentRowCount += trip.documents?.length ?? 0;
+      requirementRowCount += trip.documentRequirements?.length ?? 0;
     }
 
+    const readinessStartedAt = Date.now();
     const readinessByJobId = new Map<
       string,
       {
@@ -2836,12 +2890,6 @@ export class TransportJobsService {
         primaryTripId: string | null;
       }
     >();
-    const readinessTripsByJob = new Map<string, typeof readinessTripRows>();
-    for (const trip of readinessTripRows) {
-      const list = readinessTripsByJob.get(trip.jobId) ?? [];
-      list.push(trip);
-      readinessTripsByJob.set(trip.jobId, list);
-    }
     for (const [jobId, trips] of readinessTripsByJob.entries()) {
       const evaluations = trips.map((trip) =>
         evaluateTripDocsFromRows({
@@ -2851,7 +2899,7 @@ export class TransportJobsService {
         }),
       );
       const rollup = aggregateJobDocumentReadiness(evaluations);
-      const firstBlocking = trips.find((trip, index) => {
+      const firstBlocking = trips.find((_trip, index) => {
         const evaluation = evaluations[index];
         return (
           evaluation &&
@@ -2864,10 +2912,11 @@ export class TransportJobsService {
         primaryTripId: firstBlocking?.id ?? null,
       });
     }
+    const readinessMs = elapsedMs(readinessStartedAt);
 
     const invoiceByJobId = indexLatestInvoicesByJobId(pageInvoices);
 
-    return {
+    const result = {
       data: jobs.map((j) =>
         toJobListItemDto(
           j,
@@ -2879,6 +2928,19 @@ export class TransportJobsService {
       ),
       meta: buildPaginationMeta(page, pageSize, total),
     };
+    opsflowPerfApiLog("GET /jobs", {
+      durationMs: elapsedMs(totalStartedAt),
+      pageLoadMs,
+      tripQueryMs,
+      readinessMs,
+      prismaCalls,
+      jobCount: jobs.length,
+      tripCount: tripRows.length,
+      documentCount: documentRowCount,
+      requirementCount: requirementRowCount,
+      responseBytes: isOpsflowPerfApiEnabled() ? jsonResponseBytes(result) : 0,
+    });
+    return result;
   }
 
   async create(
