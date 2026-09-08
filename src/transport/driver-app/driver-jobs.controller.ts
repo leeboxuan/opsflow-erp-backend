@@ -268,6 +268,8 @@ export class DriverJobsController {
     },
   })
   @UseInterceptors(
+    // Legacy: trailerEndPhoto still accepted for older clients / e2e.
+    // Mobile V3 uploads TRAILER_END_PHOTO via POST .../documents first.
     FileFieldsInterceptor([{ name: "trailerEndPhoto", maxCount: 1 }]),
   )
   async completeTrip(
@@ -355,6 +357,11 @@ export class DriverJobsController {
           description:
             "Required for CONTAINER_PHOTO and SEAL_PHOTO; rejected for other types.",
         },
+        operationKey: {
+          type: "string",
+          description:
+            "Optional client idempotency key. Retries with the same key + payload replay the same document.",
+        },
         requiresSignature: { type: "boolean" },
         file: { type: "string", format: "binary" },
       },
@@ -386,6 +393,7 @@ export class DriverJobsController {
     }
     const type = typeRaw as TripDocumentType;
     const jobItemId = String(body?.jobItemId ?? "").trim() || null;
+    const operationKey = String(body?.operationKey ?? "").trim() || null;
     const requiresSignature = String(body?.requiresSignature ?? "").toLowerCase() === "true";
     return this.driverJobs.uploadTripDocumentForDriver(
       tenantId,
@@ -397,6 +405,7 @@ export class DriverJobsController {
       requiresSignature,
       { email: req.user?.email ?? null },
       jobItemId,
+      operationKey,
     );
   }
 

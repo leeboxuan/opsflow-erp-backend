@@ -1078,7 +1078,10 @@ describe("DriverJobsService trip assignment and trailer checkout", () => {
     const tripDocumentCreate = jest.fn();
     const tx = {
       trip: { update: tripUpdate },
-      tripDocument: { create: tripDocumentCreate },
+      tripDocument: {
+        create: tripDocumentCreate,
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
     };
     const prisma: any = {
       tenant: { findUnique: jest.fn().mockResolvedValue({ timezone: "Asia/Singapore" }) },
@@ -1110,6 +1113,13 @@ describe("DriverJobsService trip assignment and trailer checkout", () => {
         findMany: jest.fn().mockResolvedValue([POD_PHOTO_DOC, CONTAINER_PHOTO_DOC, SEAL_PHOTO_DOC, SIGNED_DELIVERY_DO_DOC]),
         findFirst: jest.fn().mockResolvedValue({ id: "trailer-end-1" }),
       },
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "driver-1",
+          name: "Driver",
+          email: "d@test.com",
+        }),
+      },
       masterTrailerLocation: {
         findFirst: jest.fn().mockResolvedValue({ code: "G7", name: "Gul 7" }),
         findMany: jest.fn().mockResolvedValue([]),
@@ -1121,12 +1131,12 @@ describe("DriverJobsService trip assignment and trailer checkout", () => {
         storage: {
           from: jest.fn().mockReturnValue({
             upload: jest.fn().mockResolvedValue({ error: null }),
+            remove: jest.fn().mockResolvedValue({ error: null }),
           }),
         },
       }),
     } as any;
     const svc = new DriverJobsService(prisma, { log: jest.fn() } as any, supabaseService);
-    jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: "trip1" }] } as any);
 
     await svc.completeTrip("t1", "job1", "trip1", "driver-1", {
       trailerParkingLocationCode: "G7",

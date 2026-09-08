@@ -152,3 +152,64 @@ export function createDriverTripDocUploadPerfTimer(
     },
   };
 }
+
+/** Stage timings for POST .../complete (dev/staging via DRIVER_API_PERF_LOG). */
+export function createDriverTripCompletePerfTimer(meta: {
+  jobId: string;
+  tripId: string;
+}) {
+  const startedAt = Date.now();
+  let loadEndAt = startedAt;
+  let requirementsEndAt = startedAt;
+  let trailerCheckoutEndAt = startedAt;
+  let storageEndAt = startedAt;
+  let txEndAt = startedAt;
+  let invoiceSyncEndAt = startedAt;
+  let responseBuildEndAt = startedAt;
+  let hadLegacyTrailerEndUpload = false;
+
+  return {
+    markLoadDone() {
+      loadEndAt = Date.now();
+    },
+    markRequirementsDone() {
+      requirementsEndAt = Date.now();
+    },
+    markTrailerCheckoutDone() {
+      trailerCheckoutEndAt = Date.now();
+    },
+    markStorageDone(hadUpload: boolean) {
+      storageEndAt = Date.now();
+      hadLegacyTrailerEndUpload = hadUpload;
+    },
+    markTxDone() {
+      txEndAt = Date.now();
+    },
+    markInvoiceSyncDone() {
+      invoiceSyncEndAt = Date.now();
+    },
+    markResponseBuildDone() {
+      responseBuildEndAt = Date.now();
+    },
+    finish() {
+      if (!isDriverApiPerfLogEnabled()) return;
+      const totalMs = Date.now() - startedAt;
+      console.info("[OPSFLOW_PERF_COMPLETE]", {
+        endpoint: "POST /api/drivers/jobs/:jobId/trips/:tripId/complete",
+        jobId: meta.jobId,
+        tripId: meta.tripId,
+        hadLegacyTrailerEndUpload,
+        timings: {
+          loadJobTripMs: Math.max(0, loadEndAt - startedAt),
+          requirementsMs: Math.max(0, requirementsEndAt - loadEndAt),
+          trailerCheckoutMs: Math.max(0, trailerCheckoutEndAt - requirementsEndAt),
+          storageUploadMs: Math.max(0, storageEndAt - trailerCheckoutEndAt),
+          dbTransactionMs: Math.max(0, txEndAt - storageEndAt),
+          invoiceSyncMs: Math.max(0, invoiceSyncEndAt - txEndAt),
+          responseBuildMs: Math.max(0, responseBuildEndAt - invoiceSyncEndAt),
+          totalMs,
+        },
+      });
+    },
+  };
+}

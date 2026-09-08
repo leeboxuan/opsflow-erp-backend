@@ -34,9 +34,16 @@ import {
 import { buildTripDisplayRef } from "../trips/trip-display-ref";
 import { CANONICAL_TRIP_PAYOUT_LINE_SELECT } from "../trips/trip-payout.helpers";
 import {
+  createDriverTripCompletePerfTimer,
   createDriverTripDocUploadPerfTimer,
   withDriverEndpointPerf,
 } from "./driver-endpoint-perf";
+import { IdempotencyService } from "../../shared/idempotency/idempotency.service";
+import {
+  hashRequestPayload,
+  IDEMPOTENCY_SCOPES,
+  sha256HexOfBuffer,
+} from "../../shared/idempotency/idempotency.util";
 import { JobLocationDto } from "./dto/location.dto";
 import { DocumentSignedUrlDto, JobDto, JobDocumentDto } from "../jobs/dto/job.dto";
 import {
@@ -450,6 +457,7 @@ export class DriverJobsService {
     @Optional() private readonly opsJobs?: TransportJobsService,
     @Optional() private readonly realtime?: RealtimeEventsService,
     @Optional() private readonly tripEarnings?: DriverTripEarningsService,
+    @Optional() private readonly idempotency?: IdempotencyService,
   ) {}
 
   private publishedTripVisibilityWhere() {
@@ -2765,6 +2773,69 @@ export class DriverJobsService {
     });
   }
 
+  /**
+   * Soft single-active invariant: deactivate prior active rows of the same type
+   * before creating a new active document. Shared by documents upload and the
+   * legacy complete-with-trailerEndPhoto fallback.
+   */
+  private async deactivatePriorActiveTripDocumentsOfType(
+    // PrismaService or interactive transaction client
+    db: any,
+    params: {
+      tenantId: string;
+      tripId: string;
+      type: TripDocumentType;
+    },
+  ): Promise<void> {
+    if (!DRIVER_SINGLE_ACTIVE_TRIP_DOCUMENT_TYPES.has(params.type)) return;
+    await db.tripDocument.updateMany({
+      where: {
+        tenantId: params.tenantId,
+        tripId: params.tripId,
+        type: params.type,
+        isActive: true,
+      },
+      data: { isActive: false },
+    });
+  }
+
+  /**
+   * Authoritative per-slot capacity check for CONTAINER_PHOTO / SEAL_PHOTO.
+   * Must run inside the same DB transaction as create. Uses a transaction-scoped
+   * advisory lock so concurrent uploads cannot both observe a pre-insert count
+   * below the limit and then both insert.
+   */
+  private async assertContainerLinkedPhotoCapacityOrThrow(
+    db: any,
+    params: {
+      tenantId: string;
+      tripId: string;
+      jobItemId: string;
+      type: TripDocumentType;
+    },
+  ): Promise<void> {
+    const slotKey = `${params.tenantId}|${params.tripId}|${params.jobItemId}|${params.type}`;
+    if (typeof db.$executeRaw === "function") {
+      // hashtext → int4 advisory lock key; released automatically at commit/rollback.
+      await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${slotKey}))`;
+    }
+
+    const activePhotoCount = await db.tripDocument.count({
+      where: {
+        tenantId: params.tenantId,
+        tripId: params.tripId,
+        jobItemId: params.jobItemId,
+        type: params.type,
+        isActive: true,
+      },
+    });
+    if (activePhotoCount >= MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY) {
+      throw new BadRequestException(
+        `At most ${MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY} active ${params.type} photos are allowed per container on this trip`,
+      );
+    }
+  }
+
   async completeTrip(
     tenantId: string,
     jobId: string,
@@ -2778,12 +2849,27 @@ export class DriverJobsService {
       trailerParkingPlaceId?: string;
       trailerParkingLat?: number;
       trailerParkingLng?: number;
+      /**
+       * Legacy / backwards-compatible fallback. Mobile V3 uploads TRAILER_END_PHOTO
+       * via POST .../documents first and omits this field. Older clients / e2e may
+       * still attach the binary on complete.
+       */
       trailerEndPhoto?: Express.Multer.File;
     },
-  ): Promise<{ requiresTrailerCheckout: boolean; trip: any; job: JobDto }> {
-    const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId, {
-      documents: true,
-    });
+  ): Promise<{
+    tripId: string;
+    tripStatus: TripStatus;
+    jobId: string;
+    jobStatus: JobStatus;
+    requiresTrailerCheckout: boolean;
+    /** Lightweight stub — full JobDto via getOneForDriver removed from critical path. */
+    trip: { id: string; status: TripStatus; jobId: string };
+    job: { id: string; status: JobStatus };
+  }> {
+    const perf = createDriverTripCompletePerfTimer({ jobId, tripId });
+
+    // Assignment / tenant gate only — do not load unused job.documents here.
+    const job = await this.findAssignedJobOrThrow(tenantId, jobId, driverUserId);
 
     const trip = await this.findPublishedTripOrThrow(tenantId, jobId, tripId);
     if (trip.assignedDriverUserId !== driverUserId) {
@@ -2793,6 +2879,7 @@ export class DriverJobsService {
     if (trip.status !== TripStatus.ONGOING) {
       throw new BadRequestException("Trip must be ONGOING to complete");
     }
+    perf.markLoadDone();
 
     const [completionDocs, trailerCheckout, documentRequirements] = await Promise.all([
       this.prisma.tripDocument.findMany({
@@ -2821,6 +2908,8 @@ export class DriverJobsService {
       }),
       this.loadTripDocumentRequirementSnapshots(tenantId, tripId),
     ]);
+    perf.markTrailerCheckoutDone();
+
     const containerDocumentation = await this.buildContainerDocumentationForTrip(
       tenantId,
       jobId,
@@ -2919,67 +3008,125 @@ export class DriverJobsService {
         }
       }
     }
+    perf.markRequirementsDone();
+
+    /**
+     * Legacy complete-with-file path: upload to Storage BEFORE opening a Prisma
+     * transaction. Mobile V3 preferred path skips this when TRAILER_END_PHOTO
+     * already exists from POST .../documents.
+     */
+    let pendingTrailerEndDoc: {
+      key: string;
+      originalName: string;
+      mimeType: string;
+      sizeBytes: number | null;
+      uploadActor: Awaited<ReturnType<typeof loadUploadActorFields>>;
+    } | null = null;
+
+    if (requiresTrailerCheckout && payload?.trailerEndPhoto?.buffer?.length) {
+      const file = payload.trailerEndPhoto;
+      const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
+      const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/trailer-end/${Date.now()}${ext}`;
+      const supabase = this.supabaseService.getClient();
+      const { error: upErr } = await supabase.storage
+        .from(JOB_DOCUMENTS_BUCKET)
+        .upload(key, file.buffer, {
+          contentType: file.mimetype ?? "image/jpeg",
+          upsert: false,
+        });
+      if (upErr) {
+        throw new BadRequestException(`Storage upload failed: ${upErr.message}`);
+      }
+      const trailerEndActor = await loadUploadActorFields(
+        this.prisma,
+        driverUserId,
+      );
+      pendingTrailerEndDoc = {
+        key,
+        originalName: file.originalname ?? "trailer-end.jpg",
+        mimeType: file.mimetype ?? "image/jpeg",
+        sizeBytes: file.size ?? null,
+        uploadActor: trailerEndActor,
+      };
+    }
+    perf.markStorageDone(!!pendingTrailerEndDoc);
 
     const now = new Date();
-    await this.prisma.$transaction(async (tx) => {
-      if (requiresTrailerCheckout && payload?.trailerEndPhoto) {
-        const file = payload.trailerEndPhoto;
-        const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
-        const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/trailer-end/${Date.now()}${ext}`;
-        const supabase = this.supabaseService.getClient();
-        const { error: upErr } = await supabase.storage
-          .from(JOB_DOCUMENTS_BUCKET)
-          .upload(key, file.buffer, {
-            contentType: file.mimetype ?? "image/jpeg",
-            upsert: false,
-          });
-        if (upErr) {
-          throw new BadRequestException(`Storage upload failed: ${upErr.message}`);
-        }
-        const trailerEndActor = await loadUploadActorFields(
-          this.prisma,
-          driverUserId,
-        );
-        await tx.tripDocument.create({
-          data: {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        if (pendingTrailerEndDoc) {
+          await this.deactivatePriorActiveTripDocumentsOfType(tx, {
             tenantId,
             tripId,
             type: TripDocumentType.TRAILER_END_PHOTO,
-            storageKey: key,
-            originalName: file.originalname ?? "trailer-end.jpg",
-            mimeType: file.mimetype ?? "image/jpeg",
-            sizeBytes: file.size ?? null,
-            ...trailerEndActor,
+          });
+          await tx.tripDocument.create({
+            data: {
+              tenantId,
+              tripId,
+              type: TripDocumentType.TRAILER_END_PHOTO,
+              isActive: true,
+              storageKey: pendingTrailerEndDoc.key,
+              originalName: pendingTrailerEndDoc.originalName,
+              mimeType: pendingTrailerEndDoc.mimeType,
+              sizeBytes: pendingTrailerEndDoc.sizeBytes,
+              ...pendingTrailerEndDoc.uploadActor,
+            },
+          });
+        }
+
+        await tx.trip.update({
+          where: { id: tripId },
+          data: {
+            status: TripStatus.COMPLETED,
+            pendingState: TripPendingState.NONE,
+            trailerLastLocationCode: trailerLocation?.code ?? undefined,
+            trailerParkingAddress1: requiresTrailerCheckout
+              ? (String(payload?.trailerParkingAddress1 ?? "").trim() || null)
+              : undefined,
+            trailerParkingAddress2: requiresTrailerCheckout
+              ? (String(payload?.trailerParkingAddress2 ?? "").trim() || null)
+              : undefined,
+            trailerParkingPostal: requiresTrailerCheckout
+              ? (String(payload?.trailerParkingPostal ?? "").trim() || null)
+              : undefined,
+            trailerParkingPlaceId: requiresTrailerCheckout
+              ? (String(payload?.trailerParkingPlaceId ?? "").trim() || null)
+              : undefined,
+            trailerParkingLat: requiresTrailerCheckout ? (payload?.trailerParkingLat ?? null) : undefined,
+            trailerParkingLng: requiresTrailerCheckout ? (payload?.trailerParkingLng ?? null) : undefined,
+            trailerParkedAt: requiresTrailerCheckout ? now : undefined,
+            closedAt: now,
+            completedByDriverUserId: driverUserId,
           },
         });
-      }
-
-      await tx.trip.update({
-        where: { id: tripId },
-        data: {
-          status: TripStatus.COMPLETED,
-          pendingState: TripPendingState.NONE,
-          trailerLastLocationCode: trailerLocation?.code ?? undefined,
-          trailerParkingAddress1: requiresTrailerCheckout
-            ? (String(payload?.trailerParkingAddress1 ?? "").trim() || null)
-            : undefined,
-          trailerParkingAddress2: requiresTrailerCheckout
-            ? (String(payload?.trailerParkingAddress2 ?? "").trim() || null)
-            : undefined,
-          trailerParkingPostal: requiresTrailerCheckout
-            ? (String(payload?.trailerParkingPostal ?? "").trim() || null)
-            : undefined,
-          trailerParkingPlaceId: requiresTrailerCheckout
-            ? (String(payload?.trailerParkingPlaceId ?? "").trim() || null)
-            : undefined,
-          trailerParkingLat: requiresTrailerCheckout ? (payload?.trailerParkingLat ?? null) : undefined,
-          trailerParkingLng: requiresTrailerCheckout ? (payload?.trailerParkingLng ?? null) : undefined,
-          trailerParkedAt: requiresTrailerCheckout ? now : undefined,
-          closedAt: now,
-          completedByDriverUserId: driverUserId,
-        },
       });
-    });
+    } catch (error) {
+      // Best-effort orphan cleanup if DB failed after a new Storage object was written.
+      if (pendingTrailerEndDoc) {
+        try {
+          await this.supabaseService
+            .getClient()
+            .storage.from(JOB_DOCUMENTS_BUCKET)
+            .remove([pendingTrailerEndDoc.key]);
+        } catch (cleanupError) {
+          console.warn(
+            "[DriverJobsService] orphan trailer-end storage cleanup failed after complete TX error",
+            {
+              tripId,
+              jobId,
+              storageKey: pendingTrailerEndDoc.key,
+              message:
+                cleanupError instanceof Error
+                  ? cleanupError.message
+                  : String(cleanupError),
+            },
+          );
+        }
+      }
+      throw error;
+    }
+    perf.markTxDone();
 
     await this.audit.log(
       tenantId,
@@ -2998,7 +3145,7 @@ export class DriverJobsService {
         {
           jobId,
           trailerNumber: trip.trailerNumber ?? null,
-      chassisId: (trip as any).chassisId ?? null,
+          chassisId: (trip as any).chassisId ?? null,
           trailerParkingLocationCode: trailerLocation?.code ?? null,
           trailerParkingLocationName: trailerLocation?.name ?? null,
           trailerParkingAddress1: payload?.trailerParkingAddress1 ?? null,
@@ -3011,14 +3158,14 @@ export class DriverJobsService {
       );
     }
 
-    await syncJobInvoiceReadiness(
+    const invoiceSync = await syncJobInvoiceReadiness(
       this.prisma as unknown as JobInvoiceSyncPrisma,
       tenantId,
       jobId,
     );
+    perf.markInvoiceSyncDone();
 
-    const refreshedJob = await this.getOneForDriver(tenantId, jobId, driverUserId);
-    const refreshedTrip = refreshedJob.trips.find((t) => t.id === tripId) ?? null;
+    const jobStatus = (invoiceSync?.status ?? job.status) as JobStatus;
 
     rt.publishTripEvent(this.realtime, "trip.completed", tenantId, jobId, tripId, {
       driverUserId,
@@ -3028,11 +3175,25 @@ export class DriverJobsService {
     });
     rt.publishDriverActiveJobsUpdated(this.realtime, tenantId, driverUserId);
 
-    return {
+    const result = {
+      tripId,
+      tripStatus: TripStatus.COMPLETED,
+      jobId,
+      jobStatus,
       requiresTrailerCheckout,
-      trip: refreshedTrip,
-      job: refreshedJob,
+      trip: {
+        id: tripId,
+        status: TripStatus.COMPLETED,
+        jobId,
+      },
+      job: {
+        id: jobId,
+        status: jobStatus,
+      },
     };
+    perf.markResponseBuildDone();
+    perf.finish();
+    return result;
   }
 
   private async listTrailerParkingLocations() {
@@ -3773,6 +3934,7 @@ export class DriverJobsService {
     requiresSignature = false,
     uploadActorHint?: { name?: string | null; email?: string | null },
     jobItemId?: string | null,
+    operationKey?: string | null,
   ): Promise<JobDocumentDto> {
     const perf = createDriverTripDocUploadPerfTimer({
       endpoint: "POST /api/drivers/jobs/:jobId/trips/:tripId/documents",
@@ -3821,6 +3983,7 @@ export class DriverJobsService {
       throw new BadRequestException("You are not assigned to this trip");
     }
 
+    // Load requirement snapshots once — reuse for upload permission + requiresSignature.
     const uploadSnapshots = await this.loadTripDocumentRequirementSnapshots(
       tenantId,
       tripId,
@@ -3889,6 +4052,55 @@ export class DriverJobsService {
       }
     }
 
+    const resolvedRequiresSignature = ((): boolean => {
+      if (type === TripDocumentType.POD_SIGNATURE) return false;
+      if (!documentTypeSupportsCustomerSignature(type)) return false;
+      const snapshot = requirementSnapshotForType(uploadSnapshots, type);
+      if (snapshot) return snapshot.requiresSignature === true;
+      return !!requiresSignature;
+    })();
+
+    const normalizedOperationKey = String(operationKey ?? "").trim().slice(0, 128) || null;
+    const fileSha256 = sha256HexOfBuffer(file.buffer);
+    const requestHash = hashRequestPayload({
+      scope: IDEMPOTENCY_SCOPES.DRIVER_TRIP_DOCUMENT_UPLOAD,
+      driverUserId,
+      jobId,
+      tripId,
+      type,
+      jobItemId: normalizedJobItemId,
+      fileSha256,
+      fileName: file.originalname ?? null,
+      fileSize: file.size ?? null,
+      fileMime: file.mimetype ?? null,
+      requiresSignature: resolvedRequiresSignature,
+    });
+
+    const loadDocument = async (resourceId: string) => {
+      const existing = await this.prisma.tripDocument.findFirst({
+        where: { id: resourceId, tenantId, tripId, isActive: true },
+        include: documentUploadedByInclude,
+      });
+      if (!existing || existing.tripId !== tripId) {
+        throw new NotFoundException("Document not found");
+      }
+      return this.toDocumentMetadataDto(existing);
+    };
+
+    if (normalizedOperationKey && this.idempotency) {
+      const peeked = await this.idempotency.peekCompleted({
+        tenantId,
+        scope: IDEMPOTENCY_SCOPES.DRIVER_TRIP_DOCUMENT_UPLOAD,
+        operationKey: normalizedOperationKey,
+        requestHash,
+        load: loadDocument,
+      });
+      if (peeked) {
+        perf.finish(peeked.result);
+        return peeked.result;
+      }
+    }
+
     const ext = file.originalname?.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
     const itemPath = normalizedJobItemId ? `/${normalizedJobItemId}` : "";
     const key = `${tenantId}/jobs/${jobId}/trips/${tripId}/${type.toLowerCase()}${itemPath}/${Date.now()}${ext}`;
@@ -3907,49 +4119,116 @@ export class DriverJobsService {
     }
 
     perf.markDbWriteStart();
-    if (DRIVER_SINGLE_ACTIVE_TRIP_DOCUMENT_TYPES.has(type)) {
-      await this.prisma.tripDocument.updateMany({
-        where: {
-          tenantId,
-          tripId,
-          type,
-          isActive: true,
-        },
-        data: { isActive: false },
-      });
-    }
-
     const uploadActor = await loadUploadActorFields(
       this.prisma,
       driverUserId,
       uploadActorHint,
     );
-    const doc = await this.prisma.tripDocument.create({
-      data: {
+
+    const createDocData = {
+      tenantId,
+      tripId,
+      jobItemId: normalizedJobItemId,
+      type,
+      isActive: true,
+      storageKey: key,
+      originalName: file.originalname ?? "upload",
+      mimeType: file.mimetype ?? "application/octet-stream",
+      sizeBytes: file.size ?? null,
+      ...uploadActor,
+      requiresSignature: resolvedRequiresSignature,
+    };
+
+    const persistTripDocumentInTx = async (tx: any) => {
+      if (isContainerLinkedType && normalizedJobItemId) {
+        await this.assertContainerLinkedPhotoCapacityOrThrow(tx, {
+          tenantId,
+          tripId,
+          jobItemId: normalizedJobItemId,
+          type,
+        });
+      }
+      await this.deactivatePriorActiveTripDocumentsOfType(tx, {
         tenantId,
         tripId,
-        jobItemId: normalizedJobItemId,
         type,
-        isActive: true,
-        storageKey: key,
-        originalName: file.originalname ?? "upload",
-        mimeType: file.mimetype ?? "application/octet-stream",
-        sizeBytes: file.size ?? null,
-        ...uploadActor,
-        requiresSignature: await (async () => {
-          if (type === TripDocumentType.POD_SIGNATURE) return false;
-          if (!documentTypeSupportsCustomerSignature(type)) return false;
-          const snapshots = await this.loadTripDocumentRequirementSnapshots(
+      });
+      return tx.tripDocument.create({
+        data: createDocData,
+        include: documentUploadedByInclude,
+      });
+    };
+
+    let doc: any;
+    try {
+      if (normalizedOperationKey && this.idempotency) {
+        const idempotent = await this.idempotency.execute({
+          tenantId,
+          scope: IDEMPOTENCY_SCOPES.DRIVER_TRIP_DOCUMENT_UPLOAD,
+          operationKey: normalizedOperationKey,
+          requestHash,
+          load: loadDocument,
+          execute: async (tx) => {
+            const created = await persistTripDocumentInTx(tx);
+            return {
+              resourceType: "TripDocument",
+              resourceId: created.id,
+              result: this.toDocumentMetadataDto(created),
+            };
+          },
+        });
+        if (idempotent.outcome === "replayed") {
+          try {
+            await supabase.storage.from(JOB_DOCUMENTS_BUCKET).remove([key]);
+          } catch {
+            // best-effort orphan cleanup — must not mask replay result
+          }
+          perf.markDbWriteEnd();
+          perf.finish(idempotent.result);
+          return idempotent.result;
+        }
+        doc = await this.prisma.tripDocument.findFirst({
+          where: {
+            id: (idempotent.result as JobDocumentDto).id,
             tenantId,
             tripId,
+          },
+          include: documentUploadedByInclude,
+        });
+        if (!doc) {
+          perf.markDbWriteEnd();
+          perf.markSideEffectsStart();
+          rt.publishDocumentEvent(
+            this.realtime,
+            "document.uploaded",
+            tenantId,
+            (idempotent.result as JobDocumentDto).id,
+            {
+              jobId,
+              tripId,
+              driverUserId,
+              actorUserId: driverUserId,
+              actorRole: Role.DRIVER,
+              tripStatus: trip.status as TripStatus,
+            },
           );
-          const snapshot = requirementSnapshotForType(snapshots, type);
-          if (snapshot) return snapshot.requiresSignature === true;
-          return !!requiresSignature;
-        })(),
-      },
-      include: documentUploadedByInclude,
-    });
+          perf.markSideEffectsEnd();
+          perf.finish(idempotent.result);
+          return idempotent.result;
+        }
+      } else {
+        doc = await this.prisma.$transaction(async (tx) =>
+          persistTripDocumentInTx(tx),
+        );
+      }
+    } catch (persistError) {
+      try {
+        await supabase.storage.from(JOB_DOCUMENTS_BUCKET).remove([key]);
+      } catch {
+        // best-effort orphan cleanup — never replace persistError
+      }
+      throw persistError;
+    }
 
     await this.audit.log(
       tenantId,
@@ -3961,6 +4240,7 @@ export class DriverJobsService {
         documentId: doc.id,
         type,
         jobItemId: normalizedJobItemId,
+        ...(normalizedOperationKey ? { operationKey: normalizedOperationKey } : {}),
       },
       driverUserId,
     );

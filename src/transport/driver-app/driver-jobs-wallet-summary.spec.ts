@@ -83,7 +83,15 @@ describe("DriverJobsService wallet summary and trip photos", () => {
           storageKey: "tenant/jobs/job-1/trips/trip-1/other/1.jpg",
         }),
       },
+      $executeRaw: jest.fn().mockResolvedValue(0),
     };
+    prisma.$transaction = jest.fn(async (fn: (tx: typeof prisma) => Promise<unknown>) =>
+      fn({
+        ...prisma,
+        tripDocument: prisma.tripDocument,
+        $executeRaw: prisma.$executeRaw,
+      }),
+    );
     const supabaseService: any = {
       getClient: jest.fn().mockReturnValue({
         storage: {
@@ -112,5 +120,6 @@ describe("DriverJobsService wallet summary and trip photos", () => {
     );
     expect(prisma.tripDocument.updateMany).not.toHaveBeenCalled();
     expect(prisma.tripDocument.create).toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalled();
   });
 });

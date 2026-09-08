@@ -23,7 +23,8 @@ describe("DriverJobsService container-linked trip document upload", () => {
     jobType?: JobType;
   }) {
     const storageUpload = jest.fn().mockResolvedValue({ error: null });
-    const prisma = {
+    const storageRemove = jest.fn().mockResolvedValue({ error: null });
+    const prisma: any = {
       job: {
         findFirst: jest.fn().mockResolvedValue({
           id: jobId,
@@ -71,19 +72,27 @@ describe("DriverJobsService container-linked trip document upload", () => {
           }),
         ),
       },
+      $executeRaw: jest.fn().mockResolvedValue(0),
     };
+    prisma.$transaction = jest.fn(async (fn: (tx: typeof prisma) => Promise<unknown>) =>
+      fn({
+        ...prisma,
+        $executeRaw: prisma.$executeRaw,
+        tripDocument: prisma.tripDocument,
+      }),
+    );
     const service = new DriverJobsService(
       prisma as never,
       { log: jest.fn() } as never,
       {
         getClient: () => ({
           storage: {
-            from: () => ({ upload: storageUpload }),
+            from: () => ({ upload: storageUpload, remove: storageRemove }),
           },
         }),
       } as never,
     );
-    return { service, prisma, storageUpload };
+    return { service, prisma, storageUpload, storageRemove };
   }
 
   it.each([
@@ -320,5 +329,79 @@ describe("DriverJobsService container-linked trip document upload", () => {
     ).rejects.toThrow(
       "Container photo documentation is only valid for container-style jobs",
     );
+  });
+
+  it("re-checks capacity inside the create transaction after a stale pre-storage count", async () => {
+    const { service, prisma, storageUpload, storageRemove } = makeContext();
+    (prisma.tripDocument.count as jest.Mock)
+      .mockResolvedValueOnce(MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY - 1) // fast-fail check
+      .mockResolvedValueOnce(MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY); // authoritative in-tx check
+
+    await expect(
+      service.uploadTripDocumentForDriver(
+        tenantId,
+        jobId,
+        tripId,
+        driverUserId,
+        TripDocumentType.CONTAINER_PHOTO,
+        imageFile,
+        false,
+        undefined,
+        jobItemId,
+      ),
+    ).rejects.toThrow(
+      `At most ${MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY} active CONTAINER_PHOTO photos are allowed per container on this trip`,
+    );
+
+    expect(storageUpload).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(prisma.$executeRaw).toHaveBeenCalled();
+    expect(prisma.tripDocument.create).not.toHaveBeenCalled();
+    expect(storageRemove).toHaveBeenCalled();
+  });
+
+  it("does not mask the original persist error when orphan storage cleanup fails", async () => {
+    const { service, prisma, storageRemove } = makeContext();
+    (prisma.tripDocument.count as jest.Mock)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY);
+    storageRemove.mockRejectedValue(new Error("storage remove failed"));
+
+    await expect(
+      service.uploadTripDocumentForDriver(
+        tenantId,
+        jobId,
+        tripId,
+        driverUserId,
+        TripDocumentType.SEAL_PHOTO,
+        imageFile,
+        false,
+        undefined,
+        jobItemId,
+      ),
+    ).rejects.toThrow(
+      `At most ${MAX_ACTIVE_CONTAINER_LINKED_PHOTOS_PER_CATEGORY} active SEAL_PHOTO photos are allowed per container on this trip`,
+    );
+    expect(storageRemove).toHaveBeenCalled();
+  });
+
+  it("serializes container slot inserts via advisory lock before create", async () => {
+    const { service, prisma } = makeContext();
+
+    await service.uploadTripDocumentForDriver(
+      tenantId,
+      jobId,
+      tripId,
+      driverUserId,
+      TripDocumentType.CONTAINER_PHOTO,
+      imageFile,
+      false,
+      undefined,
+      jobItemId,
+    );
+
+    expect(prisma.$executeRaw).toHaveBeenCalled();
+    expect(prisma.tripDocument.count).toHaveBeenCalledTimes(2);
+    expect(prisma.tripDocument.create).toHaveBeenCalled();
   });
 });

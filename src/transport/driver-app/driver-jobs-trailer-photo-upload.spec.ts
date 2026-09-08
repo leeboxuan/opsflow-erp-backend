@@ -15,7 +15,7 @@ describe("DriverJobsService.uploadTripDocumentForDriver trailer photos", () => {
   } as Express.Multer.File;
 
   function makePrisma() {
-    return {
+    const prisma: any = {
       job: { findFirst: jest.fn().mockResolvedValue({ id: jobId, status: "ONGOING" }) },
       trip: {
         findFirst: jest.fn().mockResolvedValue({ id: tripId, assignedDriverUserId: driverUserId }),
@@ -35,10 +35,20 @@ describe("DriverJobsService.uploadTripDocumentForDriver trailer photos", () => {
         ),
         findFirst: jest.fn().mockResolvedValue({ id: "doc-end" }),
         findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
       },
       tenant: { findUnique: jest.fn().mockResolvedValue({ timezone: "Asia/Singapore" }) },
       masterTrailerLocation: { findMany: jest.fn().mockResolvedValue([]) },
+      $executeRaw: jest.fn().mockResolvedValue(0),
     };
+    prisma.$transaction = jest.fn(async (fn: (tx: typeof prisma) => Promise<unknown>) =>
+      fn({
+        ...prisma,
+        tripDocument: prisma.tripDocument,
+        $executeRaw: prisma.$executeRaw,
+      }),
+    );
+    return prisma;
   }
 
   function makeSvc(prisma: ReturnType<typeof makePrisma>) {
@@ -248,10 +258,11 @@ describe("DriverJobsService.completeTrip trailer checkout", () => {
 
   function makeCompletePrisma() {
     const tripDocumentCreate = jest.fn();
+    const tripDocumentUpdateMany = jest.fn();
     const tripUpdate = jest.fn();
     const tx = {
       trip: { update: tripUpdate },
-      tripDocument: { create: tripDocumentCreate },
+      tripDocument: { create: tripDocumentCreate, updateMany: tripDocumentUpdateMany },
     };
     return {
       prisma: {
@@ -273,6 +284,7 @@ describe("DriverJobsService.completeTrip trailer checkout", () => {
         tripDocument: {
           findMany: jest.fn().mockResolvedValue([]),
           findFirst: jest.fn().mockResolvedValue({ id: "doc-end" }),
+          updateMany: tripDocumentUpdateMany,
         },
         masterTrailerLocation: {
           findFirst: jest.fn().mockResolvedValue({ code: "GUL7", name: "Gul 7" }),
@@ -282,12 +294,31 @@ describe("DriverJobsService.completeTrip trailer checkout", () => {
         $transaction: jest.fn(async (cb: any) => cb(tx)),
       },
       tripDocumentCreate,
+      tripDocumentUpdateMany,
       tripUpdate,
+      tx,
     };
   }
 
-  function makeCompleteSvc(prisma: ReturnType<typeof makeCompletePrisma>["prisma"]) {
-    return new DriverJobsService(prisma as any, { log: jest.fn() } as any, { getClient: jest.fn() } as any);
+  function makeCompleteSvc(
+    prisma: ReturnType<typeof makeCompletePrisma>["prisma"],
+    supabaseService?: any,
+  ) {
+    return new DriverJobsService(
+      prisma as any,
+      { log: jest.fn() } as any,
+      supabaseService ??
+        ({
+          getClient: jest.fn().mockReturnValue({
+            storage: {
+              from: jest.fn().mockReturnValue({
+                upload: jest.fn().mockResolvedValue({ error: null }),
+                remove: jest.fn().mockResolvedValue({ error: null }),
+              }),
+            },
+          }),
+        } as any),
+    );
   }
 
   it("completes when TRAILER_END_PHOTO document exists and parking code is provided", async () => {
@@ -305,13 +336,10 @@ describe("DriverJobsService.completeTrip trailer checkout", () => {
       },
     ]);
     const svc = makeCompleteSvc(prisma);
-    jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: tripId }] } as any);
 
-    await expect(
-      svc.completeTrip(tenantId, jobId, tripId, driverUserId, {
-        trailerParkingLocationCode: "GUL7",
-      }),
-    ).resolves.toBeTruthy();
+    const result = await svc.completeTrip(tenantId, jobId, tripId, driverUserId, {
+      trailerParkingLocationCode: "GUL7",
+    });
 
     expect(prisma.tripDocument.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -325,6 +353,9 @@ describe("DriverJobsService.completeTrip trailer checkout", () => {
     expect(tripDocumentCreate).not.toHaveBeenCalled();
     expect(tripUpdate).toHaveBeenCalled();
     expect(tripUpdate.mock.calls[0][0].data.trailerLastLocationCode).toBe("GUL7");
+    expect(result.tripId).toBe(tripId);
+    expect(result.tripStatus).toBe("COMPLETED");
+    expect(result.jobId).toBe(jobId);
   });
 
   it("completes without parking code when end photo and required docs exist", async () => {
@@ -342,7 +373,6 @@ describe("DriverJobsService.completeTrip trailer checkout", () => {
       },
     ]);
     const svc = makeCompleteSvc(prisma);
-    jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: tripId }] } as never);
 
     await expect(
       svc.completeTrip(tenantId, jobId, tripId, driverUserId),
@@ -365,7 +395,6 @@ describe("DriverJobsService.completeTrip trailer checkout", () => {
       },
     ]);
     const svc = makeCompleteSvc(prisma);
-    jest.spyOn(svc, "getOneForDriver").mockResolvedValue({ trips: [{ id: tripId }] } as never);
 
     await expect(
       svc.completeTrip(tenantId, jobId, tripId, driverUserId, {
@@ -378,19 +407,137 @@ describe("DriverJobsService.completeTrip trailer checkout", () => {
         trailerParkingLng: 103.67,
       }),
     ).resolves.toBeTruthy();
+    expect(tripUpdate.mock.calls[0][0].data.trailerParkingAddress1).toBe("7 Gul Circle");
+    expect(tripUpdate.mock.calls[0][0].data.trailerParkingAddress2).toBe("Unit 07-20");
+    expect(tripUpdate.mock.calls[0][0].data.trailerParkingPostal).toBe("629563");
+    expect(tripUpdate.mock.calls[0][0].data.trailerParkingPlaceId).toBe("ChIJ-gul7");
+    expect(tripUpdate.mock.calls[0][0].data.trailerParkingLat).toBe(1.31);
+    expect(tripUpdate.mock.calls[0][0].data.trailerParkingLng).toBe(103.67);
+  });
 
-    expect(tripUpdate).toHaveBeenCalledWith(
+  it("rejects completion when checkout requires trailer end photo and none exists", async () => {
+    const { prisma } = makeCompletePrisma();
+    prisma.tripDocument.findFirst.mockResolvedValue(null);
+    prisma.tripDocument.findMany.mockResolvedValue([
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: new Date(),
+        isSigned: true,
+      },
+      {
+        type: TripDocumentType.POD_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
+    ]);
+    const svc = makeCompleteSvc(prisma);
+
+    await expect(
+      svc.completeTrip(tenantId, jobId, tripId, driverUserId, {
+        trailerParkingLocationCode: "GUL7",
+      }),
+    ).rejects.toThrow(/trailerEndPhoto/i);
+  });
+
+  it("legacy complete-with-file deactivates prior active TRAILER_END_PHOTO", async () => {
+    const { prisma, tripDocumentCreate, tripDocumentUpdateMany, tripUpdate } =
+      makeCompletePrisma();
+    prisma.tripDocument.findFirst.mockResolvedValue(null);
+    prisma.tripDocument.findMany.mockResolvedValue([
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: new Date(),
+        isSigned: true,
+      },
+      {
+        type: TripDocumentType.POD_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
+    ]);
+    const upload = jest.fn().mockResolvedValue({ error: null });
+    const remove = jest.fn().mockResolvedValue({ error: null });
+    const svc = makeCompleteSvc(prisma, {
+      getClient: jest.fn().mockReturnValue({
+        storage: { from: jest.fn().mockReturnValue({ upload, remove }) },
+      }),
+    });
+
+    await svc.completeTrip(tenantId, jobId, tripId, driverUserId, {
+      trailerParkingLocationCode: "GUL7",
+      trailerEndPhoto: {
+        buffer: Buffer.from("jpeg"),
+        mimetype: "image/jpeg",
+        originalname: "end.jpg",
+        size: 4,
+      } as Express.Multer.File,
+    });
+
+    expect(upload).toHaveBeenCalled();
+    expect(tripDocumentUpdateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({
-          trailerLastLocationCode: "GUL7",
-          trailerParkingAddress1: "7 Gul Circle",
-          trailerParkingAddress2: "Unit 07-20",
-          trailerParkingPostal: "629563",
-          trailerParkingPlaceId: "ChIJ-gul7",
-          trailerParkingLat: 1.31,
-          trailerParkingLng: 103.67,
+        where: expect.objectContaining({
+          type: TripDocumentType.TRAILER_END_PHOTO,
+          isActive: true,
         }),
+        data: { isActive: false },
       }),
     );
+    expect(tripDocumentCreate).toHaveBeenCalled();
+    expect(tripUpdate).toHaveBeenCalled();
+    // Storage happened before $transaction (upload mocked; transaction still invoked once).
+    expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  it("does not complete trip when legacy Storage upload fails", async () => {
+    const { prisma, tripUpdate } = makeCompletePrisma();
+    prisma.tripDocument.findFirst.mockResolvedValue(null);
+    prisma.tripDocument.findMany.mockResolvedValue([
+      {
+        type: TripDocumentType.DELIVERY_DO,
+        signedAt: new Date(),
+        isSigned: true,
+      },
+      {
+        type: TripDocumentType.POD_PHOTO,
+        signedAt: null,
+        isSigned: false,
+      },
+    ]);
+    const upload = jest.fn().mockResolvedValue({ error: { message: "quota" } });
+    const svc = makeCompleteSvc(prisma, {
+      getClient: jest.fn().mockReturnValue({
+        storage: { from: jest.fn().mockReturnValue({ upload, remove: jest.fn() }) },
+      }),
+    });
+
+    await expect(
+      svc.completeTrip(tenantId, jobId, tripId, driverUserId, {
+        trailerParkingLocationCode: "GUL7",
+        trailerEndPhoto: {
+          buffer: Buffer.from("jpeg"),
+          mimetype: "image/jpeg",
+          originalname: "end.jpg",
+          size: 4,
+        } as Express.Multer.File,
+      }),
+    ).rejects.toThrow(/Storage upload failed/);
+    expect(tripUpdate).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects completion when another driver is assigned", async () => {
+    const { prisma } = makeCompletePrisma();
+    prisma.trip.findFirst.mockResolvedValue({
+      ...ongoingTrip,
+      assignedDriverUserId: "other-driver",
+    });
+    const svc = makeCompleteSvc(prisma);
+
+    await expect(
+      svc.completeTrip(tenantId, jobId, tripId, driverUserId, {
+        trailerParkingLocationCode: "GUL7",
+      }),
+    ).rejects.toThrow(/not assigned/i);
   });
 });
